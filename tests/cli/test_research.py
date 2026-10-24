@@ -7,15 +7,22 @@ keep rule moves `best` and a discard restores the lane, and the history survives
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 from nautilus_trader.model.instruments import Equity
 from typer.testing import CliRunner
 
+from kanso.cli import research as research_cli
+from kanso.criteria import criteria_version
 from kanso.criteria.gates import periods_margin
+from kanso.criteria.run import CardRun, Fill, midnight_ns
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
+from kanso.research import records
+from kanso.schemas import Card, ObjectiveParams, ObjectiveRef, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
 
@@ -596,6 +603,272 @@ def test_show_diffs_two_cards_of_the_hypothesis(runner: CliRunner, registered: P
     diff = payload(result)["diff"]
     assert diff.startswith(f"--- {baseline[:7]}/strategy.py")
     assert "+    lookback: int = 12" in diff
+
+
+def test_show_measured_prints_what_the_card_was_scored_from(
+    runner: CliRunner, registered: Path
+) -> None:
+    begin(runner, registered)
+    edit(registered, REVERTING)
+    kept = card(runner, registered, "fade the rolling mean")
+
+    result = at(runner, registered, "research", "show", HYP_ID, "--measured")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    lines = result.stdout.splitlines()
+    sha7 = str(kept["strategy_sha"])[:7]
+    assert lines[0].startswith("card ") and lines[0].endswith(
+        f"{sha7} · keep · fade the rolling mean"
+    )
+    assert lines[1].startswith("measured ") and lines[1].endswith(
+        f"net_edge_bps over 4 fold(s) · criteria {criteria_version()}"
+    )
+    assert f"{kept['metric']:.6f} ± {kept['metric_se']:.6f}" in lines[2]
+    assert f"{kept['n_trades']} trade(s)" in lines[2]
+    periods = lines[4:]
+    assert lines[3].split()[:4] == ["periods", str(len(periods)), "of", "1d"]
+
+    document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+    stored = document["measurement"]["run"]
+    assert lines[2].endswith(f"· {len(stored['fills'])} fill(s)") and stored["fills"]
+    assert lines[3].endswith(f"· capital {stored['capital']:.2f} {stored['currency']} · UTC")
+    # One line a period end: its UTC date, what that period returned, and the equity after it.
+    assert [line.split() for line in periods] == [
+        [
+            datetime.fromtimestamp(end // 1_000_000_000, tz=UTC).strftime("%Y-%m-%d"),
+            f"{change:+.2f}",
+            f"{equity:.2f}",
+        ]
+        for end, change, equity in zip(
+            stored["period_ends_ns"], stored["returns"], stored["equity"], strict=True
+        )
+    ]
+    assert document["sha"] == kept["strategy_sha"]
+    assert document["card"]["measured_sha"] == kept["measured_sha"]
+    assert set(document["measurement"]) == {
+        "objective",
+        "folds",
+        "criteria_version",
+        "run",
+        "host",
+        "benchmark",
+    }
+    assert document["measurement"]["criteria_version"] == criteria_version()
+    assert len(document["measurement"]["run"]["returns"]) == len(periods)
+    # The payload is the codec's form, so kanso's own code scores it to the card's number.
+    measured = records.read_measurement(document["measurement"])
+    assert measured.compute() == (kept["metric"], kept["metric_se"])
+
+
+def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differenced_against(
+    tmp_path: Path,
+) -> None:
+    """Two ends on one UTC date are told apart by their time, and a host, a benchmark or
+    both are named as what the run was differenced against."""
+    opened = midnight_ns(date(2024, 1, 2))
+    half_hour = 1_800 * 1_000_000_000
+    run = CardRun(
+        window=(date(2024, 1, 2), date(2024, 1, 2)),
+        period="30m",
+        period_ends_ns=(opened + 29 * half_hour, opened + 30 * half_hour),
+        returns=(12.5, -2.25),
+        equity=(100_012.5, 100_010.25),
+        trades=(),
+        # A position still open when the window closed: a fill no closed trade holds.
+        fills=(Fill(opened + 29 * half_hour - 60_000_000_000, "DEMO.SIM", "BUY", 10.0, 50.0, 0.1),),
+        capital=100_000.0,
+        currency="USD",
+        venue_model={"venue": "XNAS"},
+    )
+    measured = records.Measurement(
+        ObjectiveRef(id="marginal_wf_sharpe", params=ObjectiveParams(min_delta=0.0, k_se=0.5)),
+        2,
+        run,
+        host=run,
+        criteria_version="0.1.0+000000000000",
+    )
+    with StateStore(tmp_path / "state.db") as store:
+        store.migrate()
+        made = Card(
+            run_id="r1",
+            lane="op",
+            strategy_sha=store.put_blob(b"class Strategy: ..."),
+            metric=0.0,
+            metric_se=0.0,
+            n_trials=1,
+            n_trades=0,
+            wall_s=1.0,
+            peak_mem_gb=0.1,
+            status="keep",
+            desc="baseline",
+            venue_model=resolve_venue_model("XNAS", max_leverage=1.0),
+            created_at=datetime(2024, 1, 3, tzinfo=UTC),
+            measured_sha=records.record_measurement(store, measured),
+        )
+        # A newer card of the same bytes that kept none is passed over and counted.
+        unmeasured = made.model_copy(update={"status": "redundant", "measured_sha": None})
+        shown = research_cli._measurement(
+            store, HYP_ID, made.strategy_sha, [made, unmeasured, unmeasured]
+        )
+        # A benchmark is named as the benchmark, and a measurement holding both names both.
+        named: dict[str, str] = {}
+        for objective, host, benchmark in (
+            ("wf_sharpe_vs_hold", None, run),
+            ("marginal_wf_sharpe", run, run),
+        ):
+            ref = measured.objective.model_copy(update={"id": objective})
+            other = replace(measured, objective=ref, host=host, benchmark=benchmark)
+            kept = made.model_copy(
+                update={"measured_sha": records.record_measurement(store, other)}
+            )
+            named[objective] = research_cli._measurement(
+                store, HYP_ID, kept.strategy_sha, [kept]
+            ).lines[1]
+
+    assert shown.lines[0].endswith("· keep · baseline · 2 newer card(s) of these bytes kept none")
+    # Scored under another kanso, which the line says: this one's objective may compute
+    # another number from the same run.
+    assert shown.lines[1].endswith(
+        "marginal_wf_sharpe over 2 fold(s) · against the host run · criteria "
+        f"0.1.0+000000000000, not this kanso's {criteria_version()}"
+    )
+    assert shown.data["card"]["measured_sha"] == made.measured_sha
+    assert shown.lines[2].endswith("· 0 trade(s) · 1 fill(s)")
+    assert shown.lines[3].startswith("periods ")
+    assert shown.lines[3].endswith(" 2 of 30m · capital 100000.00 USD · UTC")
+    # Each end beside its own period's return and the equity after it.
+    assert [line.split() for line in shown.lines[4:]] == [
+        ["2024-01-02", "14:30:00", "+12.50", "100012.50"],
+        ["2024-01-02", "15:00:00", "-2.25", "100010.25"],
+    ]
+    assert shown.data["measurement"]["host"] == shown.data["measurement"]["run"]
+    assert named["wf_sharpe_vs_hold"].endswith(
+        "wf_sharpe_vs_hold over 2 fold(s) · against the benchmark run · criteria "
+        f"0.1.0+000000000000, not this kanso's {criteria_version()}"
+    )
+    assert named["marginal_wf_sharpe"].endswith(
+        "marginal_wf_sharpe over 2 fold(s) · against the host and the benchmark run · "
+        f"criteria 0.1.0+000000000000, not this kanso's {criteria_version()}"
+    )
+
+
+def test_show_measured_refuses_a_card_that_kept_no_measurement(
+    runner: CliRunner, registered: Path
+) -> None:
+    begin(runner, registered)
+    edit(registered, RAISING)
+    crashed = card(runner, registered, "raise on the first bar")
+    sha7 = str(crashed["strategy_sha"])[:7]
+
+    result = at(
+        runner, registered, "research", "show", HYP_ID, "--sha", sha7, "--measured", "--json"
+    )
+
+    assert result.exit_code == Exit.PRECONDITION
+    refused = payload(result)
+    assert f"no card of {HYP_ID} that evaluated {sha7} kept a measurement" in refused["error"]
+    assert refused["remedy"] == f"kanso research show {HYP_ID} --sha {sha7} --json"
+    assert at(runner, registered, *refused["remedy"].split()[1:]).exit_code == Exit.OK
+
+
+def test_show_measured_reads_past_a_newer_card_of_the_bytes_that_kept_none(
+    runner: CliRunner, registered: Path
+) -> None:
+    """A card of the same bytes recorded by a kanso that kept no measurement — a lane not yet
+    restarted onto this one, say — does not hide what the keep before it kept: the newest
+    card that kept one is shown, and the card line says how many were passed over."""
+    begin(runner, registered)
+    edit(registered, REVERTING)
+    kept = card(runner, registered, "fade the rolling mean")
+    with StateStore(registered / "state.db") as store:
+        run = records.require_active(store, HYP_ID)
+        newest = records.cards_of(store, HYP_ID)[-1]
+        records.record_card(
+            store,
+            run,
+            newest.model_copy(
+                update={"status": "redundant", "desc": "an old lane's card", "measured_sha": None}
+            ),
+        )
+    sha7 = str(kept["strategy_sha"])[:7]
+
+    result = at(runner, registered, "research", "show", HYP_ID, "--measured")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert result.stdout.splitlines()[0].endswith(
+        f"{sha7} · keep · fade the rolling mean · 1 newer card(s) of these bytes kept none"
+    )
+    document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+    assert (document["card"]["status"], document["card"]["measured_sha"]) == (
+        "keep",
+        kept["measured_sha"],
+    )
+    assert records.read_measurement(document["measurement"]).compute() == (
+        kept["metric"],
+        kept["metric_se"],
+    )
+    # The source is still shown with the newest card of the bytes, which kept none.
+    shown = payload(at(runner, registered, "research", "show", HYP_ID, "--json"))
+    assert (shown["card"]["desc"], shown["card"]["measured_sha"]) == ("an old lane's card", None)
+
+
+def test_show_measured_shows_the_newest_of_two_cards_of_the_bytes_that_kept_one(
+    runner: CliRunner, registered: Path
+) -> None:
+    """The same bytes judged twice, each card keeping a measurement of its own — a later run's
+    baseline of the keep measured another way, say — show the newer card's, and the card line
+    counts nothing passed over."""
+    begin(runner, registered)
+    edit(registered, REVERTING)
+    kept = card(runner, registered, "fade the rolling mean")
+    with StateStore(registered / "state.db") as store:
+        run = records.require_active(store, HYP_ID)
+        newest = records.cards_of(store, HYP_ID)[-1]
+        first = records.measurement_of(store, newest)
+        assert first is not None
+        again = replace(first, folds=2)
+        metric, metric_se = again.compute()
+        again_sha = records.record_measurement(store, again)
+        records.record_card(
+            store,
+            run,
+            newest.model_copy(
+                update={
+                    "status": "redundant",
+                    "desc": "measured over two folds",
+                    "metric": metric,
+                    "metric_se": metric_se,
+                    "measured_sha": again_sha,
+                }
+            ),
+        )
+    sha7 = str(kept["strategy_sha"])[:7]
+    assert again_sha != kept["measured_sha"]
+
+    result = at(runner, registered, "research", "show", HYP_ID, "--measured")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    lines = result.stdout.splitlines()
+    assert lines[0].endswith(f"{sha7} · redundant · measured over two folds")
+    assert "net_edge_bps over 2 fold(s) · " in lines[1]
+    assert f"{metric:.6f} ± {metric_se:.6f}" in lines[2]
+    document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+    assert (document["card"]["desc"], document["card"]["measured_sha"]) == (
+        "measured over two folds",
+        again_sha,
+    )
+    assert records.read_measurement(document["measurement"]) == again
+
+
+def test_show_measured_with_a_diff_is_refused_before_anything_is_read(
+    runner: CliRunner, registered: Path
+) -> None:
+    result = at(
+        runner, registered, "research", "show", HYP_ID, "--measured", "--diff", "abc", "--json"
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "--measured" in payload(result)["error"] and "--diff" in payload(result)["error"]
 
 
 def test_begin_needs_no_model_register(runner: CliRunner, registered: Path) -> None:

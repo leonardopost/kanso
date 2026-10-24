@@ -1,0 +1,13 @@
+-- A card keeps what its metric was computed from.
+--
+-- A card's row held its metric, its error and a digest of its trades, and nothing the metric
+-- was computed from: the run the card child measured was handed back to the lane, scored and
+-- dropped, so no period's return, no trade and no fill of any card survived it. A question
+-- about how a card's number came to be — whether a prefix of its window already said what the
+-- whole window would, whether one week carried the result — could be asked of no card ever
+-- run. The column names the blob holding the card's measurement: its objective and folds,
+-- the run it measured, the host and benchmark runs the objective read beside it, and the
+-- criteria version that scored it, under which the objective returns the card's metric and
+-- error exactly. A row written before this migration holds NULL, which reads back as a card
+-- that kept none, which is what it was.
+ALTER TABLE cards ADD COLUMN measured_sha TEXT REFERENCES blobs (sha);

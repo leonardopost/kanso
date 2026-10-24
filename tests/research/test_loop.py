@@ -46,6 +46,7 @@ from .conftest import (
     classify,
     document,
     load_december,
+    measured_as_scored,
     write_days,
     write_envelope,
     write_hypothesis,
@@ -117,6 +118,17 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
     assert (baseline.status, baseline.metric, baseline.n_trades) == ("keep", 0.0, 0)
     assert baseline.desc == loop.BASELINE
     assert baseline.n_trials == 1
+    # The baseline ran, so it keeps what it was scored from: the pinned objective over the
+    # run's folds, on the research window, with nothing beside it to difference against.
+    # The keep rule's two parameters are the pinned file's, which no number would show.
+    measured = measured_as_scored(store, baseline)
+    assert measured.objective.model_dump() == {
+        "id": "wf_sharpe_net",
+        "params": {"min_delta": 0.0, "k_se": 0.5},
+    }
+    assert measured.folds == ws.config.research.folds
+    assert measured.run.window == RESEARCH
+    assert (measured.host, measured.benchmark) == (None, None)
     assert run.best_sha == baseline.strategy_sha
     assert show(ws, store, registered).status == "researching"  # type: ignore[union-attr]
     assert (
@@ -388,6 +400,12 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     # the refusal denies is that it was a new experiment, not that it was measured.
     again = records.cards_of(store, registered)[-1]
     assert (again.status, again.metric) == ("redundant", kept.metric)
+    # It ran, so it keeps what it measured — the run its anchor measured, so the same bytes,
+    # stored once: one blob names both cards' measurements.
+    measured = measured_as_scored(store, kept)
+    assert measured_as_scored(store, again) == measured
+    assert again.measured_sha == kept.measured_sha
+    assert len(measured.run.trades) == kept.n_trades > 0
     assert records.n_trials(store, registered) == 3
     assert records.trial_metrics(store, registered, "wf_sharpe_net") == [
         kept.metric,
@@ -754,6 +772,8 @@ def test_a_card_that_raises_is_a_crash_carrying_its_traceback_tail(
 
     assert crashed.status == "crash"
     assert crashed.metric == 0.0
+    assert crashed.measured_sha is None, "a crash measured nothing and keeps nothing"
+    assert records.cards_of(store, registered)[-1].measured_sha is None
     assert crashed.crash_tail is not None
     assert "the card asked for the impossible" in crashed.crash_tail
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
@@ -768,6 +788,7 @@ def test_code_that_violates_the_boundary_is_discarded_before_it_runs(
 
     assert refused.status == "discard"
     assert (refused.metric, refused.wall_s, refused.peak_mem_gb) == (0.0, 0.0, 0.0)
+    assert refused.measured_sha is None, "nothing ran, so there is nothing to keep"
     assert [gate.id for gate in refused.gate_results] == ["strategy_integrity"]
     assert not refused.gate_results[0].passed
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
@@ -1109,6 +1130,7 @@ def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
         slots=2,
     )
     assert [card.status for card in made] == ["discard", "discard"]
+    assert [card.measured_sha for card in made] == [None, None], "neither ran to a result"
     only = loop.run_batch(ws, store, registered, [("peek", bad, ["refactor"])], slots=1)
     assert only[0].status == "discard"
 
@@ -1166,6 +1188,7 @@ def test_a_refused_card_is_a_discard_carrying_the_sizing_gate(
 
     assert refused.status == "discard"
     assert (refused.metric, refused.n_trades, refused.crash_tail) == (0.0, 0, None)
+    assert refused.measured_sha is None, "refused during its backtest, it measured nothing"
     assert [gate.id for gate in refused.gate_results] == ["strategy_integrity", "sizing"]
     sizing = refused.gate_results[1]
     assert not sizing.passed
@@ -1485,6 +1508,14 @@ def test_every_card_of_a_run_is_differenced_against_one_hold(
         "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's,"
         " its error Memmel's on the two paired return series"
     )
+    # Each card keeps the hold it was differenced against beside its own run, and the
+    # objective on the pair is the card's number exactly; one hold serves every card.
+    measured = measured_as_scored(store, trough)
+    assert measured.objective.id == "wf_sharpe_vs_hold"
+    assert measured.host is None and measured.benchmark is not None
+    assert len(measured.benchmark.fills) == 1 and measured.benchmark.trades == ()
+    weak = measured_as_scored(store, records.cards_of(store, hyp_id)[2])
+    assert weak.benchmark == measured.benchmark
     assert [key for key in loop._HOST_RUNS[run.run_id] if key.startswith("benchmark")] == [
         f"benchmark@{run.snapshot_id}@None"
     ]

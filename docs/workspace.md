@@ -98,12 +98,13 @@ hold is that **every fact has exactly one authority, and for the facts that matt
 the file you would be tempted to edit.**
 
 `state.db` is the authority for which hypotheses are registered and at what pin, every card
-ever run and its bytes, the `best` pointer, certification plans and certificates, approvals,
-which escalations have been read, model spend and the queue. The files are the authority for
-what the catalog holds (the manifests), what a composed version is and what state it is in
-(`strategy.yaml`), how a stage is configured (`portfolio.yaml`), the lane plan
-(`envelope.yaml`) and which sessions exist (the directories). Where the two overlap — a
-certificate, a deployed version — the file is a rendering and state is the record.
+ever run, its bytes and what it was measured from, the `best` pointer, certification plans and
+certificates, approvals, which escalations have been read, model spend and the queue. The
+files are the authority for what the catalog holds (the manifests), what a composed version
+is and what state it is in (`strategy.yaml`), how a stage is configured (`portfolio.yaml`),
+the lane plan (`envelope.yaml`) and which sessions exist (the directories). Where the two
+overlap — a certificate, a deployed version — the file is a rendering and state is the
+record.
 
 So editing a file kanso owns is not a way to change kanso's mind. Depending on which file it
 is, the edit is ignored, silently reverted on the next write, refused by name, or believed at
@@ -277,13 +278,16 @@ strategy under evaluation cannot reach a key even though the command that launch
 
 SQLite in WAL mode, and the only database kanso keeps. It holds hypothesis registration,
 status and pins; runs and every card ever run; the blob store the cards' `strategy.py` bytes
-live in; certification plans and the certificates of record; **approvals**; escalations and
-which of them have been acknowledged; the model spend ledger; the session and strategy-version
-indexes; and the queue.
+live in, and what each card that ran was measured from; certification plans and the
+certificates of record; **approvals**; escalations and which of them have been acknowledged;
+the model spend ledger; the session and strategy-version indexes; and the queue.
 
 It is kanso's alone. There is no supported way to edit it and no need to: everything in it
 is reachable through a command, and every command that writes it does so through one code
-path.
+path. A card's measurement stops being reachable that way once a newer card of the same bytes
+has kept one too — a later run's baseline, measured under another `[research] capital`, say:
+`kanso research show ID --sha S --measured` prints the newer, and the older is read with
+`kanso.research.records.measurement_of` on its card.
 
 **A database behind the shipped schema is refused rather than migrated behind your back.**
 
@@ -320,6 +324,16 @@ wanted after all, to put back: stop everything, delete `state.db-wal` and `state
 put it in `state.db`'s place, which also loses whatever was recorded since the prune. No
 card, no best, no trial count and no certificate is touched by a prune: a book deleted whose
 pins come back is re-earned by the next run, one card at a time.
+
+Every card that ran also stores what it was measured from — its run, period by period and fill
+by fill, and under a relative or benchmark objective the host-alone run or the hold it was
+scored against, compressed (`docs/concepts.md`, Card) — and a card names it, so nothing
+deletes one and a prune leaves them all. One costs what its runs hold, and two cards share one
+only when the whole measurement is the same bytes, so the host-alone run or the hold is
+stored again in the blob of every card scored against it. Measured: 77,803 bytes for the demo's keep, an absolute objective's, with 2,006
+fills; 704,643 for a synthetic run of 12,000 fills alone, which is about 0.7 GB a thousand
+cards of that size; 1,409,471 for the same run beside a host-alone run of its size, about
+1.4 GB a thousand; and 707,664 beside a hold of one fill over the same 98 periods.
 
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`

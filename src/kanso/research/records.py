@@ -75,28 +75,49 @@ snapshot, a retired hypothesis — and those can outgrow everything else the sto
 measured on 2026-10-02 in a live workspace, 3,025 MB of books in a 3,399 MB `state.db`, in
 17,105 rows of which 250 sat under pins a run could still be given. `superseded` names the
 rest and `prune` deletes it, for `kanso state prune` to call with the daemon held off.
+
+A card that ran keeps its **measurement**: what its metric was computed from — the objective
+and folds, the run the card child measured, the host and benchmark runs the objective read
+beside it, and the criteria version of the kanso that scored it — stored as one blob,
+canonical JSON compressed with zlib, whose sha is the card's `measured_sha`. A metric is one
+reading of a run; the run is what every other reading needs, and before cards kept it none
+survived the card that measured it. `Measurement` scores itself with the installed
+objective's own `compute`, which is the call the loop scored the card with, so under the
+criteria version it records what it returns is the card's `metric` and `metric_se` to the
+bit. Under another it is that kanso's arithmetic on the same run, which a release that
+changes how an objective or its error is computed moves, and the version it records is how a
+reader tells the two apart. `between` restricts it to a span of its window for a reading the
+loop never took. The runs are encoded by the one codec every stored run goes through
+(`kanso.criteria.codec`); the same measurement is the same bytes, so a strategy judged twice
+under the same pins and the same reading, by the same kanso, is stored once. Nothing deletes a
+measurement, and a card refused before or during its backtest, a crash and a card recorded
+before cards kept one name none.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
-from dataclasses import dataclass
+import zlib
+from collections.abc import Mapping, Sequence
+from dataclasses import KW_ONLY, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 import yaml
 
+from kanso.criteria.codec import decode_run, encode_run
+from kanso.criteria.library import objectives
 from kanso.criteria.run import CardRun, day_of
 from kanso.errors import PreconditionError
-from kanso.schemas import Card, CardDigest, GateResult, RunRecord, VenueModel
+from kanso.schemas import Card, CardDigest, GateResult, ObjectiveRef, RunRecord, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
 
 __all__ = [
     "Match",
+    "Measurement",
     "Signature",
     "Superseded",
     "active",
@@ -105,13 +126,17 @@ __all__ = [
     "family",
     "cards_of",
     "close",
+    "encode_measurement",
     "insert",
     "matched_book",
+    "measurement_of",
     "n_trials",
     "next_tag",
     "now",
     "prune",
+    "read_measurement",
     "record_card",
+    "record_measurement",
     "record_signature",
     "require_active",
     "runs_of",
@@ -178,6 +203,7 @@ _CARD_COLUMNS = (
     "description",
     "created_at",
     "digest",
+    "measured_sha",
 )
 
 _INSERT_CARD = (
@@ -478,9 +504,111 @@ def record_card(store: StateStore, run: RunRecord, card: Card) -> Card:
         None
         if card.digest is None
         else json.dumps(card.digest.model_dump(mode="json"), sort_keys=True),
+        card.measured_sha,
     )
     store.connection.execute(_INSERT_CARD, values)
     return card
+
+
+@dataclass(frozen=True)
+class Measurement:
+    """What a card's metric was computed from, kept with the card.
+
+    Exactly the arguments the loop scores a card with: the objective its run's pinned
+    hypothesis names, with the keep rule's two parameters; the folds `[research] folds` cut
+    the window into; the run the card child measured; and the host-alone run and the
+    benchmark run the objective reads beside it, each `None` where the run had none — every
+    objective is handed both and reads the one its mode names.
+
+    Beside them, `criteria_version` is what `criteria.library.criteria_version` was when
+    the card was scored: the kanso whose arithmetic the card's numbers are. It is not read
+    off the run, whose pin is the kanso the run began under, because a run is carded by
+    whichever kanso is installed when its next card runs. So under that criteria version
+    `compute` is the card's `metric` and `metric_se` exactly, and a reading the loop never
+    took is the same arithmetic on `between`. Under another, `compute` is the installed
+    objective on the same run — which a release that changed how an objective or its error is
+    computed makes another number — so a reading set beside the card's own is one arithmetic
+    only where the two versions agree. The version is the package version and a digest of
+    the criteria library's files, which a release moves and an edit to an objective's code
+    between two development builds of one version does not.
+    """
+
+    objective: ObjectiveRef
+    folds: int
+    run: CardRun
+    host: CardRun | None = None
+    benchmark: CardRun | None = None
+    _: KW_ONLY
+    criteria_version: str
+
+    def compute(self) -> tuple[float, float]:
+        """The installed objective over the folds: the metric and the error of that mean."""
+        found = objectives()[self.objective.id]
+        return found.compute(self.run, self.folds, self.host, self.benchmark)
+
+    def between(self, opens: int, closes: int) -> Measurement:
+        """This measurement restricted to the half-open instant span `[opens, closes)`.
+
+        The host and the benchmark are restricted with the run, because a relative or
+        benchmark objective cuts each into the same number of folds over its own window, and
+        a whole-window host beside a prefix of the run would pair fold `i` of one span with
+        fold `i` of another.
+        """
+        return replace(
+            self,
+            run=self.run.between(opens, closes),
+            host=None if self.host is None else self.host.between(opens, closes),
+            benchmark=None if self.benchmark is None else self.benchmark.between(opens, closes),
+        )
+
+    def payload(self) -> dict[str, Any]:
+        """The measurement as JSON-shaped data, each run in the codec's form."""
+        return {
+            "objective": self.objective.model_dump(mode="json"),
+            "folds": self.folds,
+            "criteria_version": self.criteria_version,
+            "run": encode_run(self.run),
+            "host": None if self.host is None else encode_run(self.host),
+            "benchmark": None if self.benchmark is None else encode_run(self.benchmark),
+        }
+
+
+def encode_measurement(measured: Measurement) -> bytes:
+    """A measurement as the bytes its blob holds: canonical JSON — sorted keys, no
+    whitespace — compressed with zlib.
+
+    One measurement is one byte string, so a strategy judged twice under the same pins and
+    the same reading by the same kanso, which measures the same run, is stored once: the
+    second judging's blob is the row the first one wrote.
+    """
+    text = json.dumps(measured.payload(), sort_keys=True, separators=(",", ":"))
+    return zlib.compress(text.encode("utf-8"))
+
+
+def record_measurement(store: StateStore, measured: Measurement) -> str:
+    """Store a measurement as one blob and return its sha, for the card's `measured_sha`."""
+    return store.put_blob(encode_measurement(measured))
+
+
+def measurement_of(store: StateStore, card: Card) -> Measurement | None:
+    """What this card's metric was computed from, or `None` when it kept none: a crash, a
+    card refused before or during its backtest, one recorded before cards kept it."""
+    if card.measured_sha is None:
+        return None
+    return read_measurement(json.loads(zlib.decompress(store.get_blob(card.measured_sha))))
+
+
+def read_measurement(payload: Mapping[str, Any]) -> Measurement:
+    """A measurement back from its JSON form: the blob's, or `measurement` in what
+    `kanso research show ID --measured --json` prints."""
+    return Measurement(
+        objective=ObjectiveRef.model_validate(payload["objective"]),
+        folds=int(payload["folds"]),
+        run=decode_run(payload["run"]),
+        host=None if payload["host"] is None else decode_run(payload["host"]),
+        benchmark=None if payload["benchmark"] is None else decode_run(payload["benchmark"]),
+        criteria_version=str(payload["criteria_version"]),
+    )
 
 
 def signature(run: CardRun) -> Signature:
@@ -856,4 +984,5 @@ def _card(row: sqlite3.Row) -> Card:
         digest=None
         if row["digest"] is None
         else CardDigest.model_validate(json.loads(str(row["digest"]))),
+        measured_sha=None if row["measured_sha"] is None else str(row["measured_sha"]),
     )

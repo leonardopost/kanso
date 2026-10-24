@@ -162,6 +162,17 @@ def test_a_crashed_card_digests_nothing() -> None:
         )
 
 
+def test_a_crashed_card_keeps_no_measurement_and_a_card_that_ran_names_one() -> None:
+    crashed = {**CARD, "status": "crash", "metric": 0.0, "crash_tail": "boom"}
+    with pytest.raises(ValidationError, match="measured_sha"):
+        Card.model_validate({**crashed, "measured_sha": SHA})
+    assert Card.model_validate(crashed).measured_sha is None
+    assert Card.model_validate({**CARD, "measured_sha": SHA}).measured_sha == SHA
+    assert (
+        Card.model_validate(CARD).row() == Card.model_validate({**CARD, "measured_sha": SHA}).row()
+    ), "results.tsv is read by position, and the measurement adds no column"
+
+
 @pytest.mark.parametrize(
     ("change", "field"),
     [

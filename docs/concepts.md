@@ -453,6 +453,63 @@ the position — 15.08 gross less 5.00 of cost — and the discard after it trad
 session, for 5.38 net: its number fell because each trade earned less, not because it traded
 less. The demo sends market orders only, so `fill_ratio` is empty.
 
+**A card that ran keeps what its number was computed from.** The metric is one reading of
+the run the card child measured — its return and equity at each period end, every closed
+trade with the fills that made it, every fill with its cost — and that run used to be scored
+and dropped, so a question about how a number came to be, whether the first weeks of the
+window already said what the whole window did or whether one week carried it, could be
+asked of no card ever run. A card that ran to a result — a redundant card and a baseline
+included — keeps its **measurement**: the objective and its folds, the run, the host-alone
+run or the benchmark run the objective read beside it, and the criteria version of the kanso
+that scored it, stored as one blob of canonical JSON compressed with zlib, its runs in the
+form a stage's realised windows are kept in, and named by the card's `measured_sha`. It is
+the arguments the card was scored with, so under that criteria version the objective on it
+returns the card's metric and error exactly (`kanso.research.records.Measurement`, whose
+`compute` is that call and whose `between` cuts the run, its host and its benchmark to any
+span of the window for a reading the loop never took).
+
+Under another kanso, `compute` is that kanso's objective on the same run, and a release can
+compute an objective differently: 0.17.0 made an objective's error the error of its mean,
+read off its own series — a per-trade edge's period by period — where 0.16.0 took the spread
+of the fold means, so on the same trades the demo keep's error is 1.065174 where 0.16.0 gave
+1.064759: close, and a different statistic. So the measurement names the version that scored
+it, and a reading set beside the card's own number is one arithmetic only where the two
+agree. The version is the one installed when the card ran, which after an upgrade is not its
+run's pin — a run is carded by whichever kanso is installed when its next card runs — and it
+is the package version and a digest of the criteria library's files, so a release moves it
+and an edit to an objective's code between two development builds of one version does not.
+
+The same bytes measured twice under the same pins and measured the same way — the same
+`[research] capital`, `folds` and `return_period`, venue model, host version, sleeve budget,
+grains and warmup (below) — by the same kanso measure the same run, so the second card names
+the first one's blob; move any of them and the second is a blob of its own. A crash, a card
+refused before or during its backtest and a card recorded before cards kept one have none.
+`research show --measured` prints the newest measurement a strategy's cards kept, passing
+over a newer card of the bytes that kept none and saying so, here on the demo's keep (the 257
+period lines between the first two and the last two are elided); an older card's, one a newer
+card of the same bytes replaced, is `kanso.research.records.measurement_of` on that card:
+
+```
+$ kanso research show demo_mr --measured
+card       f729a53 · keep · fade a 2-sigma deviation from a 60-bar rolling mean
+measured   net_edge_bps over 4 fold(s) · criteria 0.18.0+d0c850ba1d88
+metric     9.986730 ± 1.065174 · 1003 trade(s) · 2006 fill(s)
+periods    261 of 1d · capital 100000.00 USD · UTC
+           2024-01-02        +55.81       100055.81
+           2024-01-03        -31.91       100023.90
+           2024-12-30         -0.05       109976.70
+           2024-12-31        +86.48       110063.18
+```
+
+and `--json` carries the whole of it. That measurement is 981,070 bytes of JSON stored as
+77,803; a synthetic run the size of a tick lane's largest baseline — 98 daily periods, 6,000
+trades of two fills each and the 12,000 fills — is 5,704,680 bytes stored as 704,643, encoded
+and compressed in 0.18 to 0.25 s. A card scored against a host-alone run or a hold carries
+that run in its own blob, so each blob reads back whole from its one row and the host or the
+hold is stored again on every card of the run: the same synthetic run beside a host-alone run
+of its size is 11,410,530 bytes stored as 1,409,471, in 0.29 to 0.52 s, and beside a hold of
+one fill 707,664. Nothing deletes a measurement (`docs/workspace.md`, `state.db`).
+
 **A card runs in a child process with no path to any catalog.** The parent reads the
 research window — and the warmup sessions before it, when the hypothesis declares them —
 out of the catalog and hands the points to the child, which starts in a new
