@@ -22,6 +22,14 @@ The vendor is therefore asked over a window widened by the resolution at both en
 the rows are kept by the day their close falls in — so the days a spec asks for are the
 days it gets, and no bar is lost at a chunk boundary.
 
+**A tick chunk asks for the tape it can keep, and no more.** The tick endpoints filter on
+the tape instant, and a tick is kept by the day of its reference time, which is never after
+its tape instant. So nothing published before a chunk's first midnight can belong to it,
+and the only tick published after its last midnight that can is one whose venue instant
+fell before it. A tick chunk is therefore asked from its first midnight to `TAPE_MARGIN`
+past its last, in nanoseconds; asked a day either side, as a bar is, one session of XLE
+quotes walked three sessions of tape to keep one.
+
 **`limit` caps base aggregates before roll-up.** A small `limit` with a multiplier above
 one returns an empty series, which would read as an absent history rather than as a
 parameter mistake. So a limit is set only where the multiplier is one and no roll-up
@@ -59,7 +67,7 @@ import math
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from pydantic import Field, model_validator
@@ -76,7 +84,7 @@ from kanso.data.adapters.massive.entitlement import (
     settled_end,
 )
 from kanso.data.adapters.massive.errors import NON_FATAL, MalformedRequestError, TransportError
-from kanso.data.loader import DatasetRef, arrow_batches, checked, manifest_for, utc_day
+from kanso.data.loader import DatasetRef, arrow_batches, checked, manifest_for, to_ns, utc_day
 from kanso.data.loaders.points import bar_type, instrument_id, make_bar
 from kanso.data.manifest import PUBLICATIONS, Manifest, dataset_id
 from kanso.data.publication import resolve as resolve_rule
@@ -95,6 +103,7 @@ __all__ = [
     "FUTURES_MONTHS",
     "NS_PER_UNIT",
     "PREFIXES",
+    "TAPE_MARGIN",
     "TICK_LIMIT",
     "Kind",
     "MassiveBarsLoader",
@@ -109,6 +118,7 @@ __all__ = [
     "instant",
     "numbers",
     "shift",
+    "tape_window",
     "ticks",
     "vendor_ticker",
     "vendor_window",
@@ -138,6 +148,25 @@ about the request. Above one no limit is sent and the cursor is walked instead."
 TICK_LIMIT: Final = 50_000
 """Rows per tick page. The tick endpoints roll nothing up, so their limit caps exactly the
 rows that were asked for and is safe to set."""
+
+TAPE_MARGIN: Final = timedelta(hours=8)
+"""How far past a tick chunk's last midnight its tape is asked for: to 08:00 UTC.
+
+That is the overnight tape and nothing of the next session: it ends as the US pre-market
+opens in summer and an hour before it in winter, so in summer it holds nothing and in
+winter the last hour of after-hours, which the next chunk keeps. Within it, a tick the
+venue made before the midnight and the tape published after it is kept by the day it was
+made; a quote crossing midnight by a fraction of a second is one, and nothing forbids it.
+
+Measured on 2026-10-15, no tick needs more. Over 32 whole tape days — prints of AAPL, NVDA,
+SPY, TQQQ and XLE and quotes of AAPL, TQQQ and XLE, on 2026-01-14 and 2026-02-12 (winter),
+2026-10-07, 2026-10-08 and 2026-10-14 (summer) and the Monday 2026-10-12; 47,894,696 rows —
+not one published on one day was made on an earlier one. Quotes reach the tape within 3.6 s
+of the venue; prints up to eight hours late, an after-hours or overnight trade reported at
+the next pre-market, and every such trade was made after the midnight it is reported
+across, because the evening close (20:00 Eastern) falls at or after midnight UTC. A tick
+made before a midnight and published more than eight hours after it would be kept by
+neither chunk; asked a whole day past, the chunk would have kept it, and none was found."""
 
 PREFIXES: Final[dict[str, str]] = {
     "stocks": "",
@@ -259,10 +288,25 @@ def vendor_window(window: tuple[date, date], resolution: str | None) -> tuple[da
     its close, so the point that belongs to the first day of the window opened before it,
     and the point that opened on the last day closes after it. Asking wide and keeping by
     the close is what makes a chunked backfill lose nothing at its seams; the surplus rows
-    are dropped rather than written.
+    are dropped rather than written. A tick load is asked `tape_window` instead, which
+    reaches hours rather than a day past its window; this one still bounds the window a
+    tick spec's entitlement is judged over.
     """
     margin = max(shift(resolution), timedelta(days=1))
     return (window[0] - margin, window[1] + margin)
+
+
+def tape_window(window: tuple[date, date]) -> tuple[int, int]:
+    """The tape instants to ask for, to serve `window` in `ts_event` days, both included.
+
+    From the first day's midnight, before which nothing published can belong to the window,
+    to `TAPE_MARGIN` past the last day's end, which is where a tick whose venue instant fell
+    before that midnight was measured to be published by. In UTC nanoseconds, because the
+    margin is hours and a day is the finest bound a date can state.
+    """
+    first = datetime(window[0].year, window[0].month, window[0].day, tzinfo=UTC)
+    last = datetime(window[1].year, window[1].month, window[1].day, tzinfo=UTC)
+    return (to_ns(first), to_ns(last + timedelta(days=1) + TAPE_MARGIN) - 1)
 
 
 # --- reading a row ------------------------------------------------------------
@@ -670,13 +714,21 @@ class RequestLoader:
         )
 
     def _points(self, request: Request, span: tuple[date, date]) -> Iterator[Any]:
-        """Every row the source serves for the widened window, kept by its own reference day."""
+        """Every row the source serves for the widened window, kept by its own reference day.
+
+        A bar is asked a window of days widened by its resolution; a tick is asked the tape
+        instants `tape_window` names, which reach `TAPE_MARGIN` past the span and no further.
+        """
         client = self._open()
         endpoint = self.kind.endpoint(request)
-        asked = vendor_window(span, request.resolution)
-        if request.floor is not None:
-            asked = (max(asked[0], request.floor), asked[1])
-        path, params = endpoint.request(request.ticker, asked)
+        if self.kind.aggregated:
+            asked = vendor_window(span, request.resolution)
+            if request.floor is not None:
+                asked = (max(asked[0], request.floor), asked[1])
+            path, params = endpoint.request(request.ticker, asked)
+        else:
+            asked = span
+            path, params = endpoint.between(request.ticker, tape_window(span))
         for page in client.pages(path, params):
             if page.signal is not Signal.ROWS and page.signal is not Signal.NO_ROWS:
                 self._explain(client, request, endpoint, asked)
