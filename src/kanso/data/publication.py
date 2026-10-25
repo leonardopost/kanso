@@ -137,8 +137,11 @@ PUBLICATION_RULES: Final[dict[str, PublicationRule]] = {
                 "an issuer's periodic financial statement. Its reference time is the end of "
                 "the period it covers; it becomes public when the filing is accepted and "
                 "disseminated, weeks later and on no fixed offset. The source must supply "
-                "the filing instant, and restatements arrive as further points with a later "
-                "availability rather than as overwrites."
+                "the filing instant, and a point's figures are the ones the filing that "
+                "stamps it stated: a source serving every version gives a restatement as a "
+                "further point with a later availability, and one serving only a period's "
+                "latest version stamps it at that latest filing, so a restatement replaces "
+                "the earlier point on reload and is never public before it was filed."
             ),
             lag=None,
             primed=True,

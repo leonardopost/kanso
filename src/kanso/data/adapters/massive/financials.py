@@ -25,12 +25,18 @@ the next one repeats it, so a later load stamps it later.
 no instant and no accession, only the CIK and that filing day, so the instant is the
 source's filings indexes joined on both (`filings.AcceptanceIndex`): the latest acceptance
 among the periodic reports the issuer filed that day. A row the indexes cannot stamp is
-dropped, never stamped from its filing day, its period end or the moment of the fetch, and
-a series none of whose rows can be stamped is refused, naming why. Measured on 2026-10-15
-over quarterly statements since 2009, the indexes stamp 173 of AAPL's 200 rows, 171 of
-MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207 and 165 of BRK.B's 198 — the rest name a
-report the source lists without its instant — and none of a foreign issuer's, whose 20-F
-and 40-F reports the acceptance index does not hold.
+dropped, never stamped from its filing day, its period end or the moment of the fetch.
+Measured on 2026-10-15 over quarterly statements since 2009, the indexes stamp 173 of
+AAPL's 200 rows, 171 of MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207 and 165 of BRK.B's
+198 — the rest name a report the source lists without its instant, or does not hold. It
+holds none of BABA's or SONY's 20-F reports, so neither issuer's statements stamp at all.
+
+**Dropping is per row, in every window.** `data backfill` and `data sync` ask thirty days
+at a time, which is one quarter at most, so a window whose rows are all dropped is an
+ordinary window, answered with nothing as a quiet one is, and the walk goes on past it. The
+one refusal is for a window whose rows name only reports of the forms the acceptance index
+holds no instant for (`filings.UNHELD_FORMS`): there the cause is the issuer's filings and
+not one report, so no window of them would stamp either, and the refusal says so.
 
 **Vendor-computed ratios are not read.** The statements listings serve figures, not
 ratios; the source's ratios listing is not asked. A ratio has no publication instant of
@@ -76,6 +82,7 @@ from kanso.data.adapters.massive.entitlement import Endpoint, Entitlements
 from kanso.data.adapters.massive.filings import (
     FILINGS,
     FILINGS_INDEX,
+    UNHELD_FORMS,
     VENDOR,
     AcceptanceIndex,
     day_end_ns,
@@ -392,28 +399,32 @@ class FinancialsLoader:
         ]
         indexes = _indexes(self.client, ticker, served, self.as_of)
         found: list[FinancialStatement] = []
+        dropped: list[frozenset[str]] = []
         for name, row in served:
             index = indexes.get(str(row.get(CIK_FIELD, "")))
             filed = row.get(FILED_FIELD)
-            stamp = (
-                index.of(parse_day(filed, f"{name}.{FILED_FIELD}"))
-                if index is not None and filed is not None
-                else None
-            )
+            if index is None or filed is None:
+                dropped.append(frozenset())
+                continue
+            day = parse_day(filed, f"{name}.{FILED_FIELD}")
+            stamp = index.of(day)
             if stamp is None:
+                dropped.append(index.forms(day))
                 continue
             statement = statement_of(row, name, spec, instrument, stamp)
             if window[0] <= utc_day(statement.ts_event) <= window[1]:
                 found.append(statement)
-        if served and not found:
+        if dropped and len(dropped) == len(served) and all(_unheld(forms) for forms in dropped):
+            forms = ", ".join(sorted(frozenset[str]().union(*dropped)))
             raise ValidationError(
-                f"massive: {ticker}'s statements over {window[0]}..{window[1]} name "
-                f"{len(served)} rows and the source's filings indexes hold an acceptance "
-                "instant for the filing behind none of them",
+                f"massive: {ticker}'s statements over {window[0]}..{window[1]} name only "
+                f"{forms} reports, and the source's acceptance index holds the instant of "
+                "none of them",
                 remedy=(
-                    "kanso stamps a statement only at an instant the source serves; an issuer "
-                    "outside the United States files 20-F and 40-F reports the acceptance "
-                    "index does not hold, so its statements cannot be loaded from this source"
+                    f"drop {ticker} from the spec: the acceptance index holds no 20-F's "
+                    "instant, so an issuer filing its annual report on that form has no "
+                    "statement this source can stamp; if it has since moved to 10-K and "
+                    "10-Q reports, a range after its last 20-F loads"
                 ),
             )
         yield from sorted(found, key=lambda point: (point.ts_init, point.ts_event))
@@ -438,6 +449,11 @@ def _indexes(
     return {
         cik: AcceptanceIndex(client, ticker, cik, filed, as_of=as_of) for cik, filed in days.items()
     }
+
+
+def _unheld(forms: frozenset[str]) -> bool:
+    """Whether a dropped row named a day holding only reports of forms never held."""
+    return bool(forms) and forms <= UNHELD_FORMS
 
 
 def _figures(row: Mapping[str, Any], statement: Statement) -> dict[str, float]:

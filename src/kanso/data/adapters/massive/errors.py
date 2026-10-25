@@ -45,6 +45,7 @@ from kanso.errors import Exit, KansoError
 
 __all__ = [
     "ERROR_FOR",
+    "GONE",
     "NON_FATAL",
     "BelowFloorError",
     "EmptyResultError",
@@ -53,6 +54,7 @@ __all__ = [
     "NotEntitledError",
     "Outcome",
     "TransportError",
+    "retired",
 ]
 
 
@@ -168,3 +170,25 @@ ERROR_FOR: Final[dict[Outcome, type[MassiveError]]] = {
     Outcome.MALFORMED: MalformedRequestError,
 }
 """The exception each outcome raises as, for a caller that turns one into a failure."""
+
+GONE: Final = 410
+"""The status the source answers on a path it has retired.
+
+A client error, as a malformed request is, and answered as one it gets a malformed
+request's remedy — check the ticker and the parameters — which sends an operator after a
+mistake they did not make. Measured: the statements listing kanso first read was retired
+on 2026-10-09 and has answered every request since with HTTP 410 and a `GONE` status."""
+
+
+def retired(path: str, asked: str) -> MalformedRequestError:
+    """The failure a path the source has retired is raised as, wherever kanso meets it.
+
+    It names the path as retired and gives the upgrade that moves kanso onto its successor,
+    because nothing an operator can change in a spec or a ticker answers it. `asked` says
+    what kanso was asking that path for.
+    """
+    return MalformedRequestError(
+        f"massive: the source has retired {path}, where {asked} is asked (HTTP {GONE})",
+        remedy="upgrade to a kanso that asks its successor: "
+        "`uv lock --upgrade-package kanso && uv sync`",
+    )

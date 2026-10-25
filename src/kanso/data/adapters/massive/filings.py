@@ -73,7 +73,12 @@ from kanso.data.adapters.massive.entitlement import (
     probe,
     raise_if_blocked,
 )
-from kanso.data.adapters.massive.errors import MalformedRequestError, NotEntitledError
+from kanso.data.adapters.massive.errors import (
+    GONE,
+    MalformedRequestError,
+    NotEntitledError,
+    retired,
+)
 from kanso.data.loader import to_ns
 from kanso.errors import ValidationError
 
@@ -89,6 +94,7 @@ __all__ = [
     "FILINGS_INDEX",
     "PAGE_LIMIT",
     "PERIODIC_FORMS",
+    "UNHELD_FORMS",
     "VENDOR",
     "AcceptanceIndex",
     "accession_of",
@@ -169,6 +175,22 @@ their transition-period and amended forms, and the two annual reports of an issu
 outside the United States. A day's other filings — an 8-K's press release, an insider's
 Form 4 — are not where a statement comes from, so they never stamp one."""
 
+UNHELD_FORMS: Final = frozenset({"20-F", "20-F/A"})
+"""The periodic forms the acceptance index was measured holding no instant for: the annual
+report of an issuer outside the United States, and its amendment. On 2026-10-15 the filings
+index listed BABA's 20-Fs on eleven days and SONY's on three, and the acceptance index held
+none of them — BABA's of 2026-05-20 answers 404 under its own accession. An issuer whose
+statements name only these has none this source can stamp. A 40-F, the annual report of a
+Canadian issuer, was not measured, so it is not among them: a statement naming one is
+stamped where the index holds its instant and dropped where it does not, as a domestic
+report's is."""
+
+NOT_HELD: Final = (404, "NOT_FOUND")
+"""How the acceptance index answers an accession it does not hold: HTTP 404 under its own
+`NOT_FOUND` status, measured for MSFT's 10-Q of 2025-01-29 and BABA's 20-F of 2026-05-20.
+It is the one client error that is an answer about the filing — any other, a bare 404 for a
+path the source does not serve among them, is about the request."""
+
 INDEX_PAGE_LIMIT: Final = "1000"
 """Rows per page of the filings index. It serves up to ten thousand; an issuer's periodic
 reports over sixteen years are seventy-odd rows, so the first page is the whole answer."""
@@ -216,9 +238,6 @@ MSFT's periodic reports since 2009 are 72 rows, every one under MSFT's own CIK. 
 no acceptance instant, which is why the acceptance index is asked after it. A report
 accepted after the evening cut-off is listed under both the day it was accepted and the day
 it was dated (MSFT's 10-K of 2020-07-31), so the day a statement names finds it either way."""
-
-GONE: Final = 410
-"""The status a source answers on a path it has retired."""
 
 _ACCESSION: Final = re.compile(r"(\d{10})-?(\d{2})-?(\d{6})")
 """An accession number, dashed or not. The regulator's own form is `0000320193-20-000096`
@@ -372,12 +391,7 @@ def listing(
     params.update(extra or {})
     for page in client.pages(path, params):
         if page.status == GONE:
-            raise MalformedRequestError(
-                f"massive: the source has retired {path}, where the {endpoint.dataset} "
-                f"listing is asked (HTTP {page.status})",
-                remedy="upgrade to a kanso that asks the listing's successor: "
-                "`uv lock --upgrade-package kanso && uv sync`",
-            )
+            raise retired(path, f"the {endpoint.dataset} listing")
         if page.signal is Signal.BAD_REQUEST:
             raise MalformedRequestError(
                 f"massive: the {endpoint.dataset} listing rejected the request for {ticker} "
@@ -453,15 +467,20 @@ class AcceptanceIndex:
     A day is stamped at the latest acceptance among its periodic reports: whichever of them
     carried the statement, that bound is not early. A day that holds no periodic report, or
     holds one the acceptance index has no instant for, has no stamp, and `of` says so with
-    `None` rather than reaching for the day itself. Measured on 2026-10-15, the acceptance
-    index held an instant for 56 of the 65 days AAPL's quarterly statements since 2009 name
-    and 51 of NVDA's 66; a foreign issuer's 20-F and 40-F are not held at all.
+    `None` rather than reaching for the day itself, and `forms` says which forms the day's
+    reports were, which is how a statement that cannot be stamped is told apart from an
+    issuer none of whose statements can be (`UNHELD_FORMS`). Measured on 2026-10-15, the
+    acceptance index held an instant for 56 of the 65 days AAPL's quarterly statements
+    since 2009 name and 51 of NVDA's 66, and none of a 20-F.
 
     Each row is checked for the CIK and the form it was asked for, though the filings index
     was measured honouring both: the acceptance index ignores every issuer filter it is
     given, and a filter some later version ignores should cost a stamp, never a wrong one.
-    A *refused* index is not a missing stamp: it leaves as the outcome a probe establishes,
-    so "the plan excludes the filings index" never arrives as "no instant".
+    Only an answer about the filing is a missing stamp. A *refused* index leaves as the
+    outcome a probe establishes, so "the plan excludes the filings index" never arrives as
+    "no instant"; a retired lookup, a rejected one and one that was not answered leave as
+    what they are, because the one answer that means "no instant" is the 404 the index
+    gives a filing it does not hold (`NOT_HELD`).
     """
 
     def __init__(
@@ -479,6 +498,7 @@ class AcceptanceIndex:
         self._window = (min(filed), max(filed)) if filed else None
         self._as_of = as_of
         self._reports: dict[date, tuple[str, ...]] | None = None
+        self._forms: dict[str, str] = {}
         self._accepted: dict[str, int | None] = {}
 
     def of(self, filed_on: date) -> tuple[int, str] | None:
@@ -490,6 +510,10 @@ class AcceptanceIndex:
         if not found or len(stamped) < len(found):
             return None
         return max(stamped)
+
+    def forms(self, filed_on: date) -> frozenset[str]:
+        """The forms of the periodic reports dated `filed_on`; none where it holds none."""
+        return frozenset(self._forms[accession] for accession in self._listed().get(filed_on, ()))
 
     def _listed(self) -> dict[date, tuple[str, ...]]:
         if self._reports is not None:
@@ -505,24 +529,35 @@ class AcceptanceIndex:
                 as_of=self._as_of,
             ):
                 accession = accession_of(row)
+                form = str(row.get(FORM_FIELD, ""))
                 if not accession or row.get(CIK_PARAM) != self._cik:
                     continue
-                if str(row.get(FORM_FIELD, "")) not in PERIODIC_FORMS:
+                if form not in PERIODIC_FORMS:
                     continue
                 held = days.setdefault(
                     parse_day(row.get(FILED_FIELD), "filings_index.filing_date"), []
                 )
                 if accession not in held:
                     held.append(accession)
+                self._forms[accession] = form
         self._reports = {day: tuple(found) for day, found in days.items()}
         return self._reports
 
     def _instant(self, accession: str) -> int | None:
         if accession in self._accepted:
             return self._accepted[accession]
-        page = next(self._client.pages(f"{FILINGS.template}/{accession}"))
+        path = f"{FILINGS.template}/{accession}"
+        page = next(self._client.pages(path))
         if page.signal is Signal.REFUSED:
             explain(self._client, FILINGS, self._ticker, as_of=self._as_of)
+        if page.signal is Signal.BAD_REQUEST and (page.status, page.vendor_status) != NOT_HELD:
+            if page.status == GONE:
+                raise retired(path, "a filing's acceptance instant")
+            raise MalformedRequestError(
+                f"massive: the acceptance index rejected the lookup of {accession} "
+                f"(HTTP {page.status}), which is not how it answers a filing it does not hold",
+                remedy="the vendor changed this lookup; the adapter must be updated to it",
+            )
         moment = page.rows[0].get(ACCEPTANCE_FIELD) if page.rows else None
         found = None if moment is None else edgar_instant_ns(moment, f"filings.{ACCEPTANCE_FIELD}")
         self._accepted[accession] = found

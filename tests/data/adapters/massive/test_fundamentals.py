@@ -30,7 +30,7 @@ Nothing here opens a socket, reads a credential or carries a recorded secret.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -38,7 +38,9 @@ from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
+import yaml
 
+from kanso.data import commands
 from kanso.data.adapters.massive.client import MassiveClient, Response
 from kanso.data.adapters.massive.corporate_actions import (
     ANNOUNCED,
@@ -55,6 +57,7 @@ from kanso.data.adapters.massive.errors import (
     EmptyResultError,
     MalformedRequestError,
     NotEntitledError,
+    TransportError,
 )
 from kanso.data.adapters.massive.filings import (
     FILINGS,
@@ -88,10 +91,12 @@ from kanso.data.adapters.massive.financials import (
 from kanso.data.catalog import write
 from kanso.data.loader import DatasetRef, to_ns, utc_day
 from kanso.data.loaders.points import instrument_id
-from kanso.data.manifest import shortfall
+from kanso.data.manifest import answered_empty, manifests, series_subject, shortfall
 from kanso.data.publication import check_delayed
 from kanso.data.types import CorporateAction, resolve_type
-from kanso.errors import Exit, ValidationError
+from kanso.errors import Exit, KansoError, ValidationError
+from kanso.state import StateStore
+from kanso.workspace import Workspace, init
 
 from . import Replay, body, definition, missing, nothing, refused, served
 
@@ -1011,24 +1016,32 @@ def test_a_row_naming_a_report_without_an_instant_is_dropped_and_the_rest_kept()
     assert len(points) == 3
 
 
-def test_a_series_of_which_nothing_can_be_stamped_is_refused_naming_why() -> None:
+BABA_ANNUAL = {
+    "instruments": ["BABA"],
+    "start": "2025-01-01",
+    "end": "2026-06-30",
+    "timeframe": "annual",
+    "statements": ["income_statement"],
+}
+"""What BABA's statements were recorded for: two fiscal years, both naming its 20-F."""
+
+
+def test_an_issuer_whose_reports_are_never_held_is_refused_naming_the_form() -> None:
     """BABA files 20-Fs, which the acceptance index does not hold: recorded, its 20-F of
-    2026-05-20 is listed by the filings index and answers 404 under its accession."""
-    spec = financials_spec(
-        instruments=["BABA"],
-        start="2025-01-01",
-        end="2026-06-30",
-        timeframe="annual",
-        statements=["income_statement"],
-    )
+    2026-05-20 is listed by the filings index and answers 404 under its accession. That is
+    the issuer's filings and not one report, so the refusal names the form, not a gap."""
     with pytest.raises(ValidationError) as failure:
-        statements_of(spec)
+        statements_of(financials_spec(**BABA_ANNUAL))
     assert "BABA" in failure.value.message
+    assert "name only 20-F reports" in failure.value.message
     assert "none of them" in failure.value.message
+    assert "drop BABA from the spec" in str(failure.value.remedy)
     assert "20-F" in str(failure.value.remedy)
 
 
 def test_a_row_with_no_filing_day_or_no_issuer_is_dropped() -> None:
+    """Neither row can be stamped and neither says which form it came in, so they are
+    dropped, as a row naming a report without its instant is, and nothing is refused."""
     rows = rows_of("income_statements_AAPL.json")
     rows[0] = {key: value for key, value in rows[0].items() if key != "filing_date"}
     rows[1] = {key: value for key, value in rows[1].items() if key != "cik"}
@@ -1038,9 +1051,160 @@ def test_a_row_with_no_filing_day_or_no_issuer_is_dropped() -> None:
             return served(rows)
         return recorded()(url, params)
 
+    assert statements_of(financials_spec(statements=["income_statement"]), answer=answer) == []
+
+
+# --- financials: a window at a time, as backfill and sync ask -------------------------
+
+Q2_REPORT = "acceptance_0000320193-26-000013.json"
+Q3_REPORT = "acceptance_0000320193-26-000020.json"
+NOT_HELD = "acceptance_0000950170-25-010491.json"
+"""AAPL's two 10-Qs as the acceptance index answered for them, and the 404 it answered for
+MSFT's 10-Q of 2025-01-29, which the filings index lists and the acceptance index does not
+hold. Swapped in for one of AAPL's, it is a domestic report the source has no instant for,
+as it has none for 12 to 22 % of the rows measured."""
+
+WINDOWED: dict[str, str] = {
+    "income_statements_AAPL.json": "period_end",
+    "balance_sheets_AAPL.json": "period_end",
+    "cash_flow_statements_AAPL.json": "period_end",
+    "filings_index_AAPL.json": "filing_date",
+    "income_statements_BABA.json": "period_end",
+}
+"""The recordings a narrower window is answered from, and the field each is windowed on."""
+
+
+def windowed(*, instead: Mapping[str, str] | None = None) -> Any:
+    """The source as recorded, asked over windows inside the ones it was recorded over.
+
+    A backfill or a sync asks the statements listings thirty days at a time, and the
+    filings index over the days those rows name, and nothing was recorded for those
+    windows. Each is answered with the rows of the recording whose window holds it, kept
+    to the window asked — what a listing serves of a range is the part of a wider answer
+    that falls in it — and every other request goes to `recorded`, `instead` and all. A
+    window reaching outside the recording fails the test rather than being guessed at.
+    """
+    fallback = recorded(instead=instead)
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        path, asked = request_key(url, params)
+        wanted = dict(asked)
+        for name, by in WINDOWED.items():
+            held_path, held = request_key(PROVENANCE["files"][name]["url"], {})
+            bounds = (f"{by}.gte", f"{by}.lte")
+            rest = {key: value for key, value in wanted.items() if key not in bounds}
+            covered = dict(held)
+            if path != held_path or rest != {
+                key: value for key, value in covered.items() if key not in bounds
+            }:
+                continue
+            low, high = wanted[bounds[0]], wanted[bounds[1]]
+            if not covered[bounds[0]] <= low <= high <= covered[bounds[1]]:
+                pytest.fail(f"asked {path} over {low}..{high}, outside what {name} recorded")
+            document = json.loads(fundamental(name).body)
+            document["results"] = [row for row in document["results"] if low <= row[by] <= high]
+            return Response(status=200, body=json.dumps(document).encode())
+        return fallback(url, params)
+
+    return answer
+
+
+@pytest.fixture
+def held_in(tmp_path: Path) -> Iterator[tuple[Workspace, StateStore]]:
+    """A fresh workspace and its state store, for the commands that chunk a series."""
+    ws = init(tmp_path / "ws")
+    with StateStore(ws.path("state.db")) as store:
+        store.migrate()
+        yield ws, store
+
+
+def serving(monkeypatch: pytest.MonkeyPatch, answer: Any) -> None:
+    """Have every command resolve `massive_financials` to a loader over `answer`."""
+    loader, _ = financials_loader(answer)
+    monkeypatch.setattr(commands, "loader_for", lambda ws, loader_id: loader)
+
+
+def spec_file(ws: Workspace, **overrides: Any) -> Path:
+    path = ws.root / "financials.yaml"
+    path.write_text(yaml.safe_dump(financials_spec(**overrides)), encoding="utf-8")
+    return path
+
+
+def test_a_window_whose_one_quarter_has_no_instant_is_empty_and_not_refused() -> None:
+    """Thirty days hold one quarter at most, so a quarter whose report the source has no
+    instant for leaves its window nothing to stamp. That is a dropped quarter, as it is over
+    the whole span, and never a refusal giving another issuer's reason."""
+    loader, _ = financials_loader(windowed(instead={Q2_REPORT: NOT_HELD}))
+    (ref,) = loader.discover(financials_spec())
+    assert list(loader.load(ref, (date(2026, 3, 2), date(2026, 3, 31)))) == []
+    q3 = list(loader.load(ref, (date(2026, 5, 31), date(2026, 6, 29))))
+    assert {point.fiscal_period for point in q3} == {"Q3"}
+    assert len(q3) == 3
+
+
+def test_a_backfill_drops_a_quarter_with_no_instant_and_writes_the_one_after_it(
+    monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
+) -> None:
+    """The chunk holding the unstamped quarter is answered empty, as a chunk the source
+    served nothing for is, and the backfill goes on to the chunk after it."""
+    ws, store = held_in
+    serving(monkeypatch, windowed(instead={Q2_REPORT: NOT_HELD}))
+    done = commands.backfill(ws, store, FinancialsLoader.id, spec_file(ws))
+    outcomes = {(item.chunk.start, item.chunk.end): item.outcome for item in done.fetches}
+    assert outcomes[(date(2026, 3, 2), date(2026, 3, 31))] == "empty"
+    assert outcomes[(date(2026, 5, 31), date(2026, 6, 29))] == "written"
+    assert done.rows == 3
+    assert [held.span for held in manifests(ws).values()] == [
+        (date(2026, 6, 27), date(2026, 6, 27))
+    ]
+    subject = series_subject((INSTRUMENT, "financial_statement", None))
+    assert (date(2026, 3, 2), date(2026, 3, 31)) in answered_empty(store)[subject]
+
+
+def test_a_load_whose_whole_span_is_dropped_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
+) -> None:
+    """One load is one window, so a span holding only the dropped quarter has nothing to
+    write, and the catalog refuses an empty dataset as it refuses any."""
+    ws, store = held_in
+    serving(monkeypatch, windowed(instead={Q2_REPORT: NOT_HELD}))
+    spec = spec_file(ws, end="2026-03-31")
     with pytest.raises(ValidationError) as failure:
-        statements_of(financials_spec(statements=["income_statement"]), answer=answer)
-    assert "none of them" in failure.value.message
+        commands.load(ws, store, FinancialsLoader.id, spec, replace=False)
+    assert "no points were served" in failure.value.message
+    assert manifests(ws) == {}
+
+
+def test_a_sync_passes_a_newest_quarter_with_no_instant_and_asks_for_it_again(
+    monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
+) -> None:
+    """The newest quarter's report may be one the source has no instant for yet. A sync
+    passes it, writing nothing and recording nothing, so the next sync asks again and
+    writes it once the source holds the instant."""
+    ws, store = held_in
+    serving(monkeypatch, windowed())
+    commands.load(ws, store, FinancialsLoader.id, spec_file(ws, end="2026-03-31"), replace=False)
+    serving(monkeypatch, windowed(instead={Q3_REPORT: NOT_HELD}))
+    passed = commands.sync(ws, store, to=date(2026, 6, 30))
+    assert passed.rows == 0
+    assert [item.outcome for item in passed.fetches] == ["empty"] * 4
+    serving(monkeypatch, windowed())
+    caught_up = commands.sync(ws, store, to=date(2026, 6, 30))
+    assert caught_up.rows == 3
+    assert caught_up.fetches[-1].chunk.start == date(2026, 6, 27)
+
+
+def test_a_backfill_of_an_issuer_whose_reports_are_never_held_is_refused_where_it_meets_one(
+    monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
+) -> None:
+    """A window at a time, the refusal comes at BABA's first statement, because no window
+    of an issuer filing 20-Fs would stamp; the quiet windows before it are answered empty."""
+    ws, store = held_in
+    serving(monkeypatch, windowed())
+    with pytest.raises(ValidationError) as failure:
+        commands.backfill(ws, store, FinancialsLoader.id, spec_file(ws, **BABA_ANNUAL))
+    assert "2025-03-02..2025-03-31 name only 20-F reports" in failure.value.message
+    assert manifests(ws) == {}
 
 
 # --- financials: the spec, the request and the dataset --------------------------------
@@ -1213,6 +1377,65 @@ def test_the_retired_statements_listing_is_named_as_retired() -> None:
     assert "retired /vX/reference/financials" in failure.value.message
     assert "410" in failure.value.message
     assert "uv lock --upgrade-package kanso" in str(failure.value.remedy)
+
+
+def test_a_retired_statements_listing_is_named_as_retired_by_the_probe_that_meets_it() -> None:
+    """Discovery probes each listing before anything is fetched, so a retired path's 410
+    reaches an operator from the probe first, and it says the same thing there."""
+    retired = recorded(instead={"market_income_statements.json": "financials_retired.json"})
+    loader, _ = financials_loader(retired)
+    with pytest.raises(MalformedRequestError) as failure:
+        loader.discover(financials_spec())
+    assert "retired /stocks/financials/v1/income-statements" in failure.value.message
+    assert "410" in failure.value.message
+    assert "uv lock --upgrade-package kanso" in str(failure.value.remedy)
+    assert "check the ticker" not in str(failure.value.remedy)
+
+
+def answering(accession: str, response: Response) -> Any:
+    """The source as recorded, except for the acceptance index's answer for `accession`."""
+    fallback = recorded()
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if url.endswith(f"{FILINGS.template}/{accession}"):
+            return response
+        return fallback(url, params)
+
+    return answer
+
+
+@pytest.mark.parametrize(
+    ("answer", "error", "said"),
+    [
+        (
+            recorded(instead={Q3_REPORT: "financials_retired.json"}),
+            MalformedRequestError,
+            "retired /v1/reference/sec/filings/0000320193-26-000020",
+        ),
+        (
+            answering("0000320193-26-000020", missing()),
+            MalformedRequestError,
+            "rejected the lookup of 0000320193-26-000020 (HTTP 404)",
+        ),
+        (
+            answering("0000320193-26-000020", Response(status=503)),
+            TransportError,
+            "did not answer",
+        ),
+    ],
+)
+def test_a_lookup_that_is_no_answer_about_the_filing_is_not_read_as_no_instant(
+    answer: Any, error: type[KansoError], said: str
+) -> None:
+    """Only the 404 the acceptance index answers a filing it does not hold, under its own
+    `NOT_FOUND` status, means there is no instant. A retired path, a 404 with no envelope —
+    a path the source does not serve — and a server that did not answer are each reported
+    as what they are, never as a report missing its instant."""
+    days = (date(2026, 5, 1), date(2026, 7, 31))
+    index, _ = acceptance_index(TICKER, "0000320193", *days, answer=answer)
+    with pytest.raises(error) as failure:
+        index.of(date(2026, 7, 31))
+    assert said in failure.value.message
 
 
 def test_a_listing_asked_for_under_the_wrong_version_is_a_404_and_not_a_refusal() -> None:

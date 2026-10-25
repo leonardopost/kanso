@@ -335,8 +335,10 @@ and that has three visible consequences here.
 - **Financials** are `delayed` under the `fundamental` publication rule, which derives no
   lag of its own and requires the source to state the instant. They come from the three
   statements listings that replaced `/vX/reference/financials` when the source retired it
-  on 2026-10-09 (it now answers HTTP 410, and kanso says so rather than calling the request
-  malformed). A spec names `timeframe` — `quarterly` (the default), `annual` or `ttm` — and
+  on 2026-10-09. It now answers HTTP 410, and wherever kanso meets a 410 — the probe
+  discovery runs first, a listing, a filing's lookup — it names the path as retired, with
+  the upgrade that moves to its successor, rather than telling an operator to check the
+  ticker. A spec names `timeframe` — `quarterly` (the default), `annual` or `ttm` — and
   may name `statements`, any of `income_statement`, `balance_sheet` and
   `cash_flow_statement`; left out, it is every statement the grain has, and a balance
   sheet has no `ttm`, so asking for one is refused. Each point is one statement for one
@@ -357,12 +359,21 @@ and that has three visible consequences here.
   - The instant comes from the source's two filings indexes: the filings index lists the
     issuer's periodic reports on that day, and the acceptance index holds each report's
     acceptance, read as the regulator's Eastern clock it was measured serving. A row whose
-    report the acceptance index holds no instant for is **dropped**, never stamped from a
-    date. Measured over quarterly statements since 2009, 173 of AAPL's 200 rows are
-    stamped, 171 of MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207 and 165 of BRK.B's 198.
-  - An issuer outside the United States files 20-F and 40-F reports, which the acceptance
-    index does not hold, so its statements cannot be stamped; a series none of whose rows
-    can be stamped is refused, saying so.
+    report the acceptance index holds no instant for, or does not hold, is **dropped**,
+    never stamped from a date. Measured over quarterly statements since 2009, 173 of
+    AAPL's 200 rows are stamped, 171 of MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207
+    and 165 of BRK.B's 198. Dropping is the same in every command: `data backfill` and
+    `data sync` ask thirty days at a time, one quarter at most, so a window whose quarter
+    is dropped is answered empty — recorded so, as any empty chunk is, except a window
+    past the newest day held, which is asked again next time — and the command goes on
+    to the next. A `data load` whose whole span is dropped writes nothing and is refused as
+    an empty dataset.
+  - An issuer outside the United States files its annual report on Form 20-F, and the
+    acceptance index holds none: BABA's and SONY's, measured. A window whose statements
+    name only 20-F reports is refused, naming the form, because no window of that issuer
+    would stamp; a backfill stops there. A 40-F, a Canadian issuer's annual report, was
+    not measured, and a row naming one is dropped where its instant is missing, as a
+    domestic report's is.
 
   Being refused or dropped is the point: the alternative is a statement that appears to
   have been public before it was filed. `docs/backlog.md` row 223 has what fuller coverage
