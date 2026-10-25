@@ -185,14 +185,20 @@ def retired(path: str, asked: str) -> MalformedRequestError:
 
     It names the path as retired and gives the upgrade that moves kanso onto its successor,
     because nothing an operator can change in a spec or a ticker answers it. The upgrade is
-    named for both ways kanso is installed — a workspace is not a project, so `uv lock` has
-    nothing to lock where kanso is a tool — and in the order any upgrade takes: the daemon
-    stopped first, `kanso doctor` after. `asked` says what kanso was asking that path for.
+    named for both ways kanso is installed, because each is upgraded where it lives: a tool
+    by `uv tool`, a dependency in the lock of the project that holds the workspace, since
+    `kanso init` writes no `pyproject.toml` of its own. It is given in the order every
+    upgrade takes: the daemon stopped first — a service by its service manager, since a
+    restart-always policy would start it straight back after `kanso research stop` — then
+    `kanso doctor`, then the daemon started again. `asked` says what kanso was asking that
+    path for.
     """
     return MalformedRequestError(
         f"massive: the source has retired {path}, where {asked} is asked (HTTP {GONE})",
-        remedy="upgrade to a kanso that asks its successor, with any daemon stopped "
-        "(`kanso research stop`): `uv tool upgrade kanso` where it is installed as a tool, "
-        "or `uv lock --upgrade-package kanso && uv sync` in the project that depends on it; "
-        "then `kanso doctor`",
+        remedy="upgrade to a kanso that asks its successor. Stop the daemon if one runs: a "
+        "service with its service manager, one started by hand with `kanso research stop`. "
+        "Upgrade: `uv tool upgrade kanso` where kanso is installed as a tool, "
+        "`uv lock --upgrade-package kanso && uv sync` in the project that depends on it. "
+        "Run `kanso doctor`; then start the daemon again: a service with its service "
+        "manager, one started by hand with `kanso research start`",
     )
