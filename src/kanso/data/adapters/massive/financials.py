@@ -38,10 +38,10 @@ it. The one refusal is for a range every row of which names only reports of the 
 acceptance index holds no instant for (`filings.UNHELD_FORMS`): there the cause is the
 issuer's filings and not one report, and the refusal says so. One window cannot tell that
 — an issuer that filed 20-Fs and then 10-Ks and 10-Qs has windows of each — so a window
-whose rows all name those forms has the spec's whole range asked again, on to the window's
-end where a sync runs past it, and is refused only if every row of that range names them
-too; otherwise it is dropped like any other. A `data load` over a range and a backfill of
-it therefore refuse the same issuers, in the same words.
+whose rows all name those forms has the spec's whole range asked again — a sync's window
+past that range too — and is refused only if every row of that range names them too;
+otherwise it is dropped like any other. A `data load` over a range and a backfill of it
+therefore refuse the same issuers, in the same words.
 
 **Vendor-computed ratios are not read.** The statements listings serve figures, not
 ratios; the source's ratios listing is not asked. A ratio has no publication instant of
@@ -401,7 +401,7 @@ class FinancialsLoader:
             statement = statement_of(row, name, spec, instrument, stamp)
             if window[0] <= utc_day(statement.ts_event) <= window[1]:
                 found.append(statement)
-        whole = (min(window[0], spec.start), max(window[1], spec.end))
+        whole = spec.span
         forms = _unheld(served, indexes)
         if forms and whole != window:
             over = self._served(spec, ticker, whole)

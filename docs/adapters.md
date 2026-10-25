@@ -380,10 +380,9 @@ and that has three visible consequences here.
     its whole range name only 20-F reports is refused, naming the form and the range, by
     `data load`, `data backfill` and `data sync` alike. A window cannot tell that on its
     own — an issuer that filed 20-Fs and then 10-Ks and 10-Qs has windows of each — so a
-    window whose statements name only 20-Fs has the spec's whole range asked again (on to
-    the window's end, where a sync runs past the range), and only if every statement over
-    it names one too is it refused; otherwise its rows are dropped like any other, and the
-    walk goes on. A 40-F, a Canadian issuer's annual report, was not measured, and a row
+    window whose statements name only 20-Fs — a sync's window past the range too — has the
+    spec's whole range asked again, and only if every statement over it names one too is
+    it refused; otherwise its rows are dropped like any other, and the walk goes on. A 40-F, a Canadian issuer's annual report, was not measured, and a row
     naming one is dropped where its instant is missing, as a domestic report's is.
 
   Being refused or dropped is the point: the alternative is a statement that appears to

@@ -1276,13 +1276,13 @@ def test_a_window_naming_only_a_20_f_is_dropped_where_the_range_holds_another_fo
     assert kept["backfill"] == [((q2, q2), 1), ((q3, q3), 1)]
 
 
-def test_a_sync_past_the_range_asks_it_again_on_to_the_window_it_extends_over(
+def test_a_sync_past_the_range_asks_the_range_again_for_a_window_naming_only_a_20_f(
     monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
 ) -> None:
-    """Loaded to the end of March, the series is extended by a sync whose first window
-    holds only BABA's second year and its 20-F. The range asked again runs from the spec's
-    start to that window's end, which holds AAPL's 10-Q quarter, so the window is passed
-    rather than refused and the sync writes the quarter after it."""
+    """Loaded to the end of March, the series is extended by a sync whose first window lies
+    past the spec's range and holds only BABA's second year and its 20-F. The range asked
+    again is the spec's own, which holds AAPL's 10-Q quarter ending 2026-03-28, so the
+    window is passed rather than refused and the sync writes the quarter after it."""
     ws, store = held_in
     serving(monkeypatch, two_forms())
     spec = spec_file(ws, **TWO_FORMS, end="2026-03-31")
