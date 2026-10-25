@@ -987,10 +987,17 @@ costs:
 ```
 
 When no layer states it, a hypothesis that holds quotes and prints at tick resolution —
-`resolution` `tick`, `quote` or `trade`, requiring `quote` and `trade`, not `book`, and asking
-no instrument for `bar` beside `quote`, which is everything `print_through` needs (below) —
-resolves to `print_through`, and every other to `touch`: on bars there is no tape to fill a
-resting order from, and a level-two book keeps a queue of its own. On a tape `touch` credits a
+`resolution` `tick`, `quote` or `trade`, requiring no `book`, and asking every name of its
+universe for both `quote` and `trade` and none for `bar` — resolves to `print_through`, and
+every other to `touch`: on bars there is no tape to fill a resting order from, and a
+level-two book keeps a queue of its own. A name asked for one feed and not the other keeps
+the whole hypothesis on `touch`, because the print rule fills a taker only on a quote in force
+and a resting limit only on a print (below): a market order in a name asked for `trade` alone,
+or a resting limit in one asked for `quote` alone, would never fill, where under `touch` it
+does. `hyp validate` and `hyp add` warn, naming each such name and what it is asked for; a
+`screen draft` of a cell whose trigger and follower are read as different feeds of different
+names writes that shape. A rule a layer states is not held to the names: a stated print rule
+over such a name is admitted and fills nothing there (`docs/backlog.md` row 223). On a tape `touch` credits a
 resting limit with no queue ahead of it, all that is left of it from any point beyond its
 price and the size a quote shows again at every quote that shows it, and the card's fill
 ratio, maker share and per-trade edge read those credits; the print rule credits it only from

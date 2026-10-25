@@ -126,3 +126,14 @@ def test_the_program_s_print_rule_advice_says_a_sized_strategy_cannot_follow_it(
         assert f"`{name}`" in unsized and f"`{name}`" in sized
         assert name in DENIED_UNDER_SIZING
     assert "discarded before any backtest" in sized
+
+
+def test_the_program_says_the_print_rule_holds_where_nothing_states_it() -> None:
+    """The proposer reads `program.md` and the raw `hypothesis.yaml`, never the resolved venue
+    model, and at tick resolution the print rule is the default for a hypothesis that asks
+    every name for quotes and prints. The bullet once opened "in `hypothesis.yaml`", which told
+    a lane on the default that the tape's rules did not apply to it."""
+    bullet = line_with(template("program.md"), "- Under `costs.limit_fill: print_through`")
+    assert "in `hypothesis.yaml` the venue fills by the tape" not in bullet
+    assert "asks every name for `quote` and `trade` and none for `bar`" in bullet
+    assert "a `hypothesis.yaml` that names no `limit_fill` is no sign the rule is off" in bullet

@@ -615,6 +615,78 @@ def test_the_print_rule_default_leaves_the_costs_origin_where_the_layers_leave_i
     assert model["origins"]["costs"] == "hypothesis"
 
 
+@pytest.mark.parametrize(
+    ("narrowed", "asked"),
+    [
+        ({"EURO": ["trade"]}, "EURO is asked for trade"),
+        ({"EURO": ["quote"]}, "EURO is asked for quote"),
+    ],
+    ids=["prints alone", "quotes alone"],
+)
+def test_a_name_asked_for_one_feed_keeps_every_venue_on_touch_and_is_named(
+    ws: Workspace, narrowed: dict[str, list[str]], asked: str
+) -> None:
+    """Under the print rules a taker fills only on a quote in force and a resting limit only on
+    a print, so a name asked for prints alone never takes and one asked for quotes alone never
+    rests to a fill. The default stays touch, on which the same file fills, and the warning
+    names the name that kept it there. Until the default read each name, both resolved to
+    print_through on both venues with no word."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], **narrowed},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    models = resolved(ws, doc)
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {venue: model["costs"]["limit_fill"] for venue, model in models.items()} == {
+        "SIM": "touch",
+        "XETR": "touch",
+    }
+    (warning,) = admitted.warnings
+    assert warning.startswith("costs.limit_fill: touch on SIM, XETR, which credits a resting")
+    assert f": {asked}. The print rules fill a taker only on a quote in force" in warning
+    assert warning.endswith(
+        "ask each name the strategy trades for quote and trade under data_by_instrument"
+    )
+
+
+def test_every_name_asked_for_quotes_and_prints_resolves_to_the_print_rule(ws: Workspace) -> None:
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["trade", "quote"]},
+    )
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {
+        "print_through"
+    }
+
+
+def test_a_bar_only_name_at_tick_resolution_keeps_the_default_on_touch(ws: Workspace) -> None:
+    """No bar fills a resting limit under the print rules and a bar carries no quote for a
+    taker to fill on, so a name read as bars alone keeps the tape on touch as well."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_requirements=["quote", "trade", "bar"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["bar"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
+    assert ": EURO is asked for bar. The print rules" in admitted.warnings[0]
+
+
+def test_a_tape_without_prints_is_told_nothing_about_the_print_rule(ws: Workspace) -> None:
+    """A hypothesis that holds no prints was never resolved to the print rule, so no name kept
+    it from it."""
+    admitted = hyp.admit(ws, write_hypothesis(ws, tick(data_requirements=["quote"])))
+
+    assert admitted.warnings == ()
+
+
 @pytest.mark.parametrize("resolution", ["tick", "quote", "trade"])
 def test_a_latency_of_zero_at_tick_resolution_is_refused(ws: Workspace, resolution: str) -> None:
     """At zero the venue lands an order on the point it was sent from. No latency is named:

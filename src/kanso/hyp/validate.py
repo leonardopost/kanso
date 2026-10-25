@@ -35,9 +35,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   resting limit on prints and a taker on quotes, on the top-of-book venue, so the hypothesis
   must require `quote` and `trade`, may not require `book`, and may not ask an instrument for
   `bar` beside `quote`, since a bar walks the engine's bid and ask past the quote in force. A
-  hypothesis that holds quotes and prints at tick resolution, as that rule admits, resolves to
-  `print_through` when no layer states a rule (`default_limit_fill`), and every other to
-  `touch`;
+  hypothesis at tick resolution that asks every name for quotes and prints, and none for bars
+  or a book, resolves to `print_through` when no layer states a rule (`default_limit_fill`),
+  and every other to `touch`, with a warning naming the names that kept a tape of quotes and
+  prints there (`cost_warnings`);
 * at tick resolution, a venue model may not leave `latency_ms` at zero, which lands an order
   on the very point it was sent from, and on the top-of-book venue may not state a maker
   schedule under `touch` or `through`, which credit a resting limit with no queue ahead of
@@ -627,24 +628,36 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
 def default_limit_fill(hyp: Hypothesis) -> LimitFill:
     """The rule a hypothesis's venues resolve to when no layer states one.
 
-    `print_through` for a hypothesis that holds quotes and prints at tick resolution, wherever
-    that rule admits it — `quote` and `trade` required, no `book`, and no instrument asked for
-    `bar` beside `quote` (`_check_print_through`) — and `touch` for every other: bars, a book
-    whose venue keeps a queue of its own, a tape with no prints for a resting order to be
-    filled from. On a tape `touch` credits a resting limit with no queue ahead of it, all that
-    is left of it from any point beyond its price, and the size a quote shows again at every
-    quote that shows it; the print rule credits it only from a print through it, by that
-    print's size, which is the tape's own evidence that the order would have traded. A rule a
-    layer states is the operator's and stands, `touch` included.
+    `print_through` for a hypothesis at tick resolution that asks every name of its universe for
+    both quotes and prints, no name for bars and nothing for a book, and `touch` for every
+    other: bars, a book whose venue keeps a queue of its own, a tape with no prints for a
+    resting order to be filled from, and a tape with a name asked for one feed and not the other
+    (`_off_the_tape`, which `cost_warnings` names). The print rule fills a taker only on a quote
+    in force and a resting limit only on a print, so a taker in a name with no quotes never
+    fills and a resting limit in one with no prints never does: a file that fills under `touch`
+    would fill nothing there, and nothing would say so. On a tape `touch` credits a resting
+    limit with no queue ahead of it, all that is left of it from any point beyond its price, and
+    the size a quote shows again at every quote that shows it; the print rule credits it only
+    from a print through it, by that print's size, which is the tape's own evidence that the
+    order would have traded. A rule a layer states is the operator's and stands, `touch`
+    included.
     """
-    if hyp.resolution not in TICK_RESOLUTIONS:
+    if hyp.resolution not in TICK_RESOLUTIONS or BOOK_TYPE in hyp.data_requirements:
         return DEFAULT_LIMIT_FILL
-    required = set(hyp.data_requirements)
-    if not {QUOTE_TYPE, TRADE_TYPE} <= required or BOOK_TYPE in required:
-        return DEFAULT_LIMIT_FILL
-    if any({BAR_TYPE, QUOTE_TYPE} <= set(hyp.required_of(name)) for name in hyp.universe):
+    if not {QUOTE_TYPE, TRADE_TYPE} <= set(hyp.data_requirements) or _off_the_tape(hyp):
         return DEFAULT_LIMIT_FILL
     return TICK_LIMIT_FILL
+
+
+def _off_the_tape(hyp: Hypothesis) -> list[str]:
+    """The names the print rule could not fill as `touch` does: each asked for no quote or no
+    trade, or for a bar beside them, which walks the engine's bid and ask past the quote."""
+    return [
+        name
+        for name in hyp.universe
+        if not {QUOTE_TYPE, TRADE_TYPE} <= set(hyp.required_of(name))
+        or BAR_TYPE in hyp.required_of(name)
+    ]
 
 
 def check_tick_costs(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
@@ -698,17 +711,24 @@ def check_tick_costs(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
         "with no queue ahead of it — all that is left of it from any point beyond its price, "
         "and under touch the size a quote shows again at every quote that shows it",
         remedy="state limit_fill: print_through or print_through_whole, which fills a resting "
-        "limit only on a later print through it and needs quote and trade and no book; or "
+        "limit only on a later print through it and needs every name the strategy trades "
+        "asked for quote and trade, and no book; or "
         "remove maker_bps and maker_per_share from the hypothesis costs and from "
         f"venues.{queue_free[0]}.costs in portfolio.yaml",
     )
 
 
 def cost_warnings(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> tuple[str, ...]:
-    """What an admitted hypothesis's venue models charge that an operator should read: a print
-    rule with no maker schedule charges a fill that rested on the book as any fill at its price
-    — `slippage_bps` and half the spread on top of the commission, which a resting order filled
-    at its own price inside the quote never paid in the market."""
+    """What an admitted hypothesis's venue models charge that an operator should read.
+
+    A print rule with no maker schedule charges a fill that rested on the book as any fill at
+    its price — `slippage_bps` and half the spread on top of the commission, which a resting
+    order filled at its own price inside the quote never paid in the market. And a hypothesis
+    that holds quotes and prints at tick resolution but resolves to `touch`, because a name is
+    asked for one feed without the other (`default_limit_fill`), is told which names those
+    are: `touch` credits its resting limits with no queue ahead of them.
+    """
+    warnings: list[str] = []
     unscheduled = sorted(
         venue
         for venue, model in models.items()
@@ -716,15 +736,30 @@ def cost_warnings(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> tuple[st
         and model.costs.maker_bps is None
         and model.costs.maker_per_share is None
     )
-    if not unscheduled:
-        return ()
-    rule = models[unscheduled[0]].costs.limit_fill
-    return (
-        f"costs: no maker_bps or maker_per_share on {', '.join(unscheduled)} under limit_fill: "
-        f"{rule}, so a fill that rested on the book is charged as any fill at its price — "
-        "slippage_bps and half the spread on top of the commission; state the account's maker "
-        "schedule, 0 for none and negative for a rebate",
-    )
+    if unscheduled:
+        rule = models[unscheduled[0]].costs.limit_fill
+        warnings.append(
+            f"costs: no maker_bps or maker_per_share on {', '.join(unscheduled)} under "
+            f"limit_fill: {rule}, so a fill that rested on the book is charged as any fill at "
+            "its price — slippage_bps and half the spread on top of the commission; state the "
+            "account's maker schedule, 0 for none and negative for a rebate"
+        )
+    touched = sorted(v for v, model in models.items() if model.costs.limit_fill == "touch")
+    off = _off_the_tape(hyp)
+    taped = {QUOTE_TYPE, TRADE_TYPE} <= set(hyp.data_requirements)
+    tick = hyp.resolution in TICK_RESOLUTIONS and BOOK_TYPE not in hyp.data_requirements
+    if touched and off and taped and tick:
+        asked = "; ".join(f"{name} is asked for {', '.join(hyp.required_of(name))}" for name in off)
+        warnings.append(
+            f"costs.limit_fill: touch on {', '.join(touched)}, which credits a resting limit "
+            "with no queue ahead of it, and not print_through, which a hypothesis holding "
+            "quotes and prints at tick resolution resolves to only when every name is asked "
+            f"for quote and trade and none for bar: {asked}. The print rules fill a taker only "
+            "on a quote in force and a resting limit only on a print, so such a name could "
+            "not fill as it does under touch; ask each name the strategy trades for quote and "
+            "trade under data_by_instrument"
+        )
+    return tuple(warnings)
 
 
 def _check_spread(

@@ -8,8 +8,8 @@ the cost model for that hypothesis alone. Where nothing is declared the shipped 
 apply: a margin account whose leverage is the hypothesis's `max_leverage`, USD, zero
 commission and one basis point of slippage, with the spread taken from quotes when quotes
 are available, and a resting limit order filled when the market reaches its price — or, for a
-hypothesis that holds quotes and prints at tick resolution, only on a later print through it
-(`TICK_LIMIT_FILL`), the caller saying which (`default_limit_fill`). The
+hypothesis at tick resolution that asks every name for quotes and prints, only on a later
+print through it (`TICK_LIMIT_FILL`), the caller saying which (`default_limit_fill`). The
 spread, quoted or fixed, and the slippage in basis points are charged on a fill the venue
 struck at a print or a bar's close inside the quote, or in a name with no quote before it; a
 fill struck at the touch — a buy at or above the ask of its name's last quote, a sale at or
@@ -92,11 +92,12 @@ DEFAULT_SLIPPAGE_BPS = 1.0
 DEFAULT_LIMIT_FILL: LimitFill = "touch"
 """A resting limit fills when the market reaches its price: the engine's own default, what
 every venue model resolved before the key existed was measured under, and the rule a
-hypothesis resolves to when no layer states one and it does not hold quotes and prints at tick
-resolution — on bars there is no tape to credit a resting order from."""
+hypothesis resolves to when no layer states one and it does not ask every name for quotes and
+prints at tick resolution — on bars there is no tape to credit a resting order from, and in a
+name with one feed alone the print rule would fill a taker or a resting limit never."""
 TICK_LIMIT_FILL: LimitFill = "print_through"
-"""The rule a hypothesis that holds quotes and prints at tick resolution resolves to when no
-layer states one: a resting limit fills only on a later print through it, by that print's
+"""The rule a hypothesis at tick resolution that asks every name for quotes and prints resolves
+to when no layer states one: a resting limit fills only on a later print through it, by that print's
 size, and a taker on the quote in force. On a tape `touch` credits a resting limit with no
 queue ahead of it, all that is left of it from any point beyond its price, and the size a
 quote shows again at every quote that shows it — fills the market did not give."""

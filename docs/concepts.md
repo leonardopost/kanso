@@ -1606,8 +1606,9 @@ at a tolerance of zero for book data too.
 when it was placed waits on the book, and a later point that reaches its price fills it at
 that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
 (`docs/workspace.md`): under `touch`, the engine's own rule and the default for a hypothesis
-that does not hold quotes and prints at tick resolution — one that does resolves to
-`print_through` — a bar whose low is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
+that does not hold quotes and prints at tick resolution — one that asks every name for both,
+none for bars and nothing for a book, resolves to `print_through` — a bar whose low is a buy's
+price fills it; under `through` the low has to go under it, a sell's high over it,
 a print past it. Under `print_through` only a print past it fills it, by that print's own size,
 and a taker fills on the quote rather than on a print (below). On a bar the venue walks the
 open, the high, the low and the close as prints in turn, so a bar that only touched the level

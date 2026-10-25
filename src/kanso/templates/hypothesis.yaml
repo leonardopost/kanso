@@ -36,7 +36,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
                                    # measured on the account and route the strategy will trade through. Zero unless
                                    # stated, which `kanso hyp validate` refuses at resolution tick, quote or trade
-#   limit_fill: print_through      # print_through by default at tick resolution over quote and trade, touch otherwise.
+#   limit_fill: print_through      # print_through by default at tick resolution with every name asked for quote and
+                                   # trade, touch otherwise, with a warning naming a name asked for one alone.
                                    # touch | through | print_through | print_through_whole: a resting limit fills when the
                                    # market reaches its price (the engine's rule), or only once a bar's low/high or a print
                                    # goes beyond it, which fills all that is left of it (of the best-priced order, when it
