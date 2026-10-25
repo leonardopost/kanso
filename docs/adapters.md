@@ -396,7 +396,7 @@ and that has three visible consequences here.
     and a row naming one is dropped where its instant is missing, as a domestic report's is.
 
   Being refused or dropped is the point: the alternative is a statement that appears to
-  have been public before it was filed. `docs/backlog.md` row 223 has what fuller coverage
+  have been public before it was filed. `docs/backlog.md` row 228 has what fuller coverage
   would need.
 
 ### Configuration

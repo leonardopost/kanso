@@ -151,7 +151,8 @@ def test_a_quoted_follower_crosses_its_own_spread_and_is_charged_none() -> None:
 
     entry_ask, exit_bid = 100.0 + half, 100.0 * math.exp(30 / 1e4) - half
     assert found.gross == pytest.approx(math.log(exit_bid / entry_ask) * 1e4)
-    assert found.hurdle == pytest.approx(2 * (1.0 + 0.5))
+    # the commission alone, as a card charges a fill struck at the touch: no slippage_bps
+    assert found.hurdle == pytest.approx(2 * 1.0)
 
 
 def test_a_z_trigger_fires_on_an_excursion_from_its_trailing_mean() -> None:
@@ -271,7 +272,9 @@ def test_a_derived_follower_s_quoted_leg_pays_the_half_spread_it_shows() -> None
     found = tally(spec, series)
 
     one_leg = 2 * (1.0 + 0.5 + 1.0)
-    measured = 2 * (1.0 + 0.5 + 0.05 / 100.0 * 1e4)
+    # the quoted leg reaches its touch through the half-spread it shows, and a card fills it
+    # there, so it pays no slippage_bps; the leg read as prints pays the model's
+    measured = 2 * (1.0 + 0.05 / 100.0 * 1e4)
     assert found.hurdle == pytest.approx(0.5 * one_leg + 0.5 * measured)
 
 

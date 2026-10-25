@@ -5,8 +5,12 @@ extraction: so many basis points of slippage per fill. On a live stage that numb
 a model and becomes an observation, and the two can part company — a venue changes, liquidity
 thins, an order type behaves differently in size. This gate is where the observation is held
 against the assumption, and the assumption it is held against is the one the run recorded:
-`costs.slippage_bps` of the venue model the extraction charged, which is the same number
-composition measured the version's expectation through.
+`costs.slippage_bps` of the venue model the extraction charged. The extraction charges it on a
+fill not struck at the touch; a fill struck there — a taker on a quoted name, whose price
+already carries the spread, among them — was charged none (`kanso.nautilus.costs.at_touch`).
+So the allowance is the stated rate whatever share of the run's fills paid it: where most
+fills were touched it is that rate more lenient than what the certificate charged them, and
+the gate does not read each fill's own charge.
 
 **The realised half is a fact about the broker, and only a broker can report it.** A fill
 carries the price it printed at but not the price the order was worth at the instant it was
@@ -89,7 +93,8 @@ class _FillQualityDrift:
 
 
 def _modelled(ctx: GateContext) -> float:
-    """The slippage the venue model charged; zero when the run records no usable number.
+    """The slippage the venue model states, which the extraction charged on every fill not
+    struck at the touch; zero when the run records no usable number.
 
     A run whose venue model states no slippage charged none, so the whole realised figure
     is excess. That is the strict reading and the safe one: it can only fail a version the

@@ -154,6 +154,62 @@ def test_an_intent_sent_from_the_book_handler_carries_the_changes_own_instant(
     assert [(intent[0] - base) // SECOND_NS for intent in result.intents] == [1, 4, 29]
 
 
+HELD: list[int] = []
+"""How many fills the harness still held after each change `ROUND_TRIPS` was handed."""
+
+ROUND_TRIPS = b"""
+import sys
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Holds the book alone: takes the offer on every fourth change and sells at market on
+    the change after, and writes down how many fills the harness holds once each change is
+    handled.\"\"\"
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_order_book_deltas(self, deltas):
+        self.seen += 1
+        if self.seen % 4 == 2:
+            self.submit_entry(deltas.instrument_id, "BUY", qty=100, price=10.02)
+        elif self.seen % 4 == 3:
+            self.submit_exit(deltas.instrument_id)
+        held = len(self._open_fills) + len(self._booked_open) + len(self._refs)
+        sys.modules["tests.nautilus.backtest.test_order_book"].HELD.append(held)
+"""
+
+
+def test_a_sleeve_that_holds_only_the_book_keeps_no_fill_past_its_booking(request_for) -> None:
+    """On a venue matching a level-two book every fill is struck at the touch, so the harness
+    pins no quote to any: a sleeve that holds only the book is handed no point that would let
+    one go, and kept every fill it was handed for the rest of the run."""
+    from tests.nautilus.backtest.test_exit_flat import book
+
+    HELD.clear()
+    document = hypothesis().model_dump(mode="json")
+    document.update(resolution="tick", data_requirements=["book"])
+    hyp = Hypothesis.model_validate(document)
+    result = execute(
+        request_for(RESEARCH, source=ROUND_TRIPS, hypothesis_=hyp),
+        [instrument()],
+        [tuple(book(RESEARCH[0]))],
+    )
+    assert not result.crashed, result.traceback_tail
+
+    assert len(result.run.fills) >= 30
+    assert all(fill.touched for fill in result.run.fills)
+    assert len(HELD) == 80 and set(HELD) == {0}
+
+
 SEEN: list[tuple[int, float | None, float | None]] = []
 """Every call `WATCHING` was handed, written from inside the run."""
 

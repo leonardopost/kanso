@@ -2,13 +2,18 @@
 
 Commission — in basis points and, where the model states it, per share — slippage and half
 the spread are charged on every fill, once, by the runner's extraction
-(`kanso.nautilus.backtest`); the simulated venue charges nothing. The half-spread is charged
-where the price does not already carry it: a fill in an instrument the venue books from
-quotes or a level-two book, with no bars beside them, is struck at the touch — a taker bought
-the ask or sold the bid, a maker earned the spread at its own price — so the caller hands
-`fill_cost` a half-spread of zero for it (`backtest.touched_names`, `KansoStrategy._touched`),
-and a fill in an instrument fed bars, alone or beside its quotes, or prints alone, struck at a
-close or a last print, pays the model's half-spread, quoted or fixed. A fill that
+(`kanso.nautilus.backtest`); the simulated venue charges nothing. The half-spread and the
+slippage in basis points are charged where the price does not already carry the spread, and
+whether it does is read off each fill, never off its name (`at_touch`): a fill struck at the
+touch — a buy at or above the ask of the last quote of its name at or before it, a sale at or
+below that quote's bid, or any fill on a venue that matches against a level-two book — paid the
+spread in its price and whatever its order walked past the touch, so the caller hands
+`fill_cost` `touched` and neither is charged on it; a fill struck at a print or a bar's close
+inside the quote, or in a name with no quote before it, is charged both, the half-spread
+quoted or fixed. So one name fed bars beside its quotes pays the half-spread on a fill its
+bars made at a close inside the quote and not on the ones its quotes made — a close at or
+beyond the touch is a fill at the touch, and pays neither — and a taker that landed on a print
+at the near side of the quote pays it. A fill that
 rested on the book — one the venue reports as a maker's — pays the venue model's maker
 schedule instead of all three, and instead of the per-share commission, when the model states
 one: `maker_bps` of its notional and `maker_per_share` on each share, either of which alone
@@ -65,6 +70,7 @@ __all__ = [
     "MONTHLY",
     "NS_PER_YEAR",
     "BookPolicy",
+    "at_touch",
     "carry",
     "fill_cost",
     "fill_rate",
@@ -109,6 +115,17 @@ def side_rate(commission_bps: float, slippage_bps: float, half_spread: float) ->
     return (commission_bps + slippage_bps) / BPS + half_spread
 
 
+def at_touch(px: float, *, sell: bool, quote: tuple[float, float] | None) -> bool:
+    """Whether a fill at `px` was struck at the touch of `quote`, its name's last `(bid, ask)`
+    at or before it: a buy at or above the ask, a sale at or below the bid. Such a price is
+    what the market offered and carries the spread; a price inside the quote — a print, a
+    bar's close — does not. No quote, no touch."""
+    if quote is None:
+        return False
+    bid, ask = quote
+    return px <= bid if sell else px >= ask
+
+
 def _rests(maker: bool, maker_bps: float | None, maker_per_share: float | None) -> bool:
     """Whether a fill is charged the maker schedule: the venue reported it as a maker's and
     the model states a schedule for one — `maker_bps`, `maker_per_share` or both."""
@@ -123,16 +140,21 @@ def fill_rate(
     *,
     maker: bool,
     maker_per_share: float | None = None,
+    touched: bool = False,
 ) -> float:
     """What one fill costs per unit of notional under a venue model.
 
     A maker's fill under a stated maker schedule pays `maker_bps` and nothing else per unit
     of notional — nothing at all when the schedule is stated per share alone — which may be
     negative; every other fill — and a maker's, under a model that states no maker schedule —
-    pays commission, slippage and half the spread, exactly as `side_rate` strikes it.
+    pays commission, slippage and half the spread, exactly as `side_rate` strikes it, except
+    that a fill struck at the touch (`touched`, `at_touch`) pays the commission alone: its
+    price carries the spread and whatever its order walked past the touch.
     """
     if _rests(maker, maker_bps, maker_per_share):
         return 0.0 if maker_bps is None else maker_bps / BPS
+    if touched:
+        return side_rate(commission_bps, 0.0, 0.0)
     return side_rate(commission_bps, slippage_bps, half_spread)
 
 
@@ -202,9 +224,15 @@ def fill_cost(
     maker_per_share: float | None = None,
     slip: float = 0.0,
     multiplier: float = 1.0,
+    touched: bool = False,
 ) -> float:
     """What one fill costs in the account currency: `fill_rate` of its notional, plus the
     per-share charge its side pays on each share, plus the sell-side fees on a sale.
+
+    `touched` says the fill was struck at the touch (`at_touch`): its price carries the spread
+    and any walk past it, so it pays neither `half_spread` nor `slippage_bps`. `slippage_ticks`
+    is what an account states it pays a tick over the touch to take, so a taker pays it either
+    way.
 
     `slip` is the price a taker's share is charged over its fill for the model's
     `slippage_ticks` (`tick_slip`), worth `multiplier` in the account currency per unit of
@@ -232,6 +260,7 @@ def fill_cost(
         maker_bps,
         maker=maker,
         maker_per_share=maker_per_share,
+        touched=touched,
     )
     if sell:
         charged += notional * sell_fee_bps / BPS + qty * sell_fee_per_share

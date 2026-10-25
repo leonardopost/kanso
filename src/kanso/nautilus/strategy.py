@@ -151,7 +151,7 @@ kanso's own attribute, honoured by kanso's loader alone.
 
 from __future__ import annotations
 
-from bisect import bisect_left, bisect_right, insort
+from bisect import bisect_left, insort
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -198,6 +198,7 @@ from kanso.errors import ValidationError
 from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
     BookPolicy,
+    at_touch,
     carry,
     fill_cost,
     fixed_half_spread,
@@ -747,7 +748,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._scope_cls: type | None = None
         self._price_ns: dict[str, int] = {}
         self._restated: dict[str, list[splits.Split]] = {}
-        self._quoted: dict[str, tuple[list[int], list[float]]] = {}
+        self._levelled = BOOK in resolved.data_requirements
+        self._refs: dict[object, tuple[float, float] | None] = {}
+        self._open_fills: dict[object, Any] = {}
+        self._booked_open: dict[object, float] = {}
+        self._instant_ns = 0
         self._policy: BookPolicy | None = None
         self._anchor_ns = 0
         self._period_ns = 1
@@ -1005,8 +1010,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         cut as the runner cuts them — from `_anchor_ns`, `_period_ns` long, ending at the
         last point inside — and nothing turns over a warmup prefix, which the runner
         measures in no period. A funding settlement booked at an earlier instant is settled
-        first (`_refund`), so the period closes on the book the runner closes it on.
+        first (`_refund`), so the period closes on the book the runner closes it on, and before
+        that every fill of an earlier instant is let go as struck (`_struck`): no quote of its
+        instant is still to come.
         """
+        if ts_ns > self._instant_ns:
+            self._struck(ts_ns)
         if self._settling and ts_ns > self._settling[0][0]:
             self._refund()
         if self._filled:
@@ -1288,13 +1297,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._turn(int(tick.ts_init))
         self._delivered_ns = int(tick.ts_init)
         self._last_quote[key] = tick
-        mid = (float(tick.bid_price) + float(tick.ask_price)) / 2.0
+        bid, ask = float(tick.bid_price), float(tick.ask_price)
+        mid = (bid + ask) / 2.0
         self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
         self._observe_price(key, mid, int(tick.ts_event))
+        self._quoted(key, int(tick.ts_init), (bid, ask))
         if self._charges.get("spread") == "quotes":
-            times, values = self._quoted.setdefault(key, ([], []))
-            times.append(int(tick.ts_init))
-            values.append(quote_half_spread(float(tick.bid_price), float(tick.ask_price)))
             self._settle(key)
         if self._held():
             self._pending.append(tick)
@@ -2795,6 +2803,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if ledger is not None:
             ledger.running.append(self)
         try:
+            if isinstance(event, OrderFilled):
+                self._fill_arrived(event)
             self._arrived(event)
             super().handle_event(event)
             client_order_id = getattr(event, "client_order_id", None)
@@ -3077,9 +3087,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             else self.cost_rate
         )
         if self._charges.get("spread") == "quotes":
-            _, values = self._quoted.get(key, ([], []))
-            if values:
-                rate += 2.0 * values[-1]
+            quote = self._last_quote.get(key)
+            if quote is not None:
+                rate += 2.0 * quote_half_spread(float(quote.bid_price), float(quote.ask_price))
         return 1.0 + ROUND_TRIP * rate
 
     def _resting(self, intended: Mapping[str, float]) -> dict[str, float]:
@@ -3120,11 +3130,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         whichever object carried it; an order the engine has replaced with another object
         is read again from its first event (`_current`). The order, its count and its fill
         ids are let go once the venue has closed it and every fill of it is booked. With
-        `key` only that name's orders are read: a quote makes its own name's spread current
-        and no other, so a fill in another name waits for that name's quote or for a read of
-        the balance. A quoted spread's series is then cut back to its last quote: every fill
-        before now is booked, and a fill still to come is charged at a quote no older than
-        that one.
+        `key` only that name's orders are read, which a quote of that name asks for under
+        `spread: quotes`. A fill is charged against the quote it was struck against
+        (`_charge`), so when it is booked moves nothing it is charged; one booked while a quote
+        of its own instant may still come is struck again when it does (`_quoted`).
 
         With `until_ns` a fill after that instant is left unbooked and its order is read
         again next time from where it was: it is returned instead, for the period close that
@@ -3151,7 +3160,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                         held_back = True
                         continue
                     entry.booked.add(event.id)
-                    self._cash -= self._paid(event)
+                    self._book_fill(event)
                     if self._cfg.books_funding:
                         self._filled.append(
                             (int(event.ts_event), event.instrument_id.value, self._signed(event))
@@ -3165,10 +3174,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 self._cancels.pop(order.client_order_id, None)
         for client_order_id in closed:
             del self._ledger[client_order_id]
-        for name, (times, values) in self._quoted.items():
-            if key is None or name == key:
-                del times[:-1]
-                del values[:-1]
         return later
 
     @staticmethod
@@ -3216,19 +3221,78 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         elif order is not entry.order or order.event_count != kept:
             entry.unread = None
 
-    def _paid(self, event: Any) -> float:
-        """What one fill took out of cash: the value it bought, or gave back what it sold
-        for, and what the runner charges it — commission, per share included where the model
+    def _fill_arrived(self, event: Any) -> None:
+        """Pin the quote a fill is read against when the engine hands it over: its name's last
+        quote delivered so far, which a quote of the fill's own instant delivered after it
+        replaces (`_quoted`) until a later instant is (`_struck`). On a venue that matches a
+        level-two book every fill is struck at the touch whatever the quote (`_charge`), so
+        nothing is pinned: a sleeve that holds only the book is handed no point that lets a
+        fill go (`_turn`), and would keep every fill of the run."""
+        if self._levelled or event.id in self._refs:
+            return
+        quote = self._last_quote.get(event.instrument_id.value)
+        self._refs[event.id] = (
+            None if quote is None else (float(quote.bid_price), float(quote.ask_price))
+        )
+        if int(event.ts_event) >= self._instant_ns:
+            self._open_fills[event.id] = event
+
+    def _quoted(self, key: str, ts_ns: int, quote: tuple[float, float]) -> None:
+        """A quote of `key` delivered at `ts_ns`: the quote each fill of the name at that
+        instant is read against from now on, the last of the instant's quotes being the last
+        the venue applied there — as the extraction reads it (`kanso.nautilus.backtest.Marks`).
+        A fill already booked is struck again, and the difference booked.
+
+        The engine hands a sleeve a fill before the point the venue made it on (row 212 of
+        `docs/backlog.md`), so a fill a quote made arrives against the quote before that one,
+        and is put right here, when its quote is delivered."""
+        for event_id, event in self._open_fills.items():
+            if event.instrument_id.value != key or int(event.ts_event) < ts_ns:
+                continue
+            self._refs[event_id] = quote
+            booked = self._booked_open.get(event_id)
+            if booked is not None:
+                charged = self._charge(event)
+                self._cash -= charged - booked
+                self._booked_open[event_id] = charged
+
+    def _struck(self, ts_ns: int) -> None:
+        """A point of `ts_ns` is being delivered, so every fill of an earlier instant has the
+        quote it is read against and is struck as booked: let go of it."""
+        for event_id, event in list(self._open_fills.items()):
+            if int(event.ts_event) >= ts_ns:
+                continue
+            del self._open_fills[event_id]
+            if self._booked_open.pop(event_id, None) is not None:
+                self._refs.pop(event_id, None)
+        self._instant_ns = ts_ns
+
+    def _book_fill(self, event: Any) -> None:
+        """Take one fill out of cash: the value it bought, or give back what it sold for, and
+        what the runner charges it (`_charge`)."""
+        self._fill_arrived(event)
+        multiplier = self._multiplier_of(event.instrument_id)
+        signed = self._signed(event)
+        charged = self._charge(event)
+        self._cash -= signed * float(event.last_px) * multiplier + charged
+        if event.id in self._open_fills:
+            self._booked_open[event.id] = charged
+        else:
+            self._refs.pop(event.id, None)
+
+    def _charge(self, event: Any) -> float:
+        """What the runner charges one fill: commission, per share included where the model
         states one, slippage and half the spread, and a taker's `slippage_ticks` of the
         increment, no further than the limit the order carried at the fill, or a maker's own
         schedule where the venue model states one, of its notional and per share, which a
-        rebate makes negative. A fill in a name the venue books from quotes or a level-two
-        book is struck at the touch, so its price carries the spread and no half-spread is
-        charged on it (`_touched`), exactly as the extraction charges it
-        (`kanso.nautilus.backtest.touched_names`)."""
+        rebate makes negative. A fill struck at the touch of the quote it is read against — a
+        buy at or above its ask, a sale at or below its bid — or on a venue that matches a
+        level-two book carries the spread in its price, so neither the half-spread nor
+        `slippage_bps` is charged on it (`kanso.nautilus.costs.at_touch`), exactly as the
+        extraction charges it (`kanso.nautilus.backtest.Marks.struck`)."""
         multiplier = self._multiplier_of(event.instrument_id)
         qty, px = float(event.last_qty), float(event.last_px)
-        signed = qty if event.order_side == OrderSide.BUY else -qty
+        sell = event.order_side == OrderSide.SELL
         maker = event.liquidity_side == LiquiditySide.MAKER
         ticks = float(self._charges.get("slippage_ticks") or 0.0)
         slip = 0.0
@@ -3238,44 +3302,34 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 self._increment_of(event.instrument_id),
                 px,
                 limit_at(self.cache.order(event.client_order_id), event.trade_id),
-                sell=event.order_side == OrderSide.SELL,
+                sell=sell,
             )
-        key = event.instrument_id.value
-        half = 0.0 if self._touched(key) else self._half_spread_at(key, int(event.ts_event))
-        cost = fill_cost(
+        quote = self._refs.get(event.id)
+        return fill_cost(
             qty * px * multiplier,
             qty,
             float(self._charges.get("commission_bps") or 0.0),
             float(self._charges.get("slippage_bps") or 0.0),
-            half,
+            self._half_of(quote),
             _maker_bps(self._charges),
             float(self._charges.get("commission_per_share") or 0.0),
             maker=maker,
-            sell=event.order_side == OrderSide.SELL,
+            sell=sell,
             sell_fee_bps=float(self._charges.get("sell_fee_bps") or 0.0),
             sell_fee_per_share=float(self._charges.get("sell_fee_per_share") or 0.0),
             maker_per_share=_maker_per_share(self._charges),
             slip=slip,
             multiplier=multiplier,
+            touched=self._levelled or at_touch(px, sell=sell, quote=quote),
         )
-        return signed * px * multiplier + cost
 
-    def _half_spread_at(self, key: str, ts_ns: int) -> float:
-        """Half the spread one fill pays: the stated width, or the last quote before it."""
-        if self._charges.get("spread") != "quotes":
-            return fixed_half_spread(self._charges.get("fixed_bps"))
-        times, values = self._quoted.get(key, ([], []))
-        index = bisect_right(times, ts_ns)
-        return 0.0 if index == 0 else values[index - 1]
-
-    def _touched(self, key: str) -> bool:
-        """Whether the venue books `key` from quotes or a level-two book, so a fill in it is
-        struck at the touch and carries the spread in its price: the name is asked for `quote`
-        or `book` and not for `bar`, by its own list under `data_by_instrument` or by
-        `data_requirements` — the rule `kanso.nautilus.backtest.touched_names` applies, read
-        here off the configuration the runner injected."""
-        required = dict(self._cfg.data_by_instrument).get(key, self._cfg.data_requirements)
-        return (QUOTE in required or BOOK in required) and BAR not in required
+    def _half_of(self, quote: tuple[float, float] | None) -> float:
+        """Half the spread one fill pays: the stated width, or under `spread: quotes` the half
+        of the quote it is read against — the stated width when there is none before it."""
+        fixed = fixed_half_spread(self._charges.get("fixed_bps"))
+        if self._charges.get("spread") != "quotes" or quote is None:
+            return fixed
+        return quote_half_spread(*quote)
 
     def _worth(self, position: Any) -> float:
         """One open position's market value at its last print, quoted in the shares held now.

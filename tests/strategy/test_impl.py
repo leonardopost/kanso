@@ -17,7 +17,7 @@ from kanso.state import StateStore
 from kanso.strategy import files, impl
 from kanso.strategy.composition import compose
 from kanso.workspace import Workspace
-from tests.research.conftest import HYP_ID
+from tests.research.conftest import DOCUMENT, HYP_ID
 
 from .conftest import ALLOWING, BLOCKING, FILTER_ID, VARYING, certified_filter, pinned
 
@@ -381,6 +381,7 @@ def test_a_stage_shows_a_depth_sleeve_the_book_a_card_showed_it(
         resolution="tick",
         data_requirements=["book", "trade"],
         depth={"every_ms": 100, "levels": 3},
+        costs={**DOCUMENT["costs"], "latency_ms": 1},
     )
     plain = draft_hypothesis(ws, store, "demo_plain")
     draft = draft_version(store, "demo_depth", ())

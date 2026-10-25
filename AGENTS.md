@@ -47,12 +47,14 @@ ts_event` always, and the engine orders by `ts_init`. Never derive `ts_init` fro
 declared publication rule is refused at write (`data/publication.py`).
 
 **Costs are applied once, by the runner, in the extraction.** Commission — in basis points
-and, where the model states it, per share — slippage — in basis points and, on a fill that took
-liquidity where the model states it, in ticks of the instrument's increment no further than
-its order's limit — and half the spread each side, where the price does not already carry
-it: a fill in a name the venue books from quotes or a level-two book, with no bars beside
-them, is struck at the touch, so its price carries the spread and it is charged no
-half-spread, and a fill in a name fed bars or prints pays the model's — or, on a
+and, where the model states it, per share — slippage — in basis points, and, on a fill that
+took liquidity where the model states it, in ticks of the instrument's increment no further
+than its order's limit — and half the spread each side, the half-spread and the slippage in
+basis points where the price does not already carry the spread, which is read off each fill
+and never off its name: a fill struck at the touch — a buy at or above the ask of its name's
+last quote at or before it, a sale at or below that quote's bid, or any fill on a venue that
+matches a level-two book — carries the spread and is charged neither, and a fill struck at a
+print or a bar's close inside the quote, or with no quote before it, pays both — or, on a
 fill that rested on the book under a venue model that states a maker's schedule, `maker_bps`
 of its notional and `maker_per_share` on each share alone —
 plus, on a sale, the sell-side fees the model states, maker or taker —

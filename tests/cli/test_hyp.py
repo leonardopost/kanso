@@ -67,6 +67,48 @@ def test_validate_reports_the_hypothesis_and_changes_nothing(
         assert store.connection.execute("SELECT count(*) FROM hypotheses").fetchone()[0] == 0
 
 
+def test_validate_and_add_carry_the_warnings_a_file_is_admitted_with(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A tick hypothesis over quotes and prints resolves to the print rule, and with no maker
+    schedule its resting fills are charged as any fill at their price: admitted, and said."""
+    path = write_hypothesis(
+        loaded,
+        resolution="tick",
+        data_requirements=["quote", "trade"],
+        costs={"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes", "latency_ms": 20},
+    )
+
+    validated = at(runner, loaded, "hyp", "validate", path, "--json")
+    added = at(runner, loaded, "hyp", "add", path, "--json")
+    plain = at(runner, loaded, "hyp", "validate", path)
+
+    assert validated.exit_code == added.exit_code == plain.exit_code == Exit.OK
+    (warning,) = payload(validated)["warnings"]
+    assert warning.startswith("costs: no maker_bps or maker_per_share on ")
+    assert payload(added)["warnings"] == [warning]
+    assert f"warning {warning}" in " ".join(plain.output.split())
+    clean = at(runner, loaded, "hyp", "validate", write_hypothesis(loaded), "--json")
+    assert payload(clean)["warnings"] == []
+
+
+def test_validate_refuses_a_tick_hypothesis_with_no_latency(
+    runner: CliRunner, loaded: Path
+) -> None:
+    path = write_hypothesis(
+        loaded,
+        resolution="tick",
+        data_requirements=["quote", "trade"],
+        costs={"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"},
+    )
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert payload(result)["error"].startswith("costs.latency_ms: 0 on ")
+    assert "state costs.latency_ms" in payload(result)["remedy"]
+
+
 def test_a_data_type_a_vendor_adapter_registers_is_admissible(
     runner: CliRunner, loaded: Path
 ) -> None:

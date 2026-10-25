@@ -1605,8 +1605,10 @@ at a tolerance of zero for book data too.
 **A limit that rests is filled by the venue's rule.** A limit order that was not marketable
 when it was placed waits on the book, and a later point that reaches its price fills it at
 that price, as a maker. Whether *reaching* is enough is the venue model's `limit_fill`
-(`docs/workspace.md`): under `touch`, the default and the engine's own rule, a bar whose low
-is a buy's price fills it; under `through` the low has to go under it, a sell's high over it,
+(`docs/workspace.md`): under `touch`, the engine's own rule and the default for a hypothesis
+that does not hold quotes and prints at tick resolution — one that asks every name for both,
+none for bars and nothing for a book, resolves to `print_through` — a bar whose low is a buy's
+price fills it; under `through` the low has to go under it, a sell's high over it,
 a print past it. Under `print_through` only a print past it fills it, by that print's own size,
 and a taker fills on the quote rather than on a print (below). On a bar the venue walks the
 open, the high, the low and the close as prints in turn, so a bar that only touched the level
@@ -1749,33 +1751,51 @@ level-two rules — an add or an update sets the level, a delete of a price not 
 nothing, a clear empties both sides — which `kanso doctor` checks, and a property test holds
 its top levels and its best equal to the engine's `OrderBook` after any sequence of changes.
 
-**The spread is charged where the price does not already carry it.** A fill in a name the
-venue books from quotes or a level-two book — one the hypothesis asks for `quote` or `book`
-and not for `bar`, by `data_requirements` or its own `data_by_instrument` list — is struck at
-the touch: a taker buys the ask and sells the bid, a maker fills at its own price. Its price
-carries the spread, so the extraction charges it no half-spread, under `spread: quotes` and
-`fixed_bps` alike, and the fill is recorded as `touched` so a cost model re-applied to it
-charges none either. A fill in a name fed bars — alone, or beside its quotes, since the
-engine walks every bar through the book as prints and settles the venue after each point, so
-an order in flight at a bar's instant fills at the bar's close (measured: 10.00 against a
-quote of 9.99/10.01 at the same instant) — or prints alone is struck at a close or a last
-print and pays the model's half-spread as before. Under `touch` and `through` a taker on a
-quoted name whose next point is a print rather than a quote fills at the print's price, one
-side of the market or the other, and is charged none either way; on a consolidated tape
-quotes outnumber prints severalfold, and on a grid of quotes a print is rare, so the residual
-is small and runs both ways (`docs/backlog.md`). Measured before this rule on a quote of 9.99/10.01 with every
-other charge zero, under `touch` and `print_through`, sent on a quote and on a print: a
-market buy filled at 10.01 and a market sell at 9.99, each charged 10 bp on top, so a flat
-round trip whose cost was one spread was booked at two, and a quoted lane's taker edge read
-one spread a round trip below what its fills earned. A screen's hurdle already charged a
-quoted follower no spread, so a screened cell and its drafted lane now agree on quoted legs
-as they did on bars. A wider market on a quoted name is stated as `slippage_bps` or
-`slippage_ticks`, which a taker's fill pays whatever the price carried; `cost_scenario`'s
-`fixed_bps` is charged where the runner charges a spread and nowhere else.
+**The spread is charged where the price does not already carry it, read off each fill.** A
+fill struck at the touch — a buy at or above the ask of the last quote its name had at or
+before the fill, a sale at or below that quote's bid — carries the spread in its price, and
+whatever its order walked past the touch, so the extraction charges it neither the
+half-spread, under `spread: quotes` and `fixed_bps` alike, nor `slippage_bps`, and records it
+as `touched`, so a cost model re-applied to it charges neither either. Every fill on a venue
+that matches a level-two book — a hypothesis that requires `book` — is struck at that book, a
+taker at its levels and a maker at its own, and is touched too. A fill struck at a print or a
+bar's close inside the quote, or in a name with no quote before it, pays both. The rule is
+the fill's and not the name's. A name fed bars beside its quotes fills an order in flight at
+a bar's instant at the bar's close, since the engine walks every bar through the book as
+prints and settles the venue after each point (measured: 10.00 against a quote of
+9.99/10.01 at the same instant), and pays the half-spread on that fill when the close is
+inside the quote, as there, and not on the ones its quotes made; a close at or beyond the
+touch is a fill at the touch like any other, and pays neither. Under `touch` and `through` a taker that lands on the book a print left
+fills at the print's price, and pays the half-spread when that is inside the quote and
+nothing when the print hit the far side. A maker filled at its own price inside the quote — on
+a print through it under the print rules, or on a print at it under `touch` — pays both unless
+the model states a maker schedule (below). Of several quotes at one instant the one read is
+the last the venue applied there. The harness reads the same quote: the engine hands a sleeve
+a fill before the point the venue made it on, so a fill a quote made arrives against the
+quote before, and the harness strikes it again when its own quote is delivered and books the
+difference, which keeps `self.balance` equal to the equity the runner strikes. Under `spread:
+quotes`, `fixed_bps` is the width a fill with no quote before it pays, and `hyp validate`
+warns where a model that takes its spread from quotes states none over an instrument asked
+for neither `quote` nor `book`, whose fills are then charged no spread (`docs/workspace.md`). Measured before the first rule on a
+quote of 9.99/10.01 with every other charge zero, under `touch` and `print_through`, sent on a
+quote and on a print: a market buy filled at 10.01 and a market sell at 9.99, each charged
+10 bp on top, so a flat round trip whose cost was one spread was booked at two, and a quoted
+lane's taker edge read one spread a round trip below what its fills earned. Read per name, as
+it was from 0.17 to 0.19, the rule charged a name fed bars beside its quotes the half-spread
+on the fills its quotes made, a taker that landed on a print inside the quote nothing, and a
+maker the touch rule credited at the bid nothing: on a $20 name quoted 5 bp wide, under the
+shipped one basis point of slippage, a round trip of two such maker fills read +3.0 bp, the
+spread earned less two basis points of slippage, where it reads −2.0 now. A screen's hurdle
+charges a quoted follower neither, as a card does a fill at the touch. What a taker pays past
+the touch on a quoted name is stated as `slippage_ticks`; `cost_scenario`'s `fixed_bps` and
+`slippage_bps` are charged where the runner charges them and nowhere else. `cost_stress`
+multiplies what each fill recorded, and a touched fill recorded no spread: on a quoted lane
+whose model states no commission, no sale fee and no `slippage_ticks`, a touched fill records
+nothing and no multiple moves it (`docs/backlog.md` row 224).
 
-**A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, slippage and half
-the spread, once, in the runner's extraction — unless the venue model states a maker's
-schedule, `maker_bps` of the notional and `maker_per_share` on each share, and the venue
+**A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, once, in the runner's
+extraction, and slippage and half the spread where its price does not carry the spread
+(above) — unless the venue model states a maker's schedule, `maker_bps` of the notional and `maker_per_share` on each share, and the venue
 reported the fill as a maker's, in which case it pays exactly that schedule and nothing else,
 since a resting limit fills at its own price and the spread is what it earns. A negative
 rate or per-share charge is a rebate. Each recorded fill says whether it was a maker's, so the charge
@@ -2053,7 +2073,12 @@ the certification window and lost 13 under 20 ms, and a one-close rule early by 
 the reverse — a route a bar long moves a daily rule by a whole step. A hypothesis that
 states no latency has no route to slow and the gate skips, saying so; like the plateau, it
 fails an unstressed objective at or below zero before any run is made, is judged after
-every cheap verdict, and is spared when `embargoed_window` has refused the subject.
+every cheap verdict, and is spared when `embargoed_window` has refused the subject. A
+hypothesis at tick resolution is refused a latency of zero where a run begins — at `hyp
+validate`, `hyp add` and `research begin` (`docs/workspace.md`) — so a lane begun under that
+rule states one. `cert plan` and `cert run` do not check it again: the gate reads the latency
+recorded on the card it judges, and a card recorded at zero — from a run begun before the
+rule, or one that went on past an upgrade — is skipped as any latency of zero is.
 
 `param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
 unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a
