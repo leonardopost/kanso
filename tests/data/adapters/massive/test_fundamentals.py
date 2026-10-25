@@ -1067,6 +1067,32 @@ def test_a_20_f_the_acceptance_index_holds_is_stamped_and_not_refused() -> None:
     assert {point.ts_init for point in points} == {Q3_ACCEPTED}
 
 
+def test_a_range_of_20_fs_of_which_one_is_stamped_keeps_it_and_is_not_refused() -> None:
+    """The refusal needs none of the range's 20-Fs to be stamped, not merely one of them
+    unstamped. Were BABA's first year to name a 20-F of 2026-05-01 whose instant the source
+    holds, answered as it answered AAPL's 10-Q of that day, beside the 20-F of 2026-05-20 it
+    holds none for, the first year would be stamped and kept, the second dropped as any row
+    naming a report without its instant is, and nothing refused."""
+    earlier = "0001193125-26-000001"
+    rows = rows_of("income_statements_BABA.json")
+    rows[0] = {**rows[0], "filing_date": "2026-05-01"}
+    (listed,) = rows_of("filings_index_BABA.json")
+    reports = [{**listed, "filing_date": "2026-05-01", "accession_number": earlier}, listed]
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        path, asked = request_key(url, params)
+        if path == INCOME_STATEMENTS.template and "tickers" in dict(asked):
+            return served(rows)
+        if path == FILINGS_INDEX.template and "cik" in dict(asked):
+            return served(reports)
+        if path == f"{FILINGS.template}/{earlier}":
+            return fundamental("acceptance_0000320193-26-000013.json")
+        return recorded()(url, params)
+
+    points = statements_of(financials_spec(**BABA_ANNUAL), answer=answer)
+    assert [(point.fiscal_year, point.ts_init) for point in points] == [("2025", Q2_ACCEPTED)]
+
+
 def test_a_row_naming_no_day_beside_rows_naming_a_20_f_leaves_them_dropped_not_refused() -> None:
     """The refusal needs every row of the range to name a 20-F. A row naming no filing day
     names no form, so BABA's year that does name its 20-F is dropped, as a row naming a
