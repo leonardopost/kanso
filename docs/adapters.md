@@ -96,9 +96,12 @@ asked the same broken way.
 A path the source has retired is the one `malformed` request the action in the table does
 not answer. It answers HTTP 410, and no key or prefix corrects it, so the probe's detail
 names the path as retired and the failure raised from it carries the upgrade to a kanso
-that asks its successor — `uv lock --upgrade-package kanso && uv sync` — instead. It keeps
-the outcome and its exit code, so it is told apart by the detail or the remedy, not by the
-outcome.
+that asks its successor instead: with any daemon stopped (`kanso research stop`),
+`uv tool upgrade kanso` where kanso is installed as a tool, or
+`uv lock --upgrade-package kanso && uv sync` in the project that depends on it — a
+workspace is not a project, so there `uv lock` finds nothing to lock — then
+`kanso doctor`. It keeps the outcome and its exit code, so it is told apart by the detail
+or the remedy, not by the outcome.
 
 **Entitlement is probed at the grain the source gates on.** For most classes that is the
 endpoint: one answer covers the class. For indices it is the *ticker*, because the source

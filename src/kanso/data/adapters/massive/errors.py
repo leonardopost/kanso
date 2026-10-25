@@ -184,11 +184,15 @@ def retired(path: str, asked: str) -> MalformedRequestError:
     """The failure a path the source has retired is raised as, wherever kanso meets it.
 
     It names the path as retired and gives the upgrade that moves kanso onto its successor,
-    because nothing an operator can change in a spec or a ticker answers it. `asked` says
-    what kanso was asking that path for.
+    because nothing an operator can change in a spec or a ticker answers it. The upgrade is
+    named for both ways kanso is installed — a workspace is not a project, so `uv lock` has
+    nothing to lock where kanso is a tool — and in the order any upgrade takes: the daemon
+    stopped first, `kanso doctor` after. `asked` says what kanso was asking that path for.
     """
     return MalformedRequestError(
         f"massive: the source has retired {path}, where {asked} is asked (HTTP {GONE})",
-        remedy="upgrade to a kanso that asks its successor: "
-        "`uv lock --upgrade-package kanso && uv sync`",
+        remedy="upgrade to a kanso that asks its successor, with any daemon stopped "
+        "(`kanso research stop`): `uv tool upgrade kanso` where it is installed as a tool, "
+        "or `uv lock --upgrade-package kanso && uv sync` in the project that depends on it; "
+        "then `kanso doctor`",
     )

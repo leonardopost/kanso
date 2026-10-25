@@ -1453,16 +1453,35 @@ def test_a_financials_ref_built_by_hand_carries_no_spec() -> None:
 # --- the paths the source serves, and the one it retired ------------------------------
 
 
-def test_the_retired_statements_listing_is_named_as_retired() -> None:
+UPGRADE = (
+    "`kanso research stop`",
+    "`uv tool upgrade kanso`",
+    "`uv lock --upgrade-package kanso && uv sync`",
+    "`kanso doctor`",
+)
+"""The upgrade a retired path's remedy names, in the order it is taken: the daemon stopped,
+kanso upgraded where it is a tool or where it is a project's dependency, then checked."""
+
+
+def names_the_upgrade(remedy: str | None) -> bool:
+    """Whether `remedy` names every step of the upgrade, in its order."""
+    at = [str(remedy).find(step) for step in UPGRADE]
+    return -1 not in at and at == sorted(at)
+
+
+def test_the_retired_statements_listing_is_named_as_retired(tmp_path: Path) -> None:
     """Recorded after its sunset: HTTP 410 and `GONE`. Read as a malformed request it would
-    send an operator to check parameters that were never wrong."""
+    send an operator to check parameters that were never wrong. The upgrade is named for a
+    tool install too, because a workspace is not a project: `uv lock` in one has no
+    `pyproject.toml` to read."""
     retired = replace(INCOME_STATEMENTS, template="/vX/reference/financials")
     client, _ = transport(lambda url, params: fundamental("financials_retired.json"))
     with pytest.raises(MalformedRequestError) as failure:
         list(listing(client, retired, TICKER, FIRST_HALF))
     assert "retired /vX/reference/financials" in failure.value.message
     assert "410" in failure.value.message
-    assert "uv lock --upgrade-package kanso" in str(failure.value.remedy)
+    assert names_the_upgrade(failure.value.remedy)
+    assert not (init(tmp_path / "ws").root / "pyproject.toml").exists()
 
 
 def test_a_retired_statements_listing_is_named_as_retired_by_the_probe_that_meets_it() -> None:
@@ -1474,7 +1493,7 @@ def test_a_retired_statements_listing_is_named_as_retired_by_the_probe_that_meet
         loader.discover(financials_spec())
     assert "retired /stocks/financials/v1/income-statements" in failure.value.message
     assert "410" in failure.value.message
-    assert "uv lock --upgrade-package kanso" in str(failure.value.remedy)
+    assert names_the_upgrade(failure.value.remedy)
     assert "check the ticker" not in str(failure.value.remedy)
 
 
