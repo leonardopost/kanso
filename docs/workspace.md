@@ -1002,7 +1002,8 @@ Every name of the universe counts, traded or not, since the file cannot say whic
 strategy trades: a signal asked for prints alone keeps the tape on `touch` beside a traded name
 asked for both. Where no layer states a rule, `hyp validate` and `hyp add` warn, naming each
 such name, what it is asked for and why, and each way off the warning: ask every name for
-`quote` and `trade` alone under `data_by_instrument`, which resolves to `print_through`; state
+`quote` and `trade` alone under `data_by_instrument`, dropping `bar` from `data_requirements`
+where it is there since no name is left asking for it, which resolves to `print_through`; state
 `print_through`, offered only where no name is asked for `bar` beside `quote` and fit only when
 each name short of a feed is a signal the strategy never trades; or state `touch`, which keeps
 the rule. A `screen draft` of a cell whose trigger and follower are read as different feeds
@@ -1019,10 +1020,13 @@ a print through it, by that print's size. A rule a layer states is the operator'
 `hyp validate`, `hyp add` and `research begin` (exit 3), naming the key: it would price as a
 maker's the fills those rules credit with no queue ahead of them. Where no layer states a rule
 and the names alone kept the venue on `touch`, the refusal also names each such name and what it
-is asked for, and its remedy leads with asking every name for `quote` and `trade` alone, which
-moves the venue to `print_through` and admits the schedule. A `screen draft` carries a maker key
-the screen's `costs` state, which its hurdle ignores, so a draft of a cell read off two feeds
-of two names meets this refusal. A venue under a print rule that states no maker schedule is
+is asked for, and its remedy leads with asking every name for `quote` and `trade` alone —
+dropping `bar` from `data_requirements` where it is there — which moves the venue to
+`print_through` and admits the schedule. Stating a print rule is offered only where no name is
+asked for `bar` beside `quote`, over which that rule is refused: under a stated `touch` or
+`through` with such a name the remedy is the maker keys' removal. A `screen draft` carries a
+maker key the screen's `costs` state, which its hurdle ignores, so a draft of a cell read off
+two feeds of two names meets this refusal. A venue under a print rule that states no maker schedule is
 admitted with a warning, since its resting fills are charged as any fill at their price —
 `slippage_bps` and half the spread — which the account does not charge a maker.
 

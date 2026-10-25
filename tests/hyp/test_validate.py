@@ -769,10 +769,21 @@ def test_a_name_asked_for_bars_beside_quotes_and_prints_is_named_for_its_bars(
 ) -> None:
     """A name asked for bars beside its quotes and prints holds both feeds, so the print rule
     would not starve it: a bar walks the engine's bid and ask past the quote in force, and a
-    print rule over it is refused. The warning says that, and not that a feed is missing."""
+    print rule over it is refused. The warning says that, and not that a feed is missing. Its
+    way to the print rule drops bar from data_requirements too, since no name is left asking
+    for it: it once stopped at asking the name for both feeds alone, and the file that did
+    only that was refused for a type no name is asked for."""
     admitted = hyp.admit(
         ws, write_hypothesis(ws, tick(data_requirements=["quote", "trade", "bar"]))
     )
+    kept = refused(
+        ws,
+        tick(
+            data_requirements=["quote", "trade", "bar"],
+            data_by_instrument={"DEMO": ["quote", "trade"]},
+        ),
+    )
+    alone = tick(data_by_instrument={"DEMO": ["quote", "trade"]})
 
     (warning,) = admitted.warnings
     assert warning == (
@@ -783,8 +794,13 @@ def test_a_name_asked_for_bars_beside_quotes_and_prints_is_named_for_its_bars(
         "the engine's bid and ask past the quote in force, on which the print rules fill a "
         "taker, so a print rule over a name asked for bar beside quote is refused; to move to "
         "print_through, ask every name, traded or not, for quote and trade alone under "
-        "data_by_instrument; to stay on touch without this warning, state limit_fill: touch"
+        "data_by_instrument and drop bar from data_requirements; to stay on touch without this "
+        "warning, state limit_fill: touch"
     )
+    assert "data_requirements: no instrument is asked for bar once" in kept.message
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, alone).values()} == {
+        "print_through"
+    }
 
 
 def test_names_short_of_a_feed_and_barred_beside_quotes_give_both_reasons(
@@ -962,6 +978,58 @@ def test_a_maker_schedule_under_a_stated_touch_names_no_name(ws: Workspace) -> N
     assert "EURO" not in failure.message
     assert failure.remedy is not None
     assert failure.remedy.startswith("state limit_fill: print_through or print_through_whole")
+
+
+def test_a_maker_schedule_over_a_name_asked_for_bar_beside_quote_is_offered_no_print_rule(
+    ws: Workspace,
+) -> None:
+    """A print rule over a name asked for bar beside quote is refused, so the maker refusal
+    does not offer one, and asking every name for both feeds alone leaves bar asked of none,
+    so its remedy drops bar from data_requirements as well. Followed as written, the remedy
+    admits the same schedule under the print rule. It once offered both ways as they stood,
+    and each was refused in turn: the stated print rule over DEMO's bars, and the narrowed
+    file for a type no name was asked for."""
+    schedule = {"maker_bps": 0.0}
+    barred = ["quote", "trade", "bar"]
+
+    failure = refused(ws, tick(data_requirements=barred, costs=schedule))
+    stating = refused(
+        ws, tick(data_requirements=barred, costs={**schedule, "limit_fill": "print_through"})
+    )
+    alone = tick(data_by_instrument={"DEMO": ["quote", "trade"]}, costs=schedule)
+    admitted = hyp.admit(ws, write_hypothesis(ws, alone))
+
+    assert failure.message.endswith(": DEMO is asked for quote, trade, bar")
+    assert failure.remedy == (
+        "ask every name, traded or not, for quote and trade alone under data_by_instrument and "
+        "drop bar from data_requirements, which moves a venue no layer states a rule for to "
+        "print_through; or remove maker_bps and maker_per_share from the hypothesis costs and "
+        "from venues.SIM.costs in portfolio.yaml"
+    )
+    assert "DEMO is asked for bar beside quote" in stating.message
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, alone).values()} == {
+        "print_through"
+    }
+    assert admitted.warnings == ()
+
+
+def test_a_maker_schedule_under_a_stated_rule_over_bars_beside_quotes_is_offered_its_removal(
+    ws: Workspace,
+) -> None:
+    """Asking the names for both feeds cannot move a stated `through`, and a print rule is
+    refused while DEMO is asked for bar beside quote, so the remedy offers the schedule's
+    removal alone, which admits the file."""
+    stated = {"limit_fill": "through"}
+    barred = ["quote", "trade", "bar"]
+
+    failure = refused(ws, tick(data_requirements=barred, costs={**stated, "maker_bps": 0.0}))
+    removed = hyp.admit(ws, write_hypothesis(ws, tick(data_requirements=barred, costs=stated)))
+
+    assert failure.remedy == (
+        "remove maker_bps and maker_per_share from the hypothesis costs and from "
+        "venues.SIM.costs in portfolio.yaml"
+    )
+    assert removed.warnings == ()
 
 
 @pytest.mark.parametrize(

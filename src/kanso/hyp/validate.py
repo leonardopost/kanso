@@ -621,7 +621,7 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             "venue, and requiring book builds a level-two one",
             remedy="drop book from data_requirements, or state limit_fill: touch or through",
         )
-    barred = [name for name in hyp.universe if {BAR_TYPE, QUOTE_TYPE} <= set(hyp.required_of(name))]
+    barred = _barred(hyp)
     if barred:
         raise ValidationError(
             f"costs.limit_fill: {rule} on {', '.join(ruled)} fills a taker on the quote in "
@@ -632,6 +632,22 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             "left, drop bar from data_requirements and research at resolution: tick, since a "
             "bar size requires bar; or state limit_fill: touch or through",
         )
+
+
+def _barred(hyp: Hypothesis) -> list[str]:
+    """The names asked for bar beside quote, over which a print rule is refused."""
+    return [name for name in hyp.universe if {BAR_TYPE, QUOTE_TYPE} <= set(hyp.required_of(name))]
+
+
+def _alone(hyp: Hypothesis) -> str:
+    """The way off `touch` the names leave open: every name asked for both feeds alone, and
+    `bar` dropped from `data_requirements` where it is there, since no name is left asking for
+    it and a type no name is asked for is refused."""
+    dropped = " and drop bar from data_requirements" if BAR_TYPE in hyp.data_requirements else ""
+    return (
+        "ask every name, traded or not, for quote and trade alone under "
+        f"data_by_instrument{dropped}"
+    )
 
 
 def default_limit_fill(hyp: Hypothesis) -> LimitFill:
@@ -686,8 +702,10 @@ def check_tick_costs(ws: Workspace, hyp: Hypothesis, models: Mapping[str, VenueM
     through it, and a level-two book keeps a queue of its own, so neither is refused. A venue
     no layer states a rule for that its names alone keep on `touch` (`_left_on_touch`) is
     refused naming each such name and what it is asked for, and the remedy leads with asking
-    every name for both feeds, which moves it to the print rule: the warning that would say so
-    (`cost_warnings`) is never reached.
+    every name for both feeds alone (`_alone`), which moves it to the print rule: the warning
+    that would say so (`cost_warnings`) is never reached. Stating a print rule is offered only
+    where no name is asked for bar beside quote, over which it is refused
+    (`_check_print_through`).
 
     Both are structural: each refuses a configuration that cannot describe a market, the way a
     spread from quotes with no quotes is refused, and neither names a number a hypothesis must
@@ -727,21 +745,24 @@ def check_tick_costs(ws: Workspace, hyp: Hypothesis, models: Mapping[str, VenueM
         else ""
     )
     moved = (
-        "ask every name, traded or not, for quote and trade alone under data_by_instrument, "
-        "which moves a venue no layer states a rule for to print_through; or "
+        f"{_alone(hyp)}, which moves a venue no layer states a rule for to print_through; or "
         if left
         else ""
+    )
+    ruled = (
+        ""
+        if _barred(hyp)
+        else "state limit_fill: print_through or print_through_whole, which fills a resting "
+        "limit only on a later print through it and needs every name the strategy trades asked "
+        "for quote and trade, and no book; or "
     )
     raise ValidationError(
         f"costs.{key}: a maker schedule on {', '.join(queue_free)} under limit_fill: "
         f"{costs.limit_fill} prices as a maker's the fills that rule credits a resting limit "
         "with no queue ahead of it — all that is left of it from any point beyond its price, "
         f"and under touch the size a quote shows again at every quote that shows it{named}",
-        remedy=f"{moved}state limit_fill: print_through or print_through_whole, which fills a "
-        "resting limit only on a later print through it and needs every name the strategy "
-        "trades asked for quote and trade, and no book; or "
-        "remove maker_bps and maker_per_share from the hypothesis costs and from "
-        f"venues.{queue_free[0]}.costs in portfolio.yaml",
+        remedy=f"{moved}{ruled}remove maker_bps and maker_per_share from the hypothesis costs "
+        f"and from venues.{queue_free[0]}.costs in portfolio.yaml",
     )
 
 
@@ -815,10 +836,11 @@ def _off_the_tape_warning(hyp: Hypothesis, venues: list[str]) -> str:
     each way off the warning the names leave open.
 
     The default reads every name of the universe, traded or not, since the file cannot say
-    which names the strategy trades: asking each for both feeds alone moves the venues to the
-    print rule. Stating the print rule moves them too where no name is asked for bar beside
-    quote, over which it is refused, but a name it starves of a feed then never fills, so that
-    way is offered for signals alone. Stating `touch` keeps the rule and ends the warning.
+    which names the strategy trades: asking each for both feeds alone (`_alone`), with `bar`
+    dropped from `data_requirements` where it is there, moves the venues to the print rule.
+    Stating the print rule moves them too where no name is asked for bar beside quote, over
+    which it is refused, but a name it starves of a feed then never fills, so that way is
+    offered for signals alone. Stating `touch` keeps the rule and ends the warning.
     """
     off = [set(hyp.required_of(name)) for name in _off_the_tape(hyp)]
     short = any(not {QUOTE_TYPE, TRADE_TYPE} <= kinds for kinds in off)
@@ -849,9 +871,8 @@ def _off_the_tape_warning(hyp: Hypothesis, venues: list[str]) -> str:
         "no queue ahead of it, and not print_through, which a hypothesis holding quotes and "
         "prints at tick resolution resolves to when no layer states a rule only if every name "
         f"is asked for quote and trade and none for bar: {_asked(hyp)}. {because[0].upper()}"
-        f"{because[1:]}; to move to print_through, ask every name, traded or not, for quote "
-        f"and trade alone under data_by_instrument{signals}; to stay on touch without this "
-        "warning, state limit_fill: touch"
+        f"{because[1:]}; to move to print_through, {_alone(hyp)}{signals}; to stay on touch "
+        "without this warning, state limit_fill: touch"
     )
 
 
