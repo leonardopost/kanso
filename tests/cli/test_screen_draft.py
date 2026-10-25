@@ -98,9 +98,10 @@ TAPE: dict[str, Any] = {
 def test_a_tick_cell_drafts_a_file_hyp_add_admits_under_the_latency_it_was_measured_at(
     runner: CliRunner, loaded: Path
 ) -> None:
-    """At tick resolution a latency of zero is refused, and a screen's own costs carry none:
-    the route is the measure's. The draft carries it, so the file it writes registers as it
-    stands. Without it `hyp add` refused the draft for a latency of zero."""
+    """At tick resolution a latency of zero is refused, and the screen ignores a latency
+    under its own costs: the route is the measure's. The draft carries it, so the file it
+    writes registers as it stands. Without it `hyp add` refused the draft for a latency of
+    zero."""
     spec = write_spec(loaded, "tape.yaml", types=["quote", "trade"], end="2024-03-29")
     assert (
         at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
@@ -201,6 +202,32 @@ def test_a_cell_read_off_one_name_s_prints_and_another_s_quotes_registers_as_dra
     touch, spread = payload(added)["warnings"]
     assert f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote." in touch
     assert f"and {INSTRUMENT} is asked for no quote or book, so a fill there is charged" in spread
+
+
+@pytest.mark.parametrize(("measured", "drafted"), [(0.0, None), (3.0, 3.0)])
+def test_a_draft_carries_the_measure_s_latency_and_never_its_costs(
+    loaded: Path, measured: float, drafted: float | None
+) -> None:
+    """A latency under a screen's own costs is ignored by the screen, so a draft never carries
+    it: a cell measured at zero drafts none, and one measured above zero drafts its own. Once a
+    cell measured at zero drafted the costs' 7 ms, a route nothing measured it under."""
+    costs = {"SIM": {**FADE["costs"]["SIM"], "latency_ms": 7}}
+    measures = [{**FADE["measures"][0], "latency_ms": measured}]
+    spec = Screen.model_validate({**FADE, "costs": costs, "measures": measures})
+    result = result_of(spec, CELL, follower="a")
+    found = draft._hypothesis(
+        find(loaded),
+        spec,
+        result,
+        result.cells[0],
+        "bar_lane",
+        "1h",
+        (date(2024, 4, 1), date(2024, 5, 31)),
+    )
+
+    assert found.costs is not None
+    assert found.costs.latency_ms == drafted
+    assert found.costs.fixed_bps == FADE["costs"]["SIM"]["fixed_bps"]
 
 
 def test_a_cell_measured_at_no_latency_drafts_none(loaded: Path) -> None:
