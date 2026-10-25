@@ -112,7 +112,9 @@ def test_a_stage_venue_fills_a_touched_limit_the_way_its_versions_were_measured(
 def test_two_versions_disagreeing_about_a_touched_limit_are_refused(
     ws: Workspace, store: StateStore, placement: Placement
 ) -> None:
-    """One venue is one exchange, and an exchange has one fill model."""
+    """One venue is one exchange, and an exchange has one fill model. A version whose rule
+    cannot be restated — a tick one with a maker schedule, which no rule but a print rule
+    admits, beside one on bars, which no print rule admits — is retired, as the remedy says."""
     deployable(ws, store, "strict", doc=document(id="strict"))
     other = _limit_fill(a_placement(ws, "strict"), "through")
 
@@ -122,7 +124,10 @@ def test_two_versions_disagreeing_about_a_touched_limit_are_refused(
     assert raised.value.code == Exit.PRECONDITION
     assert f"venues.{VENUE}.costs.limit_fill" in raised.value.message
     assert "'touch'" in raised.value.message and "'through'" in raised.value.message
-    assert "limit_fill" in str(raised.value.remedy)
+    remedy = str(raised.value.remedy)
+    assert "state one limit_fill for both" in remedy
+    assert f"kanso strat retire {placement.label}" in remedy
+    assert f"kanso strat retire {other.label}" in remedy
 
 
 def _limit_fill(placed: Placement, rule: str) -> Placement:

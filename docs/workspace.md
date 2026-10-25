@@ -1036,7 +1036,15 @@ each of these quote behaviours as engine facts). A broker fills as it fills: the
 kanso's simulated venues and nothing a broker does. Like every cost it is inherited — a
 broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and two versions
 certified under different rules cannot share a stage venue, which is one exchange: `deploy`
-refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`.
+refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`,
+with `kanso strat retire` for either version or one rule stated for both as the remedy. A
+tick version that states no rule and holds quotes and prints resolves to `print_through`, and
+one researched on bars to `touch`, so the two meet that refusal on one venue unless both state
+`touch` or `through`; a tick version that states a maker schedule cannot, since on the top of
+the book at tick resolution only a print rule admits one, and a version on bars alone cannot state a print
+rule, so those two never share a venue and one of them is retired (`docs/backlog.md` row 225).
+A tick version's `latency_ms` is above zero, so beside a bar version at zero it meets the
+latency refusal below as well.
 
 **`print_through` fills a resting limit only on a print through it, and a taker only on a
 quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
