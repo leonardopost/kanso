@@ -1,0 +1,43 @@
+{
+ "status": "OK",
+ "request_id": "bdd5a849dbea441fae8c6450caf8baf7",
+ "results": [
+  {
+   "tickers": [
+    "NVDA"
+   ],
+   "cik": "0001045810",
+   "period_end": "2009-04-26",
+   "filing_date": "2010-05-21",
+   "fiscal_quarter": 1,
+   "fiscal_year": 2010,
+   "timeframe": "quarterly",
+   "net_income": -201338000.0,
+   "income_loss_from_discontinued_operations": 0.0,
+   "depreciation_depletion_and_amortization": 50658000.0,
+   "other_operating_activities": 148261000.0,
+   "change_in_other_operating_assets_and_liabilities_net": 144547000.0,
+   "cash_from_operating_activities_continuing_operations": 142128000.0,
+   "net_cash_from_operating_activities_discontinued_operations": 0.0,
+   "net_cash_from_operating_activities": 142128000.0,
+   "purchase_of_property_plant_and_equipment": -20777000.0,
+   "sale_of_property_plant_and_equipment": 0.0,
+   "other_investing_activities": 11872000.0,
+   "net_cash_from_investing_activities_continuing_operations": -8905000.0,
+   "net_cash_from_investing_activities_discontinued_operations": 0.0,
+   "net_cash_from_investing_activities": -8905000.0,
+   "short_term_debt_issuances_repayments": 0.0,
+   "long_term_debt_issuances_repayments": -222000.0,
+   "dividends": 0.0,
+   "noncontrolling_interests": 0.0,
+   "other_financing_activities": -38415000.0,
+   "net_cash_from_financing_activities_continuing_operations": -38637000.0,
+   "net_cash_from_financing_activities_discontinued_operations": 0.0,
+   "net_cash_from_financing_activities": -38637000.0,
+   "effect_of_currency_exchange_rate": 0.0,
+   "other_cash_adjustments": 0.0,
+   "change_in_cash_and_equivalents": 94586000.0
+  }
+ ],
+ "next_url": "https://api.massive.com/stocks/financials/v1/cash-flow-statements?cursor=AAICAAEBAAEB--gDAAIBCfvWcgEPCjAwMDEwMjE2MzU="
+}

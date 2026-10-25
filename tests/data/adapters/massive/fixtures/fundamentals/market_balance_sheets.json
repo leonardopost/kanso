@@ -1,0 +1,43 @@
+{
+ "status": "OK",
+ "request_id": "5a760a62ccb84c0f81d6b7b93baa0165",
+ "results": [
+  {
+   "tickers": [
+    "WMT"
+   ],
+   "cik": "0000104169",
+   "period_end": "2009-04-30",
+   "filing_date": "2010-06-04",
+   "fiscal_quarter": 1,
+   "fiscal_year": 2010,
+   "timeframe": "quarterly",
+   "cash_and_equivalents": 6578000000.0,
+   "receivables": 3356000000.0,
+   "inventories": 34391000000.0,
+   "other_current_assets": 3421000000.0,
+   "total_current_assets": 47746000000.0,
+   "property_plant_equipment_net": 96104000000.0,
+   "goodwill": 14882000000.0,
+   "other_assets": 3358000000.0,
+   "total_assets": 162090000000.0,
+   "accounts_payable": 28541000000.0,
+   "debt_current": 7506000000.0,
+   "accrued_and_other_current_liabilities": 20307000000.0,
+   "total_current_liabilities": 56354000000.0,
+   "long_term_debt_and_capital_lease_obligations": 35665000000.0,
+   "other_noncurrent_liabilities": 5835000000.0,
+   "total_liabilities": 97899000000.0,
+   "commitments_and_contingencies": 277000000.0,
+   "common_stock": 4048000000.0,
+   "accumulated_other_comprehensive_income": -3373000000.0,
+   "retained_earnings_deficit": 61556000000.0,
+   "other_equity": 0.0,
+   "total_equity_attributable_to_parent": 62231000000.0,
+   "noncontrolling_interest": 1683000000.0,
+   "total_equity": 63914000000.0,
+   "total_liabilities_and_equity": 162090000000.0
+  }
+ ],
+ "next_url": "https://api.massive.com/stocks/financials/v1/balance-sheets?cursor=AAICAAEBAAEB--gDAAIBCfuMcwEPCjAwMDA4OTUxMjY="
+}

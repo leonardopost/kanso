@@ -34,7 +34,11 @@ before it is allowed to mean anything.
 * no rows for a recent window and a refusal of the same question dated back to the epoch —
   the plan includes the series and the *range* is what was refused. A series the plan
   excludes is refused at every date, this fortnight included; this one was not.
-* the request shape rejected outright — `MALFORMED`, with no second question needed.
+* the request shape rejected outright — `MALFORMED`, with no second question needed. A
+  path the source has retired answers HTTP 410, which is rejected outright too, so its
+  outcome is `MALFORMED` as well; the probe's detail names the path as retired, and the
+  failure raised from it carries the upgrade rather than a correction, because no ticker
+  corrects it.
 
 **Which answers carry to the next key.** An answer about a plan carries — that is what
 makes a universe cost one probe rather than one per name — and an answer about a key does
@@ -91,12 +95,14 @@ from typing import Any, Final
 from kanso.data.adapters.massive.client import Call, MassiveClient, Signal
 from kanso.data.adapters.massive.errors import (
     ERROR_FOR,
+    GONE,
     BelowFloorError,
     EmptyResultError,
     MalformedRequestError,
     MassiveError,
     NotEntitledError,
     Outcome,
+    retired,
 )
 from kanso.errors import ValidationError
 
@@ -655,7 +661,11 @@ def raise_if_blocked(found: Probe) -> None:
 
     Each failure carries its own exit code and its own remedy, so the operator agent
     branches on the outcome rather than on prose: a plan to change, a range to clamp, a
-    window to widen and a request to correct are four different things to do.
+    window to widen and a request to correct are four different things to do. A request
+    the source rejected because it retired the path shares the malformed outcome and its
+    exit code — it fails every request of that shape, as a malformed one does — and is told
+    apart by its message and remedy: no ticker or prefix the operator corrects answers it,
+    so it is named as retired, with the upgrade.
     """
     if found.ok:
         return
@@ -681,6 +691,9 @@ def raise_if_blocked(found: Probe) -> None:
                 remedy="widen the range, or check that the instrument traded over it",
             )
         case _:
+            gone = next((step for step in found.steps if step.status == GONE), None)
+            if gone is not None:
+                raise retired(gone.path, f"{found.dataset} for {found.ticker}")
             raise MalformedRequestError(
                 f"{where} is not a request the vendor honours: {found.detail}",
                 remedy="check the ticker and the prefix its asset class carries",
@@ -939,8 +952,11 @@ def _included(
     """
     asking = control_for(asset_class) if control is None else control
     question = _question(endpoint)
-    live = _ask(client, endpoint, ticker, recent_window(today), steps).signal
+    first = _ask(client, endpoint, ticker, recent_window(today), steps)
+    live = first.signal
     if live is Signal.BAD_REQUEST:
+        if first.status == GONE:
+            return _Plan(Outcome.MALFORMED, f"the source has retired {first.path} (HTTP {GONE})")
         return _Plan(Outcome.MALFORMED, "the vendor rejected the request outright")
     if live is Signal.ROWS:
         return _Plan(None, f"the source served {question} for this series", serving=True)

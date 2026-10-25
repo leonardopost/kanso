@@ -400,9 +400,9 @@ def test_each_listing_is_asked_for_under_the_version_that_serves_it(
 def test_no_listing_asks_for_a_page_wider_than_the_source_serves(
     runner: CliRunner, wired: Replay, workspace: Path
 ) -> None:
-    """A ceiling belongs to one endpoint. The financials listing rejects a page of a
-    thousand outright rather than trimming it, so a limit borrowed from the listing next
-    door yields no rows at all and reads as a dataset the plan excludes."""
+    """A ceiling belongs to one endpoint. The statements listing kanso read until 2026-10-09
+    rejected a page of a thousand outright rather than trimming it, so a limit borrowed from
+    the listing next door yielded no rows at all and read as a dataset the plan excludes."""
     payload(at(runner, workspace, "data", "adapters", "--check", "--json"))
 
     sent = {
@@ -414,7 +414,6 @@ def test_no_listing_asks_for_a_page_wider_than_the_source_serves(
 
     assert set(sent) == set(massive_wire.LISTINGS.values())
     assert all(width <= massive_wire.CEILING[name] for name, width in sent.items()), sent
-    assert sent["financials"] < sent["splits"]
 
 
 def test_the_two_keys_that_expire_are_discovered_and_not_assumed(

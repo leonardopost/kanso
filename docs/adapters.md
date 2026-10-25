@@ -93,6 +93,20 @@ the next, so a walk over a universe skips that series and keeps going. Only `mal
 fatal, because it is a statement about a request *shape*: every name behind it would be
 asked the same broken way.
 
+A path the source has retired is the one `malformed` request the action in the table does
+not answer. It answers HTTP 410, and no key or prefix corrects it, so the probe's detail
+names the path as retired and the failure raised from it carries the upgrade to a kanso
+that asks its successor instead, in the order `docs/maintainers.md` gives every upgrade.
+Stop the daemon if one runs: a service with its service manager, because a restart-always
+policy would start it straight back after `kanso research stop`, and a daemon started by
+hand with `kanso research stop`. Upgrade: `uv tool upgrade kanso` where kanso is installed
+as a tool, or `uv lock --upgrade-package kanso && uv sync` in the project that depends on
+it (`uv add kanso`) — `kanso init` writes no `pyproject.toml`, and run from the workspace,
+uv finds the project's there or in a directory above it. Run `kanso doctor`; then start
+the daemon again, a service with its service manager and one started by hand with
+`kanso research start`. It keeps the outcome and its exit code, so it is told apart by the
+detail or the remedy, not by the outcome.
+
 **Entitlement is probed at the grain the source gates on.** For most classes that is the
 endpoint: one answer covers the class. For indices it is the *ticker*, because the source
 gates them by the feed behind each one — one index returns bars and the next does not, on
@@ -332,12 +346,58 @@ and that has three visible consequences here.
   covered from its first declaration to its last, and an issuer that declared none over
   the range is refused as empty — measured, AAPL asked for 2006-07-03..2026-09-05 is
   covered 2012-10-25..2026-07-30, and AMZN is refused. `docs/backlog.md` row 92.
-- **Financials** are `delayed` under the `fundamental` publication rule, stamped from the
-  source's own acceptance instant or from the filings index joined on the accession
-  number — the rule derives no lag of its own and requires the source to state the instant.
-  A row carrying neither is refused, and so is a range old enough that the source stamps no
-  acceptance instants at all. Being refused is the point: the alternative is a statement
-  that appears to have been public before it was filed.
+- **Financials** are `delayed` under the `fundamental` publication rule, which derives no
+  lag of its own and requires the source to state the instant. They come from the three
+  statements listings that replaced `/vX/reference/financials` when the source retired it
+  on 2026-10-09. It now answers HTTP 410, and wherever kanso meets a 410 — the probe
+  discovery runs first, a listing, a filing's lookup — it names the path as retired, with
+  the upgrade that moves to its successor, rather than telling an operator to check the
+  ticker. A spec names `timeframe` — `quarterly` (the default), `annual` or `ttm` — and
+  may name `statements`, any of `income_statement`, `balance_sheet` and
+  `cash_flow_statement`; left out, it is every statement the grain has, and a balance
+  sheet has no `ttm`, so asking for one is refused. Each point is one statement for one
+  period: `items` holds every figure the row carries under `<statement>.<field>`
+  (`income_statement.revenue`), and `units` is empty because the source states none. A
+  concept a filing did not report separately is served as `0.0`.
+
+  Three measured facts decide when a point becomes public, and the second is the one to
+  plan around:
+
+  - The source serves each period **once, as its most recent filing stated it**, and names
+    only that filing's day. A restatement has replaced the original, which is not served.
+    So a period is stamped at the acceptance of that most recent filing: on 2026-10-15 the
+    median AAPL quarter's income statement named a filing 398 days after the quarter ended,
+    because the next year's 10-Q repeats a quarter's income and cash flow, and its balance
+    sheet one 34 days after. A later load stamps a period later, as further filings repeat
+    it.
+  - The instant comes from the source's two filings indexes: the filings index lists the
+    issuer's periodic reports on that day, and the acceptance index holds each report's
+    acceptance, read as the regulator's Eastern clock it was measured serving. A row whose
+    report the acceptance index holds no instant for, or does not hold, is **dropped**,
+    never stamped from a date. Measured over quarterly statements since 2009, 173 of
+    AAPL's 200 rows are stamped, 171 of MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207
+    and 165 of BRK.B's 198. Dropping is the same in every command: `data backfill` and
+    `data sync` ask thirty days at a time, one quarter at most, so a window whose quarter
+    is dropped is answered empty — recorded so, as any empty chunk is, except a window
+    past the newest day held, which is asked again next time — and the command goes on
+    to the next. A `data load` whose whole span is dropped writes nothing and is refused as
+    an empty dataset.
+  - An issuer outside the United States files its annual report on Form 20-F, and the
+    acceptance index holds none: BABA's and SONY's, measured. A spec whose statements over
+    its whole range name only 20-F reports is refused, naming the form and the range, by
+    `data load`, `data backfill` and `data sync` alike. A window cannot tell that on its
+    own — an issuer that filed 20-Fs and then 10-Ks and 10-Qs has windows of each — so a
+    window whose statements name only 20-Fs — a sync's window past the range too — has the
+    spec's whole range asked again, and only if every statement over it names one too is
+    it refused; otherwise its rows are dropped like any other, and the walk goes on. A sync
+    extends a series that holds a stamped row of that range, so it is refused only once the
+    source has come to name a 20-F for every statement of the range, and then in the words
+    a load of the spec gives. A 40-F, a Canadian issuer's annual report, was not measured,
+    and a row naming one is dropped where its instant is missing, as a domestic report's is.
+
+  Being refused or dropped is the point: the alternative is a statement that appears to
+  have been public before it was filed. `docs/backlog.md` row 228 has what fuller coverage
+  would need.
 
 ### Configuration
 

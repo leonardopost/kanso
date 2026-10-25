@@ -65,7 +65,7 @@ from kanso.data.adapters.massive.entitlement import (
 )
 from kanso.data.adapters.massive.errors import MassiveError
 from kanso.data.adapters.massive.filings import FILINGS, offered
-from kanso.data.adapters.massive.financials import FINANCIALS
+from kanso.data.adapters.massive.financials import INCOME_STATEMENTS
 from kanso.data.adapters.massive.reference import CONTRACTS, LISTING
 from kanso.data.registry import Reach, Survey
 
@@ -141,7 +141,7 @@ TARGETS: Final[tuple[Target, ...]] = (
     Target(INDICES, BARS),
     Target(STOCKS, offered(SPLITS), sparse=True),
     Target(STOCKS, offered(DIVIDENDS_EFFECTIVE), sparse=True),
-    Target(STOCKS, offered(FINANCIALS), sparse=True),
+    Target(STOCKS, offered(INCOME_STATEMENTS), sparse=True),
     Target(STOCKS, offered(FILINGS), sparse=True),
 )
 """Every question the survey asks, in report order.
