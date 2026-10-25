@@ -280,7 +280,7 @@ def _env_detect(ws: Workspace) -> Report:
         ),
         field(
             "plan",
-            f"{plan.lanes} lane(s) · {plan.cores_per_lane} cores/lane · "
+            f"{plan.lanes} lane(s) · {plan.lane_cores} cores/lane · "
             f"{plan.mem_per_lane_gb} GB/lane · {plan.cards_per_turn} card(s)/turn · "
             f"{plan.mem_per_card_gb} GB/card · reserved {plan.reserved_cores} core(s), "
             f"{plan.reserved_mem_gb} GB",

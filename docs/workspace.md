@@ -1453,6 +1453,15 @@ name, and an override replaces the standard name rather than adding to it.
 `explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
 register as the router reads it and then makes one minimal call to every configured model.
 
+The cap is what one answer may spend, thinking included. A `propose` call for a turn of
+`[research] cards_per_turn` proposals asks for that many answers in one, and is sent with
+that many times the route's `max_output`: the shipped 4096 tokens is sized for one diff,
+and eight diffs of a strategy several hundred lines long, with the thinking beside them,
+can need several times it. An answer cut off by its cap is not JSON, so it takes the ladder as a wrong
+answer and, three times cut off, fails the step. A model whose own output limit is under
+the multiplied cap refuses the call; a smaller `cards_per_turn` or `max_output` is the
+remedy.
+
 One call connects within fifteen seconds and then waits **seven minutes** for the answer,
 and neither client retries — the router's ladder is the only retry kanso has. A model you
 serve yourself, a `local` entry whose `base_url` is a process you wrote around a vendor's
@@ -2368,6 +2377,14 @@ validated, which is why the durable override lives somewhere else: `[env] reserv
 `reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in `kanso.toml` are read on every
 detection.
 
+`cores_per_lane` is what a lane running one card at a time costs. A lane whose turns run
+`[research] cards_per_turn` cards at once runs that many children together, so it is charged
+`cores_per_lane + cards_per_turn − 1` cores, which is the `cores/lane` figure `kanso env
+detect` prints, and the lanes are counted at that: on a host of 16 cores with one reserved,
+seven lanes at one card a turn and three at four (`(16 − 1) // (2 + 4 − 1)`). The plan read
+`cards_per_turn` before this only to divide a lane's memory, so it planned as many lanes at
+eight cards a turn as at one. Re-run `kanso env detect` after changing either key.
+
 `mem_per_lane_gb` **replaces** the derived memory per lane rather than raising its floor.
 The derivation charges every lane 1.5× the largest baseline peak any run in the workspace
 ever recorded, which is the right figure only while every hypothesis is as heavy as the
@@ -2383,9 +2400,13 @@ The figure is also what a card of that lane may hold: the loop kills a card chil
 resident memory passes the lane's share, and the declaration is the first way that threshold
 can fall under 4 GB. `[research] cards_per_turn` divides that share by the number of cards
 one turn runs at once — `mem_per_card_gb` in this file, printed by `kanso env detect` —
-and the default of one leaves the share where it was. Eight is the most. It is never lowered below three times the run's *own* measured baseline
+and the default of one leaves the share where it was. Eight is the most. No card's share,
+one at a time or several, is lower than three times the run's *own* measured baseline
 peak, so the heavy hypothesis whose recorded peak you are declaring your way out of keeps
-the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
+the room its own cards need, and a `cards_per_turn` whose part of the share would fall
+under that is refused before the turn is proposed, with the widest turn the share funds
+and the `mem_per_lane_gb` the asked width needs as the remedy: on a 2.5 GB share and a
+0.4 GB baseline peak, two cards a turn are funded and seven are refused, naming 8.40 GB. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
 the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.

@@ -315,7 +315,11 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "altered; returning it unchanged reproduces bytes already carded and is refused. "
         "`repair.attempt` of `repair.of` says which repair this is, and when they run out "
         "the idea is dropped and the next turn asks for a fresh one — so read the traceback "
-        "and fix the named fault rather than guessing around it.\n\n"
+        "and fix the named fault rather than guessing around it. A crash whose "
+        "`failed_gates` hold `resources` was killed by the runner for its memory or its "
+        "clock, not for a fault in its code: the evidence names the limit, what the card "
+        "reached and how many cards its turn ran at once, and no repair is owed for it — a "
+        "change that holds or computes less is what such a card asks for.\n\n"
         "A card that ran is judged a second time by what it held. Its **signature** is, for "
         "each session of the research window, the instruments and sides it held and whether "
         "each was still open at the session's end. A proposal that does not beat the best, "
@@ -348,8 +352,8 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "least, several where the change does several things. The `coverage` fact is the "
         "cards of this hypothesis under the run's pins read back by tag — how many, the "
         "best score and its status, the newest card — so a corner with many cards and no "
-        "keep is a corner already searched, and a corner with none is one the search has "
-        "not reached.\n\n"
+        "keep or `runner_up` is a corner already searched, and a corner with none is one "
+        "the search has not reached.\n\n"
         "The search has a phase, given as the `phase` fact with the misses since the last "
         "keep. In the `local` phase — the first `local_cards` misses — propose local "
         "changes: a parameter, a threshold, a window, a respelling of the same rule. In the "
@@ -365,8 +369,10 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "each other. A diff that does not apply, changes nothing or repeats bytes already "
         "carded is dropped for its slot; return as many distinct diffs as you can. One "
         "call is one turn: the phase and the stall count the turn, and every card the "
-        "turn runs is a trial. A turn that repairs a crash is one diff, as above, whatever "
-        "`cards_per_turn` says."
+        "turn runs is a trial. Every card of the turn is judged against the best the turn "
+        "began from and the highest that beats it is kept; another that beat it too is a "
+        "`runner_up` — it was an improvement on that best, and lost only to its sibling. A "
+        "turn that repairs a crash is one diff, as above, whatever `cards_per_turn` says."
     ),
     "align_check": (
         "You check that a strategy still tests the hypothesis it was written for.\n\n"
@@ -502,7 +508,8 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
 
     The system turn is the instruction, the answer schema and the stable facts, in that
     order and from sorted keys, so it is identical across every call of this class for
-    this subject. The user turn is the dynamic facts alone.
+    this subject. The user turn is the dynamic facts alone. The output cap is the route's
+    for each answer the call asks for (`CallInputs.answers`).
     """
     schema = inputs.answer_schema or ANSWER_SCHEMAS[task]
     system = "\n\n".join(
@@ -523,7 +530,7 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
         task_class=task,
         tier=route.tier,
         effort=route.effort,
-        max_output=route.max_output,
+        max_output=route.max_output * max(1, inputs.answers),
         system=system,
         user=user,
         schema=schema,

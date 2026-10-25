@@ -1084,7 +1084,7 @@ def test_the_memory_cap_is_the_lane_share_floored_at_the_baseline_s_need(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     run = loop.begin(ws, store, registered)
-    assert loop.mem_cap(ws, run) == 8.0
+    assert loop.mem_cap(ws, run) == ENVELOPE.plan.mem_per_lane_gb
 
     heavy = run.model_copy(update={"baseline_peak_mem_gb": 100.0})
     assert loop.mem_cap(ws, heavy) == loop.HEADROOM * 100.0
@@ -1110,9 +1110,34 @@ def test_a_declared_lane_memory_is_what_a_card_of_that_lane_may_hold(
     write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
 
     assert loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
-    assert (
-        loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak}), slots=4) == cap / 4
-    )
+
+
+def test_a_turn_s_cards_share_the_lane_and_a_width_it_cannot_fund_is_refused(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """No card is held below three times what the baseline needed, one at a time or several:
+    a width whose part of the share falls under that is refused before anything runs, with
+    the widest turn the share funds and the share the asked width needs. Measured: a child of
+    a dense tick window holds about 0.4 GB, and 0.18.0 held each of seven to 0.36 GB."""
+    run = loop.begin(ws, store, registered)
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 2.5})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    dense = run.model_copy(update={"baseline_peak_mem_gb": 0.4})
+
+    assert loop.mem_cap(ws, dense, slots=2) == 1.25
+    with pytest.raises(PreconditionError, match=r"0\.36 GB a card, under the 1\.20 GB") as refused:
+        loop.mem_cap(ws, dense, slots=7)
+    assert "`[research] cards_per_turn = 2`" in str(refused.value.remedy)
+    assert "`[env] mem_per_lane_gb = 8.40`" in str(refused.value.remedy)
+
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 8.4})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    assert loop.mem_cap(ws, dense, slots=7) == pytest.approx(1.2), "the share it named funds it"
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 2.4})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    with pytest.raises(PreconditionError) as refused:
+        loop.mem_cap(ws, dense, slots=3)
+    assert "`[research] cards_per_turn = 2`" in str(refused.value.remedy), "2.4 GB funds two"
 
 
 def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
@@ -1156,6 +1181,112 @@ def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
     assert [card.measured_sha for card in made] == [None, None], "neither ran to a result"
     only = loop.run_batch(ws, store, registered, [("peek", bad, ["refactor"])], slots=1)
     assert only[0].status == "discard"
+
+
+def test_a_turn_s_cards_each_run_on_the_card_budget_times_the_turn_s_width(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The children of a turn share the lane's cores, and the budget was struck from a
+    baseline that had them to itself, so each runs on the card budget times the width and
+    the lane's share divided by it. A child the runner killed for its memory or its clock is
+    a crash carrying the `resources` verdict that says which limit and what it reached."""
+    from kanso.nautilus.backtest import RunResult
+
+    run = loop.begin(ws, store, registered)
+    asked: list[backtest.RunRequest] = []
+
+    def fake(
+        requests: Sequence[backtest.RunRequest],
+        catalog_path: object,
+        workdir: object,
+        extensions: object = (),
+    ) -> list[RunResult]:
+        asked.extend(requests)
+        return [
+            RunResult(
+                run=backtest._empty(request),
+                wall_s=[12.5, 3.0][index],
+                peak_mem_gb=[0.2, 2.75][index],
+                intents=(),
+                crashed=True,
+                reason=[backtest.BUDGET, backtest.MEMORY][index],
+                traceback_tail=None,
+            )
+            for index, request in enumerate(requests)
+        ]
+
+    monkeypatch.setattr(loop.backtest, "run_subprocesses", fake)
+    made = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("slow", REVERTING, ["refactor"]), ("big", WEAK, ["refactor"])],
+        slots=4,
+    )
+
+    assert [request.budget_s for request in asked] == [run.card_budget_s * 4] * 2
+    assert [request.mem_cap_gb for request in asked] == [loop.mem_cap(ws, run, slots=4)] * 2
+    assert [card.status for card in made] == ["crash", "crash"]
+    killed = [[gate for gate in card.gate_results if gate.id == loop.RESOURCES] for card in made]
+    assert [gate.passed for gates_of in killed for gate in gates_of] == [False, False]
+    assert killed[0][0].evidence == {
+        "killed": "budget",
+        "budget_s": round(run.card_budget_s * 4, 1),
+        "wall_s": 12.5,
+        "slots": 4,
+    }
+    assert killed[1][0].evidence == {
+        "killed": "memory",
+        "cap_gb": round(loop.mem_cap(ws, run, slots=4), 3),
+        "peak_gb": 2.75,
+        "slots": 4,
+    }
+
+
+def test_a_batched_card_carries_the_digest_one_card_of_the_same_bytes_carries(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A card that ran carries what its trades did, however it was run. Measured before
+    this, on 0.18.0 and 0.19.0: `run_batch` recorded every card with no digest, so a
+    batched card's twelve digest cells in `results.tsv` were empty and the proposer was
+    shown none of its trades — on the path tick lanes were meant to search with."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, WEAK)
+    alone = loop.card(ws, store, registered, "weak, one card")
+
+    together = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("weak, in a turn", WEAK, ["refactor"]), ("revert", REVERTING, ["refactor"])],
+        slots=2,
+    )
+
+    assert alone.digest is not None and alone.digest.fills > 0
+    assert together[0].digest == alone.digest
+    assert together[1].digest is not None
+    cells = together[0].row().split("\t")[9:]
+    assert cells == alone.row().split("\t")[9:] and any(cells)
+
+
+def test_a_card_killed_for_its_memory_says_so_and_one_that_raised_does_not(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, RAISING)
+    raised = loop.card(ws, store, registered, "raises")
+    monkeypatch.setattr(loop, "mem_cap", lambda *args, **kwargs: 1e-6)
+    edit(ws, run, REVERTING)
+    killed = loop.card(ws, store, registered, "outgrows its share")
+
+    assert (raised.status, killed.status) == ("crash", "crash")
+    assert [gate.id for gate in raised.gate_results] == ["strategy_integrity"]
+    (verdict,) = [gate for gate in killed.gate_results if gate.id == loop.RESOURCES]
+    assert verdict.passed is False
+    assert verdict.evidence["killed"] == "memory"
+    assert verdict.evidence["cap_gb"] == 0.0
+    assert verdict.evidence["slots"] == 1
 
 
 def test_one_card_is_costed_with_one_venue_model() -> None:

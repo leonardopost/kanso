@@ -127,6 +127,7 @@ import threading
 import time
 import traceback
 from array import array
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -2601,8 +2602,10 @@ def run_subprocesses(
     Each request is one slot: its own strategy bytes, its own budget and its own memory
     cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once. The points are
     written to every child that is still running, and a child killed for its own memory
-    or its own clock is a crash of that slot alone. An empty list runs nothing. A window
-    that is not the research window is refused before any child exists, as one card is.
+    or its own clock is a crash of that slot alone. The parent holds the read a chunk is
+    cut from and the newest chunk, never the window (`_fan`). An empty list runs nothing.
+    A window that is not the research window is refused before any child exists, as one
+    card is.
     """
     if not requests:
         return []
@@ -2653,6 +2656,11 @@ def _marked_chunks(
         )
 
 
+_NOTHING: Final = memoryview(b"")
+"""What a slot has pending once it has written all it was handed: a view of nothing, so no
+written chunk is kept alive by an empty slice of it."""
+
+
 class _Slot:
     """One child of a fanned card, and how far it has read the stream the others share."""
 
@@ -2668,7 +2676,7 @@ class _Slot:
         self.ready = select.poll()
         self.ready.register(fd, select.POLLOUT)
         self.queue: list[bytes] = []
-        self.pending = memoryview(b"")
+        self.pending = _NOTHING
         self.chunk_index = 0
         self.sent_end = False
         self.alive = True
@@ -2691,7 +2699,17 @@ def _fan(
     rooms: Sequence[Path],
     workdir: Path,
 ) -> list[RunResult]:
-    """Start one child per request and write one window to all of them."""
+    """Start one child per request and write one window to all of them.
+
+    The feed is lockstep: the next chunk is read only once every child still running has
+    been written every chunk before it, so the slowest child sets the pace. A chunk is
+    dropped the moment every child still running has taken it, and a child's view of a
+    chunk it has written is let go with it, so the parent holds the newest chunk and none
+    before it however long the window is — the one-card path's bound (`_Feed`). Measured
+    before this, on 0.18.0: every chunk's pickle was kept for the whole turn, about 88 bytes
+    a quote and 78 a print, so the lane fanning a twenty-name, sixty-session tick window
+    held about 44 GB of it and was killed before its first turn ended.
+    """
     ext = _pickled({"extensions": [list(source) for source in extensions]})
     slots: list[_Slot] = []
     for request, room in zip(requests, rooms, strict=True):
@@ -2710,7 +2728,8 @@ def _fan(
         slot = _Slot(child, child.stdin, room, errors, started)
         slot.queue = [ext, _pickled({"request": request.plain(), "instruments": instruments})]
         slots.append(slot)
-    shared: list[bytes] = []
+    held: deque[bytes] = deque()
+    first = 0  # the stream index of `held[0]`: every chunk before it has been dropped
     catalog_done = False
     end = _pickled(END)
     try:
@@ -2721,26 +2740,29 @@ def _fan(
             for slot in slots:
                 if slot.alive:
                     _poll_slot(slot, requests[slots.index(slot)])
-            if all(_idle(slot, len(shared)) for slot in slots if slot.alive):
+            if all(_idle(slot, first + len(held)) for slot in slots if slot.alive):
                 if not catalog_done:
                     try:
-                        shared.append(_pickled({"groups": next(chunks)}))
+                        held.append(_pickled({"groups": next(chunks)}))
                     except StopIteration:
                         catalog_done = True
                 else:
                     for slot in slots:
-                        if slot.alive and not slot.sent_end and _idle(slot, len(shared)):
+                        if slot.alive and not slot.sent_end and _idle(slot, first + len(held)):
                             slot.queue.append(end)
                             slot.sent_end = True
             progressed = False
             for slot in slots:
                 if not slot.alive or slot.sent_end and not slot.queue and not slot.pending:
                     continue
-                if slot.chunk_index < len(shared) and not slot.queue and not slot.pending:
-                    slot.queue.append(shared[slot.chunk_index])
+                if slot.chunk_index < first + len(held) and not slot.queue and not slot.pending:
+                    slot.queue.append(held[slot.chunk_index - first])
                     slot.chunk_index += 1
                 if _write_slot(slot):
                     progressed = True
+            while held and all(slot.chunk_index > first for slot in slots if slot.alive):
+                held.popleft()
+                first += 1
             if not progressed:
                 time.sleep(POLL_S)
                 _refuse_if_unwanted()
@@ -2750,10 +2772,10 @@ def _fan(
     return [_slot_result(slot, request) for slot, request in zip(slots, requests, strict=True)]
 
 
-def _idle(slot: _Slot, n_shared: int) -> bool:
+def _idle(slot: _Slot, n_read: int) -> bool:
     """Whether `slot` has written every chunk read so far and has nothing left to send."""
     return (
-        slot.chunk_index == n_shared
+        slot.chunk_index == n_read
         and not slot.queue
         and not slot.pending
         and not slot.sent_end
@@ -2806,7 +2828,7 @@ def _write_slot(slot: _Slot) -> bool:
         return False
     except BlockingIOError:  # pragma: no cover - poll said the pipe would take some
         return False
-    slot.pending = slot.pending[written:]
+    slot.pending = slot.pending[written:] if written < len(slot.pending) else _NOTHING
     return written > 0
 
 
