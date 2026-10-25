@@ -35,8 +35,10 @@ before it is allowed to mean anything.
   the plan includes the series and the *range* is what was refused. A series the plan
   excludes is refused at every date, this fortnight included; this one was not.
 * the request shape rejected outright — `MALFORMED`, with no second question needed. A
-  path the source has retired answers HTTP 410, which is rejected outright too, and the
-  probe says it was retired rather than malformed, because no ticker corrects it.
+  path the source has retired answers HTTP 410, which is rejected outright too, so its
+  outcome is `MALFORMED` as well; the probe's detail names the path as retired, and the
+  failure raised from it carries the upgrade rather than a correction, because no ticker
+  corrects it.
 
 **Which answers carry to the next key.** An answer about a plan carries — that is what
 makes a universe cost one probe rather than one per name — and an answer about a key does
@@ -660,8 +662,10 @@ def raise_if_blocked(found: Probe) -> None:
     Each failure carries its own exit code and its own remedy, so the operator agent
     branches on the outcome rather than on prose: a plan to change, a range to clamp, a
     window to widen and a request to correct are four different things to do. A request
-    the source rejected because it retired the path is a fifth: no ticker or prefix the
-    operator corrects answers it, so it is named as retired, with the upgrade.
+    the source rejected because it retired the path shares the malformed outcome and its
+    exit code — it fails every request of that shape, as a malformed one does — and is told
+    apart by its message and remedy: no ticker or prefix the operator corrects answers it,
+    so it is named as retired, with the upgrade.
     """
     if found.ok:
         return

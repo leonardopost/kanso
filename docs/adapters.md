@@ -93,6 +93,13 @@ the next, so a walk over a universe skips that series and keeps going. Only `mal
 fatal, because it is a statement about a request *shape*: every name behind it would be
 asked the same broken way.
 
+A path the source has retired is the one `malformed` request the action in the table does
+not answer. It answers HTTP 410, and no key or prefix corrects it, so the probe's detail
+names the path as retired and the failure raised from it carries the upgrade to a kanso
+that asks its successor — `uv lock --upgrade-package kanso && uv sync` — instead. It keeps
+the outcome and its exit code, so it is told apart by the detail or the remedy, not by the
+outcome.
+
 **Entitlement is probed at the grain the source gates on.** For most classes that is the
 endpoint: one answer covers the class. For indices it is the *ticker*, because the source
 gates them by the feed behind each one — one index returns bars and the next does not, on
@@ -369,11 +376,15 @@ and that has three visible consequences here.
     to the next. A `data load` whose whole span is dropped writes nothing and is refused as
     an empty dataset.
   - An issuer outside the United States files its annual report on Form 20-F, and the
-    acceptance index holds none: BABA's and SONY's, measured. A window whose statements
-    name only 20-F reports is refused, naming the form, because no window of that issuer
-    would stamp; a backfill stops there. A 40-F, a Canadian issuer's annual report, was
-    not measured, and a row naming one is dropped where its instant is missing, as a
-    domestic report's is.
+    acceptance index holds none: BABA's and SONY's, measured. A spec whose statements over
+    its whole range name only 20-F reports is refused, naming the form and the range, by
+    `data load`, `data backfill` and `data sync` alike. A window cannot tell that on its
+    own — an issuer that filed 20-Fs and then 10-Ks and 10-Qs has windows of each — so a
+    window whose statements name only 20-Fs has the spec's whole range asked again (on to
+    the window's end, where a sync runs past the range), and only if every statement over
+    it names one too is it refused; otherwise its rows are dropped like any other, and the
+    walk goes on. A 40-F, a Canadian issuer's annual report, was not measured, and a row
+    naming one is dropped where its instant is missing, as a domestic report's is.
 
   Being refused or dropped is the point: the alternative is a statement that appears to
   have been public before it was filed. `docs/backlog.md` row 223 has what fuller coverage

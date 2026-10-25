@@ -1062,7 +1062,7 @@ NOT_HELD = "acceptance_0000950170-25-010491.json"
 """AAPL's two 10-Qs as the acceptance index answered for them, and the 404 it answered for
 MSFT's 10-Q of 2025-01-29, which the filings index lists and the acceptance index does not
 hold. Swapped in for one of AAPL's, it is a domestic report the source has no instant for,
-as it has none for 12 to 22 % of the rows measured."""
+as it has none for 14 to 22 % of the rows measured."""
 
 WINDOWED: dict[str, str] = {
     "income_statements_AAPL.json": "period_end",
@@ -1194,17 +1194,103 @@ def test_a_sync_passes_a_newest_quarter_with_no_instant_and_asks_for_it_again(
     assert caught_up.fetches[-1].chunk.start == date(2026, 6, 27)
 
 
-def test_a_backfill_of_an_issuer_whose_reports_are_never_held_is_refused_where_it_meets_one(
+def test_a_backfill_of_an_issuer_whose_reports_are_never_held_is_refused_as_a_load_is(
     monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
 ) -> None:
-    """A window at a time, the refusal comes at BABA's first statement, because no window
-    of an issuer filing 20-Fs would stamp; the quiet windows before it are answered empty."""
+    """A window at a time, the refusal comes at BABA's first statement: that window names
+    only a 20-F, so the spec's whole range is asked again, and every statement over it
+    names one too. The quiet windows before it are answered empty, and the refusal is the
+    one a load of the same spec gives, word for word."""
     ws, store = held_in
     serving(monkeypatch, windowed())
-    with pytest.raises(ValidationError) as failure:
-        commands.backfill(ws, store, FinancialsLoader.id, spec_file(ws, **BABA_ANNUAL))
-    assert "2025-03-02..2025-03-31 name only 20-F reports" in failure.value.message
+    spec = spec_file(ws, **BABA_ANNUAL)
+    with pytest.raises(ValidationError) as walked:
+        commands.backfill(ws, store, FinancialsLoader.id, spec)
+    assert "2025-01-01..2026-06-30 name only 20-F reports" in walked.value.message
     assert manifests(ws) == {}
+    with pytest.raises(ValidationError) as loaded:
+        commands.load(ws, store, FinancialsLoader.id, spec, replace=False)
+    assert (loaded.value.message, loaded.value.remedy) == (
+        walked.value.message,
+        walked.value.remedy,
+    )
+
+
+TWO_FORMS = {"start": "2025-01-01", "statements": ["income_statement"]}
+"""A range over BABA's two recorded fiscal years and AAPL's two recorded quarters."""
+
+
+def two_forms() -> Any:
+    """One ticker's income statements naming 20-F reports first and 10-Qs after, from
+    recorded rows alone: BABA's two years, each naming its 20-F, and AAPL's two quarters,
+    each naming its 10-Q, served as AAPL's and kept to the window asked.
+
+    It is a ticker the source has carried for two issuers, which is what `_indexes` stamps
+    each row by its own CIK for, and the shape of an issuer that filed 20-Fs and then 10-Ks
+    and 10-Qs: one window of it names only a 20-F, and the range holds rows that stamp.
+    Everything else is answered as `windowed` answers it."""
+    rows = sorted(
+        rows_of("income_statements_BABA.json") + rows_of("income_statements_AAPL.json"),
+        key=lambda row: str(row["period_end"]),
+    )
+    fallback = windowed()
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        path, asked = request_key(url, params)
+        wanted = dict(asked)
+        if path == INCOME_STATEMENTS.template and wanted.get("tickers") == TICKER:
+            low, high = wanted["period_end.gte"], wanted["period_end.lte"]
+            document = json.loads(fundamental("income_statements_AAPL.json").body)
+            document["results"] = [row for row in rows if low <= row["period_end"] <= high]
+            return Response(status=200, body=json.dumps(document).encode())
+        return fallback(url, params)
+
+    return answer
+
+
+def test_a_window_naming_only_a_20_f_is_dropped_where_the_range_holds_another_form(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The window holding BABA's first year names only its 20-F, but the range holds AAPL's
+    10-Qs, so that window is dropped like any other: the backfill answers it empty and
+    writes both quarters, which is what a load of the same spec writes."""
+    loader, _ = financials_loader(two_forms())
+    (ref,) = loader.discover(financials_spec(**TWO_FORMS))
+    assert list(loader.load(ref, (date(2025, 3, 2), date(2025, 3, 31)))) == []
+    serving(monkeypatch, two_forms())
+    kept: dict[str, list[tuple[tuple[date, date], int]]] = {}
+    for command in ("load", "backfill"):
+        ws = init(tmp_path / command)
+        with StateStore(ws.path("state.db")) as store:
+            store.migrate()
+            spec = spec_file(ws, **TWO_FORMS)
+            if command == "load":
+                commands.load(ws, store, FinancialsLoader.id, spec, replace=False)
+            else:
+                done = commands.backfill(ws, store, FinancialsLoader.id, spec)
+                chunks = {(item.chunk.start, item.chunk.end): item.outcome for item in done.fetches}
+                assert chunks[(date(2025, 3, 2), date(2025, 3, 31))] == "empty"
+            kept[command] = sorted((item.span, item.row_count) for item in manifests(ws).values())
+    q2, q3 = date(2026, 3, 28), date(2026, 6, 27)
+    assert kept["load"] == [((q2, q3), 2)]
+    assert kept["backfill"] == [((q2, q2), 1), ((q3, q3), 1)]
+
+
+def test_a_sync_past_the_range_asks_it_again_on_to_the_window_it_extends_over(
+    monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
+) -> None:
+    """Loaded to the end of March, the series is extended by a sync whose first window
+    holds only BABA's second year and its 20-F. The range asked again runs from the spec's
+    start to that window's end, which holds AAPL's 10-Q quarter, so the window is passed
+    rather than refused and the sync writes the quarter after it."""
+    ws, store = held_in
+    serving(monkeypatch, two_forms())
+    spec = spec_file(ws, **TWO_FORMS, end="2026-03-31")
+    commands.load(ws, store, FinancialsLoader.id, spec, replace=False)
+    synced = commands.sync(ws, store, to=date(2026, 6, 30))
+    assert synced.fetches[0].chunk == commands.Chunk(date(2026, 3, 29), date(2026, 4, 27))
+    assert [item.outcome for item in synced.fetches] == ["empty", "empty", "empty", "written"]
+    assert synced.rows == 1
 
 
 # --- financials: the spec, the request and the dataset --------------------------------

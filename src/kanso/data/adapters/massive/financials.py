@@ -31,12 +31,17 @@ AAPL's 200 rows, 171 of MSFT's 203, 159 of JPM's 184, 162 of NVDA's 207 and 165 
 198 — the rest name a report the source lists without its instant, or does not hold. It
 holds none of BABA's or SONY's 20-F reports, so neither issuer's statements stamp at all.
 
-**Dropping is per row, in every window.** `data backfill` and `data sync` ask thirty days
-at a time, which is one quarter at most, so a window whose rows are all dropped is an
-ordinary window, answered with nothing as a quiet one is, and the walk goes on past it. The
-one refusal is for a window whose rows name only reports of the forms the acceptance index
-holds no instant for (`filings.UNHELD_FORMS`): there the cause is the issuer's filings and
-not one report, so no window of them would stamp either, and the refusal says so.
+**Dropping is per row, and the same in every command.** `data backfill` and `data sync` ask
+thirty days at a time, which is one quarter at most, so a window whose rows are all dropped
+is an ordinary window, answered with nothing as a quiet one is, and the walk goes on past
+it. The one refusal is for a range every row of which names only reports of the forms the
+acceptance index holds no instant for (`filings.UNHELD_FORMS`): there the cause is the
+issuer's filings and not one report, and the refusal says so. One window cannot tell that
+— an issuer that filed 20-Fs and then 10-Ks and 10-Qs has windows of each — so a window
+whose rows all name those forms has the spec's whole range asked again, on to the window's
+end where a sync runs past it, and is refused only if every row of that range names them
+too; otherwise it is dropped like any other. A `data load` over a range and a backfill of
+it therefore refuse the same issuers, in the same words.
 
 **Vendor-computed ratios are not read.** The statements listings serve figures, not
 ratios; the source's ratios listing is not asked. A ratio has no publication instant of
@@ -385,7 +390,40 @@ class FinancialsLoader:
     ) -> Iterator[object]:
         ticker = ticker_of(ref, spec.instruments)
         instrument = instrument_id(ticker, spec.venue)
-        served: list[tuple[Statement, Mapping[str, Any]]] = [
+        served = self._served(spec, ticker, window)
+        indexes = _indexes(self.client, ticker, served, self.as_of)
+        found: list[FinancialStatement] = []
+        for name, row in served:
+            filed = _filed(indexes, name, row)
+            stamp = None if filed is None else filed[0].of(filed[1])
+            if stamp is None:
+                continue
+            statement = statement_of(row, name, spec, instrument, stamp)
+            if window[0] <= utc_day(statement.ts_event) <= window[1]:
+                found.append(statement)
+        whole = (min(window[0], spec.start), max(window[1], spec.end))
+        forms = _unheld(served, indexes)
+        if forms and whole != window:
+            over = self._served(spec, ticker, whole)
+            forms = _unheld(over, _indexes(self.client, ticker, over, self.as_of))
+        if forms:
+            raise ValidationError(
+                f"massive: {ticker}'s statements over {whole[0]}..{whole[1]} name only "
+                f"{', '.join(sorted(forms))} reports, and the source's acceptance index holds "
+                "the instant of none of them",
+                remedy=(
+                    f"drop {ticker} from the spec: the acceptance index holds no 20-F's "
+                    "instant and every statement over that range names one, so none can be "
+                    "stamped; a range reaching periods it reported on 10-K or 10-Q loads those"
+                ),
+            )
+        yield from sorted(found, key=lambda point: (point.ts_init, point.ts_event))
+
+    def _served(
+        self, spec: FinancialsSpec, ticker: str, window: tuple[date, date]
+    ) -> list[tuple[Statement, Mapping[str, Any]]]:
+        """Every row the statements the spec asks for serve for `ticker` over `window`."""
+        return [
             (name, row)
             for name in spec.asked
             for row in listing(
@@ -397,37 +435,6 @@ class FinancialsLoader:
                 as_of=self.as_of,
             )
         ]
-        indexes = _indexes(self.client, ticker, served, self.as_of)
-        found: list[FinancialStatement] = []
-        dropped: list[frozenset[str]] = []
-        for name, row in served:
-            index = indexes.get(str(row.get(CIK_FIELD, "")))
-            filed = row.get(FILED_FIELD)
-            if index is None or filed is None:
-                dropped.append(frozenset())
-                continue
-            day = parse_day(filed, f"{name}.{FILED_FIELD}")
-            stamp = index.of(day)
-            if stamp is None:
-                dropped.append(index.forms(day))
-                continue
-            statement = statement_of(row, name, spec, instrument, stamp)
-            if window[0] <= utc_day(statement.ts_event) <= window[1]:
-                found.append(statement)
-        if dropped and len(dropped) == len(served) and all(_unheld(forms) for forms in dropped):
-            forms = ", ".join(sorted(frozenset[str]().union(*dropped)))
-            raise ValidationError(
-                f"massive: {ticker}'s statements over {window[0]}..{window[1]} name only "
-                f"{forms} reports, and the source's acceptance index holds the instant of "
-                "none of them",
-                remedy=(
-                    f"drop {ticker} from the spec: the acceptance index holds no 20-F's "
-                    "instant, so an issuer filing its annual report on that form has no "
-                    "statement this source can stamp; if it has since moved to 10-K and "
-                    "10-Q reports, a range after its last 20-F loads"
-                ),
-            )
-        yield from sorted(found, key=lambda point: (point.ts_init, point.ts_event))
 
 
 def _indexes(
@@ -451,9 +458,36 @@ def _indexes(
     }
 
 
-def _unheld(forms: frozenset[str]) -> bool:
-    """Whether a dropped row named a day holding only reports of forms never held."""
-    return bool(forms) and forms <= UNHELD_FORMS
+def _filed(
+    indexes: Mapping[str, AcceptanceIndex], name: Statement, row: Mapping[str, Any]
+) -> tuple[AcceptanceIndex, date] | None:
+    """The index that stamps a row and the filing day it names; `None` where it names no
+    issuer or no day, so nothing can stamp it."""
+    index = indexes.get(str(row.get(CIK_FIELD, "")))
+    filed = row.get(FILED_FIELD)
+    if index is None or filed is None:
+        return None
+    return index, parse_day(filed, f"{name}.{FILED_FIELD}")
+
+
+def _unheld(
+    served: list[tuple[Statement, Mapping[str, Any]]], indexes: Mapping[str, AcceptanceIndex]
+) -> frozenset[str]:
+    """The forms the rows name, where every row names a day holding only reports of forms
+    never held and none of them is stamped; nothing otherwise, and nothing for no rows.
+
+    The forms are read before any instant is asked for, so a range holding one report of
+    another form settles the question without a lookup."""
+    named = [_filed(indexes, name, row) for name, row in served]
+    days = [found for found in named if found is not None]
+    if not days or len(days) < len(named):
+        return frozenset()
+    forms = [index.forms(day) for index, day in days]
+    if all(found and found <= UNHELD_FORMS for found in forms) and all(
+        index.of(day) is None for index, day in days
+    ):
+        return frozenset[str]().union(*forms)
+    return frozenset()
 
 
 def _figures(row: Mapping[str, Any], statement: Statement) -> dict[str, float]:
