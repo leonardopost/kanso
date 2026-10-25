@@ -1054,6 +1054,34 @@ def test_a_row_with_no_filing_day_or_no_issuer_is_dropped() -> None:
     assert statements_of(financials_spec(statements=["income_statement"]), answer=answer) == []
 
 
+def test_a_20_f_the_acceptance_index_holds_is_stamped_and_not_refused() -> None:
+    """The refusal is for a form whose instant the source does not hold, not for the form:
+    measured, it holds no 20-F's. Were it to answer BABA's 20-F as it answered AAPL's 10-Q
+    of 2026-07-31, both of BABA's years would be stamped at that instant, as any report's
+    rows are."""
+    answer = recorded(
+        instead={"acceptance_0001193125-26-231755.json": "acceptance_0000320193-26-000020.json"}
+    )
+    points = statements_of(financials_spec(**BABA_ANNUAL), answer=answer)
+    assert len(points) == 2
+    assert {point.ts_init for point in points} == {Q3_ACCEPTED}
+
+
+def test_a_row_naming_no_day_beside_rows_naming_a_20_f_leaves_them_dropped_not_refused() -> None:
+    """The refusal needs every row of the range to name a 20-F. A row naming no filing day
+    names no form, so BABA's year that does name its 20-F is dropped, as a row naming a
+    report without its instant is, and nothing is refused."""
+    rows = rows_of("income_statements_BABA.json")
+    rows[0] = {key: value for key, value in rows[0].items() if key != "filing_date"}
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        if INCOME_STATEMENTS.template in url and "tickers" in params:
+            return served(rows)
+        return recorded()(url, params)
+
+    assert statements_of(financials_spec(**BABA_ANNUAL), answer=answer) == []
+
+
 # --- financials: a window at a time, as backfill and sync ask -------------------------
 
 Q2_REPORT = "acceptance_0000320193-26-000013.json"
@@ -1227,10 +1255,15 @@ def two_forms() -> Any:
 
     It is a ticker the source has carried for two issuers, which is what `_indexes` stamps
     each row by its own CIK for, and the shape of an issuer that filed 20-Fs and then 10-Ks
-    and 10-Qs: one window of it names only a 20-F, and the range holds rows that stamp.
-    Everything else is answered as `windowed` answers it."""
+    and 10-Qs: one window of it names only a 20-F, and the range holds rows that stamp."""
+    return as_aapl("income_statements_BABA.json", "income_statements_AAPL.json")
+
+
+def as_aapl(*recordings: str) -> Any:
+    """The income statement rows of `recordings`, served as AAPL's in period order and kept
+    to the window asked; everything else is answered as `windowed` answers it."""
     rows = sorted(
-        rows_of("income_statements_BABA.json") + rows_of("income_statements_AAPL.json"),
+        (row for name in recordings for row in rows_of(name)),
         key=lambda row: str(row["period_end"]),
     )
     fallback = windowed()
@@ -1291,6 +1324,33 @@ def test_a_sync_past_the_range_asks_the_range_again_for_a_window_naming_only_a_2
     assert synced.fetches[0].chunk == commands.Chunk(date(2026, 3, 29), date(2026, 4, 27))
     assert [item.outcome for item in synced.fetches] == ["empty", "empty", "empty", "written"]
     assert synced.rows == 1
+
+
+def test_a_sync_is_refused_as_a_load_is_once_the_range_names_only_20_fs(
+    monkeypatch: pytest.MonkeyPatch, held_in: tuple[Workspace, StateStore]
+) -> None:
+    """A sync extends a series that already holds a stamped row of the spec's range, so it
+    meets the refusal only where the source has since come to name a 20-F for every row of
+    that range: here BABA's two recorded years, served as AAPL's in place of the quarter
+    the series was loaded with. The window past the range names only a 20-F, the range
+    asked again names nothing else, and the sync writes nothing and is refused in the words
+    a load of the same spec gives."""
+    ws, store = held_in
+    serving(monkeypatch, two_forms())
+    spec = spec_file(ws, **TWO_FORMS, end="2026-03-31")
+    commands.load(ws, store, FinancialsLoader.id, spec, replace=False)
+    held = manifests(ws)
+    serving(monkeypatch, as_aapl("income_statements_BABA.json"))
+    with pytest.raises(ValidationError) as synced:
+        commands.sync(ws, store, to=date(2026, 6, 30))
+    assert "2025-01-01..2026-03-31 name only 20-F reports" in synced.value.message
+    assert manifests(ws) == held
+    with pytest.raises(ValidationError) as loaded:
+        commands.load(ws, store, FinancialsLoader.id, spec, replace=True)
+    assert (loaded.value.message, loaded.value.remedy) == (
+        synced.value.message,
+        synced.value.remedy,
+    )
 
 
 # --- financials: the spec, the request and the dataset --------------------------------

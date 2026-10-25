@@ -385,8 +385,11 @@ and that has three visible consequences here.
     own — an issuer that filed 20-Fs and then 10-Ks and 10-Qs has windows of each — so a
     window whose statements name only 20-Fs — a sync's window past the range too — has the
     spec's whole range asked again, and only if every statement over it names one too is
-    it refused; otherwise its rows are dropped like any other, and the walk goes on. A 40-F, a Canadian issuer's annual report, was not measured, and a row
-    naming one is dropped where its instant is missing, as a domestic report's is.
+    it refused; otherwise its rows are dropped like any other, and the walk goes on. A sync
+    extends a series that holds a stamped row of that range, so it is refused only once the
+    source has come to name a 20-F for every statement of the range, and then in the words
+    a load of the spec gives. A 40-F, a Canadian issuer's annual report, was not measured,
+    and a row naming one is dropped where its instant is missing, as a domestic report's is.
 
   Being refused or dropped is the point: the alternative is a statement that appears to
   have been public before it was filed. `docs/backlog.md` row 223 has what fuller coverage
