@@ -210,9 +210,13 @@ fills against under `print_through`, and a book's touch budget, read that unit.
 ticks — 3.4 million TQQQ quotes and 1.4 million NVDA prints on 2026-09-14 — so every load,
 backfill and screen fetch writes one dataset a day as the pages stream in, and a walk that
 fails loses that day and no other. A day costs its pages: the source serves 50,000 ticks a
-page in about four seconds, every page of a walk at the size its first page asked for, and
-a chunk is asked a day either side of its own — so one session of XLE quotes, 588,399 kept
-of 2,126,077 walked over 43 pages, loaded in 186 s on 2026-10-07 (`docs/backlog.md` row 142).
+page in a few seconds, every page of a walk at the size its first page asked for, and a
+chunk is asked its own days of tape and the overnight tape after them, to 08:00 UTC — a
+tick made before midnight and published within those hours is kept by the day it was made,
+and over 32 tape days measured on 2026-10-15 none was published later. One session of XLE
+quotes (2026-10-06, 587,623 points) walks 12 pages and loaded in 32–40 s on 2026-10-15;
+asked a day either side, as it was until then, it walked 43 pages and three sessions of
+tape and loaded in 97–105 s (`docs/backlog.md` row 142).
 
 The bulk path is worth reaching for over long history where the store carries the class:
 whether it does is a fact about the store's *layout*, never about a plan, and whether your

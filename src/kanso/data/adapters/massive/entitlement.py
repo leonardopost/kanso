@@ -220,9 +220,31 @@ class Endpoint:
         ticker in its own template or parameters cannot be asked that way, and says so as
         a refusal an operator can read rather than as a substitution failure.
         """
+        bounds = None if window is None else (window[0].isoformat(), window[1].isoformat())
         return (
-            self._fill(self.template, ticker, window),
-            {name: self._fill(value, ticker, window) for name, value in self.params},
+            self._fill(self.template, ticker, bounds),
+            {name: self._fill(value, ticker, bounds) for name, value in self.params},
+        )
+
+    def between(self, ticker: str, instants: tuple[int, int]) -> tuple[str, dict[str, str]]:
+        """The path and parameters that ask for `ticker` between two instants, both included.
+
+        The instants are UTC nanoseconds, and only an endpoint that filters on one can be
+        asked this way: a tick endpoint, whose window lives in its parameters and is read
+        against the tape instant to the nanosecond — measured, a six-hour window of XLE prints
+        asked in nanoseconds came back as exactly those six hours. An aggregate's window is
+        days in its address, so it is refused rather than handed a number it would misread.
+        """
+        if self.dated_path or self.timestamp_unit != "ns" or not self.windowed:
+            raise MalformedRequestError(
+                f"massive: the {self.dataset} endpoint is not windowed by a nanosecond instant "
+                "in its parameters, so it cannot be asked between two instants",
+                remedy="ask it for a window of days with `request`",
+            )
+        bounds = (str(instants[0]), str(instants[1]))
+        return (
+            self._fill(self.template, ticker, bounds),
+            {name: self._fill(value, ticker, bounds) for name, value in self.params},
         )
 
     @property
@@ -264,7 +286,7 @@ class Endpoint:
             return None
         return datetime.fromtimestamp(int(value) // UNITS[self.timestamp_unit], UTC).date()
 
-    def _fill(self, text: str, ticker: str | None, window: tuple[date, date] | None) -> str:
+    def _fill(self, text: str, ticker: str | None, bounds: tuple[str, str] | None) -> str:
         if "{ticker}" in text:
             if ticker is None:
                 raise MalformedRequestError(
@@ -278,15 +300,13 @@ class Endpoint:
             text = text.replace("{ticker}", ticker)
         if "{start}" not in text and "{end}" not in text:
             return text
-        if window is None:
+        if bounds is None:
             raise MalformedRequestError(
                 f"massive: the {self.dataset} endpoint is asked for a date window and none "
                 "was given",
                 remedy="pass the window the dataset covers",
             )
-        return text.replace("{start}", window[0].isoformat()).replace(
-            "{end}", window[1].isoformat()
-        )
+        return text.replace("{start}", bounds[0]).replace("{end}", bounds[1])
 
 
 BARS: Final = Endpoint(
