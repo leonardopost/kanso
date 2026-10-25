@@ -1763,8 +1763,9 @@ bar's close inside the quote, or in a name with no quote before it, pays both. T
 the fill's and not the name's. A name fed bars beside its quotes fills an order in flight at
 a bar's instant at the bar's close, since the engine walks every bar through the book as
 prints and settles the venue after each point (measured: 10.00 against a quote of
-9.99/10.01 at the same instant), and pays the half-spread on that fill and not on the ones
-its quotes made. Under `touch` and `through` a taker that lands on the book a print left
+9.99/10.01 at the same instant), and pays the half-spread on that fill when the close is
+inside the quote, as there, and not on the ones its quotes made; a close at or beyond the
+touch is a fill at the touch like any other, and pays neither. Under `touch` and `through` a taker that lands on the book a print left
 fills at the print's price, and pays the half-spread when that is inside the quote and
 nothing when the print hit the far side. A maker filled at its own price inside the quote — on
 a print through it under the print rules, or on a print at it under `touch` — pays both unless
@@ -1787,7 +1788,10 @@ shipped one basis point of slippage, a round trip of two such maker fills read +
 spread earned less two basis points of slippage, where it reads −2.0 now. A screen's hurdle
 charges a quoted follower neither, as a card does a fill at the touch. What a taker pays past
 the touch on a quoted name is stated as `slippage_ticks`; `cost_scenario`'s `fixed_bps` and
-`slippage_bps` are charged where the runner charges them and nowhere else.
+`slippage_bps` are charged where the runner charges them and nowhere else. `cost_stress`
+multiplies what each fill recorded, and a touched fill recorded no spread: on a quoted lane
+whose model states no commission, no sale fee and no `slippage_ticks`, a touched fill records
+nothing and no multiple moves it (`docs/backlog.md` row 224).
 
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, once, in the runner's
 extraction, and slippage and half the spread where its price does not carry the spread
@@ -2069,9 +2073,12 @@ the certification window and lost 13 under 20 ms, and a one-close rule early by 
 the reverse — a route a bar long moves a daily rule by a whole step. A hypothesis that
 states no latency has no route to slow and the gate skips, saying so; like the plateau, it
 fails an unstressed objective at or below zero before any run is made, is judged after
-every cheap verdict, and is spared when `embargoed_window` has refused the subject. Only a
-hypothesis on bars can state none: one at tick resolution is refused a latency of zero
-(`docs/workspace.md`), so the gate judges every tick lane that names it.
+every cheap verdict, and is spared when `embargoed_window` has refused the subject. A
+hypothesis at tick resolution is refused a latency of zero where a run begins — at `hyp
+validate`, `hyp add` and `research begin` (`docs/workspace.md`) — so a lane begun under that
+rule states one. `cert plan` and `cert run` do not check it again: the gate reads the latency
+recorded on the card it judges, and a card recorded at zero — from a run begun before the
+rule, or one that went on past an upgrade — is skipped as any latency of zero is.
 
 `param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
 unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a

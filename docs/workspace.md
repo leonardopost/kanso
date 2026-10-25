@@ -815,7 +815,8 @@ and whatever its order walked past the touch, so the runner charges it neither t
 half-spread, under either `spread` value, nor `slippage_bps`; a fill struck at a print or a
 bar's close inside the quote, or in a name with no quote before it, pays both
 (`docs/concepts.md`, Delivery). So one name fed bars beside its quotes pays the half-spread
-on the fills its bars made and not on those its quotes made. `spread`, `fixed_bps` and
+on a fill its bars made at a close inside the quote, and not on those its quotes made; a
+bar's close at or beyond the touch is a fill at the touch, and pays neither. `spread`, `fixed_bps` and
 `slippage_bps` price the fills the venue struck at a close or a print, and what a taker pays
 past the touch on a quoted name is stated as `slippage_ticks`. Under `spread: quotes`,
 `fixed_bps` is the width a fill with no quote before it pays, and a model that takes its

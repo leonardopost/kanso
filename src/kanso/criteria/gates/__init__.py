@@ -1499,13 +1499,17 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
     stressing them is arithmetic on the recorded fills rather than another backtest. A charge
     is multiplied; a rebate — the negative charge a venue model's `maker_bps` can put on a
     fill that rested — is divided, so under a multiple of one or more every fill costs more
-    or earns less, and no stress ever makes a rebate pay better. A fill is charged to the
-    return period it falls in; a fill after the last period end changed no return and so
-    changes none here. A book policy's `carry` is a rate on borrowed notional and not a fill
-    cost, so it is left as recorded. Under a monthly reset the transfers stand as struck and
-    the cushion as recorded, so the extra cost stays in the book across months where a real
-    reset would have absorbed it at the next turn: a stressed run's returns are exact, and
-    its equity and drawdown are the more conservative for it.
+    or earns less, and no stress ever makes a rebate pay better. A fill struck at the touch
+    recorded no half-spread and no `slippage_bps`, since its price carries the spread, so only
+    what it did pay — commission, a sale's fees, a taker's `slippage_ticks` — is multiplied:
+    the spread in a price is no recorded cost, and on a quoted lane whose model states none of
+    those a touched fill records nothing and no multiple moves it (`docs/backlog.md` row 224).
+    A fill is charged to the return period it falls in; a fill after the last period end
+    changed no return and so changes none here. A book policy's `carry` is a rate on borrowed
+    notional and not a fill cost, so it is left as recorded. Under a monthly reset the
+    transfers stand as struck and the cushion as recorded, so the extra cost stays in the book
+    across months where a real reset would have absorbed it at the next turn: a stressed run's
+    returns are exact, and its equity and drawdown are the more conservative for it.
     """
     ends = run.period_ends_ns
     added = [0.0] * len(ends)

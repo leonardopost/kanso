@@ -10,9 +10,10 @@ below that quote's bid, or any fill on a venue that matches against a level-two 
 spread in its price and whatever its order walked past the touch, so the caller hands
 `fill_cost` `touched` and neither is charged on it; a fill struck at a print or a bar's close
 inside the quote, or in a name with no quote before it, is charged both, the half-spread
-quoted or fixed. So one name fed bars beside its quotes pays the half-spread on the fills its
-bars made and not on the ones its quotes made, and a taker that landed on a print at the near
-side of the quote pays it. A fill that
+quoted or fixed. So one name fed bars beside its quotes pays the half-spread on a fill its
+bars made at a close inside the quote and not on the ones its quotes made — a close at or
+beyond the touch is a fill at the touch, and pays neither — and a taker that landed on a print
+at the near side of the quote pays it. A fill that
 rested on the book — one the venue reports as a maker's — pays the venue model's maker
 schedule instead of all three, and instead of the per-share commission, when the model states
 one: `maker_bps` of its notional and `maker_per_share` on each share, either of which alone
