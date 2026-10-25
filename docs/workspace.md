@@ -125,7 +125,6 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
-| take the spread from quotes with no `fixed_bps` over an instrument asked for neither `quote` nor `book` — a signal included | 3 · at `hyp validate`, naming `costs.spread` and the instrument: a fill there has no quote before it to read a spread from, and its price carries none |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -820,11 +819,13 @@ bar's close at or beyond the touch is a fill at the touch, and pays neither. `sp
 `slippage_bps` price the fills the venue struck at a close or a print, and what a taker pays
 past the touch on a quoted name is stated as `slippage_ticks`. Under `spread: quotes`,
 `fixed_bps` is the width a fill with no quote before it pays, and a model that takes its
-spread from quotes and states no width is refused at `hyp validate` and `hyp add` (exit 3),
-naming `costs.spread`, when an instrument of its venue is asked for neither `quote` nor
-`book`: a fill there would be charged no spread at all, and the file cannot say whether the
-strategy trades a name it reads, so a signal is held to it too, though the width it states
-is never charged. The block is scope: every metric is net of it, so a best selected under one schedule
+spread from quotes and states no width, over an instrument of its venue asked for neither
+`quote` nor `book`, is admitted with a warning at `hyp validate` and `hyp add` naming
+`costs.spread` and the instrument: a fill there is charged no spread at all. It is not
+refused, because the file cannot say whether the strategy trades a name it reads: a signal
+read and never traded — the trigger `kanso screen draft` writes as one name's prints beside
+a follower read as another's quotes — is charged nothing either way, and a screen's hurdle
+refuses a leg it trades read so. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
 `latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
@@ -995,10 +996,14 @@ level-two book keeps a queue of its own. A name asked for one feed and not the o
 the whole hypothesis on `touch`, because the print rule fills a taker only on a quote in force
 and a resting limit only on a print (below): a market order in a name asked for `trade` alone,
 or a resting limit in one asked for `quote` alone, would never fill, where under `touch` it
-does. `hyp validate` and `hyp add` warn, naming each such name and what it is asked for; a
-`screen draft` of a cell whose trigger and follower are read as different feeds of different
-names writes that shape. A rule a layer states is not held to the names: a stated print rule
-over such a name is admitted and fills nothing there (`docs/backlog.md` row 223). On a tape `touch` credits a
+does. A name asked for `bar` beside its quotes and prints keeps it there too, since a bar
+walks the engine's bid and ask past the quote in force and a print rule over it is refused. Where no
+layer states a rule, `hyp validate` and `hyp add` warn, naming each such name, what it is
+asked for and why; a `screen draft` of a cell whose trigger and follower are read as
+different feeds of different names writes that shape. A rule a layer states is not held to
+the names, and draws no such warning: a stated print rule over a name asked for one feed is
+admitted, and a market order in a name asked for `trade` alone, or a resting limit in one
+asked for `quote` alone, never fills there (`docs/backlog.md` row 223). On a tape `touch` credits a
 resting limit with no queue ahead of it, all that is left of it from any point beyond its
 price and the size a quote shows again at every quote that shows it, and the card's fill
 ratio, maker share and per-trade edge read those credits; the print rule credits it only from

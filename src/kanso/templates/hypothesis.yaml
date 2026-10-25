@@ -22,7 +22,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # close inside the quote; a fill at the touch of its name's last quote — a buy at the
                                    # ask, a sale at the bid — carries the spread and is charged neither: a taker's price
                                    # past the touch is slippage_ticks. Under `quotes`, fixed_bps prices a fill with no
-                                   # quote before it, and is required when an instrument is asked for no quote or book
+                                   # quote before it; with none, an instrument asked for no quote or book is charged no
+                                   # spread, and `kanso hyp validate` warns naming it
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
@@ -37,7 +38,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # measured on the account and route the strategy will trade through. Zero unless
                                    # stated, which `kanso hyp validate` refuses at resolution tick, quote or trade
 #   limit_fill: print_through      # print_through by default at tick resolution with every name asked for quote and
-                                   # trade, touch otherwise, with a warning naming a name asked for one alone.
+                                   # trade, touch otherwise, with a warning naming a name asked for one alone or for bar
+                                   # beside them, when no layer states a rule.
                                    # touch | through | print_through | print_through_whole: a resting limit fills when the
                                    # market reaches its price (the engine's rule), or only once a bar's low/high or a print
                                    # goes beyond it, which fills all that is left of it (of the best-priced order, when it

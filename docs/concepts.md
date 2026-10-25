@@ -1774,9 +1774,9 @@ the last the venue applied there. The harness reads the same quote: the engine h
 a fill before the point the venue made it on, so a fill a quote made arrives against the
 quote before, and the harness strikes it again when its own quote is delivered and books the
 difference, which keeps `self.balance` equal to the equity the runner strikes. Under `spread:
-quotes`, `fixed_bps` is the width a fill with no quote before it pays, and a model that takes
-its spread from quotes and states none is refused at `hyp validate` over an instrument asked
-for neither `quote` nor `book` (`docs/workspace.md`). Measured before the first rule on a
+quotes`, `fixed_bps` is the width a fill with no quote before it pays, and `hyp validate`
+warns where a model that takes its spread from quotes states none over an instrument asked
+for neither `quote` nor `book`, whose fills are then charged no spread (`docs/workspace.md`). Measured before the first rule on a
 quote of 9.99/10.01 with every other charge zero, under `touch` and `print_through`, sent on a
 quote and on a print: a market buy filled at 10.01 and a market sell at 9.99, each charged
 10 bp on top, so a flat round trip whose cost was one spread was booked at two, and a quoted

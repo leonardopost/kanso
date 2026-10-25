@@ -21,7 +21,7 @@ from kanso.screen import draft
 from kanso.state import StateStore
 from kanso.workspace import find
 
-from .conftest import INSTRUMENT, at, classify, payload, write_spec
+from .conftest import INSTRUMENT, OTHER, at, classify, payload, write_spec
 from .test_screen_run import FADE, OU, run_screen
 
 CELL = "response/a/40bp/1h/a/1h"
@@ -139,6 +139,68 @@ def test_a_tick_cell_drafts_a_file_hyp_add_admits_under_the_latency_it_was_measu
     added = at(runner, loaded, "hyp", "add", path, "--json")
     assert added.exit_code == Exit.OK, added.stdout
     assert payload(added)["status"] == "draft"
+
+
+@pytest.mark.parametrize(
+    "costs",
+    [
+        {"SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "quotes"}},
+        None,
+    ],
+    ids=["quoted spread stated", "no costs"],
+)
+def test_a_cell_read_off_one_name_s_prints_and_another_s_quotes_registers_as_drafted(
+    runner: CliRunner, paired: Path, costs: dict[str, Any] | None
+) -> None:
+    """The trigger is one name read as prints and the follower another read as quotes: each
+    is asked for its own type, the spread comes from quotes, and the trigger has none before
+    a fill. The screen's hurdle never priced the trigger, which the seed never trades, and the
+    file cannot say so, so `hyp add` admits the draft as written and names the trigger — once
+    for the spread a fill there would not be charged, once for keeping the tape on touch. A
+    refusal once held the signal to a width it is never charged, and `hyp add` exited 3."""
+    for name, seed, symbol in (("tape.yaml", 7, "DEMO"), ("othr_tape.yaml", 11, "OTHR")):
+        spec = write_spec(
+            paired,
+            name,
+            instruments=[symbol],
+            seed=seed,
+            types=["quote", "trade"],
+            end="2024-03-29",
+        )
+        answer = at(runner, paired, "data", "load", "--loader", "synthetic", "--spec", spec)
+        assert answer.exit_code == Exit.OK, answer.stdout
+    assert at(runner, paired, "data", "snapshot").exit_code == Exit.OK
+    legs = {
+        "a": {"instrument": INSTRUMENT, "type": "trade"},
+        "b": {"instrument": OTHER, "type": "quote"},
+    }
+    run_screen(runner, paired, {**TAPE, "id": "ou_pair", "legs": legs, "costs": costs})
+
+    result = at(
+        runner,
+        paired,
+        "screen",
+        "draft",
+        "ou_pair",
+        "--cell",
+        "response/a/40bp/1h/b/1h",
+        "--as",
+        "pair_lane",
+        "--certify",
+        "2024-03-01..2024-03-29",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK, result.stdout
+    path = Path(payload(result)["dir"]) / "hypothesis.yaml"
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert hypothesis["data_by_instrument"] == {INSTRUMENT: ["trade"], OTHER: ["quote"]}
+    assert hypothesis["costs"] == {**(costs or {}).get("SIM", {}), "latency_ms": 5.0}
+    added = at(runner, paired, "hyp", "add", path, "--json")
+    assert added.exit_code == Exit.OK, added.stdout
+    touch, spread = payload(added)["warnings"]
+    assert f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote." in touch
+    assert f"and {INSTRUMENT} is asked for no quote or book, so a fill there is charged" in spread
 
 
 def test_a_cell_measured_at_no_latency_drafts_none(loaded: Path) -> None:

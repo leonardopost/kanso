@@ -273,30 +273,56 @@ def test_quotes_complete_the_cost_model_without_a_width(ws: Workspace) -> None:
     assert accepted(ws, doc) is not None
 
 
-def test_a_quoted_spread_with_no_width_over_a_name_without_quotes_is_refused(
+def test_a_quoted_spread_with_no_width_over_a_name_without_quotes_is_named(
     ws: Workspace,
 ) -> None:
     """A fill in a name read as bars alone is struck at a close, which carries no spread, and
-    has no quote before it to read one from: under `spread: quotes` with no width it would be
-    charged none. Named, with the width as the remedy."""
-    failure = refused(
-        ws,
-        document(
-            resolution="1m",
-            universe=["DEMO", "EURO"],
-            data_requirements=["bar", "quote"],
-            data_by_instrument={"DEMO": ["quote"], "EURO": ["bar"]},
-            costs={"commission_bps": 0.0, "slippage_bps": 1.0, "spread": "quotes"},
-        ),
+    has no quote before it to read one from: under `spread: quotes` with no width it is charged
+    none. The file cannot say whether the strategy trades the name, and a signal is charged
+    nothing either way, so it is admitted and named, with the width as the remedy."""
+    doc = document(
+        resolution="1m",
+        universe=["DEMO", "EURO"],
+        data_requirements=["bar", "quote"],
+        data_by_instrument={"DEMO": ["quote"], "EURO": ["bar"]},
+        costs={"commission_bps": 0.0, "slippage_bps": 1.0, "spread": "quotes"},
     )
 
-    assert failure.message.startswith("costs.spread: quotes on ")
-    assert failure.message.endswith(
-        "and EURO is asked for no quote or book, so a fill there would be charged no spread"
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert warning == (
+        "costs.spread: quotes on XETR reads a fill's half-spread from the quote before it, and "
+        "EURO is asked for no quote or book, so a fill there is charged no spread; if the "
+        "strategy trades it, state fixed_bps in the hypothesis costs or under "
+        "venues.XETR.costs in portfolio.yaml — a fill with no quote before it pays half of it "
+        "— or ask it for quote under data_by_instrument"
     )
-    assert failure.remedy is not None and failure.remedy.startswith(
-        "state fixed_bps in the hypothesis costs"
+
+
+def test_a_trigger_read_as_prints_beside_a_follower_read_as_quotes_is_admitted(
+    ws: Workspace,
+) -> None:
+    """The shape `kanso screen draft` writes for a cell whose trigger is one name's prints and
+    whose follower is another's quotes, under the default spread from quotes: the trigger has
+    no quote before a fill and the file cannot say it is never traded. It is admitted, named
+    twice — no spread there, and the tape kept on touch — where a refusal once held the signal
+    to a width it is never charged."""
+    doc = document(
+        resolution="trade",
+        universe=["DEMO", "EURO"],
+        data_requirements=["quote", "trade"],
+        data_by_instrument={"DEMO": ["trade"], "EURO": ["quote"]},
+        costs={"latency_ms": 5.0},
     )
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["spread"] for model in resolved(ws, doc).values()} == {"quotes"}
+    touch, spread = admitted.warnings
+    assert touch.startswith("costs.limit_fill: touch on SIM, XETR,")
+    assert ": DEMO is asked for trade; EURO is asked for quote. The print rules" in touch
+    assert spread.startswith("costs.spread: quotes on SIM reads a fill's half-spread")
+    assert "and DEMO is asked for no quote or book, so a fill there is charged no spread" in spread
 
 
 def test_a_stated_width_prices_a_name_without_quotes_under_a_quoted_spread(ws: Workspace) -> None:
@@ -647,8 +673,9 @@ def test_a_name_asked_for_one_feed_keeps_every_venue_on_touch_and_is_named(
     (warning,) = admitted.warnings
     assert warning.startswith("costs.limit_fill: touch on SIM, XETR, which credits a resting")
     assert f": {asked}. The print rules fill a taker only on a quote in force" in warning
+    assert "bar beside quote" not in warning
     assert warning.endswith(
-        "ask each name the strategy trades for quote and trade under data_by_instrument"
+        "ask each name the strategy trades for quote and trade alone under data_by_instrument"
     )
 
 
@@ -677,6 +704,76 @@ def test_a_bar_only_name_at_tick_resolution_keeps_the_default_on_touch(ws: Works
 
     assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
     assert ": EURO is asked for bar. The print rules" in admitted.warnings[0]
+
+
+def test_a_name_asked_for_bars_beside_quotes_and_prints_is_named_for_its_bars(
+    ws: Workspace,
+) -> None:
+    """A name asked for bars beside its quotes and prints holds both feeds, so the print rule
+    would not starve it: a bar walks the engine's bid and ask past the quote in force, and a
+    print rule over it is refused. The warning says that, and not that a feed is missing."""
+    admitted = hyp.admit(
+        ws, write_hypothesis(ws, tick(data_requirements=["quote", "trade", "bar"]))
+    )
+
+    (warning,) = admitted.warnings
+    assert warning == (
+        "costs.limit_fill: touch on SIM, which credits a resting limit with no queue ahead of "
+        "it, and not print_through, which a hypothesis holding quotes and prints at tick "
+        "resolution resolves to when no layer states a rule only if every name is asked for "
+        "quote and trade and none for bar: DEMO is asked for quote, trade, bar. A bar walks "
+        "the engine's bid and ask past the quote in force, on which the print rules fill a "
+        "taker, so a print rule over a name asked for bar beside quote is refused; ask each "
+        "name the strategy trades for quote and trade alone under data_by_instrument"
+    )
+
+
+def test_names_short_of_a_feed_and_barred_beside_quotes_give_both_reasons(
+    ws: Workspace,
+) -> None:
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_requirements=["quote", "trade", "bar"],
+        data_by_instrument={"DEMO": ["quote", "trade", "bar"], "EURO": ["trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert ": DEMO is asked for quote, trade, bar; EURO is asked for trade. The print " in warning
+    assert "could not fill as it does under touch, and a bar walks the engine's bid" in warning
+
+
+@pytest.mark.parametrize("layer", ["hypothesis", "portfolio"])
+def test_a_stated_touch_over_a_one_feed_name_draws_no_warning(ws: Workspace, layer: str) -> None:
+    """A rule a layer states is the operator's: the warning says why the default stayed on
+    touch, and its remedy, asking the names for both feeds, cannot move a stated one."""
+    stated = {"limit_fill": "touch"}
+    if layer == "portfolio":
+        write_portfolio(ws, {"SIM": {"costs": stated}, "XETR": {"costs": stated}})
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0, **(stated if layer == "hypothesis" else {})},
+    )
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
+    assert admitted.warnings == ()
+
+
+def test_a_venue_a_layer_states_a_rule_for_is_left_out_of_the_warning(ws: Workspace) -> None:
+    write_portfolio(ws, {"XETR": {"costs": {"limit_fill": "through"}}})
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["quote"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert warning.startswith("costs.limit_fill: touch on SIM, which credits")
 
 
 def test_a_tape_without_prints_is_told_nothing_about_the_print_rule(ws: Workspace) -> None:
