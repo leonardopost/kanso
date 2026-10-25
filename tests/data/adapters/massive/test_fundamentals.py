@@ -1358,9 +1358,11 @@ def test_a_sync_is_refused_as_a_load_is_once_the_range_names_only_20_fs(
     """A sync extends a series that already holds a stamped row of the spec's range, so it
     meets the refusal only where the source has since come to name a 20-F for every row of
     that range: here BABA's two recorded years, served as AAPL's in place of the quarter
-    the series was loaded with. The window past the range names only a 20-F, the range
-    asked again names nothing else, and the sync writes nothing and is refused in the words
-    a load of the same spec gives."""
+    the series was loaded with. The sync's first window starts the day after that quarter,
+    inside the range, and runs past its end; the one row it holds is BABA's second year,
+    which ends on the range's last day and names only a 20-F. That window is not the range,
+    so the range is asked again, every row of it names a 20-F too, and the sync writes
+    nothing and is refused in the words a load of the same spec gives."""
     ws, store = held_in
     serving(monkeypatch, two_forms())
     spec = spec_file(ws, **TWO_FORMS, end="2026-03-31")
