@@ -17,8 +17,9 @@ card's (`kanso.nautilus.costs.at_touch`): a follower read as quotes or a book en
 or the bid it shows, so its gross move has crossed the spread already and the hurdle charges it
 neither the half-spread nor `slippage_bps`, as the runner charges a fill struck at the touch; a
 follower read as bars or prints is priced at its last price and charged the venue model's
-spread and `slippage_bps`. A model whose spread comes from quotes, over a leg that has none, is
-refused (exit 3): nothing could price it.
+spread and `slippage_bps`. Under `spread: quotes` that spread is the stated `fixed_bps`, the
+width a card's fill with no quote before it pays; a model whose spread comes from quotes and
+states no width, over a leg that has no quotes, is refused (exit 3): nothing could price it.
 
 A derived follower is traded leg by leg: a basket's legs in its weights, a spread's long leg and
 beta of its short one, both legs of a gap. Its hurdle is the sum of its legs' round trips, each
@@ -219,10 +220,12 @@ def hurdles(
             ) from None
     for leg in legs:
         model = models[venue_of[leg]]
-        if screen.legs[leg].type not in TOUCHED and model.costs.spread == "quotes":
+        unquoted = screen.legs[leg].type not in TOUCHED
+        if unquoted and model.costs.spread == "quotes" and model.costs.fixed_bps is None:
             raise ValidationError(
-                f"legs.{leg}: {venue_of[leg]}'s model takes the spread from quotes and "
-                f"{screen.legs[leg].instrument} is read as {screen.legs[leg].type}, which has none",
+                f"legs.{leg}: {venue_of[leg]}'s model takes the spread from quotes and states no "
+                f"width, and {screen.legs[leg].instrument} is read as {screen.legs[leg].type}, "
+                "which has none",
                 remedy=f"state `fixed_bps` under costs.{venue_of[leg]}, or read the leg as quote",
             )
     multipliers = {leg: float(definitions[screen.legs[leg].instrument].multiplier) for leg in legs}
