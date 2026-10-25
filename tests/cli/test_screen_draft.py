@@ -193,7 +193,8 @@ def test_a_maker_schedule_in_a_draft_read_off_two_feeds_is_refused_naming_both_n
         f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote"
     )
     assert payload(refused)["remedy"].startswith(
-        "ask every name, traded or not, for quote and trade alone under data_by_instrument"
+        "ask every name, traded or not, for quote and trade under data_by_instrument, keeping "
+        "every other type it is asked for, which moves"
     )
     assert hypothesis["costs"]["maker_bps"] == 0
     assert added.exit_code == Exit.OK, added.stdout

@@ -1002,13 +1002,15 @@ Every name of the universe counts, traded or not, since the file cannot say whic
 strategy trades: a signal asked for prints alone keeps the tape on `touch` beside a traded name
 asked for both. Where no layer states a rule, `hyp validate` and `hyp add` warn, naming each
 such name, what it is asked for and why, and each way off the warning: ask every name for
-`quote` and `trade` alone under `data_by_instrument`, dropping `bar` from `data_requirements`
-where it is there since no name is left asking for it, which resolves to `print_through`; state
-`print_through`, offered only where no name is asked for `bar` beside `quote` and fit only when
-each name short of a feed is a signal the strategy never trades; or state `touch`, which keeps
-the rule. A `screen draft` of a cell whose trigger and follower are read as different feeds
-of different names writes that shape. A rule a layer states is not held to the names, and
-draws no such warning: a stated print rule over a name asked for one feed is
+`quote` and `trade` and none for `bar` under `data_by_instrument`, each keeping every other
+type it is asked for, since a type no name is asked for is refused — the `funding` a perpetual
+requires, the series a `session_scope` reads — and drop `bar` from `data_requirements` where it
+is there, which resolves to `print_through`; state `print_through`, offered only where no name
+is asked for `bar` beside `quote` and fit only when each name short of a feed is a signal the
+strategy never trades; or state `touch`, which keeps the rule. A `screen draft` of a cell
+whose trigger and follower are read as different feeds of different names writes that shape.
+A rule a layer states is not held to the names, and draws no such warning: a stated print rule
+over a name asked for one feed is
 admitted, and a market order in a name asked for `trade` alone, or a resting limit in one
 asked for `quote` alone, never fills there (`docs/backlog.md` row 223). On a tape `touch` credits a
 resting limit with no queue ahead of it, all that is left of it from any point beyond its
@@ -1020,14 +1022,17 @@ a print through it, by that print's size. A rule a layer states is the operator'
 `hyp validate`, `hyp add` and `research begin` (exit 3), naming the key: it would price as a
 maker's the fills those rules credit with no queue ahead of them. Where no layer states a rule
 and the names alone kept the venue on `touch`, the refusal also names each such name and what it
-is asked for, and its remedy leads with asking every name for `quote` and `trade` alone —
-dropping `bar` from `data_requirements` where it is there — which moves the venue to
-`print_through` and admits the schedule. Stating a print rule is offered only where no name is
-asked for `bar` beside `quote`, over which that rule is refused: under a stated `touch` or
-`through` with such a name the remedy is the maker keys' removal. A `screen draft` carries a
-maker key the screen's `costs` state, which its hurdle ignores, so a draft of a cell read off
-two feeds of two names meets this refusal. A venue under a print rule that states no maker schedule is
-admitted with a warning, since its resting fills are charged as any fill at their price —
+is asked for, and its remedy leads with asking every name for `quote` and `trade` and none for
+`bar`, each keeping every other type it is asked for, and dropping `bar` from
+`data_requirements` where it is there, which moves the venue to `print_through` and admits the
+schedule. Stating a print rule is offered on its own where no name is asked for `bar` beside
+`quote`. Where one is, that rule is refused over it, so under a stated `touch` or `through` the
+remedy offers it beside asking every name for both feeds that way, where both are required,
+and where no layer states a rule it offers the asking alone. The maker keys' removal is
+offered in every case. A `screen draft` carries a maker key the screen's `costs` state, which
+its hurdle ignores, so a draft of a cell read off two feeds of two names meets this refusal. A
+venue under a print rule that states no maker schedule is admitted with a warning, since its
+resting fills are charged as any fill at their price —
 `slippage_bps` and half the spread — which the account does not charge a maker.
 
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its

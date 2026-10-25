@@ -639,14 +639,23 @@ def _barred(hyp: Hypothesis) -> list[str]:
     return [name for name in hyp.universe if {BAR_TYPE, QUOTE_TYPE} <= set(hyp.required_of(name))]
 
 
-def _alone(hyp: Hypothesis) -> str:
-    """The way off `touch` the names leave open: every name asked for both feeds alone, and
-    `bar` dropped from `data_requirements` where it is there, since no name is left asking for
-    it and a type no name is asked for is refused."""
-    dropped = " and drop bar from data_requirements" if BAR_TYPE in hyp.data_requirements else ""
+def _both_feeds(hyp: Hypothesis) -> str:
+    """The way off `touch` the names leave open: every name asked for both feeds and none for
+    `bar`, each keeping every other type it is asked for, and `bar` dropped from
+    `data_requirements` where it is there. A type no name is asked for is refused, so the
+    `funding` a perpetual requires, the series a session scope reads and any other type stay
+    asked of the names that were asked for them, and `bar`, which no name is left asking for,
+    goes. Keyed on `bar` being required, not on a name asked for it beside quote: a signal
+    asked for bars alone leaves it required as well."""
+    if BAR_TYPE in hyp.data_requirements:
+        return (
+            "ask every name, traded or not, for quote and trade and not for bar under "
+            "data_by_instrument, keeping every other type it is asked for, and drop bar from "
+            "data_requirements"
+        )
     return (
-        "ask every name, traded or not, for quote and trade alone under "
-        f"data_by_instrument{dropped}"
+        "ask every name, traded or not, for quote and trade under data_by_instrument, keeping "
+        "every other type it is asked for"
     )
 
 
@@ -702,10 +711,12 @@ def check_tick_costs(ws: Workspace, hyp: Hypothesis, models: Mapping[str, VenueM
     through it, and a level-two book keeps a queue of its own, so neither is refused. A venue
     no layer states a rule for that its names alone keep on `touch` (`_left_on_touch`) is
     refused naming each such name and what it is asked for, and the remedy leads with asking
-    every name for both feeds alone (`_alone`), which moves it to the print rule: the warning
-    that would say so (`cost_warnings`) is never reached. Stating a print rule is offered only
-    where no name is asked for bar beside quote, over which it is refused
-    (`_check_print_through`).
+    every name for both feeds and none for bar (`_both_feeds`), which moves it to the print
+    rule: the warning that would say so (`cost_warnings`) is never reached. A print rule is
+    refused over a name asked for bar beside quote (`_check_print_through`), so where one is,
+    stating a print rule is offered only beside asking the names for both feeds — and so only
+    where both are required, since a name is asked only for a type that is — and not where
+    that asking alone moves a venue no layer states a rule for.
 
     Both are structural: each refuses a configuration that cannot describe a market, the way a
     spread from quotes with no quotes is refused, and neither names a number a hypothesis must
@@ -745,17 +756,18 @@ def check_tick_costs(ws: Workspace, hyp: Hypothesis, models: Mapping[str, VenueM
         else ""
     )
     moved = (
-        f"{_alone(hyp)}, which moves a venue no layer states a rule for to print_through; or "
+        f"{_both_feeds(hyp)}, which moves a venue no layer states a rule for to print_through; or "
         if left
         else ""
     )
     ruled = (
-        ""
-        if _barred(hyp)
-        else "state limit_fill: print_through or print_through_whole, which fills a resting "
-        "limit only on a later print through it and needs every name the strategy trades asked "
-        "for quote and trade, and no book; or "
+        "state limit_fill: print_through or print_through_whole, which fills a resting limit "
+        "only on a later print through it and needs every name the strategy trades asked for "
+        "quote and trade, and no book; or "
     )
+    if _barred(hyp):
+        taped = {QUOTE_TYPE, TRADE_TYPE} <= set(hyp.data_requirements)
+        ruled = f"{_both_feeds(hyp)}, and {ruled}" if taped and not left else ""
     raise ValidationError(
         f"costs.{key}: a maker schedule on {', '.join(queue_free)} under limit_fill: "
         f"{costs.limit_fill} prices as a maker's the fills that rule credits a resting limit "
@@ -836,8 +848,9 @@ def _off_the_tape_warning(hyp: Hypothesis, venues: list[str]) -> str:
     each way off the warning the names leave open.
 
     The default reads every name of the universe, traded or not, since the file cannot say
-    which names the strategy trades: asking each for both feeds alone (`_alone`), with `bar`
-    dropped from `data_requirements` where it is there, moves the venues to the print rule.
+    which names the strategy trades: asking each for both feeds and none for `bar`, each
+    keeping every other type it is asked for, with `bar` dropped from `data_requirements` where
+    it is there (`_both_feeds`), moves the venues to the print rule.
     Stating the print rule moves them too where no name is asked for bar beside quote, over
     which it is refused, but a name it starves of a feed then never fills, so that way is
     offered for signals alone. Stating `touch` keeps the rule and ends the warning.
@@ -871,7 +884,7 @@ def _off_the_tape_warning(hyp: Hypothesis, venues: list[str]) -> str:
         "no queue ahead of it, and not print_through, which a hypothesis holding quotes and "
         "prints at tick resolution resolves to when no layer states a rule only if every name "
         f"is asked for quote and trade and none for bar: {_asked(hyp)}. {because[0].upper()}"
-        f"{because[1:]}; to move to print_through, {_alone(hyp)}{signals}; to stay on touch "
+        f"{because[1:]}; to move to print_through, {_both_feeds(hyp)}{signals}; to stay on touch "
         "without this warning, state limit_fill: touch"
     )
 
