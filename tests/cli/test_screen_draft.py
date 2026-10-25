@@ -21,7 +21,7 @@ from kanso.screen import draft
 from kanso.state import StateStore
 from kanso.workspace import find
 
-from .conftest import INSTRUMENT, at, classify, payload
+from .conftest import INSTRUMENT, at, classify, payload, write_spec
 from .test_screen_run import FADE, OU, run_screen
 
 CELL = "response/a/40bp/1h/a/1h"
@@ -79,6 +79,83 @@ def test_the_baseline_card_re_measures_the_screened_cell(runner: CliRunner, load
     assert begun.exit_code == Exit.OK, begun.stdout
     baseline = payload(begun)["baseline"]
     assert baseline["status"] == "keep" and baseline["metric"] > 0
+
+
+TAPE: dict[str, Any] = {
+    **FADE,
+    "id": "ou_tape",
+    "window": {"start": "2024-01-02", "end": "2024-02-29"},
+    "legs": {
+        "a": {"instrument": INSTRUMENT, "type": "trade"},
+        "b": {"instrument": INSTRUMENT, "type": "quote"},
+    },
+    "costs": {"SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "quotes"}},
+    "measures": [{**FADE["measures"][0], "followers": "b", "latency_ms": 5}],
+}
+"""The fade read off the demo path's prints and taken on its quotes, over a route of 5 ms."""
+
+
+def test_a_tick_cell_drafts_a_file_hyp_add_admits_under_the_latency_it_was_measured_at(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """At tick resolution a latency of zero is refused, and a screen's own costs carry none:
+    the route is the measure's. The draft carries it, so the file it writes registers as it
+    stands. Without it `hyp add` refused the draft for a latency of zero."""
+    spec = write_spec(loaded, "tape.yaml", types=["quote", "trade"], end="2024-03-29")
+    assert (
+        at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    )
+    assert at(runner, loaded, "data", "snapshot").exit_code == 0
+    run_screen(runner, loaded, TAPE)
+
+    result = at(
+        runner,
+        loaded,
+        "screen",
+        "draft",
+        "ou_tape",
+        "--cell",
+        "response/a/40bp/1h/b/1h",
+        "--as",
+        "tape_lane",
+        "--certify",
+        "2024-03-01..2024-03-29",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK, result.stdout
+    path = Path(payload(result)["dir"]) / "hypothesis.yaml"
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert (hypothesis["resolution"], hypothesis["data_requirements"]) == (
+        "trade",
+        ["quote", "trade"],
+    )
+    assert hypothesis["costs"] == {
+        "commission_bps": 0.5,
+        "slippage_bps": 1.0,
+        "spread": "quotes",
+        "latency_ms": 5.0,
+    }
+    added = at(runner, loaded, "hyp", "add", path, "--json")
+    assert added.exit_code == Exit.OK, added.stdout
+    assert payload(added)["status"] == "draft"
+
+
+def test_a_cell_measured_at_no_latency_drafts_none(loaded: Path) -> None:
+    """A latency of zero is no route, and the shipped default: the draft states nothing."""
+    spec = Screen.model_validate({**FADE, "costs": None})
+    result = result_of(spec, CELL, follower="a")
+    found = draft._hypothesis(
+        find(loaded),
+        spec,
+        result,
+        result.cells[0],
+        "bar_lane",
+        "1h",
+        (date(2024, 4, 1), date(2024, 5, 31)),
+    )
+
+    assert found.costs is None
 
 
 @pytest.mark.parametrize(

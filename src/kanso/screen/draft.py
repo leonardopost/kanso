@@ -7,9 +7,12 @@ holds, reserved or not, and a directory that did not exist. What is written:
 * `hypothesis.yaml` — the universe is the cell's trigger (a catch-up's leader) and follower;
   the resolution and the data requirements are their types and grain, `funding` with them when
   a perpetual is held; the horizon is the cell's, or a catch-up's `max_hold`, in whole seconds;
-  the costs are the screen's for the follower's venue; the research window is the window the
-  screen read, and the certification window is the operator's `--certify`, which has no
-  default and is refused when it starts sooner than the embargo after the screened window ends.
+  the costs are the screen's for the follower's venue, with the measure's `latency_ms` when it
+  is above zero — the route the cell was measured under, which a screen's own `costs` do not
+  set and a hypothesis at tick resolution may not leave at zero; the research window is the
+  window the screen read, and the certification window is the operator's `--certify`, which
+  has no default and is refused when it starts sooner than the embargo after the screened
+  window ends.
   The mechanism follows from the cell: a fade is `mean_reversion`, a follow of the same name
   `momentum`, a follow of another `stat_arb`, and so is a catch-up, which always trades one name
   toward another. The risk limits are the template's, as `hyp new` writes them: a draft is the
@@ -254,8 +257,11 @@ def _hypothesis(
         },
     }
     costs = (screen.costs or {}).get(venue)
-    if costs is not None:
-        document["costs"] = costs.model_dump(exclude_none=True)
+    stated = {} if costs is None else costs.model_dump(exclude_none=True)
+    if measure.latency_ms > 0:
+        stated["latency_ms"] = measure.latency_ms
+    if stated:
+        document["costs"] = stated
     return Hypothesis.model_validate(document)
 
 
