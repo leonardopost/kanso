@@ -159,6 +159,50 @@ def test_a_cell_read_off_one_name_s_prints_and_another_s_quotes_registers_as_dra
     file cannot say so, so `hyp add` admits the draft as written and names the trigger — once
     for the spread a fill there would not be charged, once for keeping the tape on touch. A
     refusal once held the signal to a width it is never charged, and `hyp add` exited 3."""
+    path = drafted_pair(runner, paired, costs)
+
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert hypothesis["data_by_instrument"] == {INSTRUMENT: ["trade"], OTHER: ["quote"]}
+    assert hypothesis["costs"] == {**(costs or {}).get("SIM", {}), "latency_ms": 5.0}
+    added = at(runner, paired, "hyp", "add", path, "--json")
+    assert added.exit_code == Exit.OK, added.stdout
+    touch, spread = payload(added)["warnings"]
+    assert f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote." in touch
+    assert f"and {INSTRUMENT} is asked for no quote or book, so a fill there is charged" in spread
+
+
+def test_a_maker_schedule_in_a_draft_read_off_two_feeds_is_refused_naming_both_names(
+    runner: CliRunner, paired: Path
+) -> None:
+    """The screen's hurdle is two taker fills and ignores a maker key, which the draft carries
+    as the account's. Each name asked for its own feed keeps the tape on touch, where a maker
+    schedule is refused: `hyp add` names both names, and asking each for both feeds, as the
+    remedy leads with, registers the draft under the print rule. The refusal once named neither
+    name and left the default that put the venue on touch unsaid."""
+    costs = {"SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "quotes", "maker_bps": 0}}
+    path = drafted_pair(runner, paired, costs)
+
+    refused = at(runner, paired, "hyp", "add", path, "--json")
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    del hypothesis["data_by_instrument"]
+    path.write_text(yaml.safe_dump(hypothesis, sort_keys=False), encoding="utf-8")
+    added = at(runner, paired, "hyp", "add", path, "--json")
+
+    assert refused.exit_code == Exit.VALIDATION, refused.stdout
+    assert payload(refused)["error"].endswith(
+        f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote"
+    )
+    assert payload(refused)["remedy"].startswith(
+        "ask every name, traded or not, for quote and trade alone under data_by_instrument"
+    )
+    assert hypothesis["costs"]["maker_bps"] == 0
+    assert added.exit_code == Exit.OK, added.stdout
+    assert payload(added)["warnings"] == []
+
+
+def drafted_pair(runner: CliRunner, paired: Path, costs: dict[str, Any] | None) -> Path:
+    """The `hypothesis.yaml` a draft writes of the fade read off DEMO's prints and taken on
+    OTHR's quotes, screened under `costs`."""
     for name, seed, symbol in (("tape.yaml", 7, "DEMO"), ("othr_tape.yaml", 11, "OTHR")):
         spec = write_spec(
             paired,
@@ -193,15 +237,7 @@ def test_a_cell_read_off_one_name_s_prints_and_another_s_quotes_registers_as_dra
     )
 
     assert result.exit_code == Exit.OK, result.stdout
-    path = Path(payload(result)["dir"]) / "hypothesis.yaml"
-    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert hypothesis["data_by_instrument"] == {INSTRUMENT: ["trade"], OTHER: ["quote"]}
-    assert hypothesis["costs"] == {**(costs or {}).get("SIM", {}), "latency_ms": 5.0}
-    added = at(runner, paired, "hyp", "add", path, "--json")
-    assert added.exit_code == Exit.OK, added.stdout
-    touch, spread = payload(added)["warnings"]
-    assert f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote." in touch
-    assert f"and {INSTRUMENT} is asked for no quote or book, so a fill there is charged" in spread
+    return Path(payload(result)["dir"]) / "hypothesis.yaml"
 
 
 @pytest.mark.parametrize(("measured", "drafted"), [(0.0, None), (3.0, 3.0)])

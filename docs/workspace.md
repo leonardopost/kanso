@@ -126,7 +126,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
-| state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
+| state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
 | hold a perpetual in a universe whose `data_requirements` does not list `funding` | 3 · at `hyp validate`, naming the instrument; a perpetual is known by its resolved definition, not its id |
@@ -997,11 +997,17 @@ the whole hypothesis on `touch`, because the print rule fills a taker only on a 
 and a resting limit only on a print (below): a market order in a name asked for `trade` alone,
 or a resting limit in one asked for `quote` alone, would never fill, where under `touch` it
 does. A name asked for `bar` beside its quotes and prints keeps it there too, since a bar
-walks the engine's bid and ask past the quote in force and a print rule over it is refused. Where no
-layer states a rule, `hyp validate` and `hyp add` warn, naming each such name, what it is
-asked for and why; a `screen draft` of a cell whose trigger and follower are read as
-different feeds of different names writes that shape. A rule a layer states is not held to
-the names, and draws no such warning: a stated print rule over a name asked for one feed is
+walks the engine's bid and ask past the quote in force and a print rule over it is refused.
+Every name of the universe counts, traded or not, since the file cannot say which names the
+strategy trades: a signal asked for prints alone keeps the tape on `touch` beside a traded name
+asked for both. Where no layer states a rule, `hyp validate` and `hyp add` warn, naming each
+such name, what it is asked for and why, and each way off the warning: ask every name for
+`quote` and `trade` alone under `data_by_instrument`, which resolves to `print_through`; state
+`print_through`, offered only where no name is asked for `bar` beside `quote` and fit only when
+each name short of a feed is a signal the strategy never trades; or state `touch`, which keeps
+the rule. A `screen draft` of a cell whose trigger and follower are read as different feeds
+of different names writes that shape. A rule a layer states is not held to the names, and
+draws no such warning: a stated print rule over a name asked for one feed is
 admitted, and a market order in a name asked for `trade` alone, or a resting limit in one
 asked for `quote` alone, never fills there (`docs/backlog.md` row 223). On a tape `touch` credits a
 resting limit with no queue ahead of it, all that is left of it from any point beyond its
@@ -1011,10 +1017,14 @@ a print through it, by that print's size. A rule a layer states is the operator'
 `touch` included. At tick resolution on the top-of-book venue, a maker schedule —
 `maker_bps` or `maker_per_share`, from any layer — under `touch` or `through` is refused at
 `hyp validate`, `hyp add` and `research begin` (exit 3), naming the key: it would price as a
-maker's the fills those rules credit with no queue ahead of them. A venue under a print rule
-that states no maker schedule is admitted with a warning, since its resting fills are charged
-as any fill at their price — `slippage_bps` and half the spread — which the account does not
-charge a maker.
+maker's the fills those rules credit with no queue ahead of them. Where no layer states a rule
+and the names alone kept the venue on `touch`, the refusal also names each such name and what it
+is asked for, and its remedy leads with asking every name for `quote` and `trade` alone, which
+moves the venue to `print_through` and admits the schedule. A `screen draft` carries a maker key
+the screen's `costs` state, which its hurdle ignores, so a draft of a cell read off two feeds
+of two names meets this refusal. A venue under a print rule that states no maker schedule is
+admitted with a warning, since its resting fills are charged as any fill at their price —
+`slippage_bps` and half the spread — which the account does not charge a maker.
 
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
 price — a bar whose low is the limit, or a print at it. Under `through` the market has to go

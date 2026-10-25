@@ -675,8 +675,66 @@ def test_a_name_asked_for_one_feed_keeps_every_venue_on_touch_and_is_named(
     assert f": {asked}. The print rules fill a taker only on a quote in force" in warning
     assert "bar beside quote" not in warning
     assert warning.endswith(
-        "ask each name the strategy trades for quote and trade alone under data_by_instrument"
+        "; to move to print_through, ask every name, traded or not, for quote and trade alone "
+        "under data_by_instrument, or, if each name short of a feed is a signal the strategy "
+        "never trades, state limit_fill: print_through, under which a market order in a name "
+        "asked for no quote, and a resting limit in one asked for no trade, never fills; to "
+        "stay on touch without this warning, state limit_fill: touch"
     )
+
+
+def test_asking_the_traded_names_alone_for_both_feeds_keeps_the_default_on_touch(
+    ws: Workspace,
+) -> None:
+    """The default reads every name, traded or not: a signal asked for prints alone beside a
+    traded name asked for both keeps the tape on touch, and the warning names the signal.
+    Its remedy once told the operator to ask each name the strategy trades for both feeds,
+    which this file already does."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["trade"], "EURO": ["quote", "trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
+    assert ": DEMO is asked for trade. The print rules" in warning
+    assert "ask every name, traded or not, for quote and trade alone" in warning
+
+
+@pytest.mark.parametrize(
+    ("way", "rule", "warned"),
+    [
+        (
+            {"data_by_instrument": {"DEMO": ["quote", "trade"], "EURO": ["quote", "trade"]}},
+            "print_through",
+            1,
+        ),
+        ({"costs": {"limit_fill": "print_through"}}, "print_through", 1),
+        ({"costs": {"limit_fill": "touch"}}, "touch", 0),
+    ],
+    ids=["both feeds", "print rule stated", "touch stated"],
+)
+def test_each_way_the_touch_warning_offers_ends_it(
+    ws: Workspace, way: dict[str, Any], rule: str, warned: int
+) -> None:
+    """A signal asked for prints alone: asking it for both feeds, or stating the print rule
+    over it, moves both venues to print_through, where the only warning left is the one for
+    a print rule with no maker schedule; stating touch keeps the rule and draws none."""
+    changes: dict[str, Any] = {
+        "universe": ["DEMO", "EURO"],
+        "data_by_instrument": {"DEMO": ["trade"], "EURO": ["quote", "trade"]},
+        **way,
+    }
+    changes["costs"] = {"spread": "fixed_bps", "fixed_bps": 0, **way.get("costs", {})}
+    doc = tick(**changes)
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {rule}
+    assert len(admitted.warnings) == warned
+    assert not any(warning.startswith("costs.limit_fill") for warning in admitted.warnings)
 
 
 def test_every_name_asked_for_quotes_and_prints_resolves_to_the_print_rule(ws: Workspace) -> None:
@@ -723,8 +781,9 @@ def test_a_name_asked_for_bars_beside_quotes_and_prints_is_named_for_its_bars(
         "resolution resolves to when no layer states a rule only if every name is asked for "
         "quote and trade and none for bar: DEMO is asked for quote, trade, bar. A bar walks "
         "the engine's bid and ask past the quote in force, on which the print rules fill a "
-        "taker, so a print rule over a name asked for bar beside quote is refused; ask each "
-        "name the strategy trades for quote and trade alone under data_by_instrument"
+        "taker, so a print rule over a name asked for bar beside quote is refused; to move to "
+        "print_through, ask every name, traded or not, for quote and trade alone under "
+        "data_by_instrument; to stay on touch without this warning, state limit_fill: touch"
     )
 
 
@@ -764,7 +823,10 @@ def test_a_stated_touch_over_a_one_feed_name_draws_no_warning(ws: Workspace, lay
 
 
 def test_a_venue_a_layer_states_a_rule_for_is_left_out_of_the_warning(ws: Workspace) -> None:
-    write_portfolio(ws, {"XETR": {"costs": {"limit_fill": "through"}}})
+    """XETR's touch is stated and SIM's is the default the names chose: only SIM is named.
+    Stated `through`, XETR was left out by its rule alone, and a warning that named every
+    venue on touch passed."""
+    write_portfolio(ws, {"XETR": {"costs": {"limit_fill": "touch"}}})
     doc = tick(
         universe=["DEMO", "EURO"],
         data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["quote"]},
@@ -844,6 +906,62 @@ def test_a_maker_schedule_stated_for_the_venue_is_refused_the_same_way(ws: Works
     failure = refused(ws, tick(costs={"limit_fill": "through"}))
 
     assert failure.message.startswith("costs.maker_bps: a maker schedule on SIM")
+
+
+@pytest.mark.parametrize(("layer", "venues"), [("hypothesis", "SIM, XETR"), ("portfolio", "SIM")])
+def test_a_maker_schedule_on_a_venue_a_one_feed_name_kept_on_touch_names_the_name(
+    ws: Workspace, layer: str, venues: str
+) -> None:
+    """No layer states a rule, and EURO, asked for prints alone, keeps the tape on touch. The
+    refusal names it, and its remedy leads with asking every name for both feeds, which admits
+    the same schedule under the print rule. It once named neither the name nor that way out,
+    and the warning that names the name was never reached."""
+    schedule = {"maker_bps": 0.0}
+    if layer == "portfolio":
+        write_portfolio(ws, {"SIM": {"costs": schedule}})
+    costs = {"spread": "fixed_bps", "fixed_bps": 0, **(schedule if layer == "hypothesis" else {})}
+    universe = ["DEMO", "EURO"]
+    both = ["quote", "trade"]
+
+    failure = refused(
+        ws,
+        tick(universe=universe, data_by_instrument={"DEMO": both, "EURO": ["trade"]}, costs=costs),
+    )
+    asked = tick(universe=universe, data_by_instrument={"DEMO": both, "EURO": both}, costs=costs)
+    admitted = hyp.admit(ws, write_hypothesis(ws, asked))
+
+    assert failure.message.startswith(f"costs.maker_bps: a maker schedule on {venues} under ")
+    assert failure.message.endswith(
+        f"; no layer states a rule for {venues}, which a hypothesis holding quotes and prints at "
+        "tick resolution resolves to print_through only if every name is asked for quote and "
+        "trade and none for bar: EURO is asked for trade"
+    )
+    assert failure.remedy is not None
+    assert failure.remedy.startswith(
+        "ask every name, traded or not, for quote and trade alone under data_by_instrument, "
+        "which moves a venue no layer states a rule for to print_through; or state limit_fill: "
+        "print_through or print_through_whole"
+    )
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, asked).values()} == {
+        "print_through"
+    }
+    assert admitted.hyp.id == "demo_mr"
+
+
+def test_a_maker_schedule_under_a_stated_touch_names_no_name(ws: Workspace) -> None:
+    """A stated touch is the operator's, and asking the names for both feeds would not move it,
+    so the refusal neither names them nor offers it."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0, "maker_bps": 0.0, "limit_fill": "touch"},
+    )
+
+    failure = refused(ws, doc)
+
+    assert "EURO" not in failure.message
+    assert failure.remedy is not None
+    assert failure.remedy.startswith("state limit_fill: print_through or print_through_whole")
 
 
 @pytest.mark.parametrize(

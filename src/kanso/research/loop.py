@@ -1222,7 +1222,7 @@ def begin(
     held = partial(_admitted, store, hyp_id, lane)
     with backtest.wanted(held):
         setup = _setup(ws, store, hyp)
-        check_tick_costs(hyp, {setup.venue_model.venue: setup.venue_model})
+        check_tick_costs(ws, hyp, {setup.venue_model.venue: setup.venue_model})
         prefixes = _warmup_spans(setup)
     snapshot = covering(
         ws,
