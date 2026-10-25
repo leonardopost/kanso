@@ -487,9 +487,32 @@ def test_a_model_that_takes_its_spread_from_quotes_cannot_price_a_bar_follower(
     }
 
     result = at(runner, loaded, "screen", "validate", write_screen(loaded, mixed), "--json")
+    widened = {**mixed, "costs": {"SIM": {"fixed_bps": 2}}}
+    priced = at(runner, loaded, "screen", "validate", write_screen(loaded, widened), "--json")
 
     assert result.exit_code == Exit.VALIDATION
-    assert "takes the spread from quotes" in payload(result)["error"]
+    assert "takes the spread from quotes and states no width" in payload(result)["error"]
+    assert payload(result)["remedy"].startswith("state `fixed_bps` under costs.SIM")
+    assert priced.exit_code == Exit.OK, priced.stdout
+    assert payload(priced)["hurdles"]["SIM"]["costs"]["spread"] == "quotes"
+
+
+def test_a_width_under_a_quoted_spread_prices_a_bar_follower_as_a_card_does(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """Under `spread: quotes` a stated `fixed_bps` is the width a card's fill with no quote
+    before it pays, so the hurdle charges a bar follower that width and the slippage, as under
+    `spread: fixed_bps`: the fade's 5 bp. The screen was refused, width or not, while the card
+    priced the same leg, and stating the width its remedy named did not clear it."""
+    quoted = {
+        **FADE,
+        "id": "ou_fade_quoted",
+        "costs": {"SIM": {**FADE["costs"]["SIM"], "spread": "quotes"}},
+    }
+
+    document = run_screen(runner, loaded, quoted)
+
+    assert document["best"][0]["response"]["hurdle_bp"] == pytest.approx(5.0)
 
 
 def test_a_hurdle_charges_the_tick_of_each_leg_s_own_definition(

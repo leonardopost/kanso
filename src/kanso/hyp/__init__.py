@@ -21,6 +21,7 @@ from kanso.hyp.registry import (
     moved,
     pin,
     refuse_active_run,
+    register,
     resume,
     retire,
     scope_of,
@@ -38,19 +39,30 @@ from kanso.hyp.scaffold import (
     scaffold,
     stub,
 )
-from kanso.hyp.validate import check_strategy, read_source, validate, venue_models
+from kanso.hyp.validate import (
+    Admitted,
+    admit,
+    check_strategy,
+    check_tick_costs,
+    read_source,
+    validate,
+    venue_models,
+)
 
 __all__ = [
     "HYPOTHESES",
     "HYPOTHESIS_FILE",
     "PROGRAM_FILE",
     "STRATEGY_FILE",
+    "Admitted",
     "Registration",
     "Status",
     "active_run",
     "add",
+    "admit",
     "check_id",
     "check_strategy",
+    "check_tick_costs",
     "host_resolution",
     "host_sizing",
     "hypothesis_dir",
@@ -60,6 +72,7 @@ __all__ = [
     "pin",
     "read_source",
     "refuse_active_run",
+    "register",
     "resume",
     "retire",
     "scaffold",

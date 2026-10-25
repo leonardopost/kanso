@@ -109,21 +109,36 @@ def _new(ws: Workspace, hyp_id: str) -> Report:
 
 
 def _validate(ws: Workspace, path: Path) -> Report:
-    hypothesis = hyp.validate(ws, path)
-    hyp.check_strategy(ws, hypothesis.id)
-    return Report(data=_summary(hypothesis, path), lines=_summary_lines(hypothesis, path, "valid"))
+    admitted = hyp.admit(ws, path)
+    hyp.check_strategy(ws, admitted.hyp.id)
+    data = {**_summary(admitted.hyp, path), "warnings": list(admitted.warnings)}
+    lines = _summary_lines(admitted.hyp, path, "valid") + _warnings(admitted.warnings)
+    return Report(data=data, lines=lines)
 
 
 def _add(ws: Workspace, path: Path) -> Report:
     with store(ws) as opened:
-        hypothesis = hyp.add(ws, opened, path)
-        registration = _registration(ws, opened, hypothesis.id)
-    data = {**_summary(hypothesis, path), **registration.payload()}
-    lines = _summary_lines(hypothesis, path, "registered") + (
-        field("status", registration.status),
-        field("sha", registration.hypothesis_sha),
+        admitted = hyp.register(ws, opened, path)
+        registration = _registration(ws, opened, admitted.hyp.id)
+    data = {
+        **_summary(admitted.hyp, path),
+        **registration.payload(),
+        "warnings": list(admitted.warnings),
+    }
+    lines = (
+        _summary_lines(admitted.hyp, path, "registered")
+        + (
+            field("status", registration.status),
+            field("sha", registration.hypothesis_sha),
+        )
+        + _warnings(admitted.warnings)
     )
     return Report(data=data, lines=lines)
+
+
+def _warnings(warnings: tuple[str, ...]) -> tuple[str, ...]:
+    """One `warning` line for each thing a file was admitted with that an operator should read."""
+    return tuple(field("warning", warning) for warning in warnings)
 
 
 def _show(ws: Workspace, hyp_id: str | None) -> Report:

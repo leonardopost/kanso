@@ -345,8 +345,7 @@ class _Feed:
         self.released += len(measured(reached, self._opens))
         if self._sink is not None:
             self._sink(reached)
-        if self._marks.quotes:
-            self._marks.price(backtest._fills_since(self._kernel.cache, self._snapshots_read))
+        self._marks.price(backtest._fills_since(self._kernel.cache, self._snapshots_read))
         self._marks.next_chunk()
         self._client.load(())
 

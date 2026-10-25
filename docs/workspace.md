@@ -125,6 +125,8 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
+| state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
 | hold a perpetual in a universe whose `data_requirements` does not list `funding` | 3 · at `hyp validate`, naming the instrument; a perpetual is known by its resolved definition, not its id |
@@ -805,13 +807,25 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason. The spread is charged where the price does not already
-carry it: a fill in a name the venue books from quotes or a level-two book — one asked for
-`quote` or `book` and not for `bar` — is struck at the touch, so its price carries the spread
-and the runner charges it no half-spread under either `spread` value; a fill in a name fed
-bars, alone or beside its quotes, or prints alone pays the half-spread the model states
-(`docs/concepts.md`, Delivery). So `spread` and `fixed_bps` price the names the venue fills
-at a close or a last print, and on a quoted name a wider market is stated as `slippage_bps`
-or `slippage_ticks`. The block is scope: every metric is net of it, so a best selected under one schedule
+carry it, and whether it does is read off each fill, never off its name: a fill struck at the
+touch — a buy at or above the ask of its name's last quote at or before it, a sale at or below
+that quote's bid, or any fill on a venue that matches a level-two book — carries the spread
+and whatever its order walked past the touch, so the runner charges it neither the
+half-spread, under either `spread` value, nor `slippage_bps`; a fill struck at a print or a
+bar's close inside the quote, or in a name with no quote before it, pays both
+(`docs/concepts.md`, Delivery). So one name fed bars beside its quotes pays the half-spread
+on a fill its bars made at a close inside the quote, and not on those its quotes made; a
+bar's close at or beyond the touch is a fill at the touch, and pays neither. `spread`, `fixed_bps` and
+`slippage_bps` price the fills the venue struck at a close or a print, and what a taker pays
+past the touch on a quoted name is stated as `slippage_ticks`. Under `spread: quotes`,
+`fixed_bps` is the width a fill with no quote before it pays, and a model that takes its
+spread from quotes and states no width, over an instrument of its venue asked for neither
+`quote` nor `book`, is admitted with a warning at `hyp validate` and `hyp add` naming
+`costs.spread` and the instrument: a fill there is charged no spread at all. It is not
+refused, because the file cannot say whether the strategy trades a name it reads: a signal
+read and never traded — the trigger `kanso screen draft` writes as one name's prints beside
+a follower read as another's quotes — is charged nothing either way, and a screen's hurdle
+refuses a leg it trades read so. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
 `latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
@@ -836,9 +850,11 @@ reached it (`docs/concepts.md`, Delivery) — pays exactly the model's maker sch
 the spread is what a resting order earns rather than pays. Negative is a net rebate, the way
 a per-share-priced account that pays for displayed liquidity can come out ahead on a fill
 that rested. Every other fill — a market order, a limit that was marketable when it arrived
-— is charged commission, slippage and half the spread exactly as before, and so is a maker's
-fill under a model that states neither `maker_bps` nor `maker_per_share` (below): leave the
-keys out and no number moves. It is
+— is charged commission, and slippage and half the spread where its price does not carry the
+spread (above), and so is a maker's fill under a model that states neither `maker_bps` nor
+`maker_per_share` (below): one filled at its own price inside the quote — on a print through
+it, say — pays the half-spread and `slippage_bps` it never paid in the market. Leave the keys
+out and no number moves. It is
 applied where every cost is, once, in the runner's extraction, and `self.balance` books the
 same rate. `cost_stress` multiplies a charge and divides a rebate, so a stress of one or more
 never lets a fill earn more. What a sleeve reserves when it sizes is the larger of the maker
@@ -878,8 +894,8 @@ priced per share charges it:
 ```yaml
 costs:
   commission_bps: 0.0
-  commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, on top of …
-  slippage_bps: 0.5                # … its slippage; the spread is in the price it took
+  commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, and …
+  slippage_bps: 0.5                # … this on a fill at a print or a close; one at the touch carries the spread
   spread: quotes
   maker_per_share: 0.0040          # a fill that rested: $0.0040 a share and nothing else
 ```
@@ -969,8 +985,55 @@ venue fills a limit order resting on the book.
 
 ```yaml
 costs:
-  limit_fill: through              # touch (default) | through | print_through | print_through_whole
+  limit_fill: through              # touch | through | print_through | print_through_whole
 ```
+
+When no layer states it, a hypothesis that holds quotes and prints at tick resolution —
+`resolution` `tick`, `quote` or `trade`, requiring no `book`, and asking every name of its
+universe for both `quote` and `trade` and none for `bar` — resolves to `print_through`, and
+every other to `touch`: on bars there is no tape to fill a resting order from, and a
+level-two book keeps a queue of its own. A name asked for one feed and not the other keeps
+the whole hypothesis on `touch`, because the print rule fills a taker only on a quote in force
+and a resting limit only on a print (below): a market order in a name asked for `trade` alone,
+or a resting limit in one asked for `quote` alone, would never fill, where under `touch` it
+does. A name asked for `bar` beside its quotes and prints keeps it there too, since a bar
+walks the engine's bid and ask past the quote in force and a print rule over it is refused.
+Every name of the universe counts, traded or not, since the file cannot say which names the
+strategy trades: a signal asked for prints alone keeps the tape on `touch` beside a traded name
+asked for both. Where no layer states a rule, `hyp validate` and `hyp add` warn, naming each
+such name, what it is asked for and why, and each way off the warning: ask every name for
+`quote` and `trade` and none for `bar` under `data_by_instrument`, each keeping every other
+type it is asked for, since a type no name is asked for is refused — the `funding` a perpetual
+requires, the series a `session_scope` reads — and drop `bar` from `data_requirements` where it
+is there, which resolves to `print_through`; state `print_through`, offered only where no name
+is asked for `bar` beside `quote` and fit only when each name short of a feed is a signal the
+strategy never trades; or state `touch`, which keeps the rule. A `screen draft` of a cell
+whose trigger and follower are read as different feeds of different names writes that shape.
+A rule a layer states is not held to the names, and draws no such warning: a stated print rule
+over a name asked for one feed is
+admitted, and a market order in a name asked for `trade` alone, or a resting limit in one
+asked for `quote` alone, never fills there (`docs/backlog.md` row 223). On a tape `touch` credits a
+resting limit with no queue ahead of it, all that is left of it from any point beyond its
+price and the size a quote shows again at every quote that shows it, and the card's fill
+ratio, maker share and per-trade edge read those credits; the print rule credits it only from
+a print through it, by that print's size. A rule a layer states is the operator's and stands,
+`touch` included. At tick resolution on the top-of-book venue, a maker schedule —
+`maker_bps` or `maker_per_share`, from any layer — under `touch` or `through` is refused at
+`hyp validate`, `hyp add` and `research begin` (exit 3), naming the key: it would price as a
+maker's the fills those rules credit with no queue ahead of them. Where no layer states a rule
+and the names alone kept the venue on `touch`, the refusal also names each such name and what it
+is asked for, and its remedy leads with asking every name for `quote` and `trade` and none for
+`bar`, each keeping every other type it is asked for, and dropping `bar` from
+`data_requirements` where it is there, which moves the venue to `print_through` and admits the
+schedule. Stating a print rule is offered on its own where no name is asked for `bar` beside
+`quote`. Where one is, that rule is refused over it, so under a stated `touch` or `through` the
+remedy offers it beside asking every name for both feeds that way, where both are required,
+and where no layer states a rule it offers the asking alone. The maker keys' removal is
+offered in every case. A `screen draft` carries a maker key the screen's `costs` state, which
+its hurdle ignores, so a draft of a cell read off two feeds of two names meets this refusal. A
+venue under a print rule that states no maker schedule is admitted with a warning, since its
+resting fills are charged as any fill at their price —
+`slippage_bps` and half the spread — which the account does not charge a maker.
 
 Under `touch`, the engine's own rule, a resting buy fills the moment the market reaches its
 price — a bar whose low is the limit, or a print at it. Under `through` the market has to go
@@ -992,7 +1055,15 @@ each of these quote behaviours as engine facts). A broker fills as it fills: the
 kanso's simulated venues and nothing a broker does. Like every cost it is inherited — a
 broker's declaration, then `venues.<MIC>.costs`, then the hypothesis — and two versions
 certified under different rules cannot share a stage venue, which is one exchange: `deploy`
-refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`.
+refuses the pair before it writes the stage (exit 2), naming `venues.<MIC>.costs.limit_fill`,
+with `kanso strat retire` for either version or one rule stated for both as the remedy. A
+tick version that states no rule and holds quotes and prints resolves to `print_through`, and
+one researched on bars to `touch`, so the two meet that refusal on one venue unless both state
+`touch` or `through`; a tick version that states a maker schedule cannot, since on the top of
+the book at tick resolution only a print rule admits one, and a version on bars alone cannot state a print
+rule, so those two never share a venue and one of them is retired (`docs/backlog.md` row 225).
+A tick version's `latency_ms` is above zero, so beside a bar version at zero it meets the
+latency refusal below as well.
 
 **`print_through` fills a resting limit only on a print through it, and a taker only on a
 quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
@@ -1111,8 +1182,16 @@ takes to see an order.
 
 ```yaml
 costs:
-  latency_ms: 20                   # zero unless stated: no delay, no model
+  latency_ms: 20                   # zero unless stated: no delay, no model; refused at tick resolution
 ```
+
+At tick resolution a venue model may not leave it at zero: `hyp validate`, `hyp add` and
+`research begin` refuse it (exit 3), naming `costs.latency_ms`, because at zero the venue
+lands every order on the very point the strategy was handed when it sent it, before anything
+later on the tape, which no route to a venue does — the one artefact the record measured at
+zero, a re-post rule's +10.7 bp a session, vanished at any real delay. No latency is chosen
+for you: any above zero is admitted, and the right one is the round trip you measure on your
+route. On bars it stays optional, and `latency_stress` skips a model that states none.
 
 Every order command — an insert, an update, a cancel — reaches the venue's book that many
 milliseconds after the sleeve sent it, on both code paths alike, and the book carries on in

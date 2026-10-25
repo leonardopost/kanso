@@ -471,8 +471,8 @@ def _agree(
             f"venues.{venue}.costs.limit_fill: {first} was certified against "
             f"{model.costs.limit_fill!r} and {label} against {mine.costs.limit_fill!r}; "
             "one venue is one exchange, and it fills a touched limit one way",
-            remedy=f"state one limit_fill for both — in each hypothesis's costs, or under "
-            f"venues.{venue}.costs in portfolio.yaml — and re-certify",
+            remedy=f"{retire}, or state one limit_fill for both — in each hypothesis's costs, "
+            f"or under venues.{venue}.costs in portfolio.yaml — and re-certify",
         )
     if model.costs.latency_ms != mine.costs.latency_ms:
         raise PreconditionError(

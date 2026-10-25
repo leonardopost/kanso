@@ -14,14 +14,17 @@ venue model that states a maker schedule, `maker_bps` of its notional and `maker
 each share alone — a per-share commission on every share of a fill that pays commission, and
 on a taker's fill `slippage_ticks` of the instrument's increment on each share, no further
 than the order's limit (`kanso.nautilus.costs.fill_cost`, `tick_slip`). **The spread is
-charged where the price does not already carry it.** A fill in an instrument the venue books
-from quotes or a level-two book is struck at the touch — a taker buys the ask and sells the
-bid, a maker fills at its own price — so the spread is in the price and the extraction charges
-no half-spread on it (`touched_names`, `Fill.touched`); a fill in an instrument fed bars or
-prints alone is struck at a close or a last print and pays the model's half-spread, quoted or
-fixed. Measured before this rule on a quote of 9.99/10.01 with every other charge zero: a
-market buy filled at 10.01 and a market sell at 9.99, each charged 10 bp on top, so a flat
-round trip whose cost was one spread was booked at two. One
+charged where the price does not already carry it, fill by fill.** A fill struck at the touch
+— a buy at or above the ask of the last quote of its name at or before it, a sale at or below
+that quote's bid, or any fill on a venue that matches a level-two book — paid the spread in its
+price, so the extraction charges it neither the half-spread nor `slippage_bps`
+(`Marks.struck`, `kanso.nautilus.costs.at_touch`, `Fill.touched`); a fill struck at a print or
+a bar's close inside the quote, or in a name with no quote before it, pays both, the
+half-spread quoted or fixed. Measured before the first rule on a quote of 9.99/10.01 with
+every other charge zero: a market buy filled at 10.01 and a market sell at 9.99, each charged
+10 bp on top, so a flat round trip whose cost was one spread was booked at two. The rule was
+read per name until 0.20, which charged a name fed bars beside its quotes the half-spread on
+the fills its quotes made, and a taker that landed on a print at the near side none. One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
@@ -123,6 +126,7 @@ import sys
 import threading
 import time
 import traceback
+from array import array
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -135,6 +139,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import IO, Any, Final
 
+import numpy as np
 from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 
 from kanso.criteria import CardRun, Fill, FundingPayment, Trade
@@ -142,6 +147,7 @@ from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.costs import (
+    at_touch,
     carry,
     fill_cost,
     fixed_half_spread,
@@ -154,7 +160,7 @@ from kanso.nautilus.costs import (
     reset,
     tick_slip,
 )
-from kanso.nautilus.cross_section import BAR, BOOK, QUOTE, is_marker
+from kanso.nautilus.cross_section import BOOK, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -182,7 +188,6 @@ __all__ = [
     "run_subprocess",
     "run_subprocesses",
     "stage_of",
-    "touched_names",
     "tunable",
     "wanted",
     "warmup_prefix",
@@ -1368,8 +1373,7 @@ def execute_chunked(
             del points
             engine.run(start=opens, end=closes - 1, streaming=True)
             ran = True
-            if marks.quotes:
-                marks.price(_fills_since(engine.cache, snapshots_read))
+            marks.price(_fills_since(engine.cache, snapshots_read))
             marks.next_chunk()
             engine.clear_data()
         if ran:
@@ -1574,9 +1578,12 @@ class Marks:
     name that last printed in the prefix is marked at that print in the first period
     rather than at nothing. Whether the window held anything at all is asked by `check`.
 
-    The quoted spreads are kept per chunk: `price` charges every fill not yet priced with
-    the last quote at or before it, from this chunk's quotes or the last quote the previous
-    chunk left, and `next_chunk` lets the chunk's series go.
+    The quotes are kept per chunk, each name's as three flat arrays — instant, bid and ask, in
+    the order they were folded — and `price` reads every fill not yet priced against the last
+    quote of its name at or before it, from this chunk's quotes or the last quote the previous
+    chunk left: the quote the fill's half-spread is read from under `spread: quotes`, and the
+    one `struck` holds its price to. Of several quotes at one instant the last folded is that
+    quote, as it is the last the venue applied there. `next_chunk` lets the chunk's quotes go.
 
     A funding point is a settlement (`settlements`): its instant, its instrument, its rate,
     and the mark its payment is struck at — the instrument's last print at or before the
@@ -1603,11 +1610,12 @@ class Marks:
         self.hyp_id = request.hyp.id
         self.quotes = model.costs.spread == "quotes"
         self.fixed_half = fixed_half_spread(model.costs.fixed_bps)
+        self.levelled = BOOK in request.hyp.data_requirements
         self.prefix = _Fold()
         self._folds: dict[int, _Fold] = {}
-        self._series: dict[str, list[tuple[int, float]]] = {}
-        self._last_quote: dict[str, tuple[int, float]] = {}
-        self._halves: dict[str, float] = {}
+        self._series: dict[str, tuple[array[int], array[float], array[float]]] = {}
+        self._last_quote: dict[str, tuple[int, float, float]] = {}
+        self._quote_of: dict[str, tuple[float, float] | None] = {}
         self._settled: list[tuple[int, str, float]] = []
         self._instants: dict[str, list[int]] = {}
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
@@ -1646,8 +1654,12 @@ class Marks:
             ask = float(point.ask_price)  # type: ignore[attr-defined]
             key = point.instrument_id.value  # type: ignore[attr-defined]
             self.fold(ts, key, (bid + ask) / 2.0, bid, ask)
-            if self.quotes:
-                self._series.setdefault(key, []).append((ts, quote_half_spread(bid, ask)))
+            held = self._series.get(key)
+            if held is None:
+                held = self._series[key] = (array("q"), array("d"), array("d"))
+            held[0].append(ts)
+            held[1].append(bid)
+            held[2].append(ask)
             return
         if kind is TradeTick:
             ts = self._admitted(point)
@@ -1746,46 +1758,83 @@ class Marks:
         return tuple(self._folds[index] for index in sorted(self._folds))
 
     def price(self, events: Sequence[Any]) -> None:
-        """Charge every fill not yet priced its quoted half-spread: the last quote published
-        for its name at or before it, in this chunk or carried from the last one; a fill
-        before any quote bears none."""
-        if not self.quotes:
-            return
-        sorted_series: dict[str, tuple[list[int], list[float]]] = {}
+        """Read every fill not yet priced against the last quote of its name at or before it,
+        in this chunk or carried from the last one; a fill before any quote of its name is
+        read against none."""
+        ordered: dict[str, tuple[Any, Any, Any]] = {}
         for event in events:
             key = str(event.id)
-            if key in self._halves:
+            if key in self._quote_of:
                 continue
             name = str(event.instrument_id)
-            if name not in sorted_series:
-                ordered = sorted(self._series.get(name, ()))
-                sorted_series[name] = ([ts for ts, _ in ordered], [v for _, v in ordered])
-            times, values = sorted_series[name]
-            index = bisect.bisect_right(times, int(event.ts_event))
+            series = ordered.get(name)
+            if series is None:
+                series = ordered[name] = self._ordered(name)
+            times, bids, asks = series
+            ts = int(event.ts_event)
+            index = int(np.searchsorted(times, ts, side="right"))
             if index > 0:
-                self._halves[key] = values[index - 1]
+                self._quote_of[key] = (float(bids[index - 1]), float(asks[index - 1]))
             else:
                 carried = self._last_quote.get(name)
-                self._halves[key] = (
-                    carried[1] if carried is not None and carried[0] <= int(event.ts_event) else 0.0
+                self._quote_of[key] = (
+                    (carried[1], carried[2]) if carried is not None and carried[0] <= ts else None
                 )
+
+    def _ordered(self, name: str) -> tuple[Any, Any, Any]:
+        """This chunk's quotes of `name` in time order, an instant's in the order folded: the
+        arrays as they are when they were folded in order, which every chunk is."""
+        held = self._series.get(name)
+        if held is None:
+            empty = np.empty(0, dtype=np.int64)
+            return empty, np.empty(0), np.empty(0)
+        times = np.frombuffer(held[0], dtype=np.int64)
+        bids = np.frombuffer(held[1], dtype=np.float64)
+        asks = np.frombuffer(held[2], dtype=np.float64)
+        if times.size > 1 and bool(np.any(times[1:] < times[:-1])):
+            order = np.argsort(times, kind="stable")
+            return times[order], bids[order], asks[order]
+        return times, bids, asks
 
     def half(self, event: Any) -> float:
         """The fraction of notional one side of the spread costs this fill: the stated
-        width's half, or the quoted half `price` charged it."""
+        width's half, or under `spread: quotes` the half of the quote `price` read it against
+        — the stated width's half, when the model states one, for a fill with no quote before
+        it, and nothing when it states none."""
         if not self.quotes:
             return self.fixed_half
-        return self._halves.get(str(event.id), 0.0)
+        quote = self._quote_of.get(str(event.id))
+        return self.fixed_half if quote is None else quote_half_spread(*quote)
+
+    def struck(self, event: Any) -> bool:
+        """Whether this fill was struck at the touch and carries the spread in its price: every
+        fill on a venue that matches a level-two book, and otherwise a buy at or above the ask
+        of the quote `price` read it against, or a sale at or below its bid (`at_touch`)."""
+        if self.levelled:
+            return True
+        return at_touch(
+            float(event.last_px),
+            sell=_sold(event),
+            quote=self._quote_of.get(str(event.id)),
+        )
 
     def next_chunk(self) -> None:
         """Let this chunk's quotes go, keeping each name's last for the fills that follow."""
-        for name, series in self._series.items():
-            if series:
-                ts, half = max(series)
+        for name in self._series:
+            times, bids, asks = self._ordered(name)
+            if times.size:
+                ts = int(times[-1])
                 held = self._last_quote.get(name)
                 if held is None or ts >= held[0]:
-                    self._last_quote[name] = (ts, half)
+                    self._last_quote[name] = (ts, float(bids[-1]), float(asks[-1]))
         self._series.clear()
+
+
+def _sold(event: Any) -> bool:
+    """Whether a fill event is a sale."""
+    from nautilus_trader.model.enums import OrderSide
+
+    return bool(event.order_side == OrderSide.SELL)
 
 
 def folded(request: RunRequest, stream: Sequence[Point]) -> Marks:
@@ -1984,7 +2033,6 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     cache = engine.cache
     multipliers = multipliers_of(cache.instruments())
     increments = increments_of(cache.instruments())
-    touched = touched_names(request.hyp)
     positions = _positions(cache)
     events, owners = _fill_events(positions)
     marks.price(events)
@@ -1996,7 +2044,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
             model,
             increments.get(str(event.instrument_id), 0.0),
             limit_at(cache.order(event.client_order_id), event.trade_id),
-            touched=str(event.instrument_id) in touched,
+            touched=marks.struck(event),
         )
         for event in events
     )
@@ -2119,24 +2167,6 @@ def _fills_since(cache: Any, read: dict[object, tuple[list[bytes], int]]) -> lis
     return found
 
 
-def touched_names(hyp: Hypothesis) -> frozenset[str]:
-    """The instruments the venue books from quotes or a level-two book, whose fills are
-    struck at the touch and carry the spread in their price: every name the hypothesis asks
-    for `quote` or `book` and not for `bar` (`data_by_instrument` narrowing
-    `data_requirements`). A name fed bars beside its quotes is left out: the engine walks each
-    bar through the book as prints and settles the venue after every point, so an order in
-    flight at a bar's instant fills at the bar's close — measured on a daily bar and a quote
-    at one instant, a market buy filled at the close of 10.00 against a quote of 9.99/10.01 —
-    and the price carries no spread. The harness reads the same rule off its configuration
-    (`KansoStrategy._touched`), so the balance a sleeve sizes against charges a fill what the
-    extraction charges it."""
-    return frozenset(
-        name
-        for name in hyp.universe
-        if {QUOTE, BOOK} & set(hyp.required_of(name)) and BAR not in hyp.required_of(name)
-    )
-
-
 def _fill(
     event: Any,
     multipliers: Mapping[str, float],
@@ -2155,9 +2185,9 @@ def _fill(
     on each share when the model states one, and `slippage_ticks` of the instrument's
     increment `tick` on each share, no further than the order's `limit`; a sale pays the
     sell-side fees the model states on top, maker or taker (`costs.fill_cost`). A fill
-    struck at the touch (`touched`) pays no half-spread, since its price carries the spread.
-    The increment, the limit and whether it was touched are recorded on the fill, so a model
-    re-applied to it charges the same.
+    struck at the touch (`touched`, `Marks.struck`) pays neither the half-spread nor
+    `slippage_bps`, since its price carries the spread. The increment, the limit and whether it
+    was touched are recorded on the fill, so a model re-applied to it charges the same.
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -2174,7 +2204,7 @@ def _fill(
         qty,
         costs.commission_bps,
         costs.slippage_bps,
-        0.0 if touched else half,
+        half,
         costs.maker_bps,
         costs.commission_per_share,
         maker=maker,
@@ -2184,6 +2214,7 @@ def _fill(
         maker_per_share=costs.maker_per_share,
         slip=tick_slip(costs.slippage_ticks, tick, px, limit, sell=side == "SELL"),
         multiplier=multiplier,
+        touched=touched,
     )
     return Fill(
         ts_ns=int(event.ts_event),

@@ -18,9 +18,12 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
                                    # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from.
-                                   # The half-spread is charged on a name the venue fills from bars or prints; a name
-                                   # asked for quote or book and no bar fills at the touch, whose price carries the
-                                   # spread, and is charged none — a wider market there is slippage_bps or slippage_ticks
+                                   # The half-spread and slippage_bps are charged on a fill struck at a print or a bar's
+                                   # close inside the quote; a fill at the touch of its name's last quote — a buy at the
+                                   # ask, a sale at the bid — carries the spread and is charged neither: a taker's price
+                                   # past the touch is slippage_ticks. Under `quotes`, fixed_bps prices a fill with no
+                                   # quote before it; with none, an instrument asked for no quote or book is charged no
+                                   # spread, and `kanso hyp validate` warns naming it
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a
@@ -32,8 +35,12 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   sell_fee_bps: 0.206            # on every sale, maker or taker, on top of the rest: the regulatory fee on the notional sold
 #   sell_fee_per_share: 0.000195   # and the activity fee on each share sold. Zero unless stated
 #   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
-                                   # measured on the account and route the strategy will trade through. Zero unless stated
-#   limit_fill: touch              # touch | through | print_through | print_through_whole: a resting limit fills when the
+                                   # measured on the account and route the strategy will trade through. Zero unless
+                                   # stated, which `kanso hyp validate` refuses at resolution tick, quote or trade
+#   limit_fill: print_through      # print_through by default at tick resolution with every name asked for quote and
+                                   # trade, touch otherwise, with a warning naming a name asked for one alone or for bar
+                                   # beside them, when no layer states a rule.
+                                   # touch | through | print_through | print_through_whole: a resting limit fills when the
                                    # market reaches its price (the engine's rule), or only once a bar's low/high or a print
                                    # goes beyond it, which fills all that is left of it (of the best-priced order, when it
                                    # goes beyond several), or only on a later print beyond it — by that print's size, or all
@@ -41,7 +48,9 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # rules need quote and trade, no book, and no bars beside an instrument's
                                    # quotes; under them a market order with no quote in force is refused, and a
                                    # taker past the displayed size walks a tick or rests at its limit
-                                   # (docs/backlog.md row 158). kanso's simulated venues only
+                                   # (docs/backlog.md row 158). kanso's simulated venues only. At tick resolution a
+                                   # maker_bps or maker_per_share under touch or through is refused: those rules credit
+                                   # a resting limit with no queue ahead of it
 # capital: 100000                  # backtest starting balance; default kanso.toml research.capital
 # sizing:                          # yours: classification never touches it. Scope: changing it clears `best`
 #   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / (price x multiplier)) whole lots with the

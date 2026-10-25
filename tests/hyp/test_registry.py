@@ -507,7 +507,11 @@ def test_a_change_of_book_policy_names_the_rule_that_moved(
 def test_a_change_of_depth_clears_the_best(ws: Workspace, store: StateStore) -> None:
     """A rule that saw the book every tenth of a second and one that saw it every second are
     different strategies over the same days, so the grid and the levels shown are scope."""
-    booked = {"resolution": "tick", "data_requirements": ["book", "trade"]}
+    booked = {
+        "resolution": "tick",
+        "data_requirements": ["book", "trade"],
+        "costs": {**DOCUMENT["costs"], "latency_ms": 20},
+    }
     register(ws, store, document(**booked, depth={"every_ms": 100, "levels": 3}))
     set_best(store)
 

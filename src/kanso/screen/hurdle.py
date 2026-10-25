@@ -8,20 +8,25 @@ declaration, `venues.<MIC>` in `portfolio.yaml`, then the screen's own `costs` f
 or, for a bound screen, its hypothesis's `costs`. So the hurdle is the number a card would
 pay, and the result records where each part of it came from.
 
-One round trip is two taker fills: commission and slippage on both — `slippage_ticks` too, as
-that many of the leg's price increments, whole, since a taker priced at market carries no limit
-to cap them — the sell-side fees on the sale (the exit of a long, the entry of a short), the
-per-share commission at the fill's own price, and half the spread on each side. **No spread
-is charged twice**: a follower read as quotes or a book enters at the ask or the bid it shows,
-so its gross move has crossed the spread already and the hurdle charges none; a follower read
-as bars or prints is priced at its last price and charged the venue model's spread. A model
-whose spread comes from quotes, over a leg that has none, is refused (exit 3): nothing could
-price it.
+One round trip is two taker fills: commission on both — `slippage_ticks` too, as that many of
+the leg's price increments, whole, since a taker priced at market carries no limit to cap them —
+the sell-side fees on the sale (the exit of a long, the entry of a short), the per-share
+commission at the fill's own price, and, on a fill priced at a last price rather than at a
+touch, half the spread and `slippage_bps`. **No spread is charged twice**, and the rule is the
+card's (`kanso.nautilus.costs.at_touch`): a follower read as quotes or a book enters at the ask
+or the bid it shows, so its gross move has crossed the spread already and the hurdle charges it
+neither the half-spread nor `slippage_bps`, as the runner charges a fill struck at the touch; a
+follower read as bars or prints is priced at its last price and charged the venue model's
+spread and `slippage_bps`. Under `spread: quotes` that spread is the stated `fixed_bps`, the
+width a card's fill with no quote before it pays; a model whose spread comes from quotes and
+states no width, over a leg that has no quotes, is refused (exit 3): nothing could price it.
 
 A derived follower is traded leg by leg: a basket's legs in its weights, a spread's long leg and
 beta of its short one, both legs of a gap. Its hurdle is the sum of its legs' round trips, each
 weighted by its share, each leg charged its own half spread — measured from its quotes where it
-has them, the model's otherwise — because a derived level is a mid and crossed no spread.
+has them, the model's otherwise — because a derived level is a mid and crossed no spread. A leg
+with quotes is then at its touch, which is where a card fills it, so it is charged no
+`slippage_bps`; a leg without them pays it, as a card's fill at a last price does.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from kanso.schemas.screen import CatchUp, LeadLag, Screen, followed
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
     DEFAULT_CURRENCY,
+    DEFAULT_LIMIT_FILL,
     VenueDeclaration,
     VenueModel,
     resolve_venue_model,
@@ -98,6 +104,7 @@ class Hurdles:
         at = np.asarray([entry_ns, exit_ns], dtype=np.int64)
         prices = grid.asof(series[leg], at)
         halves = (0.0, 0.0)
+        quoted = crossed or (series[leg].bid is not None and series[leg].ask is not None)
         if not crossed:
             halves = self._halves(leg, model, series[leg], at)
         long = direction > 0
@@ -109,7 +116,7 @@ class Hurdles:
                 notional,
                 1.0,
                 model.costs.commission_bps,
-                model.costs.slippage_bps,
+                0.0 if quoted else model.costs.slippage_bps,
                 half,
                 model.costs.maker_bps,
                 model.costs.commission_per_share,
@@ -172,6 +179,7 @@ def hurdles(
     definitions: Mapping[str, Any],
 ) -> Hurdles:
     """The venue model of every leg the screen's responses trade, refused where unpriceable."""
+    from kanso.hyp.validate import default_limit_fill
     from kanso.portfolio.files import venue_overrides  # `kanso.portfolio` imports kanso.hyp
 
     legs = traded(screen)
@@ -199,6 +207,9 @@ def hurdles(
                 if hypothesis
                 else (screen.costs or {}).get(venue),
                 quotes_available=quoted[venue],
+                default_limit_fill=default_limit_fill(hypothesis)
+                if hypothesis
+                else DEFAULT_LIMIT_FILL,
             )
         except ValidationError as error:
             where = f"{hypothesis.id}'s costs" if hypothesis else f"costs.{venue} in the screen"
@@ -209,10 +220,12 @@ def hurdles(
             ) from None
     for leg in legs:
         model = models[venue_of[leg]]
-        if screen.legs[leg].type not in TOUCHED and model.costs.spread == "quotes":
+        unquoted = screen.legs[leg].type not in TOUCHED
+        if unquoted and model.costs.spread == "quotes" and model.costs.fixed_bps is None:
             raise ValidationError(
-                f"legs.{leg}: {venue_of[leg]}'s model takes the spread from quotes and "
-                f"{screen.legs[leg].instrument} is read as {screen.legs[leg].type}, which has none",
+                f"legs.{leg}: {venue_of[leg]}'s model takes the spread from quotes and states no "
+                f"width, and {screen.legs[leg].instrument} is read as {screen.legs[leg].type}, "
+                "which has none",
                 remedy=f"state `fixed_bps` under costs.{venue_of[leg]}, or read the leg as quote",
             )
     multipliers = {leg: float(definitions[screen.legs[leg].instrument].multiplier) for leg in legs}

@@ -1394,10 +1394,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     states neither `maker_bps` nor `maker_per_share` charges a maker's fill what any fill pays.
     `slippage_ticks` is charged on each fill's recorded increment and capped by its recorded
     limit, as the runner charged it; a fill recorded before either was kept pays none of it.
-    `fixed_bps` is charged where the runner charges a spread — on a fill not struck at the
-    touch — and a fill the venue struck against a quote or a book, whose price carries the
-    spread, pays none of it under any scenario; a wider market on such a name is stated as
-    `slippage_bps`, which every taker's fill pays on its notional.
+    `fixed_bps` and `slippage_bps` are charged where the runner charges them — on a fill not
+    struck at the touch — and a fill struck at the touch, whose price carries the spread, pays
+    neither under any scenario; a taker paying more than the touch on such a fill is stated as
+    `slippage_ticks`, which every taker's fill pays per share.
     """
     from kanso.nautilus.costs import fill_cost, tick_slip
 
@@ -1412,7 +1412,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
-            0.0 if fill.touched else half_spread,
+            half_spread,
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
@@ -1422,6 +1422,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             maker_per_share=maker_per_share,
             slip=tick_slip(ticks, fill.tick, fill.px, fill.limit, sell=fill.side == "SELL"),
             multiplier=fill.multiplier,
+            touched=fill.touched,
         )
 
     ends = run.period_ends_ns
@@ -1498,13 +1499,17 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
     stressing them is arithmetic on the recorded fills rather than another backtest. A charge
     is multiplied; a rebate — the negative charge a venue model's `maker_bps` can put on a
     fill that rested — is divided, so under a multiple of one or more every fill costs more
-    or earns less, and no stress ever makes a rebate pay better. A fill is charged to the
-    return period it falls in; a fill after the last period end changed no return and so
-    changes none here. A book policy's `carry` is a rate on borrowed notional and not a fill
-    cost, so it is left as recorded. Under a monthly reset the transfers stand as struck and
-    the cushion as recorded, so the extra cost stays in the book across months where a real
-    reset would have absorbed it at the next turn: a stressed run's returns are exact, and
-    its equity and drawdown are the more conservative for it.
+    or earns less, and no stress ever makes a rebate pay better. A fill struck at the touch
+    recorded no half-spread and no `slippage_bps`, since its price carries the spread, so only
+    what it did pay — commission, a sale's fees, a taker's `slippage_ticks` — is multiplied:
+    the spread in a price is no recorded cost, and on a quoted lane whose model states none of
+    those a touched fill records nothing and no multiple moves it (`docs/backlog.md` row 224).
+    A fill is charged to the return period it falls in; a fill after the last period end
+    changed no return and so changes none here. A book policy's `carry` is a rate on borrowed
+    notional and not a fill cost, so it is left as recorded. Under a monthly reset the
+    transfers stand as struck and the cushion as recorded, so the extra cost stays in the book
+    across months where a real reset would have absorbed it at the next turn: a stressed run's
+    returns are exact, and its equity and drawdown are the more conservative for it.
     """
     ends = run.period_ends_ns
     added = [0.0] * len(ends)

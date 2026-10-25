@@ -230,7 +230,13 @@ def test_depth_levels_outside_one_to_four_hundred_are_refused(ws: Workspace, lev
 def test_depth_over_a_book_is_admissible(ws: Workspace) -> None:
     depth = {"every_ms": 100, "levels": 3}
     parsed = accepted(
-        ws, document(resolution="tick", data_requirements=["book", "trade"], depth=depth)
+        ws,
+        document(
+            resolution="tick",
+            data_requirements=["book", "trade"],
+            depth=depth,
+            costs={**DOCUMENT["costs"], "latency_ms": 20},
+        ),
     )
 
     assert parsed.depth is not None and parsed.depth.every_ms == 100
@@ -265,6 +271,73 @@ def test_quotes_complete_the_cost_model_without_a_width(ws: Workspace) -> None:
     doc = document(costs={"spread": "quotes"}, data_requirements=["bar", "quote"], resolution="1m")
 
     assert accepted(ws, doc) is not None
+
+
+def test_a_quoted_spread_with_no_width_over_a_name_without_quotes_is_named(
+    ws: Workspace,
+) -> None:
+    """A fill in a name read as bars alone is struck at a close, which carries no spread, and
+    has no quote before it to read one from: under `spread: quotes` with no width it is charged
+    none. The file cannot say whether the strategy trades the name, and a signal is charged
+    nothing either way, so it is admitted and named, with the width as the remedy."""
+    doc = document(
+        resolution="1m",
+        universe=["DEMO", "EURO"],
+        data_requirements=["bar", "quote"],
+        data_by_instrument={"DEMO": ["quote"], "EURO": ["bar"]},
+        costs={"commission_bps": 0.0, "slippage_bps": 1.0, "spread": "quotes"},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert warning == (
+        "costs.spread: quotes on XETR reads a fill's half-spread from the quote before it, and "
+        "EURO is asked for no quote or book, so a fill there is charged no spread; if the "
+        "strategy trades it, state fixed_bps in the hypothesis costs or under "
+        "venues.XETR.costs in portfolio.yaml — a fill with no quote before it pays half of it "
+        "— or ask it for quote under data_by_instrument"
+    )
+
+
+def test_a_trigger_read_as_prints_beside_a_follower_read_as_quotes_is_admitted(
+    ws: Workspace,
+) -> None:
+    """The shape `kanso screen draft` writes for a cell whose trigger is one name's prints and
+    whose follower is another's quotes, under the default spread from quotes: the trigger has
+    no quote before a fill and the file cannot say it is never traded. It is admitted, named
+    twice — no spread there, and the tape kept on touch — where a refusal once held the signal
+    to a width it is never charged."""
+    doc = document(
+        resolution="trade",
+        universe=["DEMO", "EURO"],
+        data_requirements=["quote", "trade"],
+        data_by_instrument={"DEMO": ["trade"], "EURO": ["quote"]},
+        costs={"latency_ms": 5.0},
+    )
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["spread"] for model in resolved(ws, doc).values()} == {"quotes"}
+    touch, spread = admitted.warnings
+    assert touch.startswith("costs.limit_fill: touch on SIM, XETR,")
+    assert ": DEMO is asked for trade; EURO is asked for quote. The print rules" in touch
+    assert spread.startswith("costs.spread: quotes on SIM reads a fill's half-spread")
+    assert "and DEMO is asked for no quote or book, so a fill there is charged no spread" in spread
+
+
+def test_a_stated_width_prices_a_name_without_quotes_under_a_quoted_spread(ws: Workspace) -> None:
+    parsed = accepted(
+        ws,
+        document(
+            resolution="1m",
+            universe=["DEMO", "EURO"],
+            data_requirements=["bar", "quote"],
+            data_by_instrument={"DEMO": ["quote"], "EURO": ["bar"]},
+            costs={"slippage_bps": 1.0, "spread": "quotes", "fixed_bps": 4.0},
+        ),
+    )
+
+    assert parsed.costs is not None and parsed.costs.fixed_bps == 4.0
 
 
 # -- the universe --------------------------------------------------------------
@@ -355,7 +428,13 @@ def test_a_policy_that_moves_money_is_admissible_on_a_margin_account(ws: Workspa
     assert parsed.book is not None and parsed.book.funded
 
 
-PRINT_COSTS = {"commission_bps": 0.5, "slippage_bps": 1.0, "spread": "fixed_bps", "fixed_bps": 2}
+PRINT_COSTS = {
+    "commission_bps": 0.5,
+    "slippage_bps": 1.0,
+    "spread": "fixed_bps",
+    "fixed_bps": 2,
+    "latency_ms": 20,
+}
 
 
 @pytest.mark.parametrize("rule", ["print_through", "print_through_whole"])
@@ -500,6 +579,641 @@ def test_a_print_rule_is_admissible_beside_a_bar_only_signal(ws: Workspace) -> N
     )
 
     assert parsed.costs is not None and parsed.costs.limit_fill == "print_through"
+
+
+# -- tick resolution: the fill rule, the latency and a maker schedule ---------------
+
+TICK_COSTS = {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes", "latency_ms": 20}
+
+
+def tick(**changes: Any) -> dict[str, Any]:
+    """A hypothesis over DEMO's quotes and prints at tick resolution, every cost but those
+    `changes` names stated; a route of 20 ms."""
+    costs = {**TICK_COSTS, **changes.pop("costs", {})}
+    return document(
+        **{"resolution": "tick", "data_requirements": ["quote", "trade"], **changes}, costs=costs
+    )
+
+
+BOTH_FEEDS = (
+    "ask every name, traded or not, for quote and trade under data_by_instrument, keeping every "
+    "other type it is asked for"
+)
+"""The way to the print rule the names leave open where `bar` is not required."""
+
+BOTH_FEEDS_BARLESS = (
+    "ask every name, traded or not, for quote and trade and not for bar under "
+    "data_by_instrument, keeping every other type it is asked for, and drop bar from "
+    "data_requirements"
+)
+"""The same way where `bar` is required, by a name beside its quotes or by a signal alone."""
+
+
+def both_feeds(doc: dict[str, Any]) -> dict[str, Any]:
+    """`doc` with the way to the print rule taken as it is worded: every name asked for quote
+    and trade, each keeping every other type it was asked for but bar, and bar dropped from
+    data_requirements."""
+    required = doc["data_requirements"]
+    narrowed = doc.get("data_by_instrument", {})
+    feeds = ["quote", "trade"]
+    asked = {
+        name: feeds + [kind for kind in narrowed.get(name, required) if kind not in {*feeds, "bar"}]
+        for name in doc["universe"]
+    }
+    kept = [kind for kind in required if kind != "bar"]
+    return {**doc, "data_requirements": kept, "data_by_instrument": asked}
+
+
+@pytest.mark.parametrize(
+    ("doc", "rule"),
+    [
+        (tick(), "print_through"),
+        (tick(resolution="quote"), "print_through"),
+        (tick(data_requirements=["quote"]), "touch"),
+        (tick(data_requirements=["quote", "trade", "bar"]), "touch"),
+        (
+            tick(
+                data_requirements=["book", "trade"], costs={"spread": "fixed_bps", "fixed_bps": 2}
+            ),
+            "touch",
+        ),
+        (document(), "touch"),
+        (tick(costs={"limit_fill": "touch"}), "touch"),
+        (tick(costs={"limit_fill": "through"}), "through"),
+    ],
+    ids=[
+        "tick",
+        "quote",
+        "no prints",
+        "bars beside quotes",
+        "book",
+        "bars",
+        "touch stated",
+        "through stated",
+    ],
+)
+def test_the_fill_rule_no_layer_states_follows_the_resolution(
+    ws: Workspace, doc: dict[str, Any], rule: str
+) -> None:
+    """Quotes and prints at tick resolution resolve to the print rule; bars, a book and a tape
+    with no prints resolve to touch; a rule stated at a layer stands."""
+    (model,) = resolved(ws, doc).values()
+
+    assert model["costs"]["limit_fill"] == rule
+
+
+def test_the_print_rule_default_leaves_the_costs_origin_where_the_layers_leave_it(
+    ws: Workspace,
+) -> None:
+    (model,) = resolved(ws, tick()).values()
+
+    assert model["origins"]["costs"] == "hypothesis"
+
+
+@pytest.mark.parametrize(
+    ("narrowed", "asked"),
+    [
+        ({"EURO": ["trade"]}, "EURO is asked for trade"),
+        ({"EURO": ["quote"]}, "EURO is asked for quote"),
+    ],
+    ids=["prints alone", "quotes alone"],
+)
+def test_a_name_asked_for_one_feed_keeps_every_venue_on_touch_and_is_named(
+    ws: Workspace, narrowed: dict[str, list[str]], asked: str
+) -> None:
+    """Under the print rules a taker fills only on a quote in force and a resting limit only on
+    a print, so a name asked for prints alone never takes and one asked for quotes alone never
+    rests to a fill. The default stays touch, on which the same file fills, and the warning
+    names the name that kept it there. Until the default read each name, both resolved to
+    print_through on both venues with no word."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], **narrowed},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    models = resolved(ws, doc)
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {venue: model["costs"]["limit_fill"] for venue, model in models.items()} == {
+        "SIM": "touch",
+        "XETR": "touch",
+    }
+    (warning,) = admitted.warnings
+    assert warning.startswith("costs.limit_fill: touch on SIM, XETR, which credits a resting")
+    assert f": {asked}. The print rules fill a taker only on a quote in force" in warning
+    assert "bar beside quote" not in warning
+    assert warning.endswith(
+        "; to move to print_through, ask every name, traded or not, for quote and trade under "
+        "data_by_instrument, keeping every other type it is asked for, or, if each name short "
+        "of a feed is a signal the strategy never trades, state limit_fill: print_through, "
+        "under which a market order in a name asked for no quote, and a resting limit in one "
+        "asked for no trade, never fills; to stay on touch without this warning, state "
+        "limit_fill: touch"
+    )
+
+
+def test_asking_the_traded_names_alone_for_both_feeds_keeps_the_default_on_touch(
+    ws: Workspace,
+) -> None:
+    """The default reads every name, traded or not: a signal asked for prints alone beside a
+    traded name asked for both keeps the tape on touch, and the warning names the signal.
+    Its remedy once told the operator to ask each name the strategy trades for both feeds,
+    which this file already does."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["trade"], "EURO": ["quote", "trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
+    assert ": DEMO is asked for trade. The print rules" in warning
+    assert f"to move to print_through, {BOTH_FEEDS}" in warning
+
+
+@pytest.mark.parametrize(
+    ("way", "rule", "warned"),
+    [
+        (
+            {"data_by_instrument": {"DEMO": ["quote", "trade"], "EURO": ["quote", "trade"]}},
+            "print_through",
+            1,
+        ),
+        ({"costs": {"limit_fill": "print_through"}}, "print_through", 1),
+        ({"costs": {"limit_fill": "touch"}}, "touch", 0),
+    ],
+    ids=["both feeds", "print rule stated", "touch stated"],
+)
+def test_each_way_the_touch_warning_offers_ends_it(
+    ws: Workspace, way: dict[str, Any], rule: str, warned: int
+) -> None:
+    """A signal asked for prints alone: asking it for both feeds, or stating the print rule
+    over it, moves both venues to print_through, where the only warning left is the one for
+    a print rule with no maker schedule; stating touch keeps the rule and draws none."""
+    changes: dict[str, Any] = {
+        "universe": ["DEMO", "EURO"],
+        "data_by_instrument": {"DEMO": ["trade"], "EURO": ["quote", "trade"]},
+        **way,
+    }
+    changes["costs"] = {"spread": "fixed_bps", "fixed_bps": 0, **way.get("costs", {})}
+    doc = tick(**changes)
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {rule}
+    assert len(admitted.warnings) == warned
+    assert not any(warning.startswith("costs.limit_fill") for warning in admitted.warnings)
+
+
+def test_every_name_asked_for_quotes_and_prints_resolves_to_the_print_rule(ws: Workspace) -> None:
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["trade", "quote"]},
+    )
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {
+        "print_through"
+    }
+
+
+def test_a_bar_only_name_at_tick_resolution_keeps_the_default_on_touch(ws: Workspace) -> None:
+    """No bar fills a resting limit under the print rules and a bar carries no quote for a
+    taker to fill on, so a name read as bars alone keeps the tape on touch as well."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_requirements=["quote", "trade", "bar"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["bar"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
+    assert ": EURO is asked for bar. The print rules" in admitted.warnings[0]
+
+
+def test_a_name_asked_for_bars_beside_quotes_and_prints_is_named_for_its_bars(
+    ws: Workspace,
+) -> None:
+    """A name asked for bars beside its quotes and prints holds both feeds, so the print rule
+    would not starve it: a bar walks the engine's bid and ask past the quote in force, and a
+    print rule over it is refused. The warning says that, and not that a feed is missing. Its
+    way to the print rule drops bar from data_requirements too, since no name is left asking
+    for it: it once stopped at asking the name for both feeds alone, and the file that did
+    only that was refused for a type no name is asked for."""
+    admitted = hyp.admit(
+        ws, write_hypothesis(ws, tick(data_requirements=["quote", "trade", "bar"]))
+    )
+    kept = refused(
+        ws,
+        tick(
+            data_requirements=["quote", "trade", "bar"],
+            data_by_instrument={"DEMO": ["quote", "trade"]},
+        ),
+    )
+    alone = tick(data_by_instrument={"DEMO": ["quote", "trade"]})
+
+    (warning,) = admitted.warnings
+    assert warning == (
+        "costs.limit_fill: touch on SIM, which credits a resting limit with no queue ahead of "
+        "it, and not print_through, which a hypothesis holding quotes and prints at tick "
+        "resolution resolves to when no layer states a rule only if every name is asked for "
+        "quote and trade and none for bar: DEMO is asked for quote, trade, bar. A bar walks "
+        "the engine's bid and ask past the quote in force, on which the print rules fill a "
+        "taker, so a print rule over a name asked for bar beside quote is refused; to move to "
+        f"print_through, {BOTH_FEEDS_BARLESS}; to stay on touch without this warning, state "
+        "limit_fill: touch"
+    )
+    assert "data_requirements: no instrument is asked for bar once" in kept.message
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, alone).values()} == {
+        "print_through"
+    }
+
+
+def test_names_short_of_a_feed_and_barred_beside_quotes_give_both_reasons(
+    ws: Workspace,
+) -> None:
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_requirements=["quote", "trade", "bar"],
+        data_by_instrument={"DEMO": ["quote", "trade", "bar"], "EURO": ["trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert ": DEMO is asked for quote, trade, bar; EURO is asked for trade. The print " in warning
+    assert "could not fill as it does under touch, and a bar walks the engine's bid" in warning
+
+
+@pytest.mark.parametrize("layer", ["hypothesis", "portfolio"])
+def test_a_stated_touch_over_a_one_feed_name_draws_no_warning(ws: Workspace, layer: str) -> None:
+    """A rule a layer states is the operator's: the warning says why the default stayed on
+    touch, and its remedy, asking the names for both feeds, cannot move a stated one."""
+    stated = {"limit_fill": "touch"}
+    if layer == "portfolio":
+        write_portfolio(ws, {"SIM": {"costs": stated}, "XETR": {"costs": stated}})
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0, **(stated if layer == "hypothesis" else {})},
+    )
+
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, doc).values()} == {"touch"}
+    assert admitted.warnings == ()
+
+
+def test_a_venue_a_layer_states_a_rule_for_is_left_out_of_the_warning(ws: Workspace) -> None:
+    """XETR's touch is stated and SIM's is the default the names chose: only SIM is named.
+    Stated `through`, XETR was left out by its rule alone, and a warning that named every
+    venue on touch passed."""
+    write_portfolio(ws, {"XETR": {"costs": {"limit_fill": "touch"}}})
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["quote"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0},
+    )
+
+    (warning,) = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+
+    assert warning.startswith("costs.limit_fill: touch on SIM, which credits")
+
+
+def test_a_tape_without_prints_is_told_nothing_about_the_print_rule(ws: Workspace) -> None:
+    """A hypothesis that holds no prints was never resolved to the print rule, so no name kept
+    it from it."""
+    admitted = hyp.admit(ws, write_hypothesis(ws, tick(data_requirements=["quote"])))
+
+    assert admitted.warnings == ()
+
+
+@pytest.mark.parametrize("resolution", ["tick", "quote", "trade"])
+def test_a_latency_of_zero_at_tick_resolution_is_refused(ws: Workspace, resolution: str) -> None:
+    """At zero the venue lands an order on the point it was sent from. No latency is named:
+    the remedy asks for the measured one."""
+    costs = {key: value for key, value in TICK_COSTS.items() if key != "latency_ms"}
+    failure = refused(
+        ws, document(resolution=resolution, data_requirements=["quote", "trade"], costs=costs)
+    )
+
+    assert failure.message == (
+        f"costs.latency_ms: 0 on SIM at resolution {resolution} lands every order on the point "
+        "it was sent from, before anything later on the tape, which no route to a venue does"
+    )
+    assert failure.remedy == (
+        "state costs.latency_ms — the round trip measured on the account and route you trade "
+        "through — in the hypothesis costs or under venues.SIM.costs in portfolio.yaml"
+    )
+
+
+def test_a_latency_stated_for_the_venue_admits_a_tick_hypothesis(ws: Workspace) -> None:
+    write_portfolio(ws, {"SIM": {"costs": {"latency_ms": 5}}})
+    costs = {key: value for key, value in TICK_COSTS.items() if key != "latency_ms"}
+
+    parsed = accepted(ws, tick(costs=costs | {"latency_ms": None}))
+
+    assert parsed.resolution == "tick"
+
+
+def test_a_latency_of_zero_on_bars_is_admissible(ws: Workspace) -> None:
+    (model,) = resolved(ws, DOCUMENT).values()
+
+    assert model["costs"]["latency_ms"] == 0.0
+
+
+@pytest.mark.parametrize("rule", ["touch", "through"])
+@pytest.mark.parametrize(
+    ("schedule", "key"),
+    [({"maker_bps": 0.0}, "maker_bps"), ({"maker_per_share": 0.004}, "maker_per_share")],
+)
+def test_a_maker_schedule_under_a_queue_free_rule_at_tick_resolution_is_refused(
+    ws: Workspace, rule: str, schedule: dict[str, float], key: str
+) -> None:
+    """`touch` and `through` credit a resting limit with no queue ahead of it, so a maker's
+    schedule there would price fills the tape did not give."""
+    failure = refused(ws, tick(costs={"limit_fill": rule, **schedule}))
+
+    assert failure.message.startswith(
+        f"costs.{key}: a maker schedule on SIM under limit_fill: {rule} prices as a maker's"
+    )
+    assert failure.remedy is not None
+    assert failure.remedy.startswith("state limit_fill: print_through or print_through_whole")
+    assert "venues.SIM.costs" in failure.remedy
+
+
+def test_a_maker_schedule_stated_for_the_venue_is_refused_the_same_way(ws: Workspace) -> None:
+    write_portfolio(ws, {"SIM": {"costs": {"maker_bps": -0.2}}})
+
+    failure = refused(ws, tick(costs={"limit_fill": "through"}))
+
+    assert failure.message.startswith("costs.maker_bps: a maker schedule on SIM")
+
+
+@pytest.mark.parametrize(("layer", "venues"), [("hypothesis", "SIM, XETR"), ("portfolio", "SIM")])
+def test_a_maker_schedule_on_a_venue_a_one_feed_name_kept_on_touch_names_the_name(
+    ws: Workspace, layer: str, venues: str
+) -> None:
+    """No layer states a rule, and EURO, asked for prints alone, keeps the tape on touch. The
+    refusal names it, and its remedy leads with asking every name for both feeds, which admits
+    the same schedule under the print rule. It once named neither the name nor that way out,
+    and the warning that names the name was never reached."""
+    schedule = {"maker_bps": 0.0}
+    if layer == "portfolio":
+        write_portfolio(ws, {"SIM": {"costs": schedule}})
+    costs = {"spread": "fixed_bps", "fixed_bps": 0, **(schedule if layer == "hypothesis" else {})}
+    universe = ["DEMO", "EURO"]
+    both = ["quote", "trade"]
+
+    failure = refused(
+        ws,
+        tick(universe=universe, data_by_instrument={"DEMO": both, "EURO": ["trade"]}, costs=costs),
+    )
+    asked = tick(universe=universe, data_by_instrument={"DEMO": both, "EURO": both}, costs=costs)
+    admitted = hyp.admit(ws, write_hypothesis(ws, asked))
+
+    assert failure.message.startswith(f"costs.maker_bps: a maker schedule on {venues} under ")
+    assert failure.message.endswith(
+        f"; no layer states a rule for {venues}, which a hypothesis holding quotes and prints at "
+        "tick resolution resolves to print_through only if every name is asked for quote and "
+        "trade and none for bar: EURO is asked for trade"
+    )
+    assert failure.remedy is not None
+    assert failure.remedy.startswith(
+        f"{BOTH_FEEDS}, which moves a venue no layer states a rule for to print_through; or "
+        "state limit_fill: print_through or print_through_whole"
+    )
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, asked).values()} == {
+        "print_through"
+    }
+    assert admitted.hyp.id == "demo_mr"
+
+
+def test_a_maker_schedule_under_a_stated_touch_names_no_name(ws: Workspace) -> None:
+    """A stated touch is the operator's, and asking the names for both feeds would not move it,
+    so the refusal neither names them nor offers it."""
+    doc = tick(
+        universe=["DEMO", "EURO"],
+        data_by_instrument={"DEMO": ["quote", "trade"], "EURO": ["trade"]},
+        costs={"spread": "fixed_bps", "fixed_bps": 0, "maker_bps": 0.0, "limit_fill": "touch"},
+    )
+
+    failure = refused(ws, doc)
+
+    assert "EURO" not in failure.message
+    assert failure.remedy is not None
+    assert failure.remedy.startswith("state limit_fill: print_through or print_through_whole")
+
+
+def test_a_maker_schedule_over_a_name_asked_for_bar_beside_quote_is_offered_no_print_rule(
+    ws: Workspace,
+) -> None:
+    """A print rule over a name asked for bar beside quote is refused, so the maker refusal
+    does not offer one, and asking every name for both feeds and none for bar leaves bar asked
+    of none, so its remedy drops bar from data_requirements as well. Followed as written, the
+    remedy admits the same schedule under the print rule. It once offered both ways as they
+    stood, and each was refused in turn: the stated print rule over DEMO's bars, and the
+    narrowed file for a type no name was asked for."""
+    schedule = {"maker_bps": 0.0}
+    barred = tick(data_requirements=["quote", "trade", "bar"], costs=schedule)
+
+    failure = refused(ws, barred)
+    stating = refused(ws, {**barred, "costs": {**barred["costs"], "limit_fill": "print_through"}})
+    followed = both_feeds(barred)
+    admitted = hyp.admit(ws, write_hypothesis(ws, followed))
+
+    assert failure.message.endswith(": DEMO is asked for quote, trade, bar")
+    assert failure.remedy == (
+        f"{BOTH_FEEDS_BARLESS}, which moves a venue no layer states a rule for to print_through; "
+        "or remove maker_bps and maker_per_share from the hypothesis costs and from "
+        "venues.SIM.costs in portfolio.yaml"
+    )
+    assert "DEMO is asked for bar beside quote" in stating.message
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, followed).values()} == {
+        "print_through"
+    }
+    assert admitted.warnings == ()
+
+
+@pytest.mark.parametrize("rule", ["touch", "through"])
+def test_a_maker_schedule_under_a_stated_rule_over_bars_beside_quotes_is_offered_both_ways(
+    ws: Workspace, rule: str
+) -> None:
+    """Asking the names for both feeds cannot move a stated rule, and a print rule is refused
+    while DEMO is asked for bar beside quote, so the remedy offers stating one only beside
+    asking every name for both feeds and none for bar, which keeps the schedule, or the
+    schedule's removal. Each, followed as written, admits the file. The remedy once offered
+    the removal alone, and an operator who meant the schedule had no way to it."""
+    schedule = {"maker_bps": 0.0}
+    barred = tick(data_requirements=["quote", "trade", "bar"], costs={"limit_fill": rule})
+
+    failure = refused(ws, {**barred, "costs": {**barred["costs"], **schedule}})
+    followed = both_feeds(barred)
+    followed["costs"] = {**followed["costs"], **schedule, "limit_fill": "print_through"}
+    kept = hyp.admit(ws, write_hypothesis(ws, followed))
+    removed = hyp.admit(ws, write_hypothesis(ws, barred))
+
+    assert failure.remedy == (
+        f"{BOTH_FEEDS_BARLESS}, and state limit_fill: print_through or print_through_whole, "
+        "which fills a resting limit only on a later print through it and needs every name the "
+        "strategy trades asked for quote and trade, and no book; or remove maker_bps and "
+        "maker_per_share from the hypothesis costs and from venues.SIM.costs in portfolio.yaml"
+    )
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, followed).values()} == {
+        "print_through"
+    }
+    assert kept.warnings == ()
+    assert removed.warnings == ()
+
+
+def test_a_maker_schedule_under_a_stated_rule_over_bars_beside_quotes_alone_is_offered_removal(
+    ws: Workspace,
+) -> None:
+    """With trade not required no name can be asked for prints, so the way to the print rule
+    is not open and the remedy offers the schedule's removal alone, which admits the file."""
+    barred = tick(data_requirements=["quote", "bar"], costs={"limit_fill": "touch"})
+
+    failure = refused(ws, {**barred, "costs": {**barred["costs"], "maker_bps": 0.0}})
+    removed = hyp.admit(ws, write_hypothesis(ws, barred))
+
+    assert failure.remedy == (
+        "remove maker_bps and maker_per_share from the hypothesis costs and from "
+        "venues.SIM.costs in portfolio.yaml"
+    )
+    assert removed.warnings == ()
+
+
+IN_PLAY = """
+from nautilus_trader.core.data import Data
+from nautilus_trader.model.custom import customdataclass
+from nautilus_trader.model.identifiers import InstrumentId
+
+from kanso.data.types import register_custom_type
+
+PROVIDES = {"data_types": ["kanso_in_play"]}
+
+
+@customdataclass
+class KansoInPlay(Data):
+    instrument_id: InstrumentId
+    in_play: int
+
+
+register_custom_type("kanso_in_play", KansoInPlay)
+"""
+"""An extension registering the custom series a session scope reads its flag off; its own
+module name and type id, since a type id names one class for the life of the process."""
+
+SCOPE: dict[str, Any] = {"series": "kanso_in_play", "flag": "in_play", "always": ["DEMO"]}
+"""A session scope reading its flag off that series."""
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        {"data_requirements": ["quote", "trade", "bar", "corporate_action"]},
+        {"universe": ["PERP"], "data_requirements": ["quote", "trade", "bar", "funding"]},
+        {
+            "universe": ["DEMO", "EURO"],
+            "data_requirements": ["quote", "trade", "bar", "kanso_in_play"],
+            "session_scope": SCOPE,
+        },
+        {
+            "universe": ["DEMO", "EURO"],
+            "data_requirements": ["quote", "trade", "corporate_action"],
+            "data_by_instrument": {
+                "DEMO": ["quote", "trade", "corporate_action"],
+                "EURO": ["trade"],
+            },
+        },
+        {
+            "universe": ["DEMO", "EURO"],
+            "data_requirements": ["quote", "trade", "bar"],
+            "data_by_instrument": {"DEMO": ["quote", "trade"], "EURO": ["bar"]},
+        },
+    ],
+    ids=[
+        "corporate actions beside bars",
+        "a perpetual's funding beside bars",
+        "a session scope's series beside bars",
+        "corporate actions beside a name short of a feed",
+        "a signal asked for bars alone",
+    ],
+)
+def test_the_way_to_the_print_rule_followed_as_worded_admits_any_other_required_type(
+    ws: Workspace, shape: dict[str, Any]
+) -> None:
+    """The warning's way to the print rule and the maker refusal's lead with the same words, and
+    followed as worded each admits the file under the print rule with the schedule kept, whatever
+    else the names are asked for: the funding every perpetual requires, the series a session
+    scope reads, corporate actions. The words once asked every name for quote and trade alone,
+    which left such a type asked of no name and was refused for it, and dropped bar only where a
+    name was asked for it beside quote, which a signal asked for bars alone is not."""
+    if "PERP" in shape.get("universe", []):
+        write_instruments(ws, "DEMO", "PERP")
+        ws = configured(ws, currency="USDT")
+    if "session_scope" in shape:
+        extension = ws.root / "kanso_ext"
+        extension.mkdir()
+        (extension / "kanso_in_play.py").write_text(IN_PLAY, encoding="utf-8")
+    way = BOTH_FEEDS_BARLESS if "bar" in shape["data_requirements"] else BOTH_FEEDS
+    costs = {"spread": "fixed_bps", "fixed_bps": 0}
+    schedule = {"maker_bps": 0.0}
+    doc = tick(**shape, costs=costs)
+
+    warnings = hyp.admit(ws, write_hypothesis(ws, doc)).warnings
+    failure = refused(ws, tick(**shape, costs={**costs, **schedule}))
+    followed = both_feeds(tick(**shape, costs={**costs, **schedule}))
+    admitted = hyp.admit(ws, write_hypothesis(ws, followed))
+
+    (warning,) = [warning for warning in warnings if warning.startswith("costs.limit_fill")]
+    assert f"; to move to print_through, {way}" in warning
+    assert failure.remedy is not None
+    assert failure.remedy.startswith(
+        f"{way}, which moves a venue no layer states a rule for to print_through; or "
+    )
+    assert {model["costs"]["limit_fill"] for model in resolved(ws, followed).values()} == {
+        "print_through"
+    }
+    assert admitted.warnings == ()
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        tick(costs={"maker_bps": 0.0}),
+        tick(costs={"maker_bps": 0.0, "limit_fill": "print_through_whole"}),
+        tick(
+            data_requirements=["book", "trade"],
+            costs={"spread": "fixed_bps", "fixed_bps": 2, "maker_bps": 0.0},
+        ),
+        document(costs={**DOCUMENT["costs"], "maker_bps": 0.0}),
+    ],
+    ids=["print rule by default", "print rule stated", "level-two book", "bars under touch"],
+)
+def test_a_maker_schedule_is_admissible_where_resting_fills_are_credited_from_the_tape(
+    ws: Workspace, doc: dict[str, Any]
+) -> None:
+    """The print rules credit a resting limit from a print through it, a level-two book keeps
+    a queue, and on bars there is no tape rule to choose instead."""
+    admitted = hyp.admit(ws, write_hypothesis(ws, doc))
+
+    assert admitted.warnings == ()
+
+
+def test_a_print_rule_with_no_maker_schedule_is_admitted_with_a_warning(ws: Workspace) -> None:
+    admitted = hyp.admit(ws, write_hypothesis(ws, tick()))
+
+    assert admitted.warnings == (
+        "costs: no maker_bps or maker_per_share on SIM under limit_fill: print_through, so a "
+        "fill that rested on the book is charged as any fill at its price — slippage_bps and "
+        "half the spread on top of the commission; state the account's maker schedule, 0 for "
+        "none and negative for a rebate",
+    )
+    assert hyp.validate(ws, write_hypothesis(ws, tick())).id == admitted.hyp.id
 
 
 def test_one_account_currency_across_two_venues_is_admissible(ws: Workspace) -> None:

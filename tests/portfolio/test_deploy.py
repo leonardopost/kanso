@@ -318,12 +318,12 @@ def _slow() -> dict[str, Any]:
 
 
 def _deep() -> dict[str, Any]:
-    """A hypothesis certified on a level-two book with queue position."""
+    """A hypothesis certified on a level-two book with queue position, read beside its bars, so
+    its route is the stage's: one at tick resolution must state a latency the stage's
+    version was not certified under, which is refused first."""
     from tests.replay.conftest import document
 
-    return document(
-        id="other", resolution="tick", horizon="1d", data_requirements=["book", "trade"]
-    )
+    return document(id="other", data_requirements=["bar", "book"])
 
 
 def _written(ws: Workspace, store: StateStore) -> tuple[object, ...]:

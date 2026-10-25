@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp.scaffold import HYPOTHESIS_FILE, hypothesis_file
-from kanso.hyp.validate import read_source, validate
+from kanso.hyp.validate import Admitted, admit, read_source
 from kanso.schemas import Hypothesis, load_yaml, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -205,10 +205,15 @@ def add(ws: Workspace, store: StateStore, path: Path) -> Hypothesis:
     Raises a validation failure when the file is not admissible and a precondition
     failure when a run of that hypothesis is active.
     """
+    return register(ws, store, path).hyp
+
+
+def register(ws: Workspace, store: StateStore, path: Path) -> Admitted:
+    """`add`, with the warnings the file was admitted with (`kanso.hyp.validate.admit`)."""
     source = read_source(path)
-    hyp = validate(ws, path, source)
-    pin(store, hyp, source)
-    return hyp
+    admitted = admit(ws, path, source)
+    pin(store, admitted.hyp, source)
+    return admitted
 
 
 def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:

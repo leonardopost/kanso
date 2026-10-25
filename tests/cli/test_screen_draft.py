@@ -21,7 +21,7 @@ from kanso.screen import draft
 from kanso.state import StateStore
 from kanso.workspace import find
 
-from .conftest import INSTRUMENT, at, classify, payload
+from .conftest import INSTRUMENT, OTHER, at, classify, payload, write_spec
 from .test_screen_run import FADE, OU, run_screen
 
 CELL = "response/a/40bp/1h/a/1h"
@@ -79,6 +79,209 @@ def test_the_baseline_card_re_measures_the_screened_cell(runner: CliRunner, load
     assert begun.exit_code == Exit.OK, begun.stdout
     baseline = payload(begun)["baseline"]
     assert baseline["status"] == "keep" and baseline["metric"] > 0
+
+
+TAPE: dict[str, Any] = {
+    **FADE,
+    "id": "ou_tape",
+    "window": {"start": "2024-01-02", "end": "2024-02-29"},
+    "legs": {
+        "a": {"instrument": INSTRUMENT, "type": "trade"},
+        "b": {"instrument": INSTRUMENT, "type": "quote"},
+    },
+    "costs": {"SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "quotes"}},
+    "measures": [{**FADE["measures"][0], "followers": "b", "latency_ms": 5}],
+}
+"""The fade read off the demo path's prints and taken on its quotes, over a route of 5 ms."""
+
+
+def test_a_tick_cell_drafts_a_file_hyp_add_admits_under_the_latency_it_was_measured_at(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """At tick resolution a latency of zero is refused, and the screen ignores a latency
+    under its own costs: the route is the measure's. The draft carries it, so the file it
+    writes registers as it stands. Without it `hyp add` refused the draft for a latency of
+    zero."""
+    spec = write_spec(loaded, "tape.yaml", types=["quote", "trade"], end="2024-03-29")
+    assert (
+        at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    )
+    assert at(runner, loaded, "data", "snapshot").exit_code == 0
+    run_screen(runner, loaded, TAPE)
+
+    result = at(
+        runner,
+        loaded,
+        "screen",
+        "draft",
+        "ou_tape",
+        "--cell",
+        "response/a/40bp/1h/b/1h",
+        "--as",
+        "tape_lane",
+        "--certify",
+        "2024-03-01..2024-03-29",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK, result.stdout
+    path = Path(payload(result)["dir"]) / "hypothesis.yaml"
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert (hypothesis["resolution"], hypothesis["data_requirements"]) == (
+        "trade",
+        ["quote", "trade"],
+    )
+    assert hypothesis["costs"] == {
+        "commission_bps": 0.5,
+        "slippage_bps": 1.0,
+        "spread": "quotes",
+        "latency_ms": 5.0,
+    }
+    added = at(runner, loaded, "hyp", "add", path, "--json")
+    assert added.exit_code == Exit.OK, added.stdout
+    assert payload(added)["status"] == "draft"
+
+
+@pytest.mark.parametrize(
+    "costs",
+    [
+        {"SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "quotes"}},
+        None,
+    ],
+    ids=["quoted spread stated", "no costs"],
+)
+def test_a_cell_read_off_one_name_s_prints_and_another_s_quotes_registers_as_drafted(
+    runner: CliRunner, paired: Path, costs: dict[str, Any] | None
+) -> None:
+    """The trigger is one name read as prints and the follower another read as quotes: each
+    is asked for its own type, the spread comes from quotes, and the trigger has none before
+    a fill. The screen's hurdle never priced the trigger, which the seed never trades, and the
+    file cannot say so, so `hyp add` admits the draft as written and names the trigger — once
+    for the spread a fill there would not be charged, once for keeping the tape on touch. A
+    refusal once held the signal to a width it is never charged, and `hyp add` exited 3."""
+    path = drafted_pair(runner, paired, costs)
+
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert hypothesis["data_by_instrument"] == {INSTRUMENT: ["trade"], OTHER: ["quote"]}
+    assert hypothesis["costs"] == {**(costs or {}).get("SIM", {}), "latency_ms": 5.0}
+    added = at(runner, paired, "hyp", "add", path, "--json")
+    assert added.exit_code == Exit.OK, added.stdout
+    touch, spread = payload(added)["warnings"]
+    assert f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote." in touch
+    assert f"and {INSTRUMENT} is asked for no quote or book, so a fill there is charged" in spread
+
+
+def test_a_maker_schedule_in_a_draft_read_off_two_feeds_is_refused_naming_both_names(
+    runner: CliRunner, paired: Path
+) -> None:
+    """The screen's hurdle is two taker fills and ignores a maker key, which the draft carries
+    as the account's. Each name asked for its own feed keeps the tape on touch, where a maker
+    schedule is refused: `hyp add` names both names, and asking each for both feeds, as the
+    remedy leads with, registers the draft under the print rule. The refusal once named neither
+    name and left the default that put the venue on touch unsaid."""
+    costs = {"SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "quotes", "maker_bps": 0}}
+    path = drafted_pair(runner, paired, costs)
+
+    refused = at(runner, paired, "hyp", "add", path, "--json")
+    hypothesis = yaml.safe_load(path.read_text(encoding="utf-8"))
+    del hypothesis["data_by_instrument"]
+    path.write_text(yaml.safe_dump(hypothesis, sort_keys=False), encoding="utf-8")
+    added = at(runner, paired, "hyp", "add", path, "--json")
+
+    assert refused.exit_code == Exit.VALIDATION, refused.stdout
+    assert payload(refused)["error"].endswith(
+        f": {INSTRUMENT} is asked for trade; {OTHER} is asked for quote"
+    )
+    assert payload(refused)["remedy"].startswith(
+        "ask every name, traded or not, for quote and trade under data_by_instrument, keeping "
+        "every other type it is asked for, which moves"
+    )
+    assert hypothesis["costs"]["maker_bps"] == 0
+    assert added.exit_code == Exit.OK, added.stdout
+    assert payload(added)["warnings"] == []
+
+
+def drafted_pair(runner: CliRunner, paired: Path, costs: dict[str, Any] | None) -> Path:
+    """The `hypothesis.yaml` a draft writes of the fade read off DEMO's prints and taken on
+    OTHR's quotes, screened under `costs`."""
+    for name, seed, symbol in (("tape.yaml", 7, "DEMO"), ("othr_tape.yaml", 11, "OTHR")):
+        spec = write_spec(
+            paired,
+            name,
+            instruments=[symbol],
+            seed=seed,
+            types=["quote", "trade"],
+            end="2024-03-29",
+        )
+        answer = at(runner, paired, "data", "load", "--loader", "synthetic", "--spec", spec)
+        assert answer.exit_code == Exit.OK, answer.stdout
+    assert at(runner, paired, "data", "snapshot").exit_code == Exit.OK
+    legs = {
+        "a": {"instrument": INSTRUMENT, "type": "trade"},
+        "b": {"instrument": OTHER, "type": "quote"},
+    }
+    run_screen(runner, paired, {**TAPE, "id": "ou_pair", "legs": legs, "costs": costs})
+
+    result = at(
+        runner,
+        paired,
+        "screen",
+        "draft",
+        "ou_pair",
+        "--cell",
+        "response/a/40bp/1h/b/1h",
+        "--as",
+        "pair_lane",
+        "--certify",
+        "2024-03-01..2024-03-29",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK, result.stdout
+    return Path(payload(result)["dir"]) / "hypothesis.yaml"
+
+
+@pytest.mark.parametrize(("measured", "drafted"), [(0.0, None), (3.0, 3.0)])
+def test_a_draft_carries_the_measure_s_latency_and_never_its_costs(
+    loaded: Path, measured: float, drafted: float | None
+) -> None:
+    """A latency under a screen's own costs is ignored by the screen, so a draft never carries
+    it: a cell measured at zero drafts none, and one measured above zero drafts its own. Once a
+    cell measured at zero drafted the costs' 7 ms, a route nothing measured it under."""
+    costs = {"SIM": {**FADE["costs"]["SIM"], "latency_ms": 7}}
+    measures = [{**FADE["measures"][0], "latency_ms": measured}]
+    spec = Screen.model_validate({**FADE, "costs": costs, "measures": measures})
+    result = result_of(spec, CELL, follower="a")
+    found = draft._hypothesis(
+        find(loaded),
+        spec,
+        result,
+        result.cells[0],
+        "bar_lane",
+        "1h",
+        (date(2024, 4, 1), date(2024, 5, 31)),
+    )
+
+    assert found.costs is not None
+    assert found.costs.latency_ms == drafted
+    assert found.costs.fixed_bps == FADE["costs"]["SIM"]["fixed_bps"]
+
+
+def test_a_cell_measured_at_no_latency_drafts_none(loaded: Path) -> None:
+    """A latency of zero is no route, and the shipped default: the draft states nothing."""
+    spec = Screen.model_validate({**FADE, "costs": None})
+    result = result_of(spec, CELL, follower="a")
+    found = draft._hypothesis(
+        find(loaded),
+        spec,
+        result,
+        result.cells[0],
+        "bar_lane",
+        "1h",
+        (date(2024, 4, 1), date(2024, 5, 31)),
+    )
+
+    assert found.costs is None
 
 
 @pytest.mark.parametrize(

@@ -91,7 +91,7 @@ class Strategy(Strategy):
                         held_back = True
                         continue
                     self._whole_booked.add(event.id)
-                    self._cash -= self._paid(event)
+                    self._book_fill(event)
                     if self._cfg.books_funding:
                         self._filled.append(
                             (int(event.ts_event), event.instrument_id.value, self._signed(event))
@@ -103,14 +103,13 @@ class Strategy(Strategy):
             else:
                 self._cancels.pop(order.client_order_id, None)
         self._whole = waiting
-        for name, (times, values) in self._quoted.items():
-            if key is None or name == key:
-                del times[:-1]
-                del values[:-1]
         return later
 '''
 """`_settle` as kanso 0.13.0 shipped it, over a ledger of its own, appended to a sleeve's
-source so the file's `Strategy` is the same sleeve with that booking."""
+source so the file's `Strategy` is the same sleeve with that booking. Each fill is booked by
+the harness's own `_book_fill`, which charges it against the quote it was struck against, so
+the two read the same quotes whenever they book; 0.13.0's series of quoted halves, cut back at
+each read, went with the per-fill reading in 0.20."""
 
 MOVER = b'''
 from pathlib import Path
