@@ -670,7 +670,7 @@ def test_a_certificate_whose_version_breaches_its_floor_escalates_on_its_own(
     assert adoption.blocked and "book.maintenance_pct" in adoption.blocked
     entry = unread(store)[-1]
     assert entry.kind == "deploy_blocked"
-    assert "falls to 48.64% of its gross" in entry.summary
+    assert "falls to 48.66% of its gross" in entry.summary, "measured at the paper share"
     assert "lower book.maintenance_pct" in entry.actions
 
 

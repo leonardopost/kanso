@@ -1,0 +1,9 @@
+id: deflated_edge
+kind: gate
+stage: cert
+required: false
+deflates: [net_edge_bps, marginal_net_edge_bps]
+meaningful_when: "The search correction for a per-trade edge: the research edge against the expected maximum of the trials, over its own per-trade error. Required, threshold set, from the second card."
+params: {min_probability: float}
+ranges: {min_probability: [0.9, 0.999]}
+impl: kanso.criteria.gates.deflated_edge

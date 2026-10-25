@@ -50,14 +50,22 @@ researched next.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from kanso.models.call import Call, CallInputs
 from kanso.schemas import TAGS
 from kanso.schemas.models import Route, TaskClass
 
-__all__ = ["ANSWER_SCHEMAS", "INSTRUCTIONS", "PARAM_PAIRS", "build", "canonical", "collapse"]
+__all__ = [
+    "ANSWER_SCHEMAS",
+    "INSTRUCTIONS",
+    "PARAM_PAIRS",
+    "build",
+    "canonical",
+    "classify_schema",
+    "collapse",
+]
 
 PARAM_PAIRS: Final[dict[str, object]] = {
     "type": "array",
@@ -117,6 +125,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
                 "required": ["id"],
                 "additionalProperties": False,
             },
+            "objective": {"type": "string", "minLength": 1},
             "objective_params": {
                 "type": "object",
                 "properties": {
@@ -137,7 +146,7 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
             },
             "rationale": {"type": "string", "maxLength": 240},
         },
-        "required": ["construct", "objective_params", "constraints", "rationale"],
+        "required": ["construct", "objective", "objective_params", "constraints", "rationale"],
         "additionalProperties": False,
     },
     "propose": {
@@ -221,23 +230,37 @@ ANSWER_SCHEMAS: Final[dict[TaskClass, dict[str, object]]] = {
 INSTRUCTIONS: Final[dict[TaskClass, str]] = {
     "classify": (
         "You classify a trading hypothesis for an automated research system.\n\n"
-        "Decide three things from the hypothesis and the catalogues below.\n"
+        "Decide four things from the hypothesis and the catalogues below.\n"
         "1. Which construct the hypothesis is, in portfolio-construction terms. Choose an "
         "id from the construct catalogue. A construct whose `needs_host` is not `none` "
         "modifies a deployed strategy rather than trading on its own, so name a `host` "
         "from the certified strategies; a construct that stands alone takes no host.\n"
-        "2. The keep rule's parameters. `min_delta` is the smallest improvement in the "
+        "2. The one objective every card is scored on: an id from `objectives`, under the "
+        "`objective_mode` of the construct you chose. Each entry says what it measures and "
+        "when it misleads. Read the target the hypothesis states: one stated as a return on "
+        "capital — basis points or percent a day, a month, a year — is scored on a "
+        "contribution, because a per-trade edge rewards trading less, and dropping half the "
+        "trades at a better edge is a keep under it even when the book earns less a day. "
+        "When `objective_stated` is given, the operator wrote that objective into the file: "
+        "it stands, with its keep rule, whenever your construct is measured in its mode, so "
+        "name it; otherwise name one that applies, and the operator is told it was "
+        "replaced.\n"
+        "3. The keep rule's parameters. `min_delta` is the smallest improvement in the "
         "objective worth keeping and `k_se` how many standard errors an improvement must "
         "clear, so both are noise floors: set them from how noisy this hypothesis's "
         "objective will be, not from ambition. `min_delta` is zero or more and `k_se` is "
         "above zero; the schema states no numeric range, so those two bounds are stated "
         "here.\n"
-        "3. The constraints every card of this hypothesis must satisfy. Choose ids from "
+        "4. The constraints every card of this hypothesis must satisfy. Choose ids from "
         "the card-stage gate catalogue and stay inside each parameter's stated range; a "
         "parameter typed `instrument` names one id of the hypothesis's universe, one typed "
         "`hours` is clock times on one day written `HH:MM-HH:MM`, and one typed `zone` is an "
         "IANA time-zone name such as `America/New_York`. "
-        "Include every gate the catalogue marks required. The hypothesis may already "
+        "Include every gate the catalogue marks required, and every gate whose "
+        "`required_for` lists the objective you named, with every one of its parameters "
+        "set: whether such a gate runs is not a choice, how high its bar sits is yours. A "
+        "gate marked `together` is named with all of its parameters or not at all, since "
+        "half its rule judges nothing. The hypothesis may already "
         "require gates of its own, listed under `required_constraints`: those are the "
         "operator's and stand whatever you answer, so do not repeat one to change its "
         "parameters — an entry naming a gate already required is dropped. Name a gate "
@@ -261,7 +284,21 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "worth a card. `recent_cards` is what has already been tried, newest last, and "
         "`last_diff` is the change the card before this one made: a diff that reproduces "
         "bytes already carded is refused with the card it repeats, and reverting a kept "
-        "change without a reason wastes the run. When a `crash_tail` is given, the last "
+        "change without a reason wastes the run. Each recent card that ran also carries "
+        "`n_trades` and a `digest` of what its trades did: `trades_per_session` over its "
+        "`sessions`, its `fills`, `hit_rate`, `median_hold_s`, `maker_share` of the notional "
+        "traded, and `fill_ratio`, the share of the quantity sent on limit orders that "
+        "filled; per trade, in basis points of the position opened, `gross_bps_per_trade` "
+        "before costs, `cost_bps_per_trade`, and `net_bps_per_trade` after them with its "
+        "error `net_bps_per_trade_se`; and per session, in basis points of the capital, "
+        "`gross_bps_per_session`, `cost_bps_per_session` and `net_bps_per_session`. A "
+        "metric moves when each trade earns more and also when the strategy only trades "
+        "more or less, and the digest says which: when the net edge per trade is below "
+        "zero, a change that trades less shrinks the loss and does not make a trade pay. "
+        "A recent card with no `metric` failed `edge_per_trade`. Its session contribution "
+        "is withheld, including from the digest, because dropping losing trades moves that "
+        "contribution toward zero and that move is not a result to beat. "
+        "When a `crash_tail` is given, the last "
         "card raised and that is the end of its traceback, so the crash is the change to "
         "make. `failing_certification_gates` names, by id, the gates the newest failed "
         "certificate did not pass. When `rewound_for` is "
@@ -278,7 +315,11 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "altered; returning it unchanged reproduces bytes already carded and is refused. "
         "`repair.attempt` of `repair.of` says which repair this is, and when they run out "
         "the idea is dropped and the next turn asks for a fresh one — so read the traceback "
-        "and fix the named fault rather than guessing around it.\n\n"
+        "and fix the named fault rather than guessing around it. A crash whose "
+        "`failed_gates` hold `resources` was killed by the runner for its memory or its "
+        "clock, not for a fault in its code: the evidence names the limit, what the card "
+        "reached and how many cards its turn ran at once, and no repair is owed for it — a "
+        "change that holds or computes less is what such a card asks for.\n\n"
         "A card that ran is judged a second time by what it held. Its **signature** is, for "
         "each session of the research window, the instruments and sides it held and whether "
         "each was still open at the session's end. A proposal that does not beat the best, "
@@ -311,8 +352,8 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "least, several where the change does several things. The `coverage` fact is the "
         "cards of this hypothesis under the run's pins read back by tag — how many, the "
         "best score and its status, the newest card — so a corner with many cards and no "
-        "keep is a corner already searched, and a corner with none is one the search has "
-        "not reached.\n\n"
+        "keep or `runner_up` is a corner already searched, and a corner with none is one "
+        "the search has not reached.\n\n"
         "The search has a phase, given as the `phase` fact with the misses since the last "
         "keep. In the `local` phase — the first `local_cards` misses — propose local "
         "changes: a parameter, a threshold, a window, a respelling of the same rule. In the "
@@ -321,7 +362,17 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "constant is blanked, the answer is rejected and a ladder that runs out on such "
         "answers is a miss. Change what the strategy reads, holds, filters on, exits on or "
         "how it sizes. After the structural phase the search is local again, and a keep "
-        "starts the count over."
+        "starts the count over.\n\n"
+        "When `cards_per_turn` is above one, this turn asks for that many changes at once. "
+        "Return an object whose `proposals` list holds up to that many entries, each a "
+        "`desc`, a `diff` and `tags` against the same file you were given — not against "
+        "each other. A diff that does not apply, changes nothing or repeats bytes already "
+        "carded is dropped for its slot; return as many distinct diffs as you can. One "
+        "call is one turn: the phase and the stall count the turn, and every card the "
+        "turn runs is a trial. Every card of the turn is judged against the best the turn "
+        "began from and the highest that beats it is kept; another that beat it too is a "
+        "`runner_up` — it was an improvement on that best, and lost only to its sibling. A "
+        "turn that repairs a crash is one diff, as above, whatever `cards_per_turn` says."
     ),
     "align_check": (
         "You check that a strategy still tests the hypothesis it was written for.\n\n"
@@ -382,7 +433,9 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "certify before the start of the parent's certification window, because the "
         "parent's results were measured there and nothing learned from them may be "
         "certified on them. Leave `construct`, `objective` and `constraints` out: the "
-        "candidate is written as a draft and classified by the operator's own step. "
+        "candidate is written as a draft and classified by the operator's own step. State "
+        "`derived_from: [<the parent's id>]`: the candidate was chosen by the parent's "
+        "research, so the search behind it counts the parent's cards as well as its own. "
         "`program_md` states what the research of the new idea may change and what it may "
         "not. `strategy_py` is a complete strategy in the parent's style, trading only the "
         "candidate's universe at its resolution; it must not be bytes this workspace has "
@@ -396,6 +449,48 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
     ),
 }
 """The fixed half of each task class's system turn."""
+
+
+def classify_schema(objectives: Sequence[str]) -> dict[str, object]:
+    """The `classify` answer for one hypothesis, its `objective` narrowed to these ids.
+
+    The ids are the objectives the toolbox admits for the hypothesis in either objective
+    mode — the construct, and so the mode, is chosen in the same answer — so the wire holds
+    the model to the admissible set and the check holds it to the mode. With none to name
+    the field stays a bare string, and the check refuses whatever is answered.
+    """
+    schema = ANSWER_SCHEMAS["classify"]
+    if not objectives:
+        return schema
+    properties = dict(cast("Mapping[str, object]", schema["properties"]))
+    properties["objective"] = {"type": "string", "enum": list(objectives)}
+    return {**schema, "properties": properties}
+
+
+def propose_schema(cards: int) -> dict[str, object]:
+    """The `propose` answer for one turn of `cards` slots.
+
+    One card keeps the object the task has always returned. More than one card asks for
+    a `proposals` list of that same object, at most `cards` long and at least one: a
+    turn that cannot offer a single diff is a wrong answer, and a turn that offers fewer
+    than it was asked for runs what it offered.
+    """
+    single = ANSWER_SCHEMAS["propose"]
+    if cards <= 1:
+        return single
+    return {
+        "type": "object",
+        "properties": {
+            "proposals": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": cards,
+                "items": single,
+            }
+        },
+        "required": ["proposals"],
+        "additionalProperties": False,
+    }
 
 
 def canonical(value: object) -> str:
@@ -413,9 +508,10 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
 
     The system turn is the instruction, the answer schema and the stable facts, in that
     order and from sorted keys, so it is identical across every call of this class for
-    this subject. The user turn is the dynamic facts alone.
+    this subject. The user turn is the dynamic facts alone. The output cap is the route's
+    for each answer the call asks for (`CallInputs.answers`).
     """
-    schema = ANSWER_SCHEMAS[task]
+    schema = inputs.answer_schema or ANSWER_SCHEMAS[task]
     system = "\n\n".join(
         (
             INSTRUCTIONS[task],
@@ -434,7 +530,7 @@ def build(task: TaskClass, route: Route, inputs: CallInputs) -> Call:
         task_class=task,
         tier=route.tier,
         effort=route.effort,
-        max_output=route.max_output,
+        max_output=route.max_output * max(1, inputs.answers),
         system=system,
         user=user,
         schema=schema,

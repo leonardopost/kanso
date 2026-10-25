@@ -279,7 +279,7 @@ def test_held_reads_the_own_position_with_orders_in_flight(backtest) -> None:
     assert run.strategy.seen[1:] == [DEMO_SHARES, DEMO_SHARES]
 
 
-def test_without_a_rule_held_is_the_venue_s_net_position(backtest) -> None:
+def test_without_a_rule_held_is_the_sleeve_s_own_position(backtest) -> None:
     class Reads(KansoStrategy):
         def on_start(self) -> None:
             self.bars = 0

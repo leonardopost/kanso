@@ -20,7 +20,10 @@ workspace's research settings:
 * **sample statistics use one degree of freedom**. A series too short for that reports a
   zero dispersion rather than raising, so a fold with nothing in it cannot crash a card;
 * a **trade** is a closed position, so a per-trade quantity averages over closed positions
-  only and a window that closed nothing has no edge to report.
+  only and a window that closed nothing has no edge to report;
+* the **error of a mean** is read off the series the mean is taken of — the per-period
+  returns, the per-trade edges — never off a handful of summaries of it, and is widened, and
+  never narrowed, for the serial correlation the series shows (`long_run_factor`).
 
 A year is 365.25 days: the average Gregorian year, which is what makes an observed count
 of periods per year comparable between a calendar with weekends in it and one without.
@@ -30,7 +33,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date
-from math import fsum, sqrt
+from math import cos, floor, fsum, pi, sin, sqrt, tan
+
+import numpy as np
 
 from kanso.criteria.run import BPS, CardRun, day_of
 
@@ -72,6 +77,147 @@ def standard_error(values: Sequence[float]) -> float:
     return stdev(values) / sqrt(len(values))
 
 
+def student_t_quantile(probability: float, df: int) -> float:
+    """The `probability` quantile of a Student's t of `df` degrees of freedom, `df` at least one.
+
+    For a whole number of degrees of freedom the chance `P(|T| ≤ √df · tan θ)` is a finite sum
+    in `θ` (Abramowitz and Stegun 26.7.3 and 26.7.4), so the quantile is that sum inverted by
+    bisection on `θ` in `[0, π/2)`, to the float's resolution, with nothing beyond the
+    standard library: at one degree of freedom it is the Cauchy's `tan(π(p − ½))`, and as
+    `df` grows it falls to the normal's. The distribution is symmetric, so a probability
+    below a half is the negative of its complement's quantile, and a half is zero exactly.
+    """
+    if probability < 0.5:
+        return -student_t_quantile(1.0 - probability, df)
+    target = 2.0 * probability - 1.0
+    low, high = 0.0, pi / 2
+    for _ in range(64):
+        middle = (low + high) / 2
+        if _t_central(middle, df) < target:
+            low = middle
+        else:
+            high = middle
+    return sqrt(df) * tan(low)
+
+
+def _t_central(theta: float, df: int) -> float:
+    """`P(|T| ≤ √df · tan θ)` for a Student's t of `df` degrees of freedom: for an even `df`,
+    `sin θ` times `1 + ½cos²θ + (1·3)/(2·4)cos⁴θ + …` to the power `df − 2`; for an odd one,
+    `(2/π)(θ + sin θ (cos θ + ⅔cos³θ + (2·4)/(3·5)cos⁵θ + …))` to the power `df − 2`."""
+    sine, cosine = sin(theta), cos(theta)
+    squared = cosine * cosine
+    if df % 2 == 0:
+        term = total = 1.0
+        for j in range(1, df // 2):
+            term *= (2 * j - 1) / (2 * j) * squared
+            total += term
+        return sine * total
+    term, total = cosine, 0.0
+    for j in range((df - 1) // 2):
+        total += term
+        term *= (2 * j + 2) / (2 * j + 3) * squared
+    return 2 / pi * (theta + sine * total)
+
+
+def long_run_factor(values: Sequence[float]) -> float:
+    """How much wider serial correlation makes the error of this series' mean; at least one.
+
+    The Newey–West ratio of the long-run variance to the variance: one plus twice the
+    Bartlett-weighted autocovariances over the variance, `1 + 2 Σ (1 − l/(L+1)) γ_l / γ_0`,
+    at the customary lag `L = floor(4 (n/100)^(2/9))` — four at a hundred periods, eleven at
+    ten thousand trades. It is floored at one: a series whose neighbours disagree more than
+    chance would have them is not taken as evidence that its mean is better known than an
+    independent series of that length says, so the allowance only ever widens an error.
+
+    The error it widens replaced the spread of four fold means, which was, without saying
+    so, robust to correlation inside a fold — a batch-means estimator, with three degrees of
+    freedom. Read off the series, the error has the degrees of freedom the series has, and
+    this factor is what keeps the robustness: a strategy whose returns persist from one
+    period to the next does not have its error divided by the root of a count of periods
+    that were not independent. Below three points there is nothing to estimate and the
+    factor is one.
+    """
+    n = len(values)
+    if n < 3:
+        return 1.0
+    deviations = np.asarray(values, dtype=float) - mean(values)
+    base = float(deviations @ deviations)
+    if base == 0.0:
+        return 1.0
+    lags = min(n - 1, floor(4 * (n / 100) ** (2 / 9)))
+    weighted = fsum(
+        (1 - lag / (lags + 1)) * float(deviations[lag:] @ deviations[:-lag])
+        for lag in range(1, lags + 1)
+    )
+    return max(1.0, 1 + 2 * weighted / base)
+
+
+def variances_of_means(series: Sequence[float], counts: Sequence[int]) -> list[float]:
+    """The sampling variance of each fold's mean, for a series `counts` cuts into folds.
+
+    The dispersion is the whole window's — every fold's points are draws of one series, and a
+    fold of three sessions has no dispersion of its own worth the name — widened by
+    `long_run_factor`, over each fold's own count. A fold that holds nothing scores the
+    constant zero, which varies by nothing.
+    """
+    spread = variance(series) * long_run_factor(series)
+    return [spread / n if n else 0.0 for n in counts]
+
+
+def sharpe_variance(
+    returns: Sequence[float],
+    window: tuple[date, date],
+    factor: float,
+    shape: tuple[float, float] | None,
+) -> float:
+    """The sampling variance of one fold's annualised Sharpe, in annualised units squared.
+
+    Mertens' expression for the Sharpe of non-normal returns, the one `deflated_sharpe` has
+    always deflated by: `(1 − γ₃·SR + (γ₄ − 1)/4·SR²) / (n − 1)` for a per-period `SR` over `n`
+    periods, `γ₃` the skewness and `γ₄` the non-excess kurtosis — `shape`, read off the whole
+    window, since a fold's few periods place a fourth moment nowhere — scaled by the periods
+    per year the fold observed and by `factor`, the window's `long_run_factor`. Where `shape`
+    is `None` or the expression is not positive it is the normal one, `1 + SR²/2`. A fold whose
+    Sharpe is the constant zero — fewer than two periods, or a return that never varied —
+    varies by nothing.
+    """
+    dispersion = stdev(returns)
+    if dispersion == 0.0:
+        return 0.0
+    n = len(returns)
+    ratio = mean(returns) / dispersion
+    spread = 1 + ratio**2 / 2
+    if shape is not None:
+        skewness, kurtosis = shape
+        shaped = 1 - skewness * ratio + (kurtosis - 1) / 4 * ratio**2
+        spread = shaped if shaped > 0 else spread
+    return n / years(window) * factor * spread / (n - 1)
+
+
+def sharpe_difference_variance(
+    own: Sequence[float],
+    against: Sequence[float],
+    window: tuple[date, date],
+    factor: float,
+    rho: float,
+) -> float:
+    """The sampling variance of one fold's difference of two annualised Sharpes on paired
+    returns: the same periods, one return of each run in each, both of which vary.
+
+    Memmel's correction of the Jobson–Korkie statistic, `(2(1 − ρ) + ½(SR_a² + SR_b² −
+    2·SR_a·SR_b·ρ²)) / (n − 1)` per period, `ρ` the correlation of the two series over the
+    window, scaled by the periods per year the fold observed and by `factor`. The pairing is
+    the point: a modifier that moves its host's Sharpe a little has a difference far better
+    known than either Sharpe, because most of what varies is the host, and it varies in both.
+    The expression is never negative; the floor only absorbs a correlation rounded past one.
+    """
+    n = len(own)
+    a = mean(own) / stdev(own)
+    b = mean(against) / stdev(against)
+    spread = 2 * (1 - rho) + (a**2 + b**2 - 2 * a * b * rho**2) / 2
+    return n / years(window) * factor * max(spread, 0.0) / (n - 1)
+
+
 def periods_per_year(run: CardRun, annualisation: float | str = AUTO) -> float:
     """The observed number of return periods per year, or the constant that replaces it."""
     if annualisation != AUTO:
@@ -87,9 +233,22 @@ def sharpe(run: CardRun, annualisation: float | str = AUTO) -> float:
     return mean(run.returns) / dispersion * sqrt(periods_per_year(run, annualisation))
 
 
+def edge_series(run: CardRun) -> tuple[float, ...]:
+    """Net profit per closed trade in basis points of the position opened, in the order the
+    trades closed: the series `edge_bps` is the mean of, and its error is read off."""
+    closed = sorted((t for t in run.trades if t.notional > 0), key=lambda t: t.closed_ns)
+    return tuple(t.pnl_net / t.notional * BPS for t in closed)
+
+
 def edge_bps(run: CardRun) -> float:
     """Mean net profit per closed trade, in basis points of the position opened."""
-    return mean([t.pnl_net / t.notional * BPS for t in run.trades if t.notional > 0])
+    return mean(edge_series(run))
+
+
+def contribution_series(run: CardRun) -> tuple[float, ...]:
+    """Each period's net return in basis points of the capital: the series a contribution is
+    the mean of, and its error is read off."""
+    return tuple(r / run.capital * BPS for r in run.returns)
 
 
 def contribution_bps(run: CardRun) -> float:
@@ -136,6 +295,60 @@ def drawdown_pct(run: CardRun) -> float:
         worst = max(worst, peak - value)
         previous_equity, previous_month = value, (day.year, day.month)
     return worst / run.capital * 100.0
+
+
+def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
+    """Peak-to-trough equity read after every fill as well as at every period end, as a
+    percentage of starting capital, and the instant of the trough.
+
+    `drawdown_pct` samples the equity where the runner struck it, at the period ends, so a
+    position opened and closed inside one period is never seen falling: a book that trades
+    many times a day and is flat at the close reads as flat at every sample. This path adds
+    a point at each fill — cash after the fill and its cost, plus every open position at the
+    price it last traded at — and re-anchors at each period end to the equity the runner
+    struck there, so what the runner books at an end and a fill does not carry — a period's
+    mark, funding, a carry, a reset's transfer — enters the path where the runner booked it
+    and the path meets `run.equity` at every end. The peak is never under the capital, as it
+    is not for `drawdown_pct`. A run with no fills is the period-end path alone, so the two
+    agree there; on a reset book the period-end rule's month-by-month peak is not applied
+    between ends, where the book has not been reset, so the fall read here is never the
+    shallower of the two. The instant is `None` when nothing fell.
+    """
+    marks: dict[str, tuple[float, float, float]] = {}
+    cash = run.capital
+    offset = 0.0
+    peak = run.capital
+    worst = 0.0
+    trough_at: int | None = None
+    ends = list(zip(run.period_ends_ns, run.equity, strict=True))
+    fills = sorted(run.fills, key=lambda f: f.ts_ns)
+    index = 0
+
+    def equity_now() -> float:
+        return cash + fsum(qty * px * mult for qty, px, mult in marks.values()) + offset
+
+    for fill in fills:
+        while index < len(ends) and ends[index][0] < fill.ts_ns:
+            end_ns, struck = ends[index]
+            offset += struck - equity_now()
+            peak = max(peak, struck)
+            if peak - struck > worst:
+                worst, trough_at = peak - struck, end_ns
+            index += 1
+        signed = fill.qty if fill.side == "BUY" else -fill.qty
+        cash -= signed * fill.px * fill.multiplier + fill.cost
+        qty, _, _ = marks.get(fill.instrument_id, (0.0, fill.px, fill.multiplier))
+        marks[fill.instrument_id] = (qty + signed, fill.px, fill.multiplier)
+        value = equity_now()
+        peak = max(peak, value)
+        if peak - value > worst:
+            worst, trough_at = peak - value, fill.ts_ns
+    for end_ns, struck in ends[index:]:
+        offset += struck - equity_now()
+        peak = max(peak, struck)
+        if peak - struck > worst:
+            worst, trough_at = peak - struck, end_ns
+    return worst / run.capital * 100.0, trough_at
 
 
 def correlation(left: Sequence[float], right: Sequence[float]) -> float | None:

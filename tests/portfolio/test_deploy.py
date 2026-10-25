@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -13,7 +14,7 @@ from kanso.portfolio import deploy, files, records, show
 from kanso.schemas import StrategyFile
 from kanso.state import StateStore
 from kanso.workspace import Workspace
-from tests.portfolio.conftest import FORWARD_START, deployable, second_version
+from tests.portfolio.conftest import FORWARD_START, deployable, reconfigure, second_version
 
 
 def test_deploy_admits_a_composed_version_and_runs_the_stage(
@@ -130,6 +131,109 @@ def test_capital_is_inherited_by_the_next_version(
     assert [one.version for one in made.admitted] == [second]
     assert made.admitted[0].capital == pytest.approx(inherited.capital / 2)
     assert made.retired == (f"{composed_strategy.id}@1",)
+
+
+def test_a_version_funded_with_another_share_is_judged_at_that_share(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """A paper stage of 50,000 funds the version with 20,000, not the 40,000 its expectation
+    was struck at: the expectation is measured again at 20,000 before the stage is written,
+    and the file, the row and the event all carry the new one."""
+    from kanso import strategy as strategies
+
+    reconfigure(ws, "paper", capital=50_000.0)
+    before = composed_strategy.latest().expectation
+
+    deploy(ws, store, "paper")
+
+    held = strategies.require(ws, composed_strategy.id).latest().expectation
+    assert before.capital == 40_000.0
+    assert held.capital == 20_000.0
+    assert held == strategies.restruck(
+        ws, store, composed_strategy.id, composed_strategy.latest(), 20_000.0
+    )
+    row = store.connection.execute(
+        "SELECT expectation FROM strategy_versions WHERE strategy_id = ?",
+        (composed_strategy.id,),
+    ).fetchone()
+    assert json.loads(row[0])["capital"] == 20_000.0
+    (event,) = store.events(kind="expected")
+    assert event.subject == f"{composed_strategy.id}@1"
+    assert event.detail["capital"] == 20_000.0 and event.detail["stage"] == "paper"
+
+
+def test_a_version_struck_at_its_share_is_not_measured_again(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    from kanso import strategy as strategies
+
+    deploy(ws, store, "paper")
+    deploy(ws, store, "paper")
+
+    assert strategies.require(ws, composed_strategy.id).latest().expectation == (
+        composed_strategy.latest().expectation
+    )
+    assert store.events(kind="expected") == []
+
+
+def test_an_expectation_composed_before_it_recorded_its_capital_is_struck_at_the_first_deploy(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """An upgraded workspace's versions carry no capital, error or period count; the stage's
+    next deploy measures them, so its paper gate has a band to judge by."""
+    from kanso import strategy as strategies
+    from kanso.strategy import files as strategy_files
+
+    latest = composed_strategy.latest()
+    older = latest.expectation.model_copy(update={"se": None, "periods": None, "capital": None})
+    strategy_files.write(
+        ws,
+        composed_strategy.model_copy(
+            update={"versions": [latest.model_copy(update={"expectation": older})]}
+        ),
+    )
+
+    deploy(ws, store, "paper")
+
+    held = strategies.require(ws, composed_strategy.id).latest().expectation
+    assert held.capital == 40_000.0
+    assert held.se is not None and held.periods
+    assert len(store.events(kind="expected")) == 1
+
+
+def test_a_version_whose_book_breaches_its_floor_at_the_share_is_blocked_and_escalated(
+    ws: Workspace,
+    store: StateStore,
+    composed_strategy: StrategyFile,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Measured again at a smaller share, a fixed-notional book is the more levered one; a
+    floor it falls through there blocks that version — escalated with the way out — and does
+    not raise out of the stage, which every other version on it would be halted with."""
+    from kanso import strategy as strategies
+    from kanso.errors import PreconditionError
+
+    def breached(*_: object) -> None:
+        raise PreconditionError("the composed version's book falls to 40% of its gross")
+
+    reconfigure(ws, "paper", capital=50_000.0)
+    written = files.read(ws)
+    monkeypatch.setattr(strategies, "restruck", breached)
+
+    made = deploy(ws, store, "paper")
+
+    subject = f"{composed_strategy.id}@1"
+    assert made.blocked == (subject,) and made.admitted == ()
+    assert files.read(ws) == written
+    assert strategies.require(ws, composed_strategy.id).latest().state == "composed"
+    row = store.connection.execute(
+        "SELECT summary, actions FROM escalations WHERE kind = 'deploy_blocked' AND subject = ?",
+        (subject,),
+    ).fetchone()
+    assert "with 20000, and measured again at that share it is refused" in row[0]
+    assert "falls to 40% of its gross" in row[0]
+    assert f"kanso strat retire {subject}" in row[1]
+    assert store.events(kind="expected") == []
 
 
 def test_a_replaced_version_retires(

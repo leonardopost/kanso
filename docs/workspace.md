@@ -75,7 +75,7 @@ never edits the file.
 | `screens/<id>/specs/` | `screen run`, the loader specs its fetches were made with | no — a record of what was fetched |
 | `screens/<id>/<sha7>-s<snap7>-v<ver7>.yaml` | `screen run` | no — a rendering of the result `state.db` records |
 | `demo.yaml` and other loader specs | you (`init --demo` renders one) | **yes** |
-| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
+| `mock/responses.yaml` | `init --demo` | **yes** — the mock register's scripted answers, one per task class; every `params` is a list of `{name, value}` pairs, the shape a provider constraining an answer accepts and kanso reads back into a map; every `propose` answer carries `tags` from `kanso.schemas.TAGS`, as a real model's must; every `classify` answer names its `objective`, one of the ids the hypothesis admits; the script wraps, so a second hypothesis classified against it gets the first one's answer; `{{call}}` in any string of an answer is replaced by the ordinal of the call, which is how a wrapped script still proposes bytes the loop has not carded |
 | `kanso_ext/` | you | **yes** |
 | `AGENTS.md`, `CLAUDE.md` | `init`, if absent | **yes** |
 | `.gitignore` | `init`, `skills sync` (append only) | **yes** |
@@ -98,12 +98,13 @@ hold is that **every fact has exactly one authority, and for the facts that matt
 the file you would be tempted to edit.**
 
 `state.db` is the authority for which hypotheses are registered and at what pin, every card
-ever run and its bytes, the `best` pointer, certification plans and certificates, approvals,
-which escalations have been read, model spend and the queue. The files are the authority for
-what the catalog holds (the manifests), what a composed version is and what state it is in
-(`strategy.yaml`), how a stage is configured (`portfolio.yaml`), the lane plan
-(`envelope.yaml`) and which sessions exist (the directories). Where the two overlap — a
-certificate, a deployed version — the file is a rendering and state is the record.
+ever run, its bytes and what it was measured from, the `best` pointer, certification plans and
+certificates, approvals, which escalations have been read, model spend and the queue. The
+files are the authority for what the catalog holds (the manifests), what a composed version
+is and what state it is in (`strategy.yaml`), how a stage is configured (`portfolio.yaml`),
+the lane plan (`envelope.yaml`) and which sessions exist (the directories). Where the two
+overlap — a certificate, a deployed version — the file is a rendering and state is the
+record.
 
 So editing a file kanso owns is not a way to change kanso's mind. Depending on which file it
 is, the edit is ignored, silently reverted on the next write, refused by name, or believed at
@@ -277,13 +278,16 @@ strategy under evaluation cannot reach a key even though the command that launch
 
 SQLite in WAL mode, and the only database kanso keeps. It holds hypothesis registration,
 status and pins; runs and every card ever run; the blob store the cards' `strategy.py` bytes
-live in; certification plans and the certificates of record; **approvals**; escalations and
-which of them have been acknowledged; the model spend ledger; the session and strategy-version
-indexes; and the queue.
+live in, and what each card that ran was measured from; certification plans and the
+certificates of record; **approvals**; escalations and which of them have been acknowledged;
+the model spend ledger; the session and strategy-version indexes; and the queue.
 
 It is kanso's alone. There is no supported way to edit it and no need to: everything in it
 is reachable through a command, and every command that writes it does so through one code
-path.
+path. A card's measurement stops being reachable that way once a newer card of the same bytes
+has kept one too — a later run's baseline, measured under another `[research] capital`, say:
+`kanso research show ID --sha S --measured` prints the newer, and the older is read with
+`kanso.research.records.measurement_of` on its card.
 
 **A database behind the shipped schema is refused rather than migrated behind your back.**
 
@@ -321,6 +325,16 @@ put it in `state.db`'s place, which also loses whatever was recorded since the p
 card, no best, no trial count and no certificate is touched by a prune: a book deleted whose
 pins come back is re-earned by the next run, one card at a time.
 
+Every card that ran also stores what it was measured from — its run, period by period and fill
+by fill, and under a relative or benchmark objective the host-alone run or the hold it was
+scored against, compressed (`docs/concepts.md`, Card) — and a card names it, so nothing
+deletes one and a prune leaves them all. One costs what its runs hold, and two cards share one
+only when the whole measurement is the same bytes, so the host-alone run or the hold is
+stored again in the blob of every card scored against it. Measured: 77,803 bytes for the demo's keep, an absolute objective's, with 2,006
+fills; 704,643 for a synthetic run of 12,000 fills alone, which is about 0.7 GB a thousand
+cards of that size; 1,409,471 for the same run beside a host-alone run of its size, about
+1.4 GB a thousand; and 707,664 beside a hold of one fill over the same 98 periods.
+
 **Deleting `state.db` is not a reset — it is a loss.** The next command creates an empty
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no
@@ -350,6 +364,17 @@ once classified — the construct, the objective and the card-stage constraints.
 writes those last three and nothing else; you can equally write them yourself and run
 `kanso hyp add`, which needs no model at all. The file's own comments are its field reference.
 
+**An objective you write stays yours.** State `objective` alone — a return target as
+`wf_contribution_bps`, say — and `kanso hyp add` registers the file as a draft, holding the
+objective to applying in some objective mode; `kanso classify` then decides the construct
+and the constraints around it: it keeps your objective, keep rule and all, whenever the construct it chooses is
+measured in the objective's mode and the parameters are inside the toolbox's ranges, and
+says `stated in the file, kept`. Otherwise it writes the one the model named and prints a
+`replaced` line naming yours and why (`docs/constructs.md`, Objectives). An objective an
+earlier classification wrote is kept the same way; clear the key to have a model choose
+again. A file scored on a contribution carries `edge_per_trade` with `min_bps` and `k_se`
+both set, in either list, or `kanso hyp validate` refuses it (exit 3).
+
 **`required_constraints` is the one classification cannot touch.** It holds card-stage gates
 you require, in the same shape as `constraints`, and classification neither reads it as
 something to rewrite nor writes it: it owns three keys of the file and this is a fourth, so it
@@ -368,11 +393,28 @@ required_constraints:
   params: {leg: DEMO.SIM, min_sharpe: 0.0}
 - id: trading_hours          # every fill in regular hours, flat by each close; daylight saving moves it
   params: {session: "09:30-16:00", tz: America/New_York}
+- id: edge_per_trade         # no keep unless the mean trade nets an error above zero, more as the search widens;
+  params: {min_bps: 0.0, k_se: 1.0}   # required on a contribution, and always with both thresholds
 ```
 
 Before this existed, an instruction like that could only be prose in `program.md`, which
 nothing enforces: `risk_limits` are three ceilings, and a strategy holding a tenth of what you
 asked for satisfies every one of them.
+
+**`derived_from` names the hypotheses whose research chose this one.** A draft `kanso hyp
+explore` writes names its parent, and a variation you write yourself after a hypothesis's
+lanes have run hundreds of cards names that hypothesis. The cards that chose a draft are
+cards the selection could have kept, so the search a certificate prices — the `n_trials` it
+is stamped with, the trials `deflated_*` deflate by and the ones `edge_per_trade` widens its
+margin for — counts every card of the hypothesis and of every hypothesis it derives from,
+transitively (`docs/concepts.md`, Card). A file that names none counts its own, as every file
+did before the key existed; one that names a hypothesis the workspace has not registered is
+refused (exit 3), since a parent with no cards in the store would price the search by more
+than it was while counting nothing. Classification neither reads nor writes it.
+
+```yaml
+derived_from: [sox_main]     # this idea was chosen by sox_main's research, so its 412 cards are trials here too
+```
 
 **`sizing` is yours too, and it is not a gate.** A gate judges after a backtest has been
 paid for; this moves the size of every order to the harness, so a proposal that sizes wrong
@@ -390,7 +432,10 @@ Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty
 `submit_entry(new, side)` in one handler. The budget is filled in whole lots of the
 instrument, and on a multiplied instrument — a future, an option — the price and the tick it
 is divided by are one contract's, `price x multiplier`, as is every notional the harness
-sizes, reserves or reads back on either path. Without the key, `submit_entry(id, side,
+sizes, reserves or reads back on either path. `submit_entry` also takes `edge_bp`, the move
+the entry predicts less its round trip's cost in basis points, which only a book reads — it
+orders an instant's entries by it (`docs/concepts.md`, *Stages*) — and a sleeve run alone
+ignores. Without the key, `submit_entry(id, side,
 notional=…)` or `qty=…` sizes to the smaller of what was asked and what the risk limits leave,
 floored onto the instrument's lot — a `qty` the limits leave whole is submitted whole, never
 its notional divided back by the price — read on the smaller
@@ -399,8 +444,30 @@ borrow to keep its size, and one that has made money does not grow past its capi
 both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
 orders applied, so the same flip fits at leverage one either way: the exit in flight frees
 the room the entry takes, and the venue settles both at one price, the exit first.
-`modify_order` is the engine's and is neither cut nor refused: an entry grown or re-priced by
-a modify is held to no ceiling until kanso holds it to one (`docs/backlog.md` row 123).
+`modify_order` is neither cut nor refused for a sleeve run alone: kanso hands the modify to
+the engine's own unchanged, and an entry grown or re-priced by it is held to no ceiling until
+kanso holds it to one (`docs/backlog.md` row 123).
+**In a book a member sends orders only through `submit_entry` and `submit_exit`.** It may
+cancel its orders. At run time the book refuses each of these as `book_entry`, naming the
+member, before the engine routes it, whichever handler sends it, `on_order_submitted` included: `submit_order`,
+`submit_order_list` and `modify_order` called by the sleeve, a leg an overridden `hedges()`
+returns, the engine's `close_position`, and the engine's own `submit_order`,
+`submit_order_list` and `modify_order` called past kanso's — on the engine's class, or through
+`super(KansoStrategy, self)` — which the book hears as the engine hands the order to the bus
+(`docs/concepts.md`, *Stages*). What goes past both — a command or a fill sent on the message
+bus, an event applied to an order by hand, an order handed to kanso's private `_submitted` —
+the book does not refuse (`docs/backlog.md` row 210); `strategy_integrity` refuses it before
+anything runs, in a researched strategy, sized or not, with kanso's own sends and a method
+kanso overrides reached past it, by the names each is spelt with — the spellings it does not
+follow, what an allowed module holds from elsewhere among them, are open (`docs/backlog.md`
+row 211). A sleeve run alone is held to none of it at run time (`docs/backlog.md` row 209).
+**A sleeve's position is its own, never its account's.** `self.held(id)`, `submit_exit`, an
+owed exit and the classification of an order as an entry or an exit read the position the
+engine keeps for the sleeve's own strategy in the name, not the account's net position, which
+adds up every version's on the stage; so two versions that trade one name each size and close
+only what they hold, and a sleeve alone on its account reads what the account holds;
+`kanso doctor` checks, among its engine facts, that the engine keeps one position per
+instrument and strategy.
 **An exit never goes past flat, counting the exits still working.** `submit_exit` closes the
 smaller of what was asked and what is left to close: the position less the unfilled quantity
 of every order of the sleeve's own on the closing side that the venue has not closed —
@@ -410,18 +477,28 @@ an exit or not, so a stop that would reverse the position, or both legs of a bra
 of which can fill, leave that much less to close. The stop-loss and take-profit of a bracket
 whose entry has filled nothing do not count: they can fill only after the entry and close
 what it opens, and neither the venue nor the order emulator has them open to cancel; once the
-entry has filled any of it they count in full. With no latency stated, an exit at market
-is never held back by a resting one: when the sleeve's own limit or stop orders resting at
-the venue on the closing side would leave it less than asked, it cancels them first, so a
-stop is not blocked by a take-profit, and a take-profit left above the market cannot fill
-after the stop has closed. Under a latency the cancelled orders can still fill until their
-cancels land, so the exit is cut to what they leave and the rest is owed (`costs.latency_ms`,
-below); an order of the sleeve's still in flight to the venue, modified or not, is not
-cancelled and counts, and what it cuts from an exit at market is owed at any latency, and
-paid once the venue holds that order open and the owed exit has cancelled it. An order the
-venue holds whose modify has not been answered yet, one sent in the same handler among them,
-counts too, and an exit at market does not cancel it at once: on a node a cancel sent in the
-handler that sent the modify would overtake it, where the backtest lands the modify first.
+entry has filled any of it they count in full. The child of an exit sent one-triggers-other
+in its own name — against a long, a sell that releases another sell once it fills — counts in
+full from the start, since the parent's fill releases it to close more; it stops counting once
+its parent, having filled nothing, can no longer fill, since the engine then cancels the child
+with it. A child whose parent is in another name counts once that parent has filled any of it:
+before then the venue holds it pending and an exit at market cannot cancel it, so counting it
+would hold the exit back for as long as the parent rests (`docs/backlog.md` row 206).
+An exit asked for from a handler the backtest engine runs inside another order's submission,
+such as `on_order_submitted`, counts that order as working, as a node, which hands the event
+over only once the submission has returned, always did.
+With no latency stated, an exit at market is never held back by a resting one: when the
+sleeve's own limit or stop orders resting at the venue on the closing side would leave it
+less than asked, it cancels them first, so a stop is not blocked by a take-profit, and a
+take-profit left above the market cannot fill after the stop has closed. Under a latency the
+cancelled orders can still fill until their cancels land, so the exit is cut to what they
+leave and the rest is owed (`costs.latency_ms`, below); an order of the sleeve's still in
+flight to the venue, modified or not, is not cancelled and counts, and what it cuts from an
+exit at market is owed at any latency, and paid once the venue holds that order open and the
+owed exit has cancelled it. An order the venue holds whose modify has not been answered yet,
+one sent in the same handler among them, counts too, and an exit at market does not cancel it
+at once: on a node a cancel sent in the handler that sent the modify would overtake it, where
+the backtest lands the modify first.
 With no latency stated it cancels it as the venue answers the modify; under a latency it
 cancels it on the next point, before the sleeve's handler for it, whether or not the venue
 has answered the modify by then, and the cancel still lands behind the modify, which was
@@ -450,8 +527,12 @@ so a resting order moved on every bar need not be re-posted to keep a card fast;
 does not save memory either, since the engine keeps every order's events for the run
 (`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
-not — one that overrides a harness method or binds any other name its base class owns
-(`docs/concepts.md`), with the line and what to write instead; what the scan cannot see — a second
+not — one that overrides a harness method or binds any other name its base class owns, calls
+the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
+overrides past it, as `Strategy.submit_order(self, order)`, reaches the message bus
+(`msgbus`, `_msgbus`) or applies an event to an order by hand (`.apply`), each as it is spelt
+(`docs/concepts.md`, *The embargo*, and `docs/backlog.md` row 211), with the line and what to
+write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills
@@ -601,9 +682,9 @@ The hold is not arithmetic on prices. It is a sleeve kanso ships
 (`src/kanso/templates/strategy_hold.py`) run by the same runner as the strategy — the same
 window, snapshot, venue model, costs, splits, capital, sizing budget, warmup and `book`
 policy, with every order in the warmup dropped like the strategy's — and never gated by `max_hold`, because it
-is a benchmark rather than a card. Classification then selects `wf_sharpe_vs_hold` instead
+is a benchmark rather than a card. Classification is then offered `wf_sharpe_vs_hold` instead
 of `wf_sharpe_net` (`docs/constructs.md`): the strategy's fold-wise Sharpe minus the hold's,
-fold by fold, so the keep rule's standard error is the paired one. The hold is run on every
+fold by fold, with the paired error of a difference of Sharpes on the same periods. The hold is run on every
 path that measures the objective — each card of a run (once per run, in a child of the lane
 as a card is, then reused), both
 certification windows (a `param_plateau` perturbation moves the strategy and never the
@@ -695,8 +776,8 @@ point of the feed. Neither is delayed again: an order sent from either reaches t
 latency is the whole round trip, feed and order together. The quote is a signal and moves
 nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
 `spread: quotes` has no quote series to read. What else the strategy may not touch under the
-key — the message bus and the engine's own book subscriptions — is in `docs/concepts.md`,
-The embargo. An attached construct researched or composed under the key is handed no book
+key — the engine's own book subscriptions, beside the message bus, which no strategy may
+touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book
 at all, neither the view nor a subscription of its own — asking for one is refused, and
 the card crashes naming the call; it reads its host's prices from the context it is asked
 with. A strategy that reads level one alone sends and fills the same on any grid,
@@ -723,7 +804,14 @@ set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
 `venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
-the block for exactly that reason. The block is scope: every metric is net of it, so a best selected under one schedule
+the block for exactly that reason. The spread is charged where the price does not already
+carry it: a fill in a name the venue books from quotes or a level-two book — one asked for
+`quote` or `book` and not for `bar` — is struck at the touch, so its price carries the spread
+and the runner charges it no half-spread under either `spread` value; a fill in a name fed
+bars, alone or beside its quotes, or prints alone pays the half-spread the model states
+(`docs/concepts.md`, Delivery). So `spread` and `fixed_bps` price the names the venue fills
+at a close or a last print, and on a quoted name a wider market is stated as `slippage_bps`
+or `slippage_ticks`. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
 `latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
@@ -791,7 +879,7 @@ priced per share charges it:
 costs:
   commission_bps: 0.0
   commission_per_share: 0.0040     # a taker's fill: $0.0040 a share, on top of …
-  slippage_bps: 0.5                # … its slippage and the quoted half-spread
+  slippage_bps: 0.5                # … its slippage; the spread is in the price it took
   spread: quotes
   maker_per_share: 0.0040          # a fill that rested: $0.0040 a share and nothing else
 ```
@@ -826,7 +914,7 @@ costs:
   maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
   slippage_bps: 0.0
   spread: fixed_bps
-  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+  fixed_bps: 0.0                   # prices a bar-fed name; a quoted name's fill carries its spread
 ```
 
 A fill the venue reports as a taker's — a market order, or a limit that was marketable when it
@@ -985,7 +1073,7 @@ costs:
   maker_per_share: 0.004           # a fill that rested: $0.0040 a share and nothing else
   slippage_bps: 0.0
   spread: fixed_bps
-  fixed_bps: 0.0                   # no half-spread on top of a fill at the touch
+  fixed_bps: 0.0                   # prices a bar-fed name; a quoted name's fill carries its spread
   sell_fee_bps: 0.206              # the transaction fee and the activity fee, on every sale
   sell_fee_per_share: 0.000195
   limit_fill: print_through        # a resting limit fills only on a later print through it
@@ -1192,8 +1280,11 @@ A re-pin keeps `best` while the file still asks the same question. A change to t
 narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
 `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
 counts, since a draft has no construct and the best was earned as one — and the event log
-records `best_cleared` naming the field that moved. `kanso classify` re-pins on the same
-terms, so classifying onto another construct clears it too. The windows are not scope:
+records `best_cleared` naming the field that moved. So does a re-pin whose card gates —
+`constraints` and `required_constraints` together — name one the held pin did not, or one at
+other parameters: the best was never judged by it, and the event's `gates_added` names it; a
+re-pin that only drops a gate keeps the best. `kanso classify` re-pins on the same terms, so
+classifying onto another construct, or with another gate, clears it too. The windows are not scope:
 moving the research window keeps `best`, and later cards are compared with a best measured
 over other days (`docs/backlog.md` row 149). The cards and their blobs stay in state, and
 `strategy.py` still holds the best-so-far bytes, so the next `research begin` starts from
@@ -1222,7 +1313,14 @@ want to start from your own code, that is what `kanso research begin --from-work
 for, and it clears `best` so the history says what happened.
 
 `results.tsv` is rendered from state after every card, so restoring a lane from the best
-never loses a row. Deleting it loses nothing.
+never loses a row. Deleting it loses nothing. Its columns are `sha7 metric metric_se n_trials
+n_trades wall_s peak_mem_gb status desc`, then the card's digest — `trades_per_session
+hit_rate median_hold_s maker_share fill_ratio gross_bps_per_trade cost_bps_per_trade
+net_bps_per_trade net_bps_per_trade_se gross_bps_per_session cost_bps_per_session
+net_bps_per_session`, what its trades did (`docs/concepts.md`, Card) — appended after `desc` so
+that the first nine columns sit where they always sat. A digest number with nothing to be read
+off, and every digest cell of a crash, of a card refused before or during its backtest and of
+a card recorded before 0.17, is empty.
 
 ## `screens/<id>/`
 
@@ -1315,6 +1413,15 @@ name, and an override replaces the standard name rather than adding to it.
 `routing` maps each task class — `classify`, `certify_plan`, `propose`, `align_check`,
 `explore` — to a tier, a thinking effort and an output cap. `kanso models check` prints the
 register as the router reads it and then makes one minimal call to every configured model.
+
+The cap is what one answer may spend, thinking included. A `propose` call for a turn of
+`[research] cards_per_turn` proposals asks for that many answers in one, and is sent with
+that many times the route's `max_output`: the shipped 4096 tokens is sized for one diff,
+and eight diffs of a strategy several hundred lines long, with the thinking beside them,
+can need several times it. An answer cut off by its cap is not JSON, so it takes the ladder as a wrong
+answer and, three times cut off, fails the step. A model whose own output limit is under
+the multiplied cap refuses the call; a smaller `cards_per_turn` or `max_output` is the
+remedy.
 
 One call connects within fifteen seconds and then waits **seven minutes** for the answer,
 and neither client retries — the router's ladder is the only retry kanso has. A model you
@@ -1869,7 +1976,9 @@ remedy: end it with `kanso research end demo_mr`
 (exit 2).
 
 `kanso research end` removes the lane directory and nothing else — the cards, the blobs and
-the best all stay in state, and `results.tsv` still renders. `kanso research stop` removes
+the best all stay in state, and `results.tsv` still renders. A lane working the run when it
+ends lets it go: the card in flight is killed within a second and recorded nowhere, and the
+lane takes the next hypothesis without recording a failure. `kanso research stop` removes
 neither: it signals the daemon, waits for it to go and leaves every active run and every lane
 directory exactly where they are, so the next `start` resumes them. Stopping is meant to be
 cheap.
@@ -1958,7 +2067,10 @@ certificates/<hyp>/<sha7>.py
 
 The plan is what would count as proof for this hypothesis — the cert, paper and live gates
 with their parameters and a rationale each — pinned once, re-minted only by `cert plan
---replan`. A certificate is the verdict, its evidence and its pins. The `.py` beside it is
+--replan`. A certificate is the verdict, its evidence and its pins, the `power` it states and
+the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`,
+`sessions_with_trades` and `trades`, struck from the certification run, or `null` for a
+window that closed no trade (`docs/concepts.md`, *Certification*). The `.py` beside it is
 the certified source, byte for byte, so a certified subject travels with the files even where
 `state.db` does not:
 
@@ -2000,7 +2112,9 @@ strategies/<id>/impl/<version>/        the manifest and a verbatim copy of every
 
 `strategy.yaml` gains a version each time a construct attaches and each time the sleeve
 itself is certified with different bytes; earlier versions are never rewritten, only their
-`state` moves.
+`state` moves — and their `expectation`, which `deploy` measures again when a stage funds the
+version with a share other than the `capital` it was struck at, and appends an `expected`
+event saying so.
 
 `kanso strat compose` writes both, and a passing certificate composes on its own, so these
 are usually not commands you type. `impl/<version>/` is the **one directory a backtest, a
@@ -2224,6 +2338,14 @@ validated, which is why the durable override lives somewhere else: `[env] reserv
 `reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in `kanso.toml` are read on every
 detection.
 
+`cores_per_lane` is what a lane running one card at a time costs. A lane whose turns run
+`[research] cards_per_turn` cards at once runs that many children together, so it is charged
+`cores_per_lane + cards_per_turn − 1` cores, which is the `cores/lane` figure `kanso env
+detect` prints, and the lanes are counted at that: on a host of 16 cores with one reserved,
+seven lanes at one card a turn and three at four (`(16 − 1) // (2 + 4 − 1)`). The plan read
+`cards_per_turn` before this only to divide a lane's memory, so it planned as many lanes at
+eight cards a turn as at one. Re-run `kanso env detect` after changing either key.
+
 `mem_per_lane_gb` **replaces** the derived memory per lane rather than raising its floor.
 The derivation charges every lane 1.5× the largest baseline peak any run in the workspace
 ever recorded, which is the right figure only while every hypothesis is as heavy as the
@@ -2237,9 +2359,15 @@ under-declaration therefore buys more lanes than the host can feed, not fewer.
 
 The figure is also what a card of that lane may hold: the loop kills a card child whose
 resident memory passes the lane's share, and the declaration is the first way that threshold
-can fall under 4 GB. It is never lowered below three times the run's *own* measured baseline
+can fall under 4 GB. `[research] cards_per_turn` divides that share by the number of cards
+one turn runs at once — `mem_per_card_gb` in this file, printed by `kanso env detect` —
+and the default of one leaves the share where it was. Eight is the most. No card's share,
+one at a time or several, is lower than three times the run's *own* measured baseline
 peak, so the heavy hypothesis whose recorded peak you are declaring your way out of keeps
-the room its own cards need. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
+the room its own cards need, and a `cards_per_turn` whose part of the share would fall
+under that is refused before the turn is proposed, with the widest turn the share funds
+and the `mem_per_lane_gb` the asked width needs as the remedy: on a 2.5 GB share and a
+0.4 GB baseline peak, two cards a turn are funded and seven are refused, naming 8.40 GB. On a 16-core, 16 GB host with a 0.25 GB baseline peak recorded,
 the derived 4 GB plans three lanes and kills a card above 4 GB; `mem_per_lane_gb = 2` plans
 six and kills above 2 GB; `0.5` plans seven and kills above 0.75 GB, which is the floor
 rather than the declaration.

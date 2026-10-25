@@ -18,6 +18,18 @@ The drop is measured rather than announced. The row count and the served span co
 the points that survived, so a window whose rows were all one-sided serves nothing and is
 recorded as serving nothing, which is the truth about it.
 
+**Sizes are shares, measured, and are kept as served.** The vendor's reference material
+describes `bid_size` and `ask_size` as counts of round lots, which would make every size the
+venue fills a taker against a hundredth of the market, every clip past it walk a tick, and a
+book's touch budget starve its takers. Measured on 2026-10-20 against `/v3/quotes/SPY` for
+two seconds from 10:30:00 New York on 2024-06-12: 843 rows whose sizes read 100, 200, 300 …
+2,500 — shares, in round-lot multiples — and the one instant the workspace's flat-file grid
+(`us_stocks_sip/quotes_v1`) also held carried the same `400` and `200` on both. The flat
+files read the same across twenty names on a mid-window session (SPY's median bid 700,
+largest 10,200). So a size is a count of shares on both transports and is passed through
+unconverted; a reader who meets the round-lot description should measure again rather than
+multiply.
+
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
 `QuoteTick` requires its two prices to share a precision and its two sizes to share a

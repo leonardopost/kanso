@@ -17,9 +17,11 @@ from __future__ import annotations
 
 from kanso.strategy.composition import (
     COMPOSED,
+    EXPECTED,
     REPLICATIONS,
     compose,
     expectation,
+    restruck,
     strategy_id_of,
 )
 from kanso.strategy.files import (
@@ -47,6 +49,7 @@ from kanso.strategy.impl import (
 
 __all__ = [
     "COMPOSED",
+    "EXPECTED",
     "IMPL",
     "MANIFEST_FILE",
     "REPLICATIONS",
@@ -64,6 +67,7 @@ __all__ = [
     "read",
     "read_manifest",
     "require",
+    "restruck",
     "sources",
     "strategies",
     "strategy_dir",

@@ -34,7 +34,7 @@ needs you.
 | moment | who | what |
 |---|---|---|
 | setup | operator | provider keys in `.env`, the data adapters to use (or file exports), portfolio capital and limits |
-| a new idea | operator → agent | you state the thesis; the agent writes `hypothesis.yaml`; `kanso classify` decides the construct, the objective's parameters and the card-stage constraints |
+| a new idea | operator → agent | you state the thesis; the agent writes `hypothesis.yaml`; `kanso classify` decides the construct, the objective and its keep rule, and the card-stage constraints |
 | research | kanso | one run per lane, indefinitely; stall → certification → paper, all automatic |
 | `misaligned` | operator | research drifted from the thesis. kanso already rewound the lane and carried on — decide whether the drift deserves its own hypothesis |
 | `cert_failed` ×3 | operator | the idea keeps failing certification: retire it or rewrite the thesis |
@@ -166,7 +166,7 @@ The last two:
 ```
 $ kanso research run demo_mr --cards 3
 run        d99f1b6cd8734b278a7c8f1160b32f16 · lane op · cards
-cards      3 proposed · 1 keep · 1 discard · 1 crash · 0 repeated · 0 redundant · trial 4
+cards      3 proposed · 1 keep · 0 runner_up · 1 discard · 1 crash · 0 repeated · 0 redundant · trial 4
 aligned    0 check(s) · 0 drift(s)
 best       f729a53 at 9.986730
 next       kanso research run demo_mr --cards 3
@@ -190,7 +190,7 @@ lane directory looks like afterwards. Run it again and the scripted answers wrap
 no longer fits, and the other two reproduce bytes the run has already carded, which the loop
 refuses rather than backtests twice. Every retry ladder runs out on answers with nothing new
 in them, so each of the three proposals is a `repeated` miss — no card and no trial — and
-the command exits 0 with `3 proposed · 0 keep · 0 discard · 0 crash · 3 repeated`. The demo
+the command exits 0 with `3 proposed · 0 keep · 0 runner_up · 0 discard · 0 crash · 3 repeated`. The demo
 has shown what it can; the next step is a real model in `models.yaml`.
 
 A run that stalls certifies itself before it returns, so a daemon left running reaches a
@@ -206,13 +206,16 @@ kanso portfolio show
 ```
 $ kanso cert run demo_mr                       # its trailing written/source/next lines are elided
 verdict    demo_mr · f729a53 · pass
-gates      5 judged · 5 pass · 0 fail · 0 skipped
+gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
            pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20261002T225814Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261002T225809Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
+           pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             limit_pct=15.0, mdd_p95=0.3845075723749912, n=1000, objective=net_edge_bps, objective_ci90=[7.823304135204396, 12.39450090888979]
-objective  net_edge_bps 10.149871 ± 0.603055
+           pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+objective  net_edge_bps 10.149871 ± 1.322442
+power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+per trade  net 10.16 bp ± 1.319 by session (t 7.7) · 425 trade(s) on 105 session(s)
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 
 $ kanso portfolio show

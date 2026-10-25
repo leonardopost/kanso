@@ -1,22 +1,30 @@
-"""The three gates a per-period objective and a per-share account needed: the contribution
-deflated for the search that found it, a floor on the sessions an edge was seen on, and the
-recorded fills re-priced under another cost model."""
+"""The gates a per-period objective, a per-trade objective and a per-share account needed:
+the contribution and the per-trade edge deflated for the search that found them, a floor on
+the sessions an edge was seen on, and the recorded fills re-priced under another cost
+model."""
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from math import fsum
+from statistics import NormalDist
 from typing import Any
 
 import pytest
 
 from kanso.criteria.gates import (
+    CONTRIBUTION_BAND,
+    bootstrap,
     cost_scenario,
     deflated_contribution,
+    deflated_edge,
+    expected_maximum,
     min_event_days,
     repriced,
+    robust_variance,
     stressed,
 )
+from kanso.criteria.objectives import wf_contribution_bps
 from kanso.criteria.run import Fill
 from tests.criteria.builders import START, at, build_run, context, fill, make_hyp, trade
 
@@ -63,6 +71,30 @@ def test_a_wider_or_noisier_search_deflates_a_contribution_further() -> None:
     assert loose.evidence["probability"] < tight.evidence["probability"]
 
 
+def test_the_search_is_counted_across_objectives_and_spread_in_one() -> None:
+    """Row 173: a hypothesis re-pinned from a per-trade edge to a contribution carries the
+    strategy three hundred cards chose, and its deflation used to price two. The count of
+    draws is every card that ran and traded, under any objective; the spread is still read
+    off the cards in this objective's units alone."""
+    scored = (2.0, 2.4)
+    alone = deflated_contribution.evaluate(contribution_context(trial_metrics=scored))
+    carried = deflated_contribution.evaluate(contribution_context(trial_metrics=scored, trials=300))
+
+    assert alone.evidence["trials"] == alone.evidence["scored_trials"] == 2
+    assert carried.evidence["trials"] == 300 and carried.evidence["scored_trials"] == 2
+    assert carried.evidence["trial_spread_bps"] == alone.evidence["trial_spread_bps"]
+    spread = robust_variance(scored)
+    assert carried.evidence["expected_maximum_bps"] == pytest.approx(expected_maximum(spread, 300))
+    assert carried.evidence["probability"] < alone.evidence["probability"]
+
+
+def test_a_count_below_the_scored_set_is_never_used() -> None:
+    """`trials` is 1 wherever nothing counted, so the scored set's own count is the floor."""
+    result = deflated_contribution.evaluate(contribution_context(trials=1))
+
+    assert result.evidence["trials"] == 4
+
+
 def test_a_few_ruinous_trials_do_not_widen_the_search() -> None:
     """The spread the expected maximum is built from is the candidates', not the outliers'."""
     steady = (2.0, 2.4, 2.2, 2.3, 2.1, 2.5)
@@ -82,8 +114,6 @@ def test_the_robust_variance_is_the_plain_one_on_a_normal_sample_and_unmoved_by_
     None
 ):
     from statistics import variance
-
-    from kanso.criteria.gates import robust_variance
 
     sample = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
     assert robust_variance(sample) == pytest.approx((1.4826 * 2.0) ** 2)
@@ -138,6 +168,118 @@ def test_deflated_contribution_is_skipped_on_a_sharpe_objective() -> None:
 )
 def test_deflated_contribution_without_its_context_judges_nothing(overrides: Any) -> None:
     result = deflated_contribution.evaluate(contribution_context(**overrides))
+
+    assert result.passed and result.skipped is not None
+
+
+def test_deflated_contribution_deflates_by_the_error_the_card_carried() -> None:
+    """The estimate and its error are the objective's own over the research window, the
+    numbers a card of these bytes carried, so the gate computes no error of its own."""
+    research = build_run(RETURNS)
+    estimate, error = wf_contribution_bps.compute(research, 4)
+    trials = (2.0, 2.4, 1.8, 2.2)
+    expected = expected_maximum(robust_variance(trials), 4)
+
+    result = deflated_contribution.evaluate(contribution_context())
+
+    assert result.evidence["standard_error_bps"] == pytest.approx(error)
+    assert result.evidence["probability"] == pytest.approx(
+        NormalDist().cdf((estimate - expected) / error)
+    )
+
+
+# --- deflated_edge --------------------------------------------------------------
+
+EDGE_DAYS = [date(2024, 1, 1 + i) for i in range(8)]
+EDGES = tuple(trade(day, pnl=pnl) for day, pnl in zip(EDGE_DAYS, (10.0, 30.0) * 4, strict=True))
+"""A trade a day for eight days, at 10 and 30 bp in turn: a mean of 20 bp a trade whose eight
+sessions alternate, so the error is the plain 10.69/sqrt(8)."""
+
+
+def edge_context(**overrides: Any) -> Any:
+    research = build_run((0.0,) * 8, trades=EDGES)
+    fields: dict[str, Any] = {
+        "hyp": make_hyp(),
+        "stage": "cert",
+        "params": {"min_probability": 0.95},
+        "research_run": research,
+        "trial_metrics": (18.0, 20.0, 22.0),
+    }
+    return context(research, **{**fields, **overrides})
+
+
+def test_deflated_edge_deflates_the_research_edge_by_its_per_trade_error() -> None:
+    """20 bp a trade over eight trades of variance 800/7 is known to 3.78 bp; three trials a
+    median absolute deviation of 2 bp apart are a search expected to reach 2.53 bp by
+    chance, and 20 bp clears that by more than four of its errors."""
+    error = (800 / 7) ** 0.5 / 8**0.5
+    expected = expected_maximum((1.4826 * 2.0) ** 2, 3)
+
+    result = deflated_edge.evaluate(edge_context())
+
+    assert result.passed and result.skipped is None
+    assert result.evidence["edge_bps"] == pytest.approx(20.0)
+    assert result.evidence["standard_error_bps"] == pytest.approx(error)
+    assert result.evidence["expected_maximum_bps"] == pytest.approx(expected)
+    assert expected == pytest.approx(2.5287, abs=1e-4)
+    assert result.evidence["probability"] == pytest.approx(
+        NormalDist().cdf((20.0 - expected) / error)
+    )
+    assert (result.evidence["trials"], result.evidence["trades"]) == (3, 8)
+
+
+def test_deflated_edge_fails_an_edge_a_wide_search_would_have_found_by_chance() -> None:
+    result = deflated_edge.evaluate(edge_context(trial_metrics=(-60.0, 0.0, 60.0) * 200))
+
+    assert not result.passed and result.skipped is None
+    assert result.evidence["expected_maximum_bps"] > 20.0
+
+
+def test_the_marginal_edge_is_deflated_against_the_host_paired_by_period() -> None:
+    """20 bp a trade against a host's 5, 15, -5 and 25 twice over: ten more a trade, and an
+    error read off the period-by-period differences of the two runs' influence on their
+    edges."""
+    host = build_run(
+        (0.0,) * 8,
+        trades=tuple(
+            trade(day, pnl=pnl)
+            for day, pnl in zip(EDGE_DAYS, (5.0, 15.0, -5.0, 25.0) * 2, strict=True)
+        ),
+    )
+    marginal = make_hyp(
+        objective={"id": "marginal_net_edge_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    result = deflated_edge.evaluate(
+        edge_context(hyp=marginal, host_research_run=host, host_run=host)
+    )
+
+    assert result.evidence["edge_bps"] == pytest.approx(10.0)
+    assert result.evidence["standard_error_bps"] > 0.0
+
+
+def test_deflated_edge_is_skipped_on_a_contribution() -> None:
+    result = deflated_edge.evaluate(edge_context(hyp=make_hyp(**CONTRIBUTION_HYP)))
+
+    assert result.passed and result.skipped is not None and "not a per-trade edge" in result.skipped
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"params": {}},
+        {"trial_metrics": (1.0,)},
+        {"research_run": None},
+        {"research_run": build_run((0.0,) * 8, trades=EDGES[:2])},
+        {"research_run": build_run((0.0,) * 8, trades=tuple(trade(d, pnl=5.0) for d in EDGE_DAYS))},
+        {
+            "research_run": build_run(
+                (0.0,) * 8, trades=tuple(trade(d, pnl=p) for d in EDGE_DAYS for p in (10.0, 30.0))
+            )
+        },
+    ],
+)
+def test_deflated_edge_without_its_context_judges_nothing(overrides: Any) -> None:
+    result = deflated_edge.evaluate(edge_context(**overrides))
 
     assert result.passed and result.skipped is not None
 
@@ -495,3 +637,71 @@ def test_cost_scenario_reproduces_a_card_charged_its_ticks() -> None:
         context(priced, hyp=make_hyp(**CONTRIBUTION_HYP), params={"slippage_ticks": 1.0})
     )
     assert alone.skipped is None
+
+
+# --- bootstrap ----------------------------------------------------------------
+
+
+def test_a_contribution_is_banded_in_its_own_unit_from_its_return_periods() -> None:
+    """Eight days earning 40 a day on 100,000 is 4 bp of capital a day, whatever the trades'
+    own edge: one 10,000-notional trade a day earns 40 bp of its notional, which is what the
+    band used to be — ten times the value it was recorded beside."""
+    run = build_run(
+        (40.0,) * 8,
+        trades=tuple(trade(START + timedelta(days=day), pnl=40.0) for day in range(8)),
+    )
+    ctx = context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 200}, strategy_sha="d" * 64)
+
+    result = bootstrap.evaluate(ctx)
+
+    assert result.evidence["statistic"] == CONTRIBUTION_BAND
+    assert result.evidence["objective_ci90"] == pytest.approx([4.0, 4.0])
+    assert wf_contribution_bps.compute(run, 4)[0] == pytest.approx(4.0)
+    assert result.passed
+
+
+def test_a_contribution_s_band_holds_its_value_and_a_losing_one_fails() -> None:
+    run = build_run(RETURNS)
+    value = wf_contribution_bps.compute(run, 4)[0]
+
+    result = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 2_000}, strategy_sha="d" * 64)
+    )
+    losing = bootstrap.evaluate(
+        context(
+            build_run(tuple(-abs(r) for r in RETURNS)),
+            hyp=make_hyp(**CONTRIBUTION_HYP),
+            params={"n": 2_000},
+            strategy_sha="d" * 64,
+        )
+    )
+
+    low, high = result.evidence["objective_ci90"]
+    assert low < value < high
+    assert result.passed
+    assert losing.evidence["objective_ci90"][1] < 0 and not losing.passed
+
+
+def test_a_contribution_s_drawdown_is_drawn_from_its_periods_not_its_trades() -> None:
+    """Three good days and one that loses a fifth of the capital, with no closed trade at all:
+    the path the objective's periods trace is the one whose depth is judged."""
+    run = build_run((60.0, -200.0, 60.0, 60.0), capital=1_000.0)
+
+    result = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 200}, strategy_sha="d" * 64)
+    )
+
+    assert result.skipped is None
+    assert result.evidence["mdd_p95"] >= 20.0 > result.evidence["limit_pct"]
+    assert not result.passed
+
+
+def test_a_contribution_with_one_period_has_nothing_to_resample_however_many_trades() -> None:
+    run = build_run((40.0,), trades=tuple(trade(START, pnl=10.0) for _ in range(5)))
+
+    result = bootstrap.evaluate(
+        context(run, hyp=make_hyp(**CONTRIBUTION_HYP), params={"n": 200}, strategy_sha="d" * 64)
+    )
+
+    assert result.passed
+    assert result.skipped == "fewer than two return periods, so there is nothing to resample"

@@ -6,7 +6,10 @@ writes them directly and stays a test of the pass rather than of the runner.
 
 The arithmetic is chosen to be checkable by eye: a run whose daily return never varies has a
 zero Sharpe on every fold, so the realised objective is exactly zero and a band either
-contains it or does not.
+contains it or does not. A version's expectation carries a small error (`SE`), so the band a
+twenty-day window strikes from it is about four tenths of a unit either side of its value — a
+Sharpe's fold of five periods weighs twice what a mean's would — so a value of zero holds the
+flat run's zero, and one of 1.5 or −1.5 leaves it below or above.
 """
 
 from __future__ import annotations
@@ -42,6 +45,12 @@ START = date(2024, 3, 1)
 DAYS = 20
 CAPITAL = 100_000.0
 INSTRUMENT = "DEMO.XNAS"
+SE = 0.1
+"""The error of an expectation's value, as composition records it."""
+PERIODS = 55
+"""The return periods its certification window, 2024-01-06..2024-02-29, held: one a day."""
+WIDE = 1e9
+"""An error so large that any realised value is inside the band it strikes."""
 
 VENUE_MODEL: dict[str, Any] = {
     "venue": "XNAS",
@@ -184,10 +193,12 @@ def version(
     *,
     number: int = 1,
     state: str = "paper",
-    ci90: tuple[float, float] = (-0.5, 0.5),
+    value: float = 0.0,
+    se: float = SE,
     objective_id: str = "wf_sharpe_net",
 ) -> StrategyVersion:
-    """One composed version of the sleeve, with the band its paper gates judge against."""
+    """One composed version of the sleeve, with the value and error its paper and live gates
+    strike their band from; the bootstrap's band is the value ± a half."""
     return StrategyVersion.model_validate(
         {
             "version": number,
@@ -203,10 +214,13 @@ def version(
             },
             "expectation": {
                 "objective_id": objective_id,
-                "value": 0.0,
-                "ci90": list(ci90),
+                "value": value,
+                "ci90": [value - 0.5, value + 0.5],
                 "mdd_p95": 5.0,
                 "window": {"start": "2024-01-06", "end": "2024-02-29"},
+                "se": se,
+                "periods": PERIODS,
+                "capital": CAPITAL * 0.4,
             },
             "state": state,
             "created_at": "2024-02-29T00:00:00+00:00",
@@ -356,7 +370,7 @@ def deploy(
     *,
     stage: str = "paper",
     state: str = "paper",
-    ci90: tuple[float, float] = (-0.5, 0.5),
+    value: float = 0.0,
     run: CardRun | None = None,
     positions: tuple[Book, ...] = (),
     **portfolio_changes: Any,
@@ -365,7 +379,7 @@ def deploy(
     hyp = hypothesis()
     pin_hypothesis(store, hyp)
     write_plan(ws, plan())
-    write_strategy(ws, store, version(state=state, ci90=ci90))
+    write_strategy(ws, store, version(state=state, value=value))
     write_book(store, stage, run=run or flat_run(), positions=positions)
     placed = ((STRATEGY_ID, 1),)
     changes: dict[str, Any] = {("paper" if stage == "paper" else "live"): placed}
@@ -409,13 +423,17 @@ def gate_context(
     run: CardRun | None = None,
     record: StageRecord | None = None,
     hyp: Hypothesis | None = None,
-    ci90: tuple[float, float] | None = (-0.5, 0.5),
+    value: float | None = 0.0,
+    se: float = SE,
     folds: int = 4,
     benchmark: CardRun | None = None,
 ) -> GateContext:
-    """What the monitor hands one gate, with only the piece under test varied."""
+    """What the monitor hands one gate, with only the piece under test varied; a `value` of
+    `None` is a version with no expectation at all."""
     measured = run or flat_run()
-    expectation = None if ci90 is None else version(ci90=ci90).expectation.model_dump(mode="json")
+    expectation = (
+        None if value is None else version(value=value, se=se).expectation.model_dump(mode="json")
+    )
     return GateContext(
         hyp=hyp or hypothesis(),
         construct="sleeve",

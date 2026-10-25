@@ -199,13 +199,24 @@ fetches through it needs `KANSO_MASSIVE_API_KEY`, as any request-path load does.
 | `massive_corporate_actions` | splits and dividends, as `CorporateAction` | REST |
 | `massive_financials` | periodic statements, as the `financial_statement` type (usable in a hypothesis's `data_requirements`) | REST |
 
+A quote's `bid_size` and `ask_size` are counts of **shares**, kept as served. The vendor's
+reference material describes them as round lots; measured on 2026-10-20 — 843 rows of
+`/v3/quotes/SPY` over two seconds of 2024-06-12 reading 100, 200, 300 … 2,500, and the same
+instant in the `us_stocks_sip/quotes_v1` flat file carrying the same 400 and 200 — they are
+shares on both transports, and the loader multiplies nothing. The displayed size a taker
+fills against under `print_through`, and a book's touch budget, read that unit.
+
 `massive_trades` and `massive_quotes` declare `chunk_days` 1: a liquid name's day is millions of
 ticks — 3.4 million TQQQ quotes and 1.4 million NVDA prints on 2026-09-14 — so every load,
 backfill and screen fetch writes one dataset a day as the pages stream in, and a walk that
 fails loses that day and no other. A day costs its pages: the source serves 50,000 ticks a
-page in about four seconds, every page of a walk at the size its first page asked for, and
-a chunk is asked a day either side of its own — so one session of XLE quotes, 588,399 kept
-of 2,126,077 walked over 43 pages, loaded in 186 s on 2026-10-07 (`docs/backlog.md` row 142).
+page in a few seconds, every page of a walk at the size its first page asked for, and a
+chunk is asked its own days of tape and the overnight tape after them, to 08:00 UTC — a
+tick made before midnight and published within those hours is kept by the day it was made,
+and over 32 tape days measured on 2026-10-15 none was published later. One session of XLE
+quotes (2026-10-06, 587,623 points) walks 12 pages and loaded in 32–40 s on 2026-10-15;
+asked a day either side, as it was until then, it walked 43 pages and three sessions of
+tape and loaded in 97–105 s (`docs/backlog.md` row 142).
 
 The bulk path is worth reaching for over long history where the store carries the class:
 whether it does is a fact about the store's *layout*, never about a plan, and whether your
@@ -354,7 +365,7 @@ and that has three visible consequences here.
     can be stamped is refused, saying so.
 
   Being refused or dropped is the point: the alternative is a statement that appears to
-  have been public before it was filed. `docs/backlog.md` row 170 has what fuller coverage
+  have been public before it was filed. `docs/backlog.md` row 223 has what fuller coverage
   would need.
 
 ### Configuration

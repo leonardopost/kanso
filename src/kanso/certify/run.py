@@ -57,6 +57,20 @@ running a backtest per parameter; the certificate lists its gates in the plan's 
 regardless. A window gate that judged nothing spares nothing: a skip is an absence of
 evidence, not a refusal, and the plateau then refuses a loss itself before moving anything.
 
+**A search is priced in full, or no certificate is written.** The deflation a plan must carry
+from the second card takes its expected maximum over every card of the hypothesis's family
+that ran and traded, under any objective, and its spread from the cards scored under the
+subject's own (`kanso.criteria.gates._searched`): a hypothesis re-pinned to another
+objective carries across the strategy the earlier search selected, and it is that search
+the certificate prices. Two cases are refused before anything runs, because each would
+otherwise be a certificate whose correction judged nothing and so passed. One is a subject
+behind two or more such cards with fewer than two scored in its objective's units — the
+carried strategy certified as the first card under its new objective — whose spread
+cannot be read (`unpriced`). The other is a subject scored under an objective whose
+correction the pinned plan does not carry, with its threshold, once the search has two
+cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
+objective the hypothesis has now.
+
 The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
 to research with the ids of its failing gates recorded where the proposer reads them, and
 every `n_fail`-th consecutive failure escalates. The ids alone, because a certification
@@ -86,9 +100,13 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from kanso import ext
 from kanso.certify import certificate
 from kanso.certify.plan import plan as plan_for
+from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
+from kanso.criteria import catalogue as toolbox
+from kanso.criteria.digest import session_edge
+from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_deflation
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
 from kanso.data.manifest import Manifest, catalog_path, manifests
@@ -113,8 +131,10 @@ from kanso.schemas import (
     EvaluatedGate,
     GateResult,
     Hypothesis,
+    NetPerTrade,
     ObjectiveResult,
     PlannedGate,
+    Power,
     RunRecord,
     StrategyFile,
     VenueModel,
@@ -140,6 +160,7 @@ __all__ = [
     "pinned_sha",
     "show",
     "subject_run",
+    "unpriced",
 ]
 
 CERT_STAGE: Final = "cert"
@@ -169,12 +190,19 @@ WINDOW: Final = "embargoed_window"
 """The required out-of-sample gate: once it has refused a subject, the verdict is a fail."""
 
 PLATEAU: Final = "param_plateau"
-"""The one cert gate that costs a backtest per perturbation, judged after all the others."""
+"""The cert gate that costs a backtest per perturbation, judged after all the others."""
+
+LATENCY: Final = "latency_stress"
+"""The cert gate that costs a backtest per latency multiple, judged with the plateau."""
+
+RERUNNING: Final = frozenset({PLATEAU, LATENCY})
+"""The cert gates that re-run the subject, judged after every cheap verdict is in hand and
+spared when the window gate has already refused the subject."""
 
 WINDOW_FAILED: Final = (
     "embargoed_window failed and a certificate whose window failed cannot pass, so the "
-    "perturbation backtests were not run: a plateau around a result the embargo refused is "
-    "not evidence"
+    "re-run backtests were not made: a plateau or a slower route around a result the embargo "
+    "refused is not evidence"
 )
 
 _HEX: Final = frozenset("0123456789abcdef")
@@ -284,6 +312,14 @@ def certify(
     plan = plan_for(ws, store, hyp_id, lane=lane)
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
+    _refuse_uncorrected(plan, subject, n_trials, registration)
+    reason = unpriced(store, hyp_id, subject.objective_id, n_trials)
+    if reason is not None:
+        raise PreconditionError(
+            reason,
+            remedy=f"research it further with `kanso research begin {hyp_id}` until two cards "
+            f"are scored under {subject.objective_id}",
+        )
     certificate.refuse_repeat(
         ws,
         store,
@@ -296,7 +332,7 @@ def certify(
     )
     if registration.status != CANDIDATE:
         set_status(store, hyp_id, CANDIDATE)
-    evaluated, objective = _judge(ws, store, plan, subject)
+    evaluated, objective, stated, struck = _judge(ws, store, plan, subject)
     made = Certificate(
         hyp_id=hyp_id,
         strategy_sha=subject.strategy_sha,
@@ -312,6 +348,8 @@ def certify(
         n_trials=n_trials,
         verdict=_verdict(evaluated),
         created_at=datetime.now(tz=UTC),
+        power=stated,
+        net_per_trade=struck,
     )
     certificate.write(ws, store, made, subject.source)
     _apply(ws, store, made)
@@ -322,6 +360,58 @@ def show(ws: Workspace, store: StateStore, hyp_id: str) -> Certificate | None:
     """This hypothesis's newest certificate, or `None` when it has none."""
     _registration(ws, store, hyp_id)
     return certificate.latest(store, hyp_id)
+
+
+def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -> str | None:
+    """Why the search behind a card scored under `objective_id` cannot be priced, or `None`.
+
+    The search is priced from `SEARCH_TRIALS` cards on, by the deflation gate the toolbox
+    says `deflates` the objective: over every card of the family that ran and traded, with
+    the spread of those scored in the objective's units. A family with two such cards and
+    fewer than two of them in those units has a search behind it and no spread to price it
+    by, and a deflation that cannot read its spread skips, which passes — the route a
+    strategy carried across a re-pin to another objective took to an uncorrected
+    certificate as the first card scored under its new one (`docs/backlog.md` row 173).
+    """
+    gate = deflation_gate(objective_id)
+    if n_trials < SEARCH_TRIALS or gate is None:
+        return None
+    searched = records.candidates(store, hyp_id)
+    scored = len(records.trial_metrics(store, hyp_id, objective_id))
+    if searched < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
+        return None
+    return (
+        f"{hyp_id} has {searched} cards that ran and traded behind it and {scored} of them "
+        f"scored under {objective_id}, so {gate} cannot read the spread of the search that "
+        f"selected this card: it prices the search from two cards in its units"
+    )
+
+
+def _refuse_uncorrected(
+    plan: CertificationPlan, subject: Subject, n_trials: int, registration: Registration
+) -> None:
+    """Refuse a subject whose objective's search correction the pinned plan does not carry.
+
+    A plan is made for the objective the hypothesis is registered under, and from the second
+    card it carries that objective's deflation gate with its threshold. A card scored under
+    another — one researched before a re-pin moved the objective, named by `--sha` — would
+    be certified with that gate skipping on an objective it does not deflate and its own
+    correction absent, so the search that selected it would go unpriced.
+    """
+    correction = required_deflation(subject.hyp, n_trials)
+    if correction is None:
+        return
+    planned = next((gate for gate in plan.gates if gate.id == correction), None)
+    declared = toolbox()[correction].params
+    if planned is not None and all(name in planned.params for name in declared):
+        return
+    raise PreconditionError(
+        f"{subject.strategy_sha[:7]} was scored under {subject.objective_id}, and the plan "
+        f"pinned for {subject.hyp.id} carries no {correction} with its threshold, the search "
+        "correction for it, so the search that selected it would go unpriced",
+        remedy=f"certify a card scored under {registration.objective}, as the best is: "
+        f"`kanso cert run {subject.hyp.id}`",
+    )
 
 
 # --- resolving the subject ----------------------------------------------------
@@ -500,6 +590,7 @@ def _request(
     *,
     host_only: bool = False,
     overrides: Mapping[str, float] | None = None,
+    costs: Mapping[str, float] | None = None,
 ) -> backtest.RunRequest:
     """The backtest one window asks for: the sleeve, or the host with this modifier on it.
 
@@ -507,9 +598,14 @@ def _request(
     construct the subject is the sleeve, so they replace fields of its configuration; for
     a relative one the subject is the attached modifier, so they replace the construct
     parameters it was attached with, and the host underneath it is left exactly as it was
-    certified.
+    certified. `costs` replaces keys of the venue model's cost block — `latency_ms`, for a
+    latency stress — and the venue, the harness and the extraction all read the replaced
+    model, as they read the certified one.
     """
     moved = dict(overrides or {})
+    venue_model = subject.venue_model.model_dump()
+    if costs:
+        venue_model["costs"] = {**venue_model["costs"], **costs}
     attached: Sequence[tuple[str, bytes, Mapping[str, Any]]] = ()
     if subject.host_source is None:
         strategy, own = subject.source, moved
@@ -532,7 +628,7 @@ def _request(
         strategy_source=strategy,
         window=window,
         snapshot_id=subject.snapshot_id,
-        venue_model=subject.venue_model.model_dump(),
+        venue_model=venue_model,
         capital=subject.capital,
         modifiers=attached,
         period=subject.period,
@@ -588,10 +684,16 @@ def _measure(subject: Subject) -> Measured:
     its memory share (`kanso.certify.child`), so the daemon lane that asked for it survives
     to research something else and is left holding none of what the windows cost.
     """
+    from kanso.nautilus.venue import PRINT_SIZE
+
     request = _request(subject, subject.certification)
     backtest.stage_of(subject.hyp, subject.certification)
     instruments, chunks = backtest.window_chunks(request, subject.catalog)
-    evidence = _Evidence(midnight_ns(subject.certification[0]), instruments)
+    evidence = _Evidence(
+        midnight_ns(subject.certification[0]),
+        instruments,
+        prints=subject.venue_model.costs.limit_fill in PRINT_SIZE,
+    )
     certification = _ran(
         subject,
         lambda: backtest.execute_chunked(request, instruments, map(evidence.take, chunks)),
@@ -706,18 +808,33 @@ class _Evidence:
     (`backtest.multipliers_of`). A share's multiplier is one; a contract of a thousand DOGE
     is a thousand times the capacity its contract count says, and one of a hundredth of a
     coin a hundredth of it.
+
+    Under the print rules the window carries no bars — they are refused beside quotes — and
+    the trade series is the tape the venue fills from, so a name's day's volume is summed from
+    its prints instead, each at its own price: `size x price x multiplier` over the day's
+    trades, and `capacity_vs_adv` judges a tick hypothesis rather than skipping it. Under
+    `touch` and `through` a trade series may be a few prints a session loaded as a signal —
+    an operator's session prints, four a day beside a grid of quotes — and summing those
+    would read a day's volume a thousandfold too small and refuse every fill against it, so
+    prints are read as volume only where the rule says they are the tape (`prints`). Where a
+    name carries bars as well, the bars are read and the prints are not, since a day's bars
+    already hold its prints' volume and summing both would count it twice.
     """
 
-    def __init__(self, opens_ns: int, instruments: Sequence[object]) -> None:
+    def __init__(
+        self, opens_ns: int, instruments: Sequence[object], *, prints: bool = False
+    ) -> None:
         self.opens_ns = opens_ns
+        self.prints = prints
         self.multipliers = backtest.multipliers_of(instruments)
         self.lags: dict[tuple[str, str], float] = {}
         """The smallest delay observed, per instrument and data type, in seconds."""
         self._volume: dict[str, dict[date, float]] = {}
+        self._printed: dict[str, dict[date, float]] = {}
 
     def take(self, groups: Sequence[Sequence[object]]) -> Sequence[Sequence[object]]:
         """Fold one chunk's points from the window's open on, and hand the chunk back."""
-        from nautilus_trader.model.data import Bar
+        from nautilus_trader.model.data import Bar, TradeTick
 
         for group in groups:
             for point in group:
@@ -734,12 +851,24 @@ class _Evidence:
                     days[day] = days.get(day, 0.0) + (
                         float(point.volume) * float(point.close) * self.multipliers.get(name, 1.0)
                     )
+                elif self.prints and isinstance(point, TradeTick):
+                    name = str(point.instrument_id)
+                    days = self._printed.setdefault(name, {})
+                    day = day_of(int(point.ts_event))
+                    days[day] = days.get(day, 0.0) + (
+                        float(point.size) * float(point.price) * self.multipliers.get(name, 1.0)
+                    )
         return groups
 
     @property
     def daily_volume(self) -> dict[str, list[float]]:
-        """Each instrument's daily traded notional over the window, oldest first."""
-        return {name: [days[day] for day in sorted(days)] for name, days in self._volume.items()}
+        """Each instrument's daily traded notional over the window, oldest first: from its
+        bars where the window held any, else from its prints."""
+        volumes = {name: [days[day] for day in sorted(days)] for name, days in self._volume.items()}
+        for name, days in self._printed.items():
+            if name not in volumes:
+                volumes[name] = [days[day] for day in sorted(days)]
+        return volumes
 
 
 def _dataset_facts(
@@ -825,8 +954,12 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-) -> tuple[list[EvaluatedGate], ObjectiveResult]:
-    """Evaluate the plan's certification gates, and measure the objective they judged."""
+) -> tuple[list[EvaluatedGate], ObjectiveResult, Power | None, NetPerTrade | None]:
+    """Evaluate the plan's certification gates, measure the objective they judged, state
+    what the certification window could resolve from the research window's own dispersion —
+    the same statement `cert plan` makes from the card, here from the research window run
+    again — and strike the certification window's net per trade from the run the gates
+    judged (`net_per_trade`)."""
     planned = plan.stage_gates(CERT_STAGE)
     if not planned:  # pragma: no cover - the planner refuses a plan that reaches no stage
         raise PreconditionError(
@@ -840,6 +973,8 @@ def _judge(
         return (
             [_blocked(gate, snapshot, blocked) for gate in planned],
             ObjectiveResult(id=objective.id, value=0.0, se=0.0),
+            None,
+            None,
         )
     measured = _measure(subject)
     compared = _parity(ws, store, plan, subject)
@@ -849,7 +984,12 @@ def _judge(
         measured.host_certification,
         measured.benchmark_certification,
     )
-    metrics = records.trial_metrics(store, subject.hyp.id)
+    researched = objective.compute(
+        measured.research, subject.folds, measured.host_research, measured.benchmark_research
+    )
+    stated = power(*researched, subject.research, subject.certification, window_params(plan))
+    metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
+    searched = records.candidates(store, subject.hyp.id)
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
     parameters = _tunable(subject)
@@ -860,6 +1000,12 @@ def _judge(
         request = _request(subject, subject.certification, overrides=overrides)
         return _ran(subject, lambda: backtest.run(request, subject.catalog))
 
+    def rerun_costs(costs: Mapping[str, float]) -> CardRun:
+        """The subject over the certification window again under a venue model whose cost
+        keys are replaced, the strategy as it was."""
+        request = _request(subject, subject.certification, costs=costs)
+        return _ran(subject, lambda: backtest.run(request, subject.catalog))
+
     registry = gates()
     verdicts: dict[str, EvaluatedGate] = {}
     for gate in _perturbation_last(planned):
@@ -867,7 +1013,7 @@ def _judge(
         if found is None:
             verdicts[gate.id] = _skipped(gate, UNIMPLEMENTED)
             continue
-        if gate.id == PLATEAU and _window_failed(verdicts):
+        if gate.id in RERUNNING and _window_failed(verdicts):
             verdicts[gate.id] = _skipped(gate, WINDOW_FAILED)
             continue
         context = GateContext(
@@ -886,26 +1032,52 @@ def _judge(
             benchmark_run=measured.benchmark_certification,
             benchmark_research_run=measured.benchmark_research,
             trial_metrics=metrics,
+            trials=max(searched, 1),
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,
             rerun=rerun,
+            rerun_costs=rerun_costs,
             session=compared,
         )
         verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
-    return [verdicts[gate.id] for gate in planned], ObjectiveResult(
-        id=objective.id, value=value, se=se
+    return (
+        [verdicts[gate.id] for gate in planned],
+        ObjectiveResult(id=objective.id, value=value, se=se),
+        stated,
+        net_per_trade(measured.certification),
+    )
+
+
+def net_per_trade(run: CardRun) -> NetPerTrade | None:
+    """The certification window's mean net per trade, from the run certification made of it.
+
+    Struck here, once, from the run every gate judged — never by running the window again —
+    so a book that ranks its members by it (`kanso.nautilus.book`) reads the number the
+    certificate was judged on (`kanso.criteria.digest.session_edge`). `None` for a window
+    that closed no trade.
+    """
+    edge = session_edge(run)
+    if edge is None:
+        return None
+    value, se, sessions, trades = edge
+    return NetPerTrade(
+        net_per_trade_bp=value,
+        net_se_session=se,
+        net_t=None if not se else value / se,
+        sessions_with_trades=sessions,
+        trades=trades,
     )
 
 
 def _perturbation_last(planned: Sequence[PlannedGate]) -> list[PlannedGate]:
-    """The plan's cert gates with the one that costs a backtest per parameter moved last.
+    """The plan's cert gates with the ones that cost a backtest per move last.
 
-    Every cheap verdict is then in hand before the expensive one is paid for, the window
-    gate's among them, which is the one that decides whether it is paid for at all. Only
+    Every cheap verdict is then in hand before the expensive ones are paid for, the window
+    gate's among them, which is the one that decides whether they are paid for at all. Only
     the judging is reordered: the certificate lists the gates in the plan's order.
     """
-    return sorted(planned, key=lambda gate: gate.id == PLATEAU)
+    return sorted(planned, key=lambda gate: gate.id in RERUNNING)
 
 
 def _window_failed(verdicts: Mapping[str, EvaluatedGate]) -> bool:

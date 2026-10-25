@@ -78,6 +78,32 @@ def test_the_live_path_submits_what_the_research_path_submits() -> None:
     assert node.intents
 
 
+def test_the_two_paths_price_their_fills_at_the_quotes_alike() -> None:
+    """Under a quoted spread each path charges a fill on a name fed bars and quotes the half
+    its last quote states, priced after the chunk that made it; both charge the same."""
+    from kanso.schemas import resolve_venue_model
+    from kanso.schemas.venue import CostsOverride
+
+    costs = {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"}
+    hyp = hypothesis(data_requirements=["bar", "quote"], costs=costs)
+    model = resolve_venue_model(
+        "XNAS",
+        broker="synthetic",
+        hypothesis_costs=CostsOverride.model_validate(costs),
+        max_leverage=1.0,
+        quotes_available=True,
+    )
+    request = replace(request_for(hyp=hyp), venue_model=model.model_dump())
+
+    node, engine = both(request, [instrument()], [tuple(bars(FORWARD)), tuple(quotes(FORWARD))])
+
+    def charged(result: backtest.RunResult) -> list[tuple[int, str, float, float, float]]:
+        return [(f.ts_ns, f.side, f.qty, f.px, f.cost) for f in result.run.fills]
+
+    assert charged(node) == charged(engine)
+    assert charged(engine) and all(cost > 0.0 for *_, cost in charged(engine))
+
+
 def test_the_two_paths_agree_through_a_flicker_of_more_than_a_hundred_orders_a_second() -> None:
     """Neither path throttles submissions, so neither denies an order the other accepts.
 

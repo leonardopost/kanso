@@ -120,7 +120,7 @@ def test_a_demotion_in_a_child_records_what_one_in_this_process_records(
         tuple(one.stage for one in here_made.deployments),
         here_made.halted,
     )
-    assert made.state == "paper" and made.redeployed == ("paper", "live")
+    assert made.state == "paper" and made.redeployed == ("live", "paper")
     assert strategies.require(ws, strategy_id) == strategies.require(other, strategy_id)
     assert stages(ws) == stages(other)
     assert recorded(store, strategy_id) == here_records
@@ -216,7 +216,7 @@ def test_a_stop_leaves_a_demotion_to_finish(
     finally:
         backtest.resume()
 
-    assert made.state == "paper" and made.redeployed == ("paper", "live")
+    assert made.state == "paper" and made.redeployed == ("live", "paper")
     assert strategies.require(ws, strategy_id).latest().state == "paper"
 
 
@@ -256,7 +256,7 @@ def test_a_monitor_that_demoted_holds_none_of_what_the_redeploys_cost(
     write_plan(ws, plan())
     held = strategy_files.require(ws, strategy_id)
     latest = held.latest()
-    unreachable = latest.expectation.model_copy(update={"ci90": (1e9, 2e9)})
+    unreachable = latest.expectation.model_copy(update={"value": 1.5e9, "ci90": (1e9, 2e9)})
     strategy_files.write(
         ws,
         held.model_copy(

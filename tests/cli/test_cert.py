@@ -120,7 +120,7 @@ def sized(min_duration: str) -> dict[str, Any]:
     return {**mocked.PLAN, "gates": gates}
 
 
-def test_a_paper_window_too_short_for_its_own_band_is_warned_about(
+def test_a_paper_window_too_short_for_its_band_to_refuse_anything_is_warned_about(
     runner: CliRunner, researched: Path
 ) -> None:
     """The fixture certifies over 61 days and its plan judges paper over five: a warning."""
@@ -131,7 +131,7 @@ def test_a_paper_window_too_short_for_its_own_band_is_warned_about(
     assert "warning" in result.stdout
     assert "paper window 5d against a 61d certification window" in result.stdout
     (warning,) = document["warnings"]
-    assert "noisier than the band" in warning
+    assert "as wide as the certification value's own" in warning
     assert plan_document(researched)["plan_version"] == 1, "a warning pins the plan all the same"
 
 
@@ -145,6 +145,36 @@ def test_a_paper_window_the_certification_window_can_judge_is_not(
 
     assert payload(result)["warnings"] == []
     assert "warning" not in at(runner, researched, "cert", "plan", HYP_ID).stdout
+
+
+def test_the_plan_states_what_the_windows_resolve_for_the_best_card(
+    runner: CliRunner, researched: Path
+) -> None:
+    """Stated from the best card's own metric and error, after the plan is pinned: the window
+    gate's bar is a `min_fraction` of nothing, so an edge of zero clears it half the time."""
+    result = at(runner, researched, "cert", "plan", HYP_ID)
+    document = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+    with StateStore(researched / "state.db") as store:
+        best = records.cards_of(store, HYP_ID)[-1]
+
+    stated = document["power"]
+    assert stated["research"] == best.metric
+    assert stated["research_se"] == best.metric_se
+    assert stated["resolves"] == pytest.approx(2.4865 * stated["standard_error"], rel=1e-4)
+    assert stated["bar"] == 0.0 and stated["pass_at_zero"] == 0.5
+    assert "power      resolves" in result.stdout
+    assert "embargoed_window passes" in result.stdout and "0.50 at zero" in result.stdout
+
+
+def test_a_plan_with_no_best_card_says_there_is_nothing_to_state_power_from(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    result = at(runner, mocked_ws, "cert", "plan", HYP_ID)
+    document = payload(at(runner, mocked_ws, "cert", "plan", HYP_ID, "--json"))
+
+    assert result.exit_code == Exit.OK
+    assert document["power"] is None
+    assert "no best card yet" in result.stdout
 
 
 def test_reading_a_pinned_plan_costs_nothing(runner: CliRunner, researched: Path) -> None:
@@ -227,7 +257,8 @@ def test_the_certificate_reads_as_the_verdict_then_the_gates(
     assert result.exit_code == Exit.OK
     assert "embargoed_window" in result.stdout
     assert "publication_lag" in result.stdout
-    assert "1 skipped" in result.stdout and "nothing is deployed" in result.stdout
+    assert "2 skipped" in result.stdout and "nothing is deployed" in result.stdout
+    assert "fewer than two trials" in result.stdout, "one card that traded is no search yet"
     assert "engine" in result.stdout and "snapshot" in result.stdout
 
 
@@ -283,6 +314,46 @@ def test_a_sha_that_is_not_a_sha_is_refused(runner: CliRunner, researched: Path)
     assert "prefix" in payload(result)["error"]
 
 
+def unpinned(root: Path, gate_id: str, params: dict[str, Any] | None = None) -> None:
+    """Rewrite the pinned plan without one gate, or with its parameters replaced: a plan as
+    an earlier kanso, or a planner it did not hold to the rule, could have left it."""
+    document = plan_document(root)
+    document["gates"] = [
+        dict(gate, params=params) if params is not None and gate["id"] == gate_id else gate
+        for gate in document["gates"]
+        if params is not None or gate["id"] != gate_id
+    ]
+    (root / "certificates" / HYP_ID / "plan.yaml").write_text(
+        yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "said"),
+    [
+        (None, "deflated_edge is the search correction for net_edge_bps"),
+        ({}, "gates.deflated_edge.min_probability: is not set"),
+    ],
+)
+def test_a_pinned_plan_that_does_not_price_the_search_is_refused_by_plan_and_run(
+    runner: CliRunner, researched: Path, params: dict[str, Any] | None, said: str
+) -> None:
+    """Behind two cards a plan carries its search correction with its threshold set; one
+    pinned without either is refused where it is read, with the replan that writes one."""
+    assert at(runner, researched, "cert", "plan", HYP_ID, "--json").exit_code == Exit.OK
+    unpinned(researched, "deflated_edge", params)
+
+    for command in ("plan", "run"):
+        result = at(runner, researched, "cert", command, HYP_ID, "--json")
+        document = payload(result)
+        assert result.exit_code == Exit.VALIDATION, document
+        assert said in document["error"]
+        assert document["remedy"] == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+    assert certificates(researched) == []
+    replanned = at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json")
+    assert replanned.exit_code == Exit.OK and payload(replanned)["plan_version"] == 2
+
+
 def test_a_hypothesis_with_no_card_has_nothing_to_certify(
     runner: CliRunner, mocked_ws: Path
 ) -> None:
@@ -321,6 +392,79 @@ def test_show_reads_as_the_verdict_and_its_gates(runner: CliRunner, researched: 
     assert result.exit_code == Exit.OK
     assert HYP_ID in result.stdout
     assert "embargoed_window" in result.stdout
+    assert "power      resolves" in result.stdout
+
+
+def test_a_certificate_states_its_window_s_net_per_trade(
+    runner: CliRunner, researched: Path
+) -> None:
+    """`run` and `show` print the net per trade a book ranks by, and `--json` carries it."""
+    made = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))
+
+    net = made["net_per_trade"]
+    assert net is not None
+    assert net["trades"] >= net["sessions_with_trades"] >= 1
+    shown = at(runner, researched, "cert", "show", HYP_ID).stdout
+    assert f"per trade  net {net['net_per_trade_bp']:.4g} bp" in shown
+    assert f"{net['trades']} trade(s) on {net['sessions_with_trades']} session(s)" in shown
+
+
+@pytest.mark.parametrize(
+    ("se", "t", "error"),
+    [
+        (None, None, "no session error"),
+        (0.0, None, "± 0 by session"),
+        (1.5, 2.0, "± 1.5 by session (t 2)"),
+    ],
+)
+def test_the_per_trade_line_says_what_error_the_net_was_struck_with(
+    se: float | None, t: float | None, error: str
+) -> None:
+    """A window whose trades closed on one session has no error by session to state."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from kanso.cli.cert import _net_line
+    from kanso.schemas import Certificate, NetPerTrade
+
+    net = NetPerTrade(
+        net_per_trade_bp=3.0,
+        net_se_session=se,
+        net_t=t,
+        sessions_with_trades=1 if se is None else 4,
+        trades=6,
+    )
+    (line,) = _net_line(cast("Certificate", SimpleNamespace(net_per_trade=net)))
+
+    assert line.endswith(f"net 3 bp {error} · 6 trade(s) on {net.sessions_with_trades} session(s)")
+
+
+def test_the_certificate_states_the_power_the_plan_stated(
+    runner: CliRunner, researched: Path
+) -> None:
+    """The plan states it from the card, the certificate from the research window run again:
+    the same bytes over the same window, so the same numbers."""
+    planned = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))["power"]
+    made = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))
+
+    assert made["power"] == pytest.approx(planned)
+
+
+def test_a_certificate_whose_plan_sets_no_fraction_states_no_pass_probability(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    gates = [
+        dict(gate, params=pairs()) if gate["id"] == "embargoed_window" else gate
+        for gate in mocked.PLAN["gates"]
+    ]
+    mocked.scripted(mocked_ws, certify_plan=[{**mocked.PLAN, "gates": gates}])
+    begin(runner, mocked_ws)
+    keep(runner, mocked_ws)
+
+    result = at(runner, mocked_ws, "cert", "run", HYP_ID)
+
+    assert result.exit_code == Exit.OK
+    assert "embargoed_window sets no min_fraction, so no pass probability" in result.stdout
 
 
 def test_show_of_something_that_is_not_a_hypothesis_is_refused(

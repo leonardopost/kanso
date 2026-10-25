@@ -85,9 +85,26 @@ instrument's points of the class over the span and leaves the series' files wher
 **A file's footer counts each row group and states its `ts_init` range.** `write_data`
 writes a file in row groups of `max_rows_per_group` rows, 5,000 unless the catalog is opened
 with another, and the footer of each states its rows and the least and greatest `ts_init`
-among them. So the points a span holds are at most the rows of the groups whose range meets
-it, read off the footers without reading a point, and a card's window is read in as few
-spans as that count allows (`kanso.nautilus.backtest._reads`).
+among them. So a group whose range lies within one step of a window's reads is counted off
+its footer without reading a point; a group reaching further has its `ts_init` column read,
+and nothing else of it, and is counted step by step; and a card's window is read in as few
+spans as that count allows (`kanso.nautilus.backtest._row_groups`, `_reads`).
+
+**A query not handed its files lists them through the catalog it is asked of.** `query`
+without `files` — every query of bars, and of a custom type — asks the catalog's own
+`get_file_list_from_data_cls` for every file of the class, a glob of the class's whole
+directory, once a query, and then keeps the series and span asked for. And
+`ParquetDataCatalog(path)` is one instance per path for the whole process, the constructor
+handing back the instance it made first, while `copy.copy` of it is an instance of its own.
+So kanso reads a window through a copy whose listing answers from one glob a class, and no
+other reader in the process sees that listing (`kanso.nautilus.backtest._catalog`).
+
+**A query of a listed file that has gone raises.** `query(..., files=...)` handed a path
+whose file has gone raises `FileNotFoundError` naming it. A query of bars is not handed its
+files: it reads the directory of each listed file that meets its span, so it reads whatever
+that directory holds when it runs, and raises `RuntimeError` when the directory holds no
+file. So a window whose listing a replace has overtaken learns it at the read that fails,
+and lists the class again (`kanso.nautilus.backtest._read_listed`).
 
 Availability timestamps
 -----------------------
@@ -395,6 +412,16 @@ is. A fill model that hands the engine a simulated book does change it: a zero-q
 among the fills it answers ends the fill before the check (below), which is how `print_through`
 fills a print beyond a resting limit by the print's own size (`kanso.nautilus.tape`).
 
+The venue shares nothing among takers either: two strategies sending market orders into one
+name at one instant are each filled from the touch as if alone. Measured: under a quote of
+9.99/10.01 showing 100 a side, two strategies each buying 80 at market on it are filled 80
+and 80, both at 10.01. So a book does not leave
+that to the venue. Its ledger hands every taker entry of an instant its share of one budget
+per name and side — the size the latest quote displays — in the book's own order, and cuts
+the entry to it before it is sent (`kanso.nautilus.book`); the venue still charges nothing
+and the runner still charges each fill once. A book's resting orders, and its entries in a
+name no quote has been seen for, are credited by the venue as this section states.
+
 **What a fill model can decide.** The matching engine asks its fill model,
 `get_orderbook_for_fill_simulation`, for the fills of every order it has matched — a market
 order, a limit marketable when it lands, and a resting limit a point reached, marked `MAKER` —
@@ -512,6 +539,104 @@ mirrors when it notes the orders it cancelled; on the backtest it also sends the
 one still in flight without marking it, and — read in `trading/strategy.pyx` rather than
 measured — leaves one a node has not yet sent, so kanso hands it the orders only when none
 is still `INITIALIZED`, and cancels them one by one otherwise.
+
+Positions
+---------
+**Under the NETTING OMS a position is one strategy's in one instrument, not the account's.**
+The execution engine names a netting fill's position `{instrument_id}-{strategy_id}`
+(`ExecutionEngine._determine_netting_position_id`, `execution/engine.pyx`), so the cache
+keeps one open position per (instrument, strategy), and `Cache.positions_open(instrument_id=…,
+strategy_id=…)` hands back that one or none. `Portfolio.net_position(instrument_id)` is the
+sum of every open position in the instrument across every strategy on the account — a
+`Decimal`, as is each position's `signed_decimal_qty()` it adds up — so on a stage of two
+versions trading one name it is neither version's. Measured: two strategies on one NETTING
+account, one buying 10 and the other 5 of one name, hold two open positions named for
+their strategies, 10 and 5, under a net position of 15; the first selling 10 closes its own
+and leaves the second's 5 open, the net position 5. Both position changes are applied in
+the cache and the portfolio before the fill reaches the strategy (read in
+`ExecutionEngine._handle_order_fill`), so the two readers move at the same instant. So
+`KansoStrategy` reads its own position, the one `held` and `submit_exit` size against, from
+the cache by its own strategy id and never from the portfolio. A broker nets every version's
+orders on the account into one position of its own; the split by strategy is the engine's
+bookkeeping beside it.
+
+**The simulated venue does not hold a reduce-only close to the sender's position.** Under
+NETTING its matching engine reads the position a fill bears on as the first open position in
+the instrument, across every strategy (`OrderMatchingEngine._get_position_id` in
+`backtest/engine.pyx` takes `cache.positions_open(instrument_id=…)[0]`, which the cache sorts
+by id), and caps a reduce-only fill at that position's quantity; the execution engine then
+books the fill to the sender's own position. Measured: beside `Probe-A` long 10, `Probe-B`
+closing its own long 500 with `close_position` sells 10 and stays long 490; beside `Probe-A`
+short 5, its close of a long 100 sells 5 and stays long 95; and each pair closed `Probe-A`
+first ends flat, since each fill is applied before the next close is matched. So the node's
+flatten, which sends `close_position`'s reduce-only order, closes a name's positions in the
+cache's order by id, each by the strategy that holds it (`kanso.nautilus.node._flatten`);
+`submit_exit` never sets the flag.
+
+Dispatch
+--------
+**A topic's handlers at one priority are called in the order they subscribed, not in the
+order their components were registered.** `MessageBus.subscribe` keeps its subscriptions in a
+dict in the order they were made and hands a topic's matches over as `sorted(subs,
+reverse=True)`, and `Subscription.__lt__` compares `priority` alone (`common/component.pyx`),
+so a stable sort leaves handlers of one priority in subscription order; a priority may not be
+below zero, where every strategy's own subscriptions sit. A strategy subscribes its data when
+it starts, and the trader starts strategies in the order they were added, so the two orders
+agree until one subscribes later than its start. Measured: of two strategies on one name,
+the one added first subscribing to prints only on its first quote and the one added second
+subscribing at its start, a print reaches the second first; on a bare bus two handlers at
+priority zero subscribed in turn are called in that order, after one at priority one. And a
+point reaches only its own instrument's subscribers, so points of two names at one instant
+reach them in the stream's order (`sort_data` keeps it, above). Neither order is a rule a
+book can rank its members by, so kanso's book does not let either decide which entry is
+handed room first: every member's entries of an instant are collected and handed room in
+the book's own order once every member has handled the marker that closes the instant
+(`kanso.nautilus.book`).
+
+**An order is heard on the bus before it is routed, and so is a modify.** `Strategy
+.submit_order` publishes the order's `OrderInitialized` on `events.order.<the order's
+strategy id>` before it adds the order to the cache or routes the command to the emulator or
+the risk engine; `submit_order_list` publishes each order's before it routes the list; and
+`modify_order` publishes the `OrderPendingUpdate` it applies to an order not held locally
+before it routes the modify (`_create_modify_order`); `MessageBus.publish_c` calls each
+subscriber in turn and lets an exception out (`trading/strategy.pyx`,
+`common/component.pyx`). So a subscriber to `events.order.*` that raises leaves the order
+unsent and the order at the venue as it was, whichever way the engine's methods were reached:
+called on the engine's class, past a subclass's own override, too. Measured at no latency and
+at 20 ms: a strategy resting a sale of 10 at 10.50 on a market of 9.99/10.01, then sending a
+buy at market by `Strategy.submit_order(self, order)`, a list of two by
+`Strategy.submit_order_list`, a modify of its rest to 20 at 9.00, and a buy in the name of a
+strategy the engine does not run, each refused by such a subscriber and caught, kept its rest
+of 10 at 10.50 unfilled over three more minutes and held no other order; the list was refused
+at its first order. A book refuses that way every order and modify a member hands the
+engine's own methods past kanso's (`kanso.nautilus.book.BookLedger.heard`). A command or a
+fill a strategy sends on the bus itself, to `ExecEngine.execute`, `RiskEngine.execute` or
+`ExecEngine.process`, goes past those methods, an event it applies to an order with
+`Order.apply` sends no command at all, and a subscriber it takes off the bus hears nothing:
+in a book each went out unrefused (`docs/backlog.md` row 210), and only the integrity scan
+refuses them, in a researched strategy and by the names they are spelt with
+(`kanso.criteria.integrity`; what it does not follow is `docs/backlog.md` row 211).
+
+**Every change to a strategy's orders and positions reaches it as an event before any handler
+of its runs again.** `ExecutionEngine._handle_event` applies an order event to the order, and
+a fill to the position it makes, before it publishes the order event on `events.order.<the
+strategy's id>` and then the position events it held back on `events.position.<the
+strategy's id>` (`execution/engine.pyx`); a strategy publishes the pending modify and the
+pending cancel it applies itself; and `cancel_all_orders` alone applies one and publishes
+nothing — `OrderPendingCancel`, which changes a status and moves no quantity
+(`trading/strategy.pyx`). Measured at no latency and at 20 ms: a strategy that bought at
+market, rested three orders, moved one, cancelled one by itself and the rest with
+`cancel_all_orders`, flipped long to short, closed, reopened and closed again, one step a
+quote, found its orders (status, filled, left, closed) and positions (signed quantity,
+closed, events) in the cache on entry to each of its 19 quote handlers as they were when its
+last handler ended, whether an event's or a quote's. That is what lets `KansoStrategy` keep a
+sleeve's position reads from one event to the next (`KansoStrategy._forget_kept`), which a
+tick sleeve asks of every name on every point. And `Cache.position_snapshot_bytes` hands back
+the cache's own list of a position's pickled snapshots, which `snapshot_position` — at a
+NETTING flip, and at a reopen — appends to (`cache/cache.pyx`): read after every handler of
+that strategy, each list was the one read before, grown at its end. That is what lets the
+runner unpickle each snapshot once rather than every one after every chunk
+(`kanso.nautilus.backtest._fills_since`).
 
 Risk configuration
 ------------------
@@ -667,6 +792,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from itertools import count
 from typing import Any
@@ -1449,6 +1575,252 @@ def _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight() -> tuple
     )
 
 
+@dataclass(frozen=True)
+class _Announced:
+    """What `_probe_changes_reach_their_strategy` found."""
+
+    compared: int
+    """Quote handlers that read the strategy's orders and positions on entry."""
+    distinct: int
+    """How many different readings of them those handlers found."""
+    unannounced: tuple[str, ...]
+    """Each change found on entry to one that no event handed since its last handler."""
+    cancelled_moved: tuple[str, ...]
+    """What `cancel_all_orders` changed of an order besides its status."""
+    handed: tuple[str, ...]
+    """The events the strategy was handed, by name, in order."""
+    lists: tuple[str, ...]
+    """Each snapshot list read that was not the list read before it, grown at its end."""
+    snapshots: int
+    """The snapshots the cache holds at the end."""
+
+
+def _probe_changes_reach_their_strategy(latency_ns: int) -> _Announced:
+    """A strategy on a quoted name that buys 10 at market; rests a buy of 10 at 9.95, a sale of
+    5 at 10.08 and a buy of 3 at 9.90; moves the first to 9.97 and cancels the last; flips to
+    a short once the ask has reached 9.97; cancels the rest with `cancel_all_orders`; closes,
+    reopens with a buy of 5 and closes again — a step a quote. On entry to each quote handler
+    it reads every order of its own (status, filled, left, closed) and every position (signed
+    quantity, closed, events) from the cache, and compares them with what it read as its last
+    handler, an event's or a quote's, ended; and it reads each position's snapshot list."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.data import QuoteTick
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.step = 0
+            self.last: object = None
+            self.entries: list[tuple[int, object, object]] = []
+            self.rests: list[Any] = []
+            self.cancelled: list[tuple[object, object]] = []
+            self.handed: list[str] = []
+            self.read: dict[Any, tuple[list[bytes], list[bytes]]] = {}
+            self.lists: list[tuple[str, bool, int, int]] = []
+
+        def held(self) -> object:
+            orders = sorted(
+                self.cache.orders(strategy_id=self.id), key=lambda o: o.client_order_id.value
+            )
+            positions = sorted(self.cache.positions(strategy_id=self.id), key=lambda p: p.id.value)
+            return (
+                tuple(
+                    (o.client_order_id.value, order_status_to_str(o.status))
+                    + (float(o.filled_qty), float(o.leaves_qty), o.is_closed)
+                    for o in orders
+                ),
+                tuple((p.id.value, p.signed_qty, p.is_closed, p.event_count) for p in positions),
+            )
+
+        def ended(self) -> None:
+            self.last = self.held()
+            for position_id in self.cache.position_snapshot_ids():
+                frames = self.cache.position_snapshot_bytes(position_id)
+                was = self.read.get(position_id, (frames, []))
+                grown = frames is was[0] and frames[: len(was[1])] == was[1]
+                self.lists.append((position_id.value, grown, len(was[1]), len(frames)))
+                self.read[position_id] = (frames, list(frames))
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+            self.ended()
+
+        def handle_event(self, event: Any) -> None:
+            self.handed.append(type(event).__name__)
+            super().handle_event(event)
+            self.ended()
+
+        def on_quote_tick(self, tick: Any) -> None:
+            self.entries.append((self.step, self.last, self.held()))
+            self.act()
+            self.step += 1
+            self.ended()
+
+        def market(self, side: Any, quantity: float) -> None:
+            self.submit_order(
+                self.order_factory.market(equity.id, side, Quantity.from_int(int(quantity)))
+            )
+
+        def rest(self, side: Any, quantity: int, price: float) -> Any:
+            order = self.order_factory.limit(
+                equity.id, side, Quantity.from_int(quantity), Price(price, 2)
+            )
+            self.submit_order(order)
+            return order
+
+        def act(self) -> None:
+            net = sum(p.signed_qty for p in self.cache.positions_open(strategy_id=self.id))
+            if self.step == 0:
+                self.market(OrderSide.BUY, 10)
+            elif self.step == 2:
+                self.rests = [
+                    self.rest(OrderSide.BUY, 10, 9.95),
+                    self.rest(OrderSide.SELL, 5, 10.08),
+                    self.rest(OrderSide.BUY, 3, 9.90),
+                ]
+            elif self.step == 4:
+                self.modify_order(self.rests[0], price=Price(9.97, 2))
+                self.cancel_order(self.rests[2])
+            elif self.step == 8:
+                self.market(OrderSide.SELL, net + 20)
+            elif self.step == 10:
+                before = [(o.filled_qty, o.leaves_qty, o.is_closed) for o in self.rests]
+                self.cancel_all_orders(equity.id)
+                after = [(o.filled_qty, o.leaves_qty, o.is_closed) for o in self.rests]
+                self.cancelled.append((before, after))
+            elif self.step == 12:
+                self.market(OrderSide.BUY, -net)
+            elif self.step == 14:
+                self.market(OrderSide.BUY, 5)
+            elif self.step == 16:
+                self.market(OrderSide.SELL, net)
+
+    touches = [(9.99, 10.01)] * 5 + [(9.95, 9.97)] * 3 + [(9.99, 10.01)] * 11
+    points = [
+        QuoteTick(
+            equity.id,
+            Price(bid, 2),
+            Price(ask, 2),
+            Quantity.from_int(100),
+            Quantity.from_int(100),
+            (index + 1) * _MINUTE_NS,
+            (index + 1) * _MINUTE_NS,
+        )
+        for index, (bid, ask) in enumerate(touches)
+    ]
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(points)
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        snapshots = sum(
+            len(engine.cache.position_snapshot_bytes(position_id))
+            for position_id in engine.cache.position_snapshot_ids()
+        )
+    finally:
+        engine.dispose()
+    return _Announced(
+        compared=len(probe.entries),
+        distinct=len({now for _, _, now in probe.entries}),
+        unannounced=tuple(
+            f"quote {step}: {last} then {now}" for step, last, now in probe.entries if now != last
+        ),
+        cancelled_moved=tuple(
+            f"{before} then {after}" for before, after in probe.cancelled if after != before
+        ),
+        handed=tuple(probe.handed),
+        lists=tuple(
+            f"{name}: {was} -> {now}" for name, grown, was, now in probe.lists if not grown
+        ),
+        snapshots=snapshots,
+    )
+
+
+_HANDED_KINDS = frozenset(
+    {
+        "OrderFilled",
+        "OrderUpdated",
+        "OrderPendingCancel",
+        "OrderCanceled",
+        "PositionOpened",
+        "PositionChanged",
+        "PositionClosed",
+    }
+)
+"""The events `_probe_changes_reach_their_strategy` must have been handed for its reads to
+have compared anything: fills, a modify, a cancel and every kind of position change."""
+
+
+def _check_every_change_reaches_its_strategy_before_its_next_handler() -> tuple[bool, str]:
+    """What `KansoStrategy._forget_kept` rests on to keep a sleeve's position reads between
+    events: whatever changes its orders or its positions is handed to it as an event before
+    any handler of its runs again, but the pending cancel `cancel_all_orders` marks, which
+    moves no quantity and closes nothing."""
+    seen: list[str] = []
+    holds = True
+    for latency_ns in (0, 20_000_000):
+        found = _probe_changes_reach_their_strategy(latency_ns)
+        kinds = set(found.handed)
+        holds = (
+            holds
+            and not found.unannounced
+            and not found.cancelled_moved
+            and kinds >= _HANDED_KINDS
+            and found.distinct > 5
+        )
+        seen.append(
+            f"{latency_ns // 1_000_000} ms: {found.compared} quote handlers read "
+            f"{found.distinct} different holdings, compared after "
+            f"{len(found.handed)} events ({', '.join(sorted(kinds))}); changes no event had "
+            f"handed {list(found.unannounced)}; cancel_all_orders moved "
+            f"{list(found.cancelled_moved) or 'no quantity and closed nothing'}"
+        )
+    return holds, (
+        "a strategy that bought at market, rested three orders, moved one, cancelled one by "
+        "itself and the rest with cancel_all_orders, flipped long to short, closed, reopened "
+        "and closed again, reading its orders and positions in the cache on entry to every "
+        "quote handler against what it read as its last handler ended — " + "; ".join(seen)
+    )
+
+
+def _check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end() -> tuple[bool, str]:
+    """What `kanso.nautilus.backtest._fills_since` rests on to read each position snapshot
+    once: `position_snapshot_bytes` hands back the cache's own list, and a snapshot is added
+    at its end."""
+    seen: list[str] = []
+    holds = True
+    for latency_ns in (0, 20_000_000):
+        found = _probe_changes_reach_their_strategy(latency_ns)
+        holds = holds and not found.lists and found.snapshots >= 2
+        seen.append(
+            f"{latency_ns // 1_000_000} ms: {found.snapshots} snapshots at the end; read as "
+            f"another list or changed before its end: {list(found.lists) or 'none'}"
+        )
+    return holds, (
+        "a NETTING position flipped from long to short, closed, reopened and closed again, "
+        "its snapshot lists read after every handler — " + "; ".join(seen)
+    )
+
+
 def _probe_close_after_a_sale(sold: int) -> tuple[bool, str, float, float, float]:
     """A long of 10; then, in one handler, a sale of `sold` at market and `close_position`.
     Returns the close's (is_reduce_only, status, quantity, filled) and the net position at
@@ -1528,6 +1900,470 @@ def _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position() -> tu
         f"of 10 and {part} after a sale of 4. The close carries reduce_only by default, and "
         "the venue refuses a reduce-only order the position no longer has room for and "
         "trims one to the quantity still open, rather than open the other side"
+    )
+
+
+def _probe_two_strategies_in_one_name() -> tuple[object, ...]:
+    """Two strategies on one NETTING account: `A` buys 10 and `B` buys 5 on the first print,
+    and `A` sells 10 on the second. Returns, read in `A`'s handler before its sale and again
+    at the end, the open positions by id with their signed quantities, each strategy's own
+    position as the cache answers it by (instrument, strategy), and the net position."""
+    from decimal import Decimal
+
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import StrategyId, Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    ids = (StrategyId("Probe-A"), StrategyId("Probe-B"))
+
+    def read(cache: Any, portfolio: Any) -> tuple[object, ...]:
+        held = {str(p.id): float(p.signed_qty) for p in cache.positions_open()}
+        own = tuple(
+            float(
+                sum(
+                    (
+                        p.signed_decimal_qty()
+                        for p in cache.positions_open(instrument_id=equity.id, strategy_id=id_)
+                    ),
+                    Decimal(0),
+                )
+            )
+            for id_ in ids
+        )
+        return held, own, float(portfolio.net_position(equity.id))
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, bought: int) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.bought = bought
+            self.seen = 0
+            self.before: tuple[object, ...] = ()
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.submit_order(
+                    self.order_factory.market(
+                        equity.id, OrderSide.BUY, Quantity.from_int(self.bought)
+                    )
+                )
+            elif self.seen == 2 and self.bought == 10:
+                self.before = read(self.cache, self.portfolio)
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.SELL, Quantity.from_int(10))
+                )
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0))
+        first = Probe("A", 10)
+        engine.add_strategy(first)
+        engine.add_strategy(Probe("B", 5))
+        engine.run()
+        return first.before, read(engine.cache, engine.portfolio)
+    finally:
+        engine.dispose()
+
+
+def _check_a_netting_position_is_one_strategy_s_in_one_instrument() -> tuple[bool, str]:
+    """`KansoStrategy`'s own-position reader: under NETTING the cache keeps one position per
+    (instrument, strategy), and the portfolio's net position is every strategy's sum."""
+    before, after = _probe_two_strategies_in_one_name()
+    holds = before == (
+        {"AAPL.XNAS-Probe-A": 10.0, "AAPL.XNAS-Probe-B": 5.0},
+        (10.0, 5.0),
+        15.0,
+    ) and after == ({"AAPL.XNAS-Probe-B": 5.0}, (0.0, 5.0), 5.0)
+    return holds, (
+        "two strategies on one NETTING account, A buying 10 and B 5 of one name, then A "
+        "selling 10: (open positions by id, each strategy's own by (instrument, strategy), "
+        f"net position) = {before} before the sale and {after} after it. A position is named "
+        "{instrument}-{strategy}, A's sale closes A's alone, and the net position is the "
+        "account's sum"
+    )
+
+
+def _probe_a_reduce_only_close_beside_a_mate() -> tuple[dict[str, float], ...]:
+    """Two strategies on one NETTING account in one name, `Probe-A` sorting first by id.
+
+    On the first print `A` buys 10 and `B` 500; on the second `B` closes its own position
+    with `close_position`; on the third each closes its own, `A` first. On the fourth `A`
+    sells 5 and `B` buys 100; on the fifth `B` closes its own; on the sixth each closes its
+    own, `A` first. Returns the open positions by id with their signed quantities, read at
+    the third, fourth, sixth and seventh prints, before anything is sent there."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    seen: list[dict[str, float]] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, script: dict[int, tuple[str, int]]) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.script = script
+            self.ticks = 0
+
+        def on_start(self) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.ticks += 1
+            if self.order_id_tag == "A" and self.ticks in (3, 4, 6, 7):
+                seen.append({str(p.id): float(p.signed_qty) for p in self.cache.positions_open()})
+            step = self.script.get(self.ticks)
+            if step is None:
+                return
+            action, qty = step
+            if action == "close":
+                for position in self.cache.positions_open(strategy_id=self.id):
+                    self.close_position(position)
+                return
+            side = OrderSide.BUY if action == "buy" else OrderSide.SELL
+            self.submit_order(self.order_factory.market(equity.id, side, Quantity.from_int(qty)))
+
+    close = ("close", 0)
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", *(10.0,) * 6))
+        engine.add_strategy(Probe("A", {1: ("buy", 10), 3: close, 4: ("sell", 5), 6: close}))
+        engine.add_strategy(
+            Probe("B", {1: ("buy", 500), 2: close, 3: close, 4: ("buy", 100), 5: close, 6: close})
+        )
+        engine.run()
+        return tuple(seen)
+    finally:
+        engine.dispose()
+
+
+def _check_a_reduce_only_close_is_held_to_the_name_s_first_position() -> tuple[bool, str]:
+    """The node flatten's order: under NETTING the venue trims a reduce-only close to the
+    first open position in the instrument by id, whoever's it is, and closes sent in that
+    order each find their own."""
+    seen = _probe_a_reduce_only_close_beside_a_mate()
+    a, b = "AAPL.XNAS-Probe-A", "AAPL.XNAS-Probe-B"
+    holds = seen == ({a: 10.0, b: 490.0}, {}, {a: -5.0, b: 95.0}, {})
+    return holds, (
+        "Probe-A and Probe-B on one NETTING account in one name: B's close_position of its "
+        "own long 500 beside A's long 10, then both closed A first, then B's close of its "
+        "own long 100 beside A's short 5, then both closed A first, read (open positions by "
+        f"id) = {seen}. The venue holds a reduce-only close to the first open position in "
+        "the instrument sorted by id — the mate's, on either side — and fills the strategy's "
+        "own with what that allows; closed in that order, each close finds its own first"
+    )
+
+
+def _probe_subscription_order() -> tuple[list[str], list[str]]:
+    """Who hears a print first, and in which order a bare bus calls three handlers.
+
+    Two strategies on one name: `A`, added first, subscribes to quotes at its start and to
+    prints only on its first quote; `B`, added second, subscribes to prints at its start. A
+    quote at minute one, a print at minute two. Returns the tags in the order the print
+    reached them, and the order a bus calls handlers subscribed `second` and `third` at
+    priority zero and then `first` at priority one."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.common.component import MessageBus, TestClock
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType
+    from nautilus_trader.model.identifiers import TraderId, Venue
+    from nautilus_trader.model.objects import Money
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    heard: list[str] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str, *, late: bool) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.late = late
+
+        def on_start(self) -> None:
+            if self.late:
+                self.subscribe_quote_ticks(equity.id)
+            else:
+                self.subscribe_trade_ticks(equity.id)
+
+        def on_quote_tick(self, tick: object) -> None:
+            self.subscribe_trade_ticks(equity.id)
+
+        def on_trade_tick(self, tick: object) -> None:
+            heard.append(self.order_id_tag)
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote")[:1])
+        engine.add_data(_limit_points("trade", 10.0)[1:])
+        engine.add_strategy(Probe("A", late=True))
+        engine.add_strategy(Probe("B", late=False))
+        engine.run()
+    finally:
+        engine.dispose()
+    bus = MessageBus(trader_id=TraderId("KANSO-001"), clock=TestClock())
+    called: list[str] = []
+    for name, priority in (("second", 0), ("third", 0), ("first", 1)):
+        bus.subscribe(
+            topic="kanso.order", handler=lambda _, n=name: called.append(n), priority=priority
+        )
+    bus.publish(topic="kanso.order", msg="point")
+    return heard, called
+
+
+def _probe_two_takers_on_one_touch() -> list[tuple[str, float, float]]:
+    """Two strategies each buying 80 at market on the first quote, 9.99/10.01 showing 100 a
+    side, on one level-one venue; returns each fill as (tag, quantity, price)."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, StrategyConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    fills: list[tuple[str, float, float]] = []
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self, tag: str) -> None:
+            super().__init__(StrategyConfig(order_id_tag=tag))
+            self.sent = False
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+
+        def on_quote_tick(self, tick: object) -> None:
+            if not self.sent:
+                self.sent = True
+                self.submit_order(
+                    self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(80))
+                )
+
+        def on_order_filled(self, event: Any) -> None:
+            fills.append((self.order_id_tag, float(event.last_qty), float(event.last_px)))
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote", 9.99, 10.01))
+        engine.add_strategy(Probe("A"))
+        engine.add_strategy(Probe("B"))
+        engine.run()
+    finally:
+        engine.dispose()
+    return fills
+
+
+def _check_two_takers_are_each_filled_from_the_whole_touch() -> tuple[bool, str]:
+    """Why a book's ledger shares the touch among its takers: the venue does not."""
+    fills = _probe_two_takers_on_one_touch()
+    return fills == [("A", 80.0, 10.01), ("B", 80.0, 10.01)], (
+        f"two strategies each buying 80 at market on a quote of 9.99/10.01 showing 100 a "
+        f"side were filled {fills}: each from the whole touch, the second taking none of what "
+        "the first was filled"
+    )
+
+
+def _check_handlers_at_one_priority_run_in_subscription_order() -> tuple[bool, str]:
+    """Why a book collects an instant's entries before it hands out room: the order the
+    engine serves its strategies in is the order they subscribed."""
+    heard, called = _probe_subscription_order()
+    holds = heard == ["B", "A"] and called == ["first", "second", "third"]
+    return holds, (
+        f"a print reached {heard} where A was added first and subscribed to prints only on "
+        "its first quote and B, added second, subscribed at its start; a bus called "
+        f"{called} for handlers subscribed second and third at priority zero and first at "
+        "priority one. Handlers of one priority run in subscription order, higher first"
+    )
+
+
+def _probe_refused_on_the_bus(
+    latency_ns: int,
+) -> tuple[list[tuple[str, bool]], list[tuple[float, float, str, float]], int]:
+    """A strategy whose own `submit_order` counts its calls and hands the order to the
+    engine's rests a sale of 10 at 10.50 by it on its first quote of 9.99/10.01; on its
+    second, with a subscriber to `events.order.*` above its own handlers raising on every
+    `OrderInitialized` and `OrderPendingUpdate`, it sends by the engine's methods called on
+    the engine's class a buy of 10 at market, a list of two such buys, a modify of its rest to
+    20 at 9.00, and a buy of 10 in the name of a strategy the engine does not run, catching
+    each refusal; three more quotes follow. Returns each refused event's type with whether
+    the cache held its order then, every order the cache holds at the end as (quantity,
+    price, status, filled), and how many calls its own `submit_order` saw."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.backtest.models import LatencyModel
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.core.uuid import UUID4
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide, order_status_to_str
+    from nautilus_trader.model.events import OrderInitialized, OrderPendingUpdate
+    from nautilus_trader.model.identifiers import ClientOrderId, StrategyId, Venue
+    from nautilus_trader.model.objects import Money, Price, Quantity
+    from nautilus_trader.model.orders import MarketOrder, OrderList
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    refused: list[tuple[str, bool]] = []
+
+    class RefusedError(Exception):
+        """What the subscriber raises."""
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.rest: Any = None
+            self.refusing = False
+            self.overridden = 0
+
+        def on_start(self) -> None:
+            self.subscribe_quote_ticks(equity.id)
+
+        def submit_order(self, order: Any, *args: Any, **kwargs: Any) -> None:
+            self.overridden += 1
+            Strategy.submit_order(self, order, *args, **kwargs)
+
+        def buy(self) -> Any:
+            return self.order_factory.market(equity.id, OrderSide.BUY, Quantity.from_int(10))
+
+        def on_quote_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen == 1:
+                self.rest = self.order_factory.limit(
+                    equity.id, OrderSide.SELL, Quantity.from_int(10), Price(10.5, 2)
+                )
+                self.submit_order(self.rest)
+            elif self.seen == 2:
+                listed = OrderList(
+                    self.order_factory.generate_order_list_id(), [self.buy(), self.buy()]
+                )
+                stranger = MarketOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=StrategyId("Nobody-001"),
+                    instrument_id=equity.id,
+                    client_order_id=ClientOrderId("O-nobody-1"),
+                    order_side=OrderSide.BUY,
+                    quantity=Quantity.from_int(10),
+                    init_id=UUID4(),
+                    ts_init=0,
+                )
+                sends: tuple[Callable[[], object], ...] = (
+                    lambda: Strategy.submit_order(self, self.buy()),
+                    lambda: Strategy.submit_order_list(self, listed),
+                    lambda: Strategy.modify_order(
+                        self, self.rest, quantity=Quantity.from_int(20), price=Price(9.0, 2)
+                    ),
+                    lambda: Strategy.submit_order(self, stranger),
+                )
+                self.refusing = True
+                for send in sends:
+                    with suppress(RefusedError):
+                        send()
+                self.refusing = False
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+            latency_model=LatencyModel(base_latency_nanos=latency_ns) if latency_ns else None,
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("quote", *(9.99, 10.01) * 4))
+        probe = Probe()
+        engine.add_strategy(probe)
+
+        def hear(event: Any) -> None:
+            if probe.refusing and isinstance(event, OrderInitialized | OrderPendingUpdate):
+                refused.append(
+                    (type(event).__name__, engine.cache.order_exists(event.client_order_id))
+                )
+                raise RefusedError
+
+        engine.kernel.msgbus.subscribe(topic="events.order.*", handler=hear, priority=1)
+        engine.run()
+        held = [
+            (
+                float(order.quantity),
+                float(order.price),
+                order_status_to_str(order.status),
+                float(order.filled_qty),
+            )
+            for order in engine.cache.orders()
+        ]
+        return refused, held, probe.overridden
+    finally:
+        engine.dispose()
+
+
+def _check_an_order_and_a_modify_are_heard_on_the_bus_before_they_are_routed() -> tuple[bool, str]:
+    """What a book refuses an order a member sent past kanso by: the bus hears it first."""
+    seen = {latency: _probe_refused_on_the_bus(latency) for latency in (0, 20 * _MS)}
+    refused = [
+        ("OrderInitialized", False),
+        ("OrderInitialized", False),
+        ("OrderPendingUpdate", True),
+        ("OrderInitialized", False),
+    ]
+    holds = all(
+        found == refused
+        and len(held) == 1
+        and held[0][:2] == (10.0, 10.5)
+        and held[0][3] == 0.0
+        and overridden == 1
+        for found, held, overridden in seen.values()
+    )
+    return holds, (
+        f"refused on the bus, at no latency and at 20 ms: {seen}. The strategy's own "
+        "submit_order saw only the rest it was called for, not the orders sent by the "
+        "engine's class. Each event was heard before "
+        "the engine routed what it was about: the buys were never in the cache, the list "
+        "stopped at its first order, and the rest of 10 at 10.50 stayed unfilled at that size "
+        "over three more minutes"
     )
 
 
@@ -3406,6 +4242,103 @@ def _check_a_footer_counts_each_row_group_and_states_its_ts_init_range() -> tupl
     )
 
 
+def _check_a_catalog_is_one_instance_per_path() -> tuple[bool, str]:
+    """Open a directory's catalog twice and another directory's once, and copy the first."""
+    import copy
+
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+        one, again, other = (ParquetDataCatalog(path) for path in (first, first, second))
+        copied = copy.copy(one)
+        same = one is again and one is not other
+        private = copied is not one and copied.path == one.path and copied.fs is one.fs
+    return same and private, (
+        f"ParquetDataCatalog of one path twice {'is' if one is again else 'is not'} one "
+        f"instance, of another path {'is not' if one is not other else 'is'} it, and a copy "
+        f"{'is its own instance of the same path' if private else 'is not'}"
+    )
+
+
+def _check_a_query_lists_its_files_through_the_catalog_it_asks() -> tuple[bool, str]:
+    """Write two names' bars and a point of a custom type of no instrument, put a counting
+    `get_file_list_from_data_cls` on a copy of the catalog, and query each series through
+    the copy without its files: which classes the copy was asked to list, and what each
+    query returned."""
+    import copy
+
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    bar: Any = _sample_bar()
+    other: Any = Bar(
+        type(bar.bar_type).from_str("MSFT.XNAS-1-DAY-LAST-EXTERNAL"),
+        bar.open,
+        bar.high,
+        bar.low,
+        bar.close,
+        bar.volume,
+        ts_event=bar.ts_event,
+        ts_init=bar.ts_init,
+    )
+    wide = _define_custom_type({"value": float})()
+    with tempfile.TemporaryDirectory() as directory:
+        catalog: Any = copy.copy(ParquetDataCatalog(directory))
+        catalog.write_data([bar, other])
+        catalog.write_data([wide(value=1.0, ts_event=7, ts_init=7)])
+        lister = catalog.get_file_list_from_data_cls
+        asked: list[str] = []
+
+        def listing(data_cls: type) -> list[str]:
+            asked.append(data_cls.__name__)
+            files: list[str] = lister(data_cls)
+            return files
+
+        catalog.get_file_list_from_data_cls = listing
+        bars = catalog.query(Bar, identifiers=[str(bar.bar_type)], start=0, end=10_000)
+        custom = catalog.query(wide, start=0, end=10)
+    expected = ["Bar", wide.__name__]
+    holds = asked == expected and [str(b.bar_type) for b in bars] == [str(bar.bar_type)]
+    holds = holds and len(custom) == 1
+    return holds, (
+        f"query without files asked the catalog's own listing for {asked}, and returned "
+        f"{len(bars)} bar(s) of one name's two and {len(custom)} custom point(s)"
+    )
+
+
+def _check_a_query_of_a_listed_file_gone_raises() -> tuple[bool, str]:
+    """Write one name's print and one bar, list each class, remove every file, and query the
+    print handed its listed file and the bar through a copy of the catalog answering the
+    listing taken before."""
+    import copy
+    from pathlib import Path
+
+    from nautilus_trader.model.data import Bar, TradeTick
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    bar: Any = _sample_bar()
+    with tempfile.TemporaryDirectory() as directory:
+        catalog: Any = copy.copy(ParquetDataCatalog(directory))
+        catalog.write_data([_sale("AAPL.XNAS", 7)])
+        catalog.write_data([bar])
+        prints = catalog.get_file_list_from_data_cls(TradeTick)
+        bars = catalog.get_file_list_from_data_cls(Bar)
+        catalog.get_file_list_from_data_cls = lambda data_cls: list(bars)
+        for path in (*prints, *bars):
+            Path(path).unlink()
+        gone = _raises(lambda: catalog.query(TradeTick, start=0, end=10_000, files=prints))
+        empty = _raises(
+            lambda: catalog.query(Bar, identifiers=[str(bar.bar_type)], start=0, end=10_000)
+        )
+    named = str(gone).startswith("FileNotFoundError: ") and prints[0] in str(gone)
+    holds = named and str(empty).startswith("RuntimeError: ")
+    return holds, (
+        f"a query handed a print's file that had gone raised {str(gone).split(':')[0]}"
+        f"{' naming it' if named else ''}, and a query of bars whose one listed file had "
+        f"gone raised {str(empty).split(':')[0]}"
+    )
+
+
 def _check_delete_with_no_identifier_removes_a_series_of_no_instrument() -> tuple[bool, str]:
     """Write a point of a custom type of no instrument, and two names' prints, ask the
     engine to remove each class over every instant without naming an identifier, and see
@@ -4785,6 +5718,21 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_footer_counts_each_row_group_and_states_its_ts_init_range,
     ),
     (
+        "ParquetDataCatalog is one instance per path in a process, and a copy of it is an "
+        "instance of its own",
+        _check_a_catalog_is_one_instance_per_path,
+    ),
+    (
+        "a catalog query not handed its files lists them through the catalog's own "
+        "get_file_list_from_data_cls, once a query",
+        _check_a_query_lists_its_files_through_the_catalog_it_asks,
+    ),
+    (
+        "a catalog query handed a file that has gone raises FileNotFoundError naming it, and "
+        "a query of bars whose listed directory holds no file raises RuntimeError",
+        _check_a_query_of_a_listed_file_gone_raises,
+    ),
+    (
         "delete_data_range with no identifier removes the files of a series of no instrument",
         _check_delete_with_no_identifier_removes_a_series_of_no_instrument,
     ),
@@ -5066,9 +6014,47 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_close_is_reduce_only_and_the_venue_holds_it_to_the_position,
     ),
     (
+        "under the NETTING OMS the cache keeps one position per (instrument, strategy), "
+        "named {instrument}-{strategy}, and the portfolio's net position is every "
+        "strategy's sum",
+        _check_a_netting_position_is_one_strategy_s_in_one_instrument,
+    ),
+    (
+        "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
+        "open position in the instrument sorted by id, whichever strategy's it is",
+        _check_a_reduce_only_close_is_held_to_the_name_s_first_position,
+    ),
+    (
+        "a topic's handlers at one priority are called in the order they subscribed, higher "
+        "priorities first, whatever order their strategies were added in",
+        _check_handlers_at_one_priority_run_in_subscription_order,
+    ),
+    (
+        "an order's OrderInitialized, every order's of a list, and a modify's "
+        "OrderPendingUpdate are published on the bus before the engine routes the command, "
+        "so a subscriber that raises sends nothing, at no latency and at 20 ms",
+        _check_an_order_and_a_modify_are_heard_on_the_bus_before_they_are_routed,
+    ),
+    (
+        "two market orders sent into one name at one instant on a level-one venue are each "
+        "filled from the whole touch, neither sharing what the other took",
+        _check_two_takers_are_each_filled_from_the_whole_touch,
+    ),
+    (
         "cancel_all_orders marks an order open at the venue pending cancel, leaves one in "
         "flight as it is, and cancels both",
         _check_cancel_all_orders_takes_what_is_open_and_what_is_in_flight,
+    ),
+    (
+        "every change to a strategy's orders and positions in the cache is handed to it as "
+        "an event before any handler of its runs again, but the pending cancel "
+        "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
+        _check_every_change_reaches_its_strategy_before_its_next_handler,
+    ),
+    (
+        "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
+        "which a NETTING flip or reopen appends to and nothing else changes",
+        _check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end,
     ),
 )
 

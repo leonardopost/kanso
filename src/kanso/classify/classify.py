@@ -8,17 +8,35 @@ after everything that can be worked out without a model already has been.
 
 **The deterministic half comes first.** Which constructs can attach to what this workspace
 has certified, how a candidate's universe, horizon and resolution relate to each certified
-strategy's, and which objective the toolbox's own predicate selects for each objective
-mode are all computed before the call. The objective is therefore never the model's to
-choose: it follows from the hypothesis and the construct, and only the keep rule's two
-parameters are asked for.
+strategy's, and which objectives the toolbox's own predicate admits in each objective mode
+are all computed before the call. The predicate bounds the objective and chooses nothing
+within it: the model names one of the admitted ids — the wire holds it to the set, the
+check to the construct's mode — with the keep rule's two parameters. It used to be the
+lowest priority the predicate admitted, which put every hypothesis held under a day on the
+per-trade edge whatever it said its target was, and under that objective a strategy making
+two trades a day at ten basis points replaces one making forty at 1.2: five basis points a
+day of a quarter of the capital kept over twelve.
+
+**An objective the file already names is the operator's.** A hypothesis whose target is a
+return on capital states the contribution in its own file, and one `classify` used to
+replace it with the per-trade edge before the first card. Now an objective written in the
+file stands, keep rule and all, whenever the construct chosen is measured in its mode and
+its parameters are inside the toolbox's ranges; the model is shown it and asked to name it.
+Otherwise the model's objective is written, and the replacement is returned with its reason
+and recorded as an `objective_replaced` event, so `kanso classify` reports it rather than
+leaving a reader to diff the file. The same holds for an objective a previous classification
+wrote, which is the operator's once it is in the file: clearing the key is how a model is
+asked to choose again.
 
 **The answer is checked before it is believed.** A construct that is not in the catalogue,
-a host that is not certified, a parameter outside its declared range, a constraint that is
-not a card-stage gate, a missing required gate — each is a complaint handed back to the
-same model, and the router's ladder decides how many attempts that is worth. Nothing
-half-valid reaches the file: the classification is spliced into the hypothesis, the whole
-document is validated as a workspace file would be, and only then is anything written.
+a host that is not certified, an objective the construct's mode does not admit, a parameter
+outside its declared range, a constraint that is not a card-stage gate, a missing required
+gate — the toolbox's `required` ones, and those whose `required_for` names the objective
+written, each with every parameter set — and a gate whose parameters mean nothing apart
+named with some of them: each is a complaint handed back to the same model, and the router's
+ladder decides how many attempts that is worth. Nothing half-valid reaches the file: the
+classification is spliced into the hypothesis, the whole document is validated as a
+workspace file would be, and only then is anything written.
 
 **The prompt states the idea and never its results.** No card metric, no certificate and
 no strategy source is assembled into it, here or anywhere the inputs come from, because a
@@ -50,9 +68,9 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import yaml
 
 from kanso.classify.construct import PORTFOLIO, Catalogue, catalogue
-from kanso.classify.features import CARD_STAGE, NO_HOST, features
+from kanso.classify.features import CARD_STAGE, MODES, NO_HOST, applicable_ids, features
 from kanso.criteria import catalogue as toolbox
-from kanso.criteria import check_params
+from kanso.criteria import check_params, required_card_gates
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import (
     STRATEGY_FILE,
@@ -68,6 +86,7 @@ from kanso.hyp import (
 )
 from kanso.hyp.registry import CLASSIFIED, DRAFT
 from kanso.models import CallInputs, route
+from kanso.models.tasks import classify_schema
 from kanso.research.lanes import DEFAULT_LANE
 from kanso.schemas import (
     ConstraintRef,
@@ -83,7 +102,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-__all__ = ["classify"]
+__all__ = ["Classified", "StatedObjective", "classify"]
 
 TASK: Final = "classify"
 """The task class this step calls; the router owns its tier, effort and output cap."""
@@ -94,8 +113,27 @@ CLASSIFICATION: Final = ("construct", "objective", "constraints")
 CLASSIFIABLE: Final = frozenset({DRAFT, CLASSIFIED})
 """A hypothesis is classified before it is researched, and re-classified until it is."""
 
+OBJECTIVE: Final = "objective"
+"""The one of the three keys an operator may state for classification to keep."""
+
+OBJECTIVE_REPLACED: Final = "objective_replaced"
+"""The event kind recording an objective the file named and the classification did not keep."""
+
 _KEY: Final = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:")
 """A top-level key of a YAML document: no indentation, no leading marker."""
+
+
+@dataclass(frozen=True)
+class StatedObjective:
+    """An objective the file named before it was classified, and what became of it.
+
+    `id` is the id as the file wrote it, `None` when the key held no id at all. `reason` says
+    why it was not kept, and is `None` exactly when it was.
+    """
+
+    id: str | None
+    kept: bool
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,20 +143,40 @@ class Classification:
     construct: ConstructRef
     objective: ObjectiveRef
     constraints: tuple[ConstraintRef, ...]
+    stated: StatedObjective | None = None
+
+
+@dataclass(frozen=True)
+class Classified:
+    """What `classify` wrote: the hypothesis as it now reads, and what it did with an
+    objective the file already named — `None` when it named none."""
+
+    hyp: Hypothesis
+    stated: StatedObjective | None
+
+
+@dataclass(frozen=True)
+class _Stated:
+    """The file's own objective block, read before anything is stripped from it."""
+
+    id: str | None
+    ref: ObjectiveRef | None
+    problem: str | None
 
 
 def classify(
     ws: Workspace, store: StateStore, hyp_id: str, *, lane: str = DEFAULT_LANE
-) -> Hypothesis:
+) -> Classified:
     """Classify one registered hypothesis and write the answer into its file.
 
-    Returns the hypothesis as it now reads. `lane` is the lane the call's spend is
-    attributed to.
+    Returns the hypothesis as it now reads and what became of an objective the file named.
+    `lane` is the lane the call's spend is attributed to.
     """
     registration = cast("Registration", show(ws, store, hyp_id))
     _classifiable(registration)
     path = hypothesis_file(ws, hyp_id)
     text = _text(path)
+    stated = _stated(text)
     hyp = validate(ws, path, _without(text, CLASSIFICATION).encode("utf-8"))
 
     computed = features(ws, store, hyp)
@@ -134,12 +192,13 @@ def classify(
             attachable=computed["attachable"],
             objectives=computed["objectives"],
             folds=folds,
+            stated=stated,
         )
         if answered is not None and not complaints:
             accepted.append(answered)
         return complaints
 
-    route(ws, store, TASK, _inputs(hyp, computed, check), lane=lane)
+    route(ws, store, TASK, _inputs(hyp, computed, check, stated), lane=lane)
     chosen = accepted[-1]
 
     document = _written(text, chosen)
@@ -147,8 +206,18 @@ def classify(
     _replace(path, document)
     pin(store, updated, document.encode("utf-8"))
     set_status(store, hyp_id, CLASSIFIED)
+    if chosen.stated is not None and not chosen.stated.kept:
+        store.event(
+            OBJECTIVE_REPLACED,
+            hyp_id,
+            {
+                "stated": chosen.stated.id,
+                "objective": chosen.objective.id,
+                "reason": chosen.stated.reason,
+            },
+        )
     _render_stub(ws, updated, chosen, computed["certified"])
-    return updated
+    return Classified(hyp=updated, stated=chosen.stated)
 
 
 def _classifiable(registration: Registration) -> None:
@@ -174,25 +243,33 @@ Check = Callable[[Mapping[str, object]], Sequence[str]]
 """What the router runs on an answer that already satisfies the task class's schema."""
 
 
-def _inputs(hyp: Hypothesis, computed: Mapping[str, Any], check: Check) -> CallInputs:
+def _inputs(
+    hyp: Hypothesis, computed: Mapping[str, Any], check: Check, stated: _Stated | None
+) -> CallInputs:
     """The call's two halves: the idea and the catalogues, then the state of the book.
 
     The hypothesis and the catalogues do not move while one hypothesis is classified, so
-    they are the cached prefix; what this workspace has certified is the half that does.
+    they are the cached prefix; what this workspace has certified is the half that does. An
+    objective the file names is part of the idea, and is shown beside it; the answer's
+    `objective` is narrowed on the wire to the ids either mode admits.
     """
+    stable: dict[str, Any] = {
+        "hypothesis": _document(hyp),
+        "constructs": computed["constructs"],
+        "objectives": computed["objectives"],
+        "card_gates": computed["card_gates"],
+    }
+    if stated is not None and stated.ref is not None:
+        stable["objective_stated"] = stated.ref.model_dump(mode="json")
     return CallInputs(
         subject=hyp.id,
-        stable={
-            "hypothesis": _document(hyp),
-            "constructs": computed["constructs"],
-            "objectives": computed["objectives"],
-            "card_gates": computed["card_gates"],
-        },
+        stable=stable,
         dynamic={
             "certified_strategies": computed["certified"],
             "attachable": computed["attachable"],
         },
         check=check,
+        answer_schema=classify_schema(applicable_ids(dict(computed["objectives"]))),
     )
 
 
@@ -214,12 +291,17 @@ def _read(
     attachable: Mapping[str, Sequence[str]],
     objectives: Mapping[str, Any],
     folds: int,
+    stated: _Stated | None = None,
 ) -> tuple[Classification | None, list[str]]:
     """One answer, read as a classification, and everything wrong with it.
 
     The three references are built first, so a value the data model cannot hold is one
     complaint rather than an exception; the catalogue, the applicability and the ranges
-    are checked on the objects that survived.
+    are checked on the objects that survived. The objective the answer names is checked
+    against the set the construct's mode admits whether or not it is the one written: an
+    objective the file states is kept over it when that mode admits it too
+    (`_kept_objective`), and the gates the written objective requires are checked against
+    that one, the operator's own `required_constraints` counting toward them.
 
     The keep rule is read on its own because it is the one part of the answer the wire
     does not constrain: a numeric range is a keyword the provider refuses, so
@@ -264,24 +346,118 @@ def _read(
         *_constraint_complaints(constraints, hyp, folds),
     ]
     mode = entry.item.objective_mode
-    selected = objectives[mode]["selected"]
-    if selected is None:
+    admitted = applicable_ids(dict(objectives), mode)
+    if not admitted:
         complaints.append(
             f"construct.id: nothing in the toolbox measures a {construct.id} on this "
             f"hypothesis, since no {mode} objective applies to it"
         )
         return None, complaints
-    complaints.extend(
-        f"objective.params.{problem}"
-        for problem in check_params(toolbox()[selected], parameters.model_dump(), hyp, folds)
-    )
+    named = str(data.get("objective") or "")
+    if named in admitted:
+        complaints.extend(
+            f"objective.params.{problem}"
+            for problem in check_params(toolbox()[named], parameters.model_dump(), hyp, folds)
+        )
+    else:
+        complaints.append(_objective_complaint(named, construct.id, mode, objectives))
+    if complaints:
+        return None, complaints
+    answered = ObjectiveRef(id=named, params=parameters)
+    written, note = _kept_objective(stated, answered, construct.id, mode, objectives, hyp, folds)
+    complaints = _required_complaints(written.id, constraints, hyp)
     if complaints:
         return None, complaints
     return Classification(
-        construct=construct,
-        objective=ObjectiveRef(id=str(selected), params=parameters),
-        constraints=constraints,
+        construct=construct, objective=written, constraints=constraints, stated=note
     ), []
+
+
+def _objective_complaint(
+    named: str, construct: str, mode: str, objectives: Mapping[str, Any]
+) -> str:
+    """Why an answer's objective is not one its construct can be scored on.
+
+    The wire holds the answer to the ids either mode admits, so one this mode does not
+    admit is the other mode's.
+    """
+    other = next(one for one in MODES if one != mode)
+    return (
+        f"objective: {named} is {_a(other)} objective, and {_a(construct)} is measured "
+        f"{mode}; name one of {', '.join(applicable_ids(dict(objectives), mode))}"
+    )
+
+
+def _a(word: str) -> str:
+    """The word with its indefinite article: an absolute objective, a relative one."""
+    return f"{'an' if word[:1] in 'aeiou' else 'a'} {word}"
+
+
+def _kept_objective(
+    stated: _Stated | None,
+    answered: ObjectiveRef,
+    construct: str,
+    mode: str,
+    objectives: Mapping[str, Any],
+    hyp: Hypothesis,
+    folds: int,
+) -> tuple[ObjectiveRef, StatedObjective | None]:
+    """The objective written, and what became of one the file stated.
+
+    A stated objective stands, keep rule and all, when the construct's mode admits it and
+    its parameters are inside the toolbox's ranges; the answer's is written otherwise, and
+    the stated one is reported replaced, with the first of those that failed as the reason.
+    """
+    if stated is None:
+        return answered, None
+    reason = stated.problem
+    ref = stated.ref
+    if ref is not None and reason is None:
+        reason = _inadmissible(ref, construct, mode, objectives, hyp, folds)
+    if ref is not None and reason is None:
+        return ref, StatedObjective(id=ref.id, kept=True)
+    return answered, StatedObjective(id=stated.id, kept=False, reason=reason)
+
+
+def _inadmissible(
+    ref: ObjectiveRef,
+    construct: str,
+    mode: str,
+    objectives: Mapping[str, Any],
+    hyp: Hypothesis,
+    folds: int,
+) -> str | None:
+    """Why a stated objective cannot be kept for this construct, or `None` when it can."""
+    item = toolbox().get(ref.id)
+    if item is None or item.kind != OBJECTIVE:
+        return f"{ref.id} is not an objective in the toolbox"
+    if ref.id not in applicable_ids(dict(objectives), mode):
+        other = next(one for one in MODES if one != mode)
+        if ref.id in applicable_ids(dict(objectives), other):
+            return f"{ref.id} is {_a(other)} objective, and {_a(construct)} is measured {mode}"
+        return f"{ref.id} does not apply to this hypothesis"
+    problems = check_params(item, ref.params.model_dump(), hyp, folds)
+    if problems:
+        return f"its keep rule is outside the toolbox's ranges: {'; '.join(problems)}"
+    return None
+
+
+def _required_complaints(
+    objective: str, constraints: Sequence[ConstraintRef], hyp: Hypothesis
+) -> list[str]:
+    """The gates the objective written requires, each among the card gates.
+
+    The operator's `required_constraints` count, as they do on every card. A gate that is
+    `required_for` an objective declares `together`, so the one naming it was already held
+    to every parameter by `_constraint_complaints`, or by validation for the operator's.
+    """
+    named = {ref.id for ref in (*constraints, *(hyp.required_constraints or ()))}
+    return [
+        f"constraints: {gate} is required of a hypothesis scored on {objective}, with "
+        f"{', '.join(toolbox()[gate].params)} set; the values are yours, inside their ranges"
+        for gate in required_card_gates(objective)
+        if gate not in named
+    ]
 
 
 def _host_complaints(
@@ -373,6 +549,43 @@ def _text(path: Path) -> str:
         return source.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValidationError(f"{path}: is not UTF-8 text: {exc}") from None
+
+
+def _stated(text: str) -> _Stated | None:
+    """The objective the file names before classification, or `None` when it names none.
+
+    Read from the file's own objective block alone, so the rest of the document — a
+    construct whose host has gone, a constraint the toolbox has dropped — cannot stop it
+    being read; a block that does not parse as an objective is stated and unusable, and is
+    reported replaced with the reason.
+    """
+    block = _only(text, OBJECTIVE)
+    try:
+        found = yaml.safe_load(block) if block.strip() else None
+    except yaml.YAMLError as exc:
+        return _Stated(id=None, ref=None, problem=f"it does not parse: {exc}")
+    value = found.get(OBJECTIVE) if isinstance(found, dict) else None
+    if value is None:
+        return None
+    raw = value.get("id") if isinstance(value, dict) else None
+    named = None if raw is None else str(raw)
+    try:
+        ref = ObjectiveRef.model_validate(value)
+    except ValidationError as exc:
+        return _Stated(id=named, ref=None, problem=f"it is not an objective: {exc.message}")
+    return _Stated(id=ref.id, ref=ref, problem=None)
+
+
+def _only(text: str, key: str) -> str:
+    """The document's one top-level block under `key`, and nothing else."""
+    kept: list[str] = []
+    keeping = False
+    for line in text.splitlines():
+        found = _KEY.match(line)
+        keeping = found.group(1) == key if found is not None else keeping
+        if keeping:
+            kept.append(line)
+    return "".join(f"{line}\n" for line in kept)
 
 
 def _without(text: str, keys: Sequence[str]) -> str:

@@ -50,20 +50,23 @@ from kanso.criteria.context import (
     text,
     verdict,
 )
+from kanso.criteria.digest import edge_per_trade as edge_per_trade_of
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import REGISTRY, SHARPE_FAMILY, Objective, benchmark_level
 from kanso.criteria.quantities import (
     correlation,
     drawdown_pct,
+    edge_series,
+    fill_path_drawdown_pct,
     mean,
-    moments,
     periods_per_year,
     stdev,
+    student_t_quantile,
     variance,
     years,
 )
 from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, Trade, day_of
-from kanso.errors import ValidationError
+from kanso.errors import PreconditionError, ValidationError
 from kanso.schemas import GateResult, parse_duration
 from kanso.schemas.screen import hours_minutes
 
@@ -601,6 +604,41 @@ class _MaxDrawdown:
         )
 
 
+class _IntradayDrawdown:
+    """Peak-to-trough equity inside the hypothesis's own limit, read after every fill as
+    well as at every period end.
+
+    `max_drawdown` samples the equity where the runner strikes it, at the return periods'
+    ends, so a position opened and closed inside one period is never seen falling: a book
+    that trades many times a day and is flat at the close reads as flat at every sample, and
+    a card that fell six percent at noon and recovered by the close passes a five percent
+    limit. This gate reads the same limit on the path through every fill — cash after each
+    fill, plus every open position at the price it last traded at, re-anchored at each
+    period end to the equity the runner struck there (`fill_path_drawdown_pct`) — so the fall
+    it reports is never shallower than `max_drawdown`'s, and is the one a book that is flat
+    at its period ends actually took. Carries no parameter: the limit is the hypothesis's, as
+    it is for `max_drawdown`, and which of the two a lane is held to is the classifier's or
+    the operator's choice.
+    """
+
+    id: ClassVar[str] = "intraday_drawdown"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        limit = ctx.hyp.risk_limits.max_drawdown_pct
+        observed, trough_at = fill_path_drawdown_pct(ctx.run)
+        return verdict(
+            self.id,
+            observed <= limit,
+            {
+                "max_drawdown_pct": observed,
+                "period_end_pct": drawdown_pct(ctx.run),
+                "trough_ns": trough_at,
+                "limit_pct": limit,
+                "fills": len(ctx.run.fills),
+            },
+        )
+
+
 NO_FLOOR: Final = "the hypothesis declares no book.maintenance_pct, so there is no floor to hold"
 NEVER_HELD: Final = (
     "no period end held a position valued at its period's adverse extreme, so no margin "
@@ -679,7 +717,24 @@ class _EmbargoedWindow:
 
 
 class _WalkForwardConsistency:
-    """Most research folds positive, and the certification fold not the worst of them."""
+    """Most research folds positive: an edge that recurs rather than arriving once.
+
+    The gate once also required the certification window's estimate to exceed the worst
+    research fold, and that clause is gone because it measured nothing. Four research folds
+    and a certification window of a fold's length are five draws of one quantity, so the
+    certification one is the lowest of the five a fifth of the time whatever the edge is —
+    `1 − 1/(K+1)`, 0.80 at four folds — and the research folds of a selected candidate are
+    the ones selection inflated, which takes it to about 0.42 after fifty trials and 0.24
+    after five hundred: simulated in October 2026 on the layout of an operator's 153
+    certificates, every one of which the planner had given this gate. A clause whose pass
+    rate does not move with the quantity it tests has no power against anything; it only
+    refuses sound candidates at random, and more certification data made it refuse more
+    often, not less. It is not kept as a parameter whose absence means off, because a
+    planner offered it could only choose to add those refusals. Whether the certification
+    window holds the edge is `embargoed_window`'s question, asked against the research
+    estimate rather than its worst fold. What is left reads the research window alone: how
+    many of its folds the objective was positive in.
+    """
 
     id: ClassVar[str] = "walk_forward_consistency"
 
@@ -698,17 +753,15 @@ class _WalkForwardConsistency:
             ctx.host_research_run,
             ctx.benchmark_research_run,
         )
-        certified = _metric(objective, ctx.run, ctx, ctx.host_run, ctx.benchmark_run)
         positive = sum(1 for value in folds if value > 0)
         return verdict(
             self.id,
-            positive >= required and certified > min(folds),
+            positive >= required,
             {
                 "objective": objective.id,
                 "folds": list(folds),
                 "positive_folds": positive,
                 "min_positive_folds": required,
-                "certification": certified,
             },
         )
 
@@ -717,16 +770,18 @@ class _DeflatedSharpe:
     """The research Sharpe, deflated by how many trials went into selecting it.
 
     The estimate deflated is the one selection acted on — the research-window metric the
-    keep rule compared. The expected maximum it is measured against is built from the
-    trials' own metrics: their count is how many candidates the maximum was taken over
-    and their spread is the distribution it was taken from, so both must describe the
-    same set or the bar is measured against a search that never happened. That set is
-    `trial_metrics`, which excludes a crash and a card that placed no order — those are
-    edits that failed rather than candidates the selection could have chosen — and includes
-    one refused as redundant, which is a candidate the selection ranked and declined. The
-    length,
-    skewness and kurtosis of the research return series supply the sampling distribution.
-    Both the estimate and the spread are taken back out of annualised units first, so the
+    keep rule compared. The expected maximum it is measured against is the maximum of as many
+    draws as the selection was taken over, from the distribution of the trials' own metrics.
+    The spread is read off `trial_metrics`, which excludes a crash, a card that placed no
+    order and a card scored under another objective — the first two are edits that failed
+    rather than candidates the selection could have chosen, the third a number in other
+    units — and includes one refused as redundant, which is a candidate the selection ranked
+    and declined. The count is the larger of that set's and `trials`, every card that ran
+    and traded under any objective (`_searched`). The
+    estimate's own error is the objective's, the one its card carried: Mertens' variance of a
+    Sharpe for skewed and fat-tailed returns, fold by fold, widened for serial correlation,
+    and Memmel's paired one for a Sharpe differenced against a host or a hold. The estimate,
+    the error and the spread are all taken back out of annualised units first, so the
     deflation is done in the units the return series was actually sampled in.
     """
 
@@ -736,56 +791,78 @@ class _DeflatedSharpe:
         floor = number(ctx, "min_dsr")
         if floor is None:
             return skipped(self.id, "no minimum was chosen, so no deflation was required")
-        objective = _objective(ctx)
-        if objective is None:
-            return skipped(self.id, NO_OBJECTIVE)
-        if objective.id not in SHARPE_FAMILY:
-            return skipped(
-                self.id,
-                f"the objective {objective.id} is not a Sharpe, so no card computed one to deflate",
-            )
-        if ctx.research_run is None:
-            return skipped(self.id, NO_RESEARCH_RUN)
-        metrics = list(ctx.trial_metrics)
-        if len(metrics) < 2:
-            return skipped(self.id, "fewer than two trials, so the trial spread is unknown")
-        returns = ctx.research_run.returns
-        shape = moments(returns)
-        if len(returns) < 3 or shape is None:
-            return skipped(self.id, "the research return series is too short or does not vary")
-        scale = sqrt(periods_per_year(ctx.research_run))
-        estimate = (
-            _metric(
-                objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
-            )
-            / scale
-        )
-        expected = self._expected_maximum(
-            variance(metrics) / periods_per_year(ctx.research_run), len(metrics)
-        )
-        skewness, kurtosis = shape
-        denominator = 1 - skewness * estimate + (kurtosis - 1) / 4 * estimate**2
-        if denominator <= 0:
-            return skipped(self.id, "the sampling variance of the estimate is not positive")
-        dsr = NormalDist().cdf((estimate - expected) * sqrt(len(returns) - 1) / sqrt(denominator))
+        found = _deflatable(self.id, ctx, SHARPE_FAMILY, "a Sharpe")
+        if isinstance(found, GateResult):
+            return found
+        research, metrics, (estimate, error) = found
+        if len(research.returns) < 3:
+            return skipped(self.id, "the research return series is too short to give an error")
+        scale = sqrt(periods_per_year(research))
+        searched = _searched(ctx, metrics)
+        expected = expected_maximum(variance(metrics) / periods_per_year(research), searched)
+        if error <= 0:
+            return skipped(self.id, "the research return series does not vary")
+        dsr = NormalDist().cdf((estimate / scale - expected) / (error / scale))
         return verdict(
             self.id,
             dsr >= floor,
             {
                 "dsr": dsr,
                 "min_dsr": floor,
-                "sharpe": estimate,
+                "sharpe": estimate / scale,
+                "standard_error": error / scale,
                 "expected_maximum": expected,
-                "trials": len(metrics),
-                "skew": skewness,
-                "kurtosis": kurtosis,
+                "trials": searched,
+                "scored_trials": len(metrics),
             },
         )
 
-    @staticmethod
-    def _expected_maximum(trial_variance: float, n_trials: int) -> float:
-        """The Sharpe a search of this width is expected to produce from pure noise."""
-        return expected_maximum(trial_variance, n_trials)
+
+def _deflatable(
+    gate: str, ctx: GateContext, family: frozenset[str], kind: str
+) -> tuple[CardRun, list[float], tuple[float, float]] | GateResult:
+    """What every deflation gate needs before it can judge — the research run, the trials and
+    the research estimate with its error — or the skip that says which was missing.
+
+    The estimate and its error are the objective's own over the research run, the numbers a
+    card of these bytes carried, so a deflation never computes an error of its own.
+    """
+    objective = _objective(ctx)
+    if objective is None:
+        return skipped(gate, NO_OBJECTIVE)
+    if objective.id not in family:
+        return skipped(
+            gate, f"the objective {objective.id} is not {kind}, so no card computed one to deflate"
+        )
+    research = ctx.research_run
+    if research is None:
+        return skipped(gate, NO_RESEARCH_RUN)
+    metrics = list(ctx.trial_metrics)
+    if len(metrics) < 2:
+        return skipped(gate, "fewer than two trials, so the trial spread is unknown")
+    try:
+        measured = objective.compute(
+            research, ctx.research_folds, ctx.host_research_run, ctx.benchmark_research_run
+        )
+    except PreconditionError as missing:
+        return skipped(gate, missing.message[:200])
+    return research, metrics, measured
+
+
+def _searched(ctx: GateContext, metrics: Sequence[float]) -> int:
+    """How many candidates the selection a deflation prices was taken over.
+
+    Every card that ran to a result and traded counts, under whichever objective it was
+    scored — the count is of draws and has no units, which only the spread has — so a
+    hypothesis re-pinned to another objective is priced for the search that chose the
+    strategy it carried across, not for the cards scored since. Measured on a lane switched
+    from a per-trade edge to a contribution after three hundred cards: its first certificate
+    was deflated by one trial and so skipped, and two cards later by the expected maximum of
+    two draws rather than of three hundred, seven to thirteen basis points a day of selection
+    left unpriced (`docs/backlog.md` row 173). `trials` is what certification counts, and 1
+    where nothing did, so the set's own count is the floor.
+    """
+    return max(ctx.trials, len(metrics))
 
 
 def expected_maximum(trial_variance: float, n_trials: int) -> float:
@@ -827,20 +904,71 @@ def robust_variance(values: Sequence[float]) -> float:
 CONTRIBUTION_FAMILY: Final = frozenset({"wf_contribution_bps", "marginal_wf_contribution_bps"})
 """The objectives that read a mean net return per period in basis points of the capital."""
 
+EDGE_FAMILY: Final = frozenset({"net_edge_bps", "marginal_net_edge_bps"})
+"""The objectives that read a mean net profit per closed trade in basis points."""
+
+
+def _deflated_mean(
+    gate: str,
+    ctx: GateContext,
+    family: frozenset[str],
+    kind: str,
+    units: tuple[str, str],
+) -> GateResult:
+    """A mean objective's research estimate, deflated by how many trials went into selecting
+    it: the probability it exceeds the expected maximum of the search by its own error.
+
+    `units` names the estimate's evidence key and what its error was read off — periods or
+    trades — which is all that differs between a contribution and a per-trade edge.
+    """
+    floor = number(ctx, "min_probability")
+    if floor is None:
+        return skipped(gate, "no minimum was chosen, so no deflation was required")
+    found = _deflatable(gate, ctx, family, kind)
+    if isinstance(found, GateResult):
+        return found
+    research, metrics, (estimate, error) = found
+    name, counted = units
+    count_of = len(research.returns) if counted == "periods" else len(edge_series(research))
+    if count_of < 3:
+        return skipped(gate, f"the research window holds too few {counted} to give an error")
+    if error <= 0:
+        return skipped(gate, "the research estimate's error is zero, so nothing deflates it")
+    spread = robust_variance(metrics)
+    searched = _searched(ctx, metrics)
+    expected = expected_maximum(spread, searched)
+    probability = NormalDist().cdf((estimate - expected) / error)
+    return verdict(
+        gate,
+        probability >= floor,
+        {
+            "probability": probability,
+            "min_probability": floor,
+            name: estimate,
+            "standard_error_bps": error,
+            "expected_maximum_bps": expected,
+            "trial_spread_bps": sqrt(spread),
+            "trials": searched,
+            "scored_trials": len(metrics),
+            counted: count_of,
+        },
+    )
+
 
 class _DeflatedContribution:
     """The research contribution, deflated by how many trials went into selecting it.
 
-    The contribution's sampling error is the standard error of the per-period net returns in
-    basis points of the capital over the research window — of the differences against the
-    host's for the marginal form — and the expected maximum it is measured against is built
-    from the trials' own metrics, in the same units: their count is how many candidates the
-    selection took the maximum over and their spread is the distribution it took it from
+    The contribution's sampling error is the objective's own — the error of a mean of the
+    per-period net returns in basis points of the capital over the research window, of the
+    paired per-period differences against the host's for the marginal form, widened for
+    serial correlation — and the expected maximum it is measured against is that of as many
+    draws as the selection took the maximum over (`_searched`, every card that ran and traded
+    under any objective), from the distribution of the trials' own metrics in the same units
     (`trial_metrics`, the same set `deflated_sharpe` reads), read robustly as 1.4826 times
-    their median absolute deviation (`robust_variance`), so a few trials that blew up do
-    not widen the search past any candidate the selection weighed. The probability reported is
-    that of the estimate exceeding that maximum by its own error, and the gate passes when
-    it clears the floor chosen for it. A t-statistic on the contribution deflated for the
+    their median absolute deviation (`robust_variance`), so a few trials that blew up do not
+    widen the search past any candidate the selection weighed. The probability reported is
+    that of the estimate exceeding that maximum by its own error, and the gate passes when it
+    clears the floor chosen for it. A t-statistic on the contribution deflated for the
     search, in short — the multiple-testing control a per-period objective has where a
     Sharpe has its deflated ratio.
     """
@@ -848,61 +976,30 @@ class _DeflatedContribution:
     id: ClassVar[str] = "deflated_contribution"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
-        floor = number(ctx, "min_probability")
-        if floor is None:
-            return skipped(self.id, "no minimum was chosen, so no deflation was required")
-        objective = _objective(ctx)
-        if objective is None:
-            return skipped(self.id, NO_OBJECTIVE)
-        if objective.id not in CONTRIBUTION_FAMILY:
-            return skipped(
-                self.id,
-                f"the objective {objective.id} is not a contribution, so no card computed one",
-            )
-        if ctx.research_run is None:
-            return skipped(self.id, NO_RESEARCH_RUN)
-        metrics = list(ctx.trial_metrics)
-        if len(metrics) < 2:
-            return skipped(self.id, "fewer than two trials, so the trial spread is unknown")
-        series = _contribution_series(objective, ctx.research_run, ctx.host_research_run)
-        if series is None or len(series) < 3:
-            return skipped(self.id, "the research return series is too short to give an error")
-        error = stdev(series) / sqrt(len(series))
-        if error <= 0:
-            return skipped(self.id, "the research return series does not vary")
-        estimate = _metric(
-            objective, ctx.research_run, ctx, ctx.host_research_run, ctx.benchmark_research_run
-        )
-        spread = robust_variance(metrics)
-        expected = expected_maximum(spread, len(metrics))
-        probability = NormalDist().cdf((estimate - expected) / error)
-        return verdict(
-            self.id,
-            probability >= floor,
-            {
-                "probability": probability,
-                "min_probability": floor,
-                "contribution_bps": estimate,
-                "standard_error_bps": error,
-                "expected_maximum_bps": expected,
-                "trial_spread_bps": sqrt(spread),
-                "trials": len(metrics),
-                "periods": len(series),
-            },
+        return _deflated_mean(
+            self.id, ctx, CONTRIBUTION_FAMILY, "a contribution", ("contribution_bps", "periods")
         )
 
 
-def _contribution_series(
-    objective: Objective, run: CardRun, host: CardRun | None
-) -> tuple[float, ...] | None:
-    """The per-period net returns a contribution is the mean of, in basis points of the
-    capital: the run's own, or its differences against the host's for the marginal form."""
-    own = tuple(r / run.capital * BPS for r in run.returns)
-    if objective.id == "wf_contribution_bps":
-        return own
-    if host is None or len(host.returns) != len(run.returns):
-        return None
-    return tuple(r - h / host.capital * BPS for r, h in zip(own, host.returns, strict=True))
+class _DeflatedEdge:
+    """The research per-trade edge, deflated by how many trials went into selecting it.
+
+    The same test as `deflated_contribution`, on the sub-daily default: the estimate is the
+    research edge in basis points per trade, its error the objective's own — the edge
+    linearised period by period, so trades of one session that move together count as one
+    session's worth, widened for serial correlation across periods, and for the marginal form
+    the two runs' linearisations differenced period by period — and the bar the expected
+    maximum of the search, from the count of its candidates and the robust spread of its
+    trials scored under the same objective. Until it existed a run scored on a per-trade edge
+    reached a certificate with nothing pricing the search behind it: both other deflations
+    skip it, and the embargo's fraction of a selected maximum is only an implicit, partial
+    correction, gone altogether when the research number is at or below zero.
+    """
+
+    id: ClassVar[str] = "deflated_edge"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        return _deflated_mean(self.id, ctx, EDGE_FAMILY, "a per-trade edge", ("edge_bps", "trades"))
 
 
 class _MinEventDays:
@@ -922,6 +1019,143 @@ class _MinEventDays:
             return skipped(self.id, "no minimum was chosen, so no count was required")
         days = {day_of(fill.ts_ns) for fill in ctx.run.fills}
         return verdict(self.id, len(days) >= minimum, {"event_days": len(days), "min": minimum})
+
+
+def search_margin(trials: int) -> float:
+    """How many of their own errors the best of `trials` cards whose trades earn nothing is
+    expected to clear by chance: the expected maximum of that many standard normals, by the
+    approximation the deflation gates use (`expected_maximum` at a spread of one error), and
+    zero for one card, which is no search."""
+    return expected_maximum(1.0, trials) if trials >= 2 else 0.0
+
+
+def periods_margin(errors: float, periods: int) -> float:
+    """`errors` of a normal error, restated as a multiple of a per-trade error read period by
+    period off `periods` periods that closed a trade, at least two: the same chance of being
+    cleared by a card whose trades earn nothing.
+
+    Read that way the error is the per-period influences' over the window, which sum to zero
+    and are zero outside the `p` periods that traded, so it is `√(N/(N − 1))` of the error of
+    the mean of `p` period totals taken as `p` draws with no degree of freedom spent — low by
+    `√((p − 1)/p)` against the one that spends it, the window's `N` periods being many more
+    than `p` — and an edge over the corrected error is a Student's t of `p − 1` degrees of
+    freedom, not a normal, wherever the period totals are normal: a Cauchy at two periods.
+    So the margin is that t's quantile at the normal's chance of clearing `errors`, widened
+    by `√(p/(p − 1))`: one error is 2.60 of them over two periods, 1.15 over eight and 1.004
+    over 252; three are 333 over two, 4.84 over eight and 3.04 over 252. Zero is zero.
+    """
+    freedom = periods - 1
+    return student_t_quantile(NormalDist().cdf(errors), freedom) * sqrt(periods / freedom)
+
+
+class _EdgePerTrade:
+    """The card's trades make money on average, by more than their own error says is noise.
+
+    The estimate is the card's mean net edge per closed trade in basis points of the
+    position opened — `pnl_net / notional`, after every fill cost the runner charged, over
+    the closed trades with a notional — and its error is the per-trade objective's own: the
+    edge linearised period by period, so a session's clips that one regime moves together
+    count as one session's worth, widened for serial correlation across periods. Both are
+    read over the whole window as one fold (`kanso.criteria.digest.edge_per_trade`), the
+    numbers a card's digest records as `net_bps_per_trade` and `net_bps_per_trade_se`, so
+    what the proposer and the operator are shown is what was judged. The gate passes when
+    `net − margin × se > min_bps`, strictly, over trades that closed in at least two of the
+    window's periods, where `margin` is `periods_margin` of the larger of `k_se` and
+    `search_margin(trials)` — the evidence's `normal_margin` — over the periods that closed
+    a trade: on a hypothesis's first card, at `min_bps` zero and `k_se` zero, a card whose
+    trades closed in two periods or more passes exactly when its mean trade made money.
+
+    The margin is a chance, and the periods set its width. An error read period by period
+    has the degrees of freedom of the periods that closed a trade, and on few of them it
+    reads low and the edge over it has tails a normal does not: measured in October 2026 on
+    cards whose trades earn nothing, held to `normal_margin` errors as if normal, those that
+    traded on two sessions passed at `k_se` 1 0.31 of the time rather than 0.16, and 0.14
+    rather than 0.0011 as the 500th card of a search. Restated on its degrees of freedom,
+    `normal_margin` is cleared by such a card with the normal's chance `1 − Φ(normal_margin)`
+    wherever each period's trades sum to a normal — measured 0.148 to 0.163 at `k_se` 1 on
+    two to thirty sessions against 0.159, and at or below it on heavy-tailed trades four to a
+    session — so the rates below hold on two sessions as on two hundred. Where the periods
+    hold unequal numbers of heavy-tailed trades it runs a little above: up to 0.18 at `k_se`
+    1 and 0.014 as the fiftieth card, on two to ten sessions.
+
+    The margin grows with the search. A lane draws hundreds of cards, and one whose trades
+    earn nothing still clears `k_se` errors' chance with probability `1 − Φ(k_se)` — at
+    `k_se` 1, one card in six — so a fixed margin lets zero-edge cards through in proportion
+    to the search's length. So `normal_margin` is never below the expected maximum of `trials`
+    standard normals: 0 errors on one card, 0.52 at 2 trials, 2.28 at 50 and 3.05 at 500.
+    `trials` is this card and every card of the hypothesis before it that ran to a result and
+    traded, under any objective (`GateContext.trials`). Each card is held to the search as it
+    stood when it ran, so the expected count of zero-edge cards that pass grows with the
+    logarithm of the search rather than with its length: over 500 cards, about 3.3 at `k_se`
+    1 rather than 79, 2.3 at `k_se` 2 rather than 11, and 0.67 at `k_se` 3 either way. That
+    count is a sum of each card's chance, so it holds however the cards are correlated;
+    correlated cards are fewer independent draws than their number, which makes the margin
+    wider than their search, never narrower. Which gates run and their `min_bps` and `k_se`
+    stay the agents' choice; the search sets only a floor under `k_se`.
+
+    An error read period by period is zero whenever every trade closed in one period, however
+    far apart the trades landed — each period's influence on the mean is zero — and has no
+    degree of freedom to restate a margin on, so a card that traded once, or traded one
+    session's clips, fails at any `k_se`, its error and margin stated as `None` and its
+    periods in `periods_with_trades`. Trading less to pass therefore ends at two periods, where
+    the margin is widest.
+
+    It exists because an objective struck on the book rewards trading less once every trade
+    loses: a contribution moves towards zero as the losing trades are dropped, and a card
+    that halves its clips at a worse loss per clip scores better and is kept. As a card gate
+    a failing card is not kept whatever it scored, so with it on a lane only a card whose
+    trades pay on average can become the best — and the toolbox declares it `required_for`
+    both contributions, so every hypothesis scored on one carries it. A card that closed no
+    trade has no edge — its estimate is zero, in no period — and fails at any `min_bps`,
+    which the range holds at zero or above: a card that did not trade did not show that a
+    trade pays.
+
+    Its two parameters mean nothing apart (`together`), and a file naming one of them is
+    refused where it is registered. A pin registered before that was refused judges every
+    card it is asked to and fails it, naming the parameter it was not given: half a rule
+    used to skip, and a skip passes. Named with neither, it judges nothing and says so.
+    """
+
+    id: ClassVar[str] = "edge_per_trade"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        floor, k_se = number(ctx, "min_bps"), number(ctx, "k_se")
+        if floor is None and k_se is None:
+            return skipped(self.id, "no min_bps and k_se were chosen, so no edge was required")
+        if floor is None or k_se is None:
+            chosen, missing = ("k_se", "min_bps") if floor is None else ("min_bps", "k_se")
+            return verdict(
+                self.id,
+                False,
+                {
+                    "refused": f"{chosen} was chosen and {missing} was not, and the two mean "
+                    "nothing apart",
+                    "min_bps": floor,
+                    "k_se": k_se,
+                },
+            )
+        edge, se, periods = edge_per_trade_of(ctx.run)
+        searched = search_margin(ctx.trials)
+        normal = max(k_se, searched)
+        margin = None if se is None else periods_margin(normal, periods)
+        lower = None if se is None or margin is None else edge - margin * se
+        return verdict(
+            self.id,
+            lower is not None and lower > floor,
+            {
+                "net_bps_per_trade": edge,
+                "se": se,
+                "k_se": k_se,
+                "trials": ctx.trials,
+                "expected_maximum": searched,
+                "normal_margin": normal,
+                "margin": margin,
+                "lower": lower,
+                "min_bps": floor,
+                "n_trades": sum(1 for trade in ctx.run.trades if trade.notional > 0),
+                "periods_with_trades": periods,
+            },
+        )
 
 
 class _TradingHours:
@@ -1160,6 +1394,10 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     states neither `maker_bps` nor `maker_per_share` charges a maker's fill what any fill pays.
     `slippage_ticks` is charged on each fill's recorded increment and capped by its recorded
     limit, as the runner charged it; a fill recorded before either was kept pays none of it.
+    `fixed_bps` is charged where the runner charges a spread — on a fill not struck at the
+    touch — and a fill the venue struck against a quote or a book, whose price carries the
+    spread, pays none of it under any scenario; a wider market on such a name is stated as
+    `slippage_bps`, which every taker's fill pays on its notional.
     """
     from kanso.nautilus.costs import fill_cost, tick_slip
 
@@ -1174,7 +1412,7 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
             fill.qty,
             scenario.get("commission_bps") or 0.0,
             scenario.get("slippage_bps") or 0.0,
-            half_spread,
+            0.0 if fill.touched else half_spread,
             maker_bps,
             scenario.get("commission_per_share") or 0.0,
             maker=fill.maker,
@@ -1343,22 +1581,56 @@ class _CostStress:
         )
 
 
-class _Bootstrap:
-    """What the trade sequence could have looked like, and how deep it could have drawn.
+CONTRIBUTION_BAND: Final = "contribution_bps"
+"""The contribution family's band: the mean of resampled return periods, in bp of capital."""
 
-    A replication resamples the closed trades with replacement, keeping the population and
-    losing the order, and rebuilds the equity path from the starting capital. The gate
-    judges both of the numbers it records. The path gives the drawdown distribution, whose
-    ninety-fifth percentile is held to the hypothesis's limit; the same draw gives the
-    objective's own statistic, whose ninety-percent band must reach above zero — a band
-    that lies at or below zero says the population of trades carries no edge in whatever
-    order it arrives, and a drawdown inside the limit does not make that a pass. The band
-    is also what becomes a deployed version's expectation. The statistic is the run's
-    objective family measured on the resampled trades — a Sharpe of the trade series, or
-    its mean edge per trade — less, for an objective measured against a benchmark, what
-    the benchmark scored on the same statistic over the same folds: a hold has no trades
-    of its own to resample, and the band a paper stage judges a realised difference
-    against has to be one of differences.
+EDGE_BAND: Final = "edge_bps"
+"""A per-trade edge's band: the mean of resampled closed trades' edges, in bp of notional."""
+
+SHARPE_BAND: Final = "trade_sharpe"
+"""The Sharpe family's band: a Sharpe of resampled closed trades' P&L, annualised by the
+trades the window held per year."""
+
+
+def band_statistic(objective: Objective) -> str:
+    """What `bootstrap` resamples for this objective, by the name its evidence records it
+    under — which is what a band is reused by, so a band of one statistic is never read
+    as another's."""
+    if objective.statistic == CONTRIBUTION_BAND:
+        return CONTRIBUTION_BAND
+    return SHARPE_BAND if objective.id in SHARPE_FAMILY else EDGE_BAND
+
+
+class _Bootstrap:
+    """What the run could have looked like, and how deep it could have drawn.
+
+    A replication resamples the run with replacement, keeping the population and losing the
+    order, and rebuilds the equity path from the starting capital. What is resampled is
+    what the objective is a mean of. A contribution — the mean return per period in basis
+    points of the capital — resamples the window's **return periods**, so its band is in
+    basis points of the capital per period, the unit its value and a paper stage's
+    realised contribution are in; every other objective resamples the **sessions that
+    closed its trades**, every trade of a drawn session together, and its statistic is a
+    Sharpe of the drawn trades' P&L or their mean edge per trade. Sessions rather than
+    trades because the clips of one session share that session's luck — the objective's own
+    error is read period by period for the same reason — and forty clips drawn one by one
+    would read as forty independent draws, a band too narrow and a drawdown too shallow for
+    a book that trades many times a day; drawn by session the band is as wide as the
+    sessions' spread says, and the path inside each drawn session is the session's own, so
+    the drawdown keeps every intraday trough. The evidence names which (`statistic`), and
+    how many units were drawn from. The gate judges both of the numbers it records. The path
+    gives the drawdown distribution, whose ninety-fifth percentile is held to the
+    hypothesis's limit; the same draw gives the statistic, whose ninety-percent band must
+    reach above zero — a band that lies at or below zero says the population carries no
+    edge in whatever order it arrives, and a drawdown inside the limit does not make that a
+    pass. For an objective measured against a benchmark the statistic is less what the
+    benchmark scored on the same statistic over the same folds: a hold has no trades of its
+    own to resample, and the band has to be one of differences.
+
+    The band is composition's `ci90`. It is a confidence band of the certification
+    window's statistic, not the band a paper window of another length is judged against:
+    that one is struck from the value's error and the window's periods
+    (`kanso.criteria.band`).
     """
 
     id: ClassVar[str] = "bootstrap"
@@ -1370,66 +1642,179 @@ class _Bootstrap:
         objective = _objective(ctx)
         if objective is None:
             return skipped(self.id, NO_OBJECTIVE)
-        if len(ctx.run.trades) < 2:
+        statistic = band_statistic(objective)
+        if statistic == CONTRIBUTION_BAND:
+            if len(ctx.run.returns) < 2:
+                return skipped(
+                    self.id, "fewer than two return periods, so there is nothing to resample"
+                )
+        elif len(ctx.run.trades) < 2:
             return skipped(self.id, "fewer than two closed trades, so there is nothing to resample")
         limit = ctx.hyp.risk_limits.max_drawdown_pct
-        low, high, worst = self._resample(ctx, objective, replications)
+        low, high, worst, drawn = self._resample(ctx, objective, statistic, replications)
         return verdict(
             self.id,
             worst <= limit and high > 0,
             {
                 "objective": objective.id,
+                "statistic": statistic,
                 "objective_ci90": [low, high],
                 "mdd_p95": worst,
                 "limit_pct": limit,
                 "n": replications,
+                "resampled": "periods" if statistic == CONTRIBUTION_BAND else "sessions",
+                "drawn_from": drawn,
             },
         )
 
     @staticmethod
     def _resample(
-        ctx: GateContext, objective: Objective, replications: int
-    ) -> tuple[float, float, float]:
-        trades = ctx.run.trades
-        pnl = np.array([t.pnl_net for t in trades], dtype=float)
-        edge = np.array(
-            [t.pnl_net / t.notional * BPS if t.notional > 0 else 0.0 for t in trades],
-            dtype=float,
-        )
+        ctx: GateContext, objective: Objective, statistic: str, replications: int
+    ) -> tuple[float, float, float, int]:
+        """The band's two ends, the drawdown's ninety-fifth percentile, and how many units
+        the draws were taken from: return periods for a contribution, sessions otherwise."""
         capital = ctx.run.capital
-        per_year = len(trades) / years(ctx.run.window)
         rng = np.random.default_rng(
             int.from_bytes(sha256(ctx.strategy_sha.encode()).digest()[:8], "big")
         )
-        drawdowns: list[np.ndarray] = []
-        statistics: list[np.ndarray] = []
-        for start in range(0, replications, BLOCK):
-            width = min(BLOCK, replications - start)
-            draws = rng.integers(0, len(trades), size=(width, len(trades)))
-            sample = pnl[draws]
-            path = capital + np.cumsum(sample, axis=1)
-            peak = np.maximum(np.maximum.accumulate(path, axis=1), capital)
-            drawdowns.append(((peak - path) / capital * 100.0).max(axis=1))
-            statistics.append(
-                _sharpe_of(sample, per_year)
-                if objective.id in SHARPE_FAMILY
-                else edge[draws].mean(axis=1)
+        if statistic == CONTRIBUTION_BAND:
+            moves = np.array(ctx.run.returns, dtype=float)
+            statistics, drawdowns = _resample_periods(moves, capital, replications, rng)
+            drawn = len(moves)
+        else:
+            sessions = _sessions_of(ctx.run.trades)
+            statistics, drawdowns = _resample_sessions(
+                sessions, statistic, capital, years(ctx.run.window), replications, rng
             )
-        spread = np.concatenate(statistics) - benchmark_level(
-            objective, ctx.research_folds, ctx.benchmark_run
-        )
+            drawn = len(sessions.count)
+        spread = statistics - benchmark_level(objective, ctx.research_folds, ctx.benchmark_run)
         return (
             float(np.percentile(spread, 5)),
             float(np.percentile(spread, 95)),
-            float(np.percentile(np.concatenate(drawdowns), 95)),
+            float(np.percentile(drawdowns, 95)),
+            drawn,
         )
 
 
-def _sharpe_of(sample: np.ndarray, per_year: float) -> np.ndarray:
-    """Annualised Sharpe of each resampled row; a row that cannot vary scores zero."""
-    dispersion = sample.std(axis=1, ddof=1)
-    safe = np.where(dispersion > 0, dispersion, 1.0)
-    return np.where(dispersion > 0, sample.mean(axis=1) / safe * sqrt(per_year), 0.0)
+def _resample_periods(
+    moves: np.ndarray, capital: float, replications: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray]:
+    """A contribution's draws: the return periods with replacement, the path rebuilt from
+    the capital, the statistic each row's mean return in basis points of the capital."""
+    statistics: list[np.ndarray] = []
+    drawdowns: list[np.ndarray] = []
+    for start in range(0, replications, BLOCK):
+        width = min(BLOCK, replications - start)
+        sample = moves[rng.integers(0, len(moves), size=(width, len(moves)))]
+        path = capital + np.cumsum(sample, axis=1)
+        peak = np.maximum(np.maximum.accumulate(path, axis=1), capital)
+        drawdowns.append(((peak - path) / capital * 100.0).max(axis=1))
+        statistics.append(sample.mean(axis=1) / capital * BPS)
+    return np.concatenate(statistics), np.concatenate(drawdowns)
+
+
+@dataclass(frozen=True)
+class _Sessions:
+    """The closed trades of a run folded by the session that closed each — the UTC day of its
+    closing fill — into what a session draw needs: per session, how many trades it closed,
+    their edges in basis points of notional summed, their net P&L summed and squared and
+    summed, and the shape of its own path — the running P&L's highest and lowest point
+    inside the session against its start, and the deepest drawdown within it — so a path
+    through drawn sessions keeps every trough a session held."""
+
+    count: np.ndarray
+    edge_sum: np.ndarray
+    pnl_sum: np.ndarray
+    pnl_sumsq: np.ndarray
+    total: np.ndarray
+    crest: np.ndarray
+    trough: np.ndarray
+    inner: np.ndarray
+
+
+def _sessions_of(trades: Sequence[Trade]) -> _Sessions:
+    """Fold a run's closed trades by session, in the order the sessions closed."""
+    by_day: dict[date, list[Trade]] = {}
+    for trade in sorted(trades, key=lambda t: (t.closed_ns, t.opened_ns)):
+        by_day.setdefault(day_of(trade.closed_ns), []).append(trade)
+    count, edge_sum, pnl_sum, pnl_sumsq, total, crest, trough, inner = ([] for _ in range(8))
+    for day in sorted(by_day):
+        held = by_day[day]
+        pnl = np.array([t.pnl_net for t in held], dtype=float)
+        edges = np.array(
+            [t.pnl_net / t.notional * BPS if t.notional > 0 else 0.0 for t in held], dtype=float
+        )
+        path = np.cumsum(pnl)
+        running_peak = np.maximum(np.maximum.accumulate(path), 0.0)
+        count.append(len(held))
+        edge_sum.append(float(edges.sum()))
+        pnl_sum.append(float(pnl.sum()))
+        pnl_sumsq.append(float((pnl * pnl).sum()))
+        total.append(float(path[-1]))
+        crest.append(float(max(path.max(), 0.0)))
+        trough.append(float(min(path.min(), 0.0)))
+        inner.append(float((running_peak - path).max()))
+    return _Sessions(
+        *(
+            np.array(series, dtype=float)
+            for series in (count, edge_sum, pnl_sum, pnl_sumsq, total, crest, trough, inner)
+        )
+    )
+
+
+def _resample_sessions(
+    sessions: _Sessions,
+    statistic: str,
+    capital: float,
+    window_years: float,
+    replications: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """A trade statistic's draws: the sessions with replacement, every trade of a drawn
+    session together.
+
+    The statistic is read off the drawn trades through their sessions' sums — a mean edge is
+    the summed edges over the summed count, a Sharpe the mean and the dispersion of the
+    drawn P&L from the sums and the squared sums, annualised by the trades the row holds per
+    year of the window — and the drawdown is exact at the trade: the path through the drawn
+    sessions carries each one's own crest and trough at the level it starts from, so the
+    deepest fall is the larger of a fall from an earlier peak to a session's trough and the
+    deepest fall inside one session. A row that cannot vary — one trade, or trades that all
+    returned the same — scores a Sharpe of zero, as a trade-by-trade draw did.
+    """
+    n_sessions = len(sessions.count)
+    statistics: list[np.ndarray] = []
+    drawdowns: list[np.ndarray] = []
+    for start in range(0, replications, BLOCK):
+        width = min(BLOCK, replications - start)
+        draws = rng.integers(0, n_sessions, size=(width, n_sessions))
+        counts = sessions.count[draws].sum(axis=1)
+        if statistic == SHARPE_BAND:
+            total_pnl = sessions.pnl_sum[draws].sum(axis=1)
+            total_sq = sessions.pnl_sumsq[draws].sum(axis=1)
+            mean = total_pnl / counts
+            varies = counts > 1
+            variance = np.where(
+                varies, (total_sq - counts * mean * mean) / np.maximum(counts - 1, 1), 0.0
+            )
+            dispersion = np.sqrt(np.maximum(variance, 0.0))
+            safe = np.where(dispersion > 0, dispersion, 1.0)
+            per_year = counts / window_years
+            statistics.append(np.where(dispersion > 0, mean / safe * np.sqrt(per_year), 0.0))
+        else:
+            statistics.append(sessions.edge_sum[draws].sum(axis=1) / counts)
+        level = np.zeros(width)
+        peak = np.zeros(width)
+        deepest = np.zeros(width)
+        for position in range(n_sessions):
+            drawn = draws[:, position]
+            deepest = np.maximum(
+                deepest, np.maximum(peak - (level + sessions.trough[drawn]), sessions.inner[drawn])
+            )
+            peak = np.maximum(peak, level + sessions.crest[drawn])
+            level = level + sessions.total[drawn]
+        drawdowns.append(deepest / capital * 100.0)
+    return np.concatenate(statistics), np.concatenate(drawdowns)
 
 
 class _BookCorrelation:
@@ -1538,12 +1923,15 @@ max_hold: Final[Gate] = _MaxHold()
 position_size: Final[Gate] = _PositionSize()
 leg_edge: Final[Gate] = _LegEdge()
 max_drawdown: Final[Gate] = _MaxDrawdown()
+intraday_drawdown: Final[Gate] = _IntradayDrawdown()
 maintenance_margin: Final[Gate] = _MaintenanceMargin()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
 deflated_sharpe: Final[Gate] = _DeflatedSharpe()
 deflated_contribution: Final[Gate] = _DeflatedContribution()
+deflated_edge: Final[Gate] = _DeflatedEdge()
 min_event_days: Final[Gate] = _MinEventDays()
+edge_per_trade: Final[Gate] = _EdgePerTrade()
 trading_hours: Final[Gate] = _TradingHours()
 cost_stress: Final[Gate] = _CostStress()
 cost_scenario: Final[Gate] = _CostScenario()

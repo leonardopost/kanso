@@ -92,6 +92,7 @@ def write_scripts(ws: Workspace, **per_tier: dict[str, list[Any]]) -> None:
 ALIGNED: dict[str, Any] = {"aligned": True, "reason": "same mechanism and universe"}
 CLASSIFIED: dict[str, Any] = {
     "construct": {"id": "sleeve"},
+    "objective": "net_edge_bps",
     "objective_params": {"min_delta": 0.0, "k_se": 1.0},
     "constraints": [{"id": "strategy_integrity", "params": pairs()}],
     "rationale": "a complete signal-to-trade thesis with nothing to attach to",

@@ -9,9 +9,10 @@ The plan is derived, not measured:
     live_colocated   the `live` stage of `portfolio.yaml` carries at least one strategy
     reserved         2 cores and 8 GB when colocated, else 1 core and 4 GB
     cores_per_lane   2
+    lane_cores       cores_per_lane + cards_per_turn - 1
     mem_per_lane_gb  `[env] mem_per_lane_gb` when declared, else
                      max(4, 1.5 x the largest baseline peak memory recorded over runs)
-    lanes            max(1, min((cores_total - reserved_cores) // cores_per_lane,
+    lanes            max(1, min((cores_total - reserved_cores) // lane_cores,
                                 (mem_gb - reserved_mem_gb) // mem_per_lane_gb))
 
 `[env] reserved_cores`, `reserved_mem_gb`, `cores_per_lane` and `mem_per_lane_gb` in
@@ -19,6 +20,13 @@ The plan is derived, not measured:
 formula still researches, one card at a time. `mem_per_lane_gb` is rounded to two
 decimals before `lanes` is computed, so the numbers written to the file reproduce the
 lane count.
+
+A lane whose turns run `[research] cards_per_turn` cards at once runs that many children
+together, each a core's work, so it is charged one core more for every card beside the
+first. Its memory is not charged again: the share is divided across the children
+(`mem_per_card_gb`). Before this the width divided the share and nothing else, so an
+eight-core host declared at one core a lane planned seven lanes whatever the width, and at
+eight cards a turn that was fifty-six children on seven cores.
 
 Before the first baseline card there is nothing to calibrate against and, undeclared,
 `mem_per_lane_gb` is its 4 GB floor; re-detecting after a baseline may change `lanes`.
@@ -87,6 +95,7 @@ def plan_for(
     cores_per_lane: int | None = None,
     mem_per_lane_gb: float | None = None,
     baseline_peak_mem_gb: float | None = None,
+    cards_per_turn: int = 1,
 ) -> Plan:
     """Derive the lane plan. Pure: the same inputs always give the same plan.
 
@@ -103,6 +112,9 @@ def plan_for(
     maxima: the derivation charges every lane the largest baseline peak the workspace
     ever recorded, and an operator whose heaviest hypothesis is not the one researching
     is declaring what a lane costs now, which may be well under that peak.
+
+    `cores_per_lane` is what a lane running one card at a time costs, and a lane is charged
+    one core more for every card its turn runs beside the first (`Plan.lane_cores`).
     """
     default_cores, default_mem = RESERVED_COLOCATED if live_colocated else RESERVED_ALONE
     cores = max(0, default_cores if reserved_cores is None else reserved_cores)
@@ -114,7 +126,9 @@ def plan_for(
     if mem_per_lane_gb is not None:
         per_lane_mem = max(MIN_DECLARED_MEM_PER_LANE_GB, mem_per_lane_gb)
     per_lane_mem = round(per_lane_mem, 2)
-    by_cores = (detected.cores_total - cores) // per_lane_cores
+    per_turn = max(1, cards_per_turn)
+    per_card = round(per_lane_mem / per_turn, 2)
+    by_cores = (detected.cores_total - cores) // (per_lane_cores + per_turn - 1)
     by_memory = math.floor((detected.mem_gb - memory) / per_lane_mem)
     return Plan(
         live_colocated=live_colocated,
@@ -122,8 +136,17 @@ def plan_for(
         reserved_mem_gb=memory,
         cores_per_lane=per_lane_cores,
         mem_per_lane_gb=per_lane_mem,
+        cards_per_turn=per_turn,
+        mem_per_card_gb=per_card,
         lanes=max(1, min(by_cores, by_memory)),
     )
+
+
+def _cards_per_turn(ws: Workspace | None) -> int:
+    """How many cards a turn runs, or one when the workspace does not say."""
+    config = None if ws is None else getattr(ws, "config", None)
+    research = None if config is None else getattr(config, "research", None)
+    return 1 if research is None else research.cards_per_turn
 
 
 def detect(ws: Workspace | None = None) -> Envelope:
@@ -162,6 +185,7 @@ def detect(ws: Workspace | None = None) -> Envelope:
             cores_per_lane=cores_per_lane,
             mem_per_lane_gb=mem_per_lane_gb,
             baseline_peak_mem_gb=max_baseline_peak_mem_gb(_path(ws, "state.db")),
+            cards_per_turn=_cards_per_turn(ws),
         ),
         detected_at=_now(),
     )

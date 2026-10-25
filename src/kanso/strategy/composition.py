@@ -13,18 +13,37 @@ deployment can refuse a version whose engine has moved and a number can be trace
 the conditions that produced it.
 
 **The expectation is measured, not assumed.** The generated implementation is run over the
-sleeve hypothesis's certification window, and what that run produces becomes the band the
-paper and live gates later judge the realised result against: the objective's value, a
-ninety-percent interval around it, the ninety-fifth percentile of the resampled drawdown,
-and the window all three were measured over. When the certificate already holds that
-evidence — the plan included the bootstrap gate, and it judged this same subject on this
-same snapshot — it is reused rather than recomputed, because two resamplings of the same
-run are two chances for the record and the expectation to disagree about the same thing.
-With too few closed trades to resample, the interval is the point estimate and the
-drawdown is the one the run actually took: an honest band of zero width beats an invented
-one. A sleeve measured against a benchmark has the benchmark run beside it over the same
-window, from the same request with the strategy replaced, and its band is a band of
-differences from that hold.
+sleeve hypothesis's certification window, and what that run produces is what the paper and
+live gates later judge the realised result against: the objective's value, its standard
+error and the return periods it was read over — from which a gate strikes the band for the
+window it judges (`kanso.criteria.band`) — the bootstrap's ninety-percent interval around
+the value, the ninety-fifth percentile of the resampled drawdown, and the window all of it
+was measured over.
+
+**It is measured at the capital the stage will hold the version at.** A stage funds a
+version with a share of its capital and the realised objective is read on that share, so an
+expectation struck at the hypothesis's own capital would be a number in another unit for any
+strategy whose dollar result does not scale with the capital it is handed — a fixed
+notional, or a sizing budget — which a contribution in basis points of the capital is not:
+the demo's sleeve, 10,000 of notional capped at a fifth of the template's 40% share of a
+100,000 paper stage, realised twice on paper the contribution it was certified at over
+100,000 (8.34 against 4.09 bp a day, measured in October 2026). So the run is made at the
+share the paper stage would fund the strategy with now, and at the hypothesis's own book
+only when the stage would fund it with nothing; `deploy` measures it again at the share a
+stage actually gives (`restruck`) whenever the two differ — the live stage's, after a
+promotion — and the expectation records the capital it was struck at.
+
+When the certificate already holds the bootstrap's evidence — the plan included the gate,
+it judged this same subject on this same snapshot, it resampled the statistic this objective
+is banded by, and the expectation is struck at the capital the certificate measured at — it
+is reused rather than recomputed, because two resamplings of the same run are two chances
+for the record and the expectation to disagree about the same thing. A certificate written
+before the bootstrap named its statistic is resampled afresh, so a band of per-trade edges
+recorded for a contribution is never read as one. With too little to resample, the interval
+is the point estimate and the drawdown is the one the run actually took: an honest band of
+zero width beats an invented one. A sleeve measured against a benchmark has the benchmark
+run beside it over the same window, from the same request with the strategy replaced, and
+its band is a band of differences from that hold.
 
 **The same bytes under the same engine are one version**, whatever position or state that
 version is in: certification is automatic and so is this, so a plan re-run on the same
@@ -39,6 +58,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from math import isclose
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso import __version__, ext
@@ -46,8 +66,8 @@ from kanso.certify import certificate
 from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, drawdown_pct, gates, objectives
-from kanso.criteria.gates import worst_margin
-from kanso.criteria.objectives import measures_benchmark
+from kanso.criteria.gates import band_statistic, worst_margin
+from kanso.criteria.objectives import Objective, measures_benchmark
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError
 from kanso.hyp import HYPOTHESIS_FILE, Registration, moved, scope_of
@@ -71,10 +91,22 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-__all__ = ["BOOTSTRAP", "COMPOSED", "REPLICATIONS", "compose", "expectation", "strategy_id_of"]
+__all__ = [
+    "BOOTSTRAP",
+    "COMPOSED",
+    "EXPECTED",
+    "REPLICATIONS",
+    "compose",
+    "expectation",
+    "restruck",
+    "strategy_id_of",
+]
 
 COMPOSED: Final = "composed"
 """The state a fresh version is in, and the event kind composition appends."""
+
+EXPECTED: Final = "expected"
+"""The event kind a version's expectation struck again at another capital appends."""
 
 BOOTSTRAP: Final = "bootstrap"
 """The gate whose evidence an expectation's band is: the certificate's, or a fresh one."""
@@ -84,10 +116,12 @@ REPLICATIONS: Final = 1000
 ninety-percent interval and a ninety-fifth percentile to be stable to the eye."""
 
 CERT_STAGE: Final = "cert"
+CERT_TO_PAPER: Final = "paper"
+"""The stage a passing certificate's version is deployed to, and the share it is measured at."""
 NO_HOST: Final = "none"
 """What a construct that is a strategy of its own declares it attaches to."""
 
-_BANDS: Final = frozenset({"objective", "objective_ci90", "mdd_p95"})
+_BANDS: Final = frozenset({"objective", "statistic", "objective_ci90", "mdd_p95"})
 """The evidence a bootstrap that judged always carries, and an expectation always needs."""
 
 _UNMEASURED: Final = Expectation(
@@ -142,9 +176,17 @@ def compose(ws: Workspace, store: StateStore, hyp_id: str) -> StrategyVersion:
         created_at=created,
     )
     sleeve_hyp = _hypothesis(ws, store, draft.sleeve.hyp_id)
-    capital = _book(ws, store, sleeve_hyp, draft)
-    manifest = impl.generate(ws, store, strategy_id, draft, sleeve_hyp, capital, created)
-    measured = expectation(ws, manifest, draft, sleeve_hyp, capital, passed)
+    book = _book(ws, store, sleeve_hyp, draft)
+    manifest = impl.generate(ws, store, strategy_id, draft, sleeve_hyp, book, created)
+    measured = expectation(
+        ws,
+        manifest,
+        draft,
+        sleeve_hyp,
+        _struck_at(ws, strategy_id, manifest, book),
+        passed,
+        book=book,
+    )
     version = construct.compose(
         held,
         hyp_id,
@@ -183,12 +225,18 @@ def expectation(
     version: StrategyVersion,
     hyp: Hypothesis,
     capital: float,
-    passed: Certificate,
+    passed: Certificate | None,
+    *,
+    book: float | None = None,
 ) -> Expectation:
-    """Run the implementation over the sleeve's certification window and band the result.
+    """Run the implementation over the sleeve's certification window at `capital` and band
+    the result.
 
     The run is the files in the implementation directory, not the blobs they were copied
-    from, so what the expectation describes is what a stage will load.
+    from, so what the expectation describes is what a stage will load. `book` is the capital
+    the certificate measured at: its bootstrap evidence is reused only for an expectation
+    struck at that capital, and `passed` is consulted for nothing else but the planner's
+    replication count.
     """
     if hyp.objective is None:
         raise PreconditionError(
@@ -200,14 +248,48 @@ def expectation(
     run, benchmark = _measure(ws, manifest, version, hyp, capital)
     _check_margin(hyp, run)
     objective = objectives()[hyp.objective.id]
-    value, _ = objective.compute(run, ws.config.research.folds, benchmark=benchmark)
-    low, high, worst = _bands(ws, passed, version, hyp, run, value, objective.id, benchmark)
+    value, se = objective.compute(run, ws.config.research.folds, benchmark=benchmark)
+    reusable = book is not None and isclose(capital, book)
+    low, high, worst = _bands(
+        ws,
+        passed if reusable else None,
+        version,
+        hyp,
+        run,
+        value,
+        objective,
+        benchmark,
+        replications=_replications(passed),
+    )
     return Expectation(
         objective_id=objective.id,
         value=value,
         ci90=(low, high),
         mdd_p95=worst,
         window=DateWindow(start=start, end=end),
+        se=se,
+        periods=len(run.returns),
+        capital=capital,
+    )
+
+
+def restruck(
+    ws: Workspace, store: StateStore, strategy_id: str, version: StrategyVersion, capital: float
+) -> Expectation:
+    """This version's expectation measured again at `capital`.
+
+    What a stage that funds a version with a share other than the one its expectation was
+    struck at — or that holds a version composed before an expectation recorded its capital
+    — needs before it can judge it: the same run over the same window, at the money the
+    stage gives it. The certificate the version's newest bytes were certified by supplies
+    the replication count, and its band where it was measured at this capital.
+    """
+    sleeve_hyp = _hypothesis(ws, store, version.sleeve.hyp_id)
+    manifest = impl.read_manifest(ws, strategy_id, version.version)
+    # Only a sleeve's own version reuses its certificate's band, measured at the sleeve's book.
+    book = sleeve_hyp.capital or ws.config.research.capital
+    return expectation(
+        ws, manifest, version, sleeve_hyp, capital, _certified(store, version), book=book
     )
 
 
@@ -223,6 +305,20 @@ def _certificate(store: StateStore, hyp_id: str) -> Certificate:
             remedy=f"run `kanso cert run {hyp_id}` until it passes",
         )
     return passed[0]
+
+
+def _certified(store: StateStore, version: StrategyVersion) -> Certificate | None:
+    """The passing certificate of the bytes this version was last composed from: its newest
+    attached construct's, or its sleeve's; `None` where this record holds none."""
+    subject = version.attached[-1] if version.attached else version.sleeve
+    return next(
+        (
+            held
+            for held in certificate.of(store, subject.hyp_id)
+            if held.verdict == "pass" and held.strategy_sha == subject.strategy_sha
+        ),
+        None,
+    )
 
 
 def strategy_id_of(passed: Certificate, ws: Workspace | None = None) -> str:
@@ -441,6 +537,30 @@ def _book(
     return max(books)
 
 
+def _struck_at(ws: Workspace, strategy_id: str, manifest: impl.ImplManifest, book: float) -> float:
+    """The capital a fresh version's expectation is struck at: the share the paper stage
+    would fund the strategy with were it deployed now — the share its version on paper
+    holds, or the largest slice the limits leave, the capital rule `deploy` applies
+    (`kanso.portfolio.capital.assign`) — or the book, where the workspace has no portfolio
+    file or the stage would fund it with nothing, or with less than its budgets, which
+    `deploy` refuses or blocks anyway."""
+    # Deferred: the portfolio imports this module to compose what it deploys.
+    from kanso.portfolio import capital
+    from kanso.portfolio import files as portfolio_files
+
+    try:
+        portfolio = portfolio_files.read(ws)
+    except PreconditionError:
+        return book
+    paper = portfolio_files.stage_of(portfolio, CERT_TO_PAPER)
+    share = capital.assign(paper, portfolio.limits, strategy_id)
+    budgets = sum(
+        float(component.config.get("sizing_budget", 0.0) or 0.0)
+        for component in manifest.components
+    )
+    return share if share > 0 and share >= budgets else book
+
+
 def _window(hyp: Hypothesis) -> tuple[date, date]:
     """The embargoed window an expectation is measured over: the sleeve's own."""
     return hyp.windows.certification.start, hyp.windows.certification.end
@@ -488,22 +608,25 @@ def _grains(config: Mapping[str, Any]) -> tuple[str, ...]:
 
 def _bands(
     ws: Workspace,
-    passed: Certificate,
+    passed: Certificate | None,
     version: StrategyVersion,
     hyp: Hypothesis,
     run: CardRun,
     value: float,
-    objective_id: str,
+    objective: Objective,
     benchmark: CardRun | None = None,
+    *,
+    replications: int = REPLICATIONS,
 ) -> tuple[float, float, float]:
     """The interval and the drawdown percentile: the certificate's, or a fresh resampling.
 
-    A resampling is seeded from the version's sleeve rather than from the certificate that
-    triggered the composition, so a construct that changes nothing about the book reads
-    back the band its host has, and a sleeve's recomputed band is the one its own
-    certificate would have recorded.
+    `passed` is the certificate whose evidence may be reused — `None` when the expectation
+    is struck at a capital it did not measure at. A resampling is seeded from the version's
+    sleeve rather than from the certificate that triggered the composition, so a construct
+    that changes nothing about the book reads back the band its host has, and a sleeve's
+    recomputed band is the one its own certificate would have recorded at that capital.
     """
-    recorded = _recorded(passed, version, objective_id)
+    recorded = None if passed is None else _recorded(passed, version, objective)
     if recorded is not None:
         return recorded
     result = gates()[BOOTSTRAP].evaluate(
@@ -511,7 +634,7 @@ def _bands(
             hyp=hyp,
             construct=impl.SLEEVE,
             stage=CERT_STAGE,
-            params={"n": _replications(passed)},
+            params={"n": replications},
             window=_window(hyp),
             run=run,
             research_folds=ws.config.research.folds,
@@ -527,13 +650,15 @@ def _bands(
 
 
 def _recorded(
-    passed: Certificate, version: StrategyVersion, objective_id: str
+    passed: Certificate, version: StrategyVersion, objective: Objective
 ) -> tuple[float, float, float] | None:
     """The certificate's own bootstrap evidence, when it resampled this very run.
 
-    The subject and the snapshot have to match, and so does the objective: a certificate
-    of an attached construct measured a different subject over a different window with a
-    relative objective, and none of its evidence describes the strategy it composes into.
+    The subject and the snapshot have to match, and so do the objective and the statistic
+    resampled for it: a certificate of an attached construct measured a different subject
+    over a different window with a relative objective, none of whose evidence describes the
+    strategy it composes into, and a certificate written before the bootstrap named its
+    statistic banded a contribution by per-trade edges.
     """
     if (
         passed.strategy_sha != version.sleeve.strategy_sha
@@ -547,7 +672,8 @@ def _recorded(
             if gate.id == BOOTSTRAP
             and gate.skipped is None
             and gate.evidence.keys() >= _BANDS
-            and gate.evidence["objective"] == objective_id
+            and gate.evidence["objective"] == objective.id
+            and gate.evidence["statistic"] == band_statistic(objective)
         ),
         None,
     )
@@ -557,9 +683,9 @@ def _recorded(
     return float(low), float(high), float(found.evidence["mdd_p95"])
 
 
-def _replications(passed: Certificate) -> int:
+def _replications(passed: Certificate | None) -> int:
     """How many resamplings to draw: the planner's count, or this module's own."""
-    for gate in passed.gates:
+    for gate in () if passed is None else passed.gates:
         chosen = gate.params.get("n")
         if gate.id == BOOTSTRAP and isinstance(chosen, int):
             return chosen

@@ -186,6 +186,20 @@ def test_an_empty_universe_is_refused() -> None:
         build(universe=[])
 
 
+def test_derived_from_names_other_hypotheses_once_each() -> None:
+    assert build().derived_from == []
+    assert build(derived_from=["demo_parent", "demo_other"]).derived_from == [
+        "demo_parent",
+        "demo_other",
+    ]
+    with pytest.raises(ValidationError, match="derived_from: repeats an id"):
+        build(derived_from=["demo_parent", "demo_parent"])
+    with pytest.raises(ValidationError, match="cannot derive from itself"):
+        build(derived_from=[build().id])
+    with pytest.raises(ValidationError, match="derived_from"):
+        build(derived_from=["Not-An-Id"])
+
+
 @pytest.mark.parametrize("bad", ["ab", "Demo", "demo-mr", "d" * 41, ""])
 def test_the_id_is_constrained(bad: str) -> None:
     with pytest.raises(ValidationError, match="id"):

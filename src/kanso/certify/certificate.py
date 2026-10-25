@@ -80,6 +80,8 @@ _COLUMNS: Final = (
     "verdict",
     "path",
     "created_at",
+    "power",
+    "net_per_trade",
 )
 
 _INSERT: Final = (
@@ -262,6 +264,10 @@ def write(ws: Workspace, store: StateStore, certificate: Certificate, source: by
             certificate.verdict,
             str(path.relative_to(ws.root)),
             certificate.created_at.isoformat(),
+            None if certificate.power is None else _dump(certificate.power.model_dump(mode="json")),
+            None
+            if certificate.net_per_trade is None
+            else _dump(certificate.net_per_trade.model_dump(mode="json")),
         ),
     )
     return path
@@ -304,5 +310,9 @@ def _certificate(row: Any) -> Certificate:
             "n_trials": row["n_trials"],
             "verdict": row["verdict"],
             "created_at": row["created_at"],
+            "power": None if row["power"] is None else json.loads(str(row["power"])),
+            "net_per_trade": None
+            if row["net_per_trade"] is None
+            else json.loads(str(row["net_per_trade"])),
         }
     )

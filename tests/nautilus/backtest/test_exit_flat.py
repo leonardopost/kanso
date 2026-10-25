@@ -436,6 +436,70 @@ BRACKETS = {"plain": b"", "emulated": b"emulation_trigger=TriggerType.BID_ASK,"}
 """A bracket the venue holds, whose children it keeps back until the entry fills, and one
 the engine's order emulator holds, whose children it keeps unsent."""
 
+ONE_TRIGGERS_OTHER = (
+    HEAD
+    + b'''
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import ContingencyType, OrderSide, TriggerType
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import LimitOrder, OrderList
+
+
+class Strategy(KansoStrategy):
+    """Buys 100 once; on its fifth quote sells it in two limits of 50 at the bid times AT,
+    sent one-triggers-other, so the venue or the emulator releases the second only once the
+    first fills; on its EXIT_ONth quote asks for one exit, EXIT, and never asks again."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        bid = float(tick.bid_price)
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        if self.seen == 5:
+            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+            list_id = self.order_factory.generate_order_list_id()
+            links = (
+                {"contingency_type": ContingencyType.OTO, "linked_order_ids": [ids[1]]},
+                {"parent_order_id": ids[0]},
+            )
+            orders = [
+                LimitOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=self.id,
+                    instrument_id=instrument_id,
+                    client_order_id=ids[index],
+                    order_side=OrderSide.SELL,
+                    quantity=Quantity.from_int(50),
+                    price=Price(round(bid * AT, 2), 2),
+                    init_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(),
+                    order_list_id=list_id,
+                    EMULATION
+                    **links[index],
+                )
+                for index in range(2)
+            ]
+            self.submit_order_list(OrderList(list_id, orders))
+        if self.seen == EXIT_ON:
+            self.submit_exit(instrument_id, EXIT)
+'''
+)
+
+ONE_TRIGGERS_OTHER_EXITS = {
+    "marketable-then-priced": (b"1.0", b"5", b"price=round(bid * 0.5, 2)"),
+    "marketable-then-at-market": (b"1.0", b"5", b""),
+    "resting-then-at-market": (b"1.5", b"30", b""),
+}
+"""Where the two limits are and which exit follows them: marketable when sent, with an exit
+at a marketable limit or at market in the same handler, or resting far over the market
+until an exit at market on a later quote."""
+
 MODIFIED_OPEN = CANCELLED_OPEN.replace(b"PRICE", b"round(float(tick.ask_price) + 1.0, 2)").replace(
     b"CANCEL",
     b"from nautilus_trader.model.objects import Price; "
@@ -992,6 +1056,32 @@ def test_an_exit_at_market_does_not_count_the_exits_of_a_bracket_whose_entry_has
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("held", sorted(BRACKETS))
+@pytest.mark.parametrize("shape", sorted(ONE_TRIGGERS_OTHER_EXITS))
+def test_an_exit_counts_the_child_of_an_exit_sent_one_triggers_other(
+    request_for, shape: str, held: str, latency_ms: float
+) -> None:
+    """A child sent one-triggers-other under a parent on its own side is released by the
+    parent's fill to sell as well, so `submit_exit` counts it from the start, and the exit
+    never goes past flat. One whose parent was cancelled with nothing filled is not counted:
+    it never fills, and an exit at market on the resting pair goes out whole once the
+    parent's cancel is spent. Measured on the round before this test: with the limits
+    marketable when sent and the exit in the same handler, the exit counted the parent alone,
+    sold 50 beside the two limits, and the sleeve sold 150 of its 100 — at a limit wherever
+    the pair was held, at market where the venue held it; the resting pair was closed whole,
+    as it is here."""
+    at, exit_on, exit = ONE_TRIGGERS_OTHER_EXITS[shape]
+    source = (
+        ONE_TRIGGERS_OTHER.replace(b"AT,", at + b",")
+        .replace(b"EXIT_ON:", exit_on + b":")
+        .replace(b"EXIT)", exit + b")")
+        .replace(b"EMULATION", BRACKETS[held])
+    )
+    run = _run(request_for, latency_ms, source, quotes=True)
+    assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
 def test_a_batch_of_cancels_with_an_emulated_order_in_it_cancels_every_one(
     request_for, latency_ms: float
 ) -> None:
@@ -1188,3 +1278,133 @@ def test_an_order_is_not_cancelled_for_an_exit_at_market_taken_back_before_its_a
     resting where the sleeve put it, stops waiting on it, and nothing is sold."""
     run = _run(request_for, 0.0, TAKEN_BACK_AT_A_PRICE, quotes=True)
     assert [(fill.side, fill.qty) for fill in run.fills] == [("BUY", 100.0)]
+
+
+ASKED_AGAIN = (
+    HEAD
+    + b'''
+
+class Strategy(KansoStrategy):
+    """Buys 100 once; on its thirtieth quote asks for its exit, EXIT, and asks for it again,
+    the same, as the engine reports the first submitted."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.again = False
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        elif self.seen == 30:
+            self.bid = float(tick.bid_price)
+            self.again = True
+            self.submit_exit(instrument_id, EXIT)
+
+    def on_order_submitted(self, event):
+        if self.again:
+            self.again = False
+            self.submit_exit(event.instrument_id, EXIT)
+'''
+)
+"""A sleeve that asks for its exit again from the handler the engine runs inside the first
+exit's submission."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("exit", [b"", b"price=round(self.bid * 0.5, 2)"], ids=["market", "priced"])
+def test_an_exit_asked_again_while_the_first_is_submitted_counts_the_first(
+    request_for, exit: bytes, latency_ms: float
+) -> None:
+    """The backtest engine runs the sleeve's `on_order_submitted` inside the first exit's
+    submission, and the exit asked for again there counts the first as working, so the
+    sleeve sells its 100 and no more. Measured on the round before this test, and on main:
+    the first exit was kept as working only once its submission returned, the second was
+    sized to the whole position, and the sleeve sold 200 of its 100, at market and at a
+    marketable limit, at 0 and at 20 ms."""
+    source = ASKED_AGAIN.replace(b"EXIT)", exit + b")")
+    run = _run(request_for, latency_ms, source, quotes=True)
+    assert never_short(run.fills) == (100.0, 100.0, 0.0), run.fills
+
+
+ACROSS_NAMES = (
+    HEAD
+    + b'''
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import ContingencyType, OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import LimitOrder, OrderList
+
+
+class Strategy(KansoStrategy):
+    """Buys 100 of each of its two names; on its fifth quote of the first sends one list: in
+    the second name a SIDE of 100 far from the market, one-triggers-other with a sale of the
+    first name's 100 far over it, which only the second name's fill would release; on its
+    thirtieth quote of the first asks for that name's exit at market."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = {}
+
+    def on_quote_tick(self, tick):
+        instrument_id = tick.instrument_id
+        key = instrument_id.value
+        self.seen[key] = self.seen.get(key, 0) + 1
+        if self.seen[key] == 1:
+            self.submit_entry(instrument_id, "BUY", qty=100)
+        first, second = self.universe
+        if instrument_id != first:
+            return
+        if self.seen[key] == 5:
+            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+            list_id = self.order_factory.generate_order_list_id()
+            far = 0.5 if OrderSide.SIDE == OrderSide.BUY else 1.5
+            legs = (
+                (second, OrderSide.SIDE, self.last_price(second) * far, {
+                    "contingency_type": ContingencyType.OTO, "linked_order_ids": [ids[1]]
+                }),
+                (first, OrderSide.SELL, float(tick.bid_price) * 1.5, {"parent_order_id": ids[0]}),
+            )
+            orders = [
+                LimitOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=self.id,
+                    instrument_id=name,
+                    client_order_id=ids[index],
+                    order_side=side,
+                    quantity=Quantity.from_int(100),
+                    price=Price(round(price, 2), 2),
+                    init_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(),
+                    order_list_id=list_id,
+                    **links,
+                )
+                for index, (name, side, price, links) in enumerate(legs)
+            ]
+            self.submit_order_list(OrderList(list_id, orders))
+        elif self.seen[key] == 30:
+            self.submit_exit(first)
+'''
+)
+"""A sleeve whose child of one name waits on a parent in another."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+@pytest.mark.parametrize("side", ["SELL", "BUY"])
+def test_an_exit_at_market_is_not_held_back_by_a_child_waiting_on_another_name(
+    request_for, side: str, latency_ms: float
+) -> None:
+    """A child whose parent is in another name and has filled nothing is left out of what an
+    exit counts, as on main: the venue holds it pending, an exit at market cannot cancel it,
+    and counted it would keep the exit from going out for as long as the parent rests. So the
+    exit at market of the first name sells its 100. Measured on the round before this test,
+    which counted every child whose parent was not on its other side of its own name: the
+    exit sold nothing, its 100 owed on every later point and never paid."""
+    source = ACROSS_NAMES.replace(b"SIDE", side.encode())
+    run = _run(request_for, latency_ms, source, quotes=True, names=(SYMBOL, OTHER))
+    first = [fill for fill in run.fills if fill.instrument_id == f"{SYMBOL}.{VENUE}"]
+    assert never_short(first) == (100.0, 100.0, 0.0), run.fills

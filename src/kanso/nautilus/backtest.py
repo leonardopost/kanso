@@ -13,11 +13,20 @@ deducted per fill in this extraction — or, for a fill the venue reports as a m
 venue model that states a maker schedule, `maker_bps` of its notional and `maker_per_share` on
 each share alone — a per-share commission on every share of a fill that pays commission, and
 on a taker's fill `slippage_ticks` of the instrument's increment on each share, no further
-than the order's limit (`kanso.nautilus.costs.fill_cost`, `tick_slip`). One
+than the order's limit (`kanso.nautilus.costs.fill_cost`, `tick_slip`). **The spread is
+charged where the price does not already carry it.** A fill in an instrument the venue books
+from quotes or a level-two book is struck at the touch — a taker buys the ask and sells the
+bid, a maker fills at its own price — so the spread is in the price and the extraction charges
+no half-spread on it (`touched_names`, `Fill.touched`); a fill in an instrument fed bars or
+prints alone is struck at a close or a last print and pays the model's half-spread, quoted or
+fixed. Measured before this rule on a quote of 9.99/10.01 with every other charge zero: a
+market buy filled at 10.01 and a market sell at 9.99, each charged 10 bp on top, so a flat
+round trip whose cost was one spread was booked at two. One
 application means one number: a card, a certification gate, a composition expectation and a
 realised paper objective all read the same arithmetic, and a cost model can be re-applied to
 recorded fills without re-running anything, because each fill records whether it was a
-maker's, the instrument's increment and the order's limit. A perpetual's funding is booked
+maker's, whether it was struck at the touch, the instrument's increment and the order's
+limit. A perpetual's funding is booked
 here too, once, at each settlement, on what was held then (`_equity`) — never by the venue —
 and the runner configures the sleeve to book the same amount into the balance it sizes from
 (`books_funding`).
@@ -99,6 +108,7 @@ from __future__ import annotations
 
 import bisect
 import contextlib
+import copy
 import gc
 import hashlib
 import os
@@ -113,6 +123,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -143,7 +154,7 @@ from kanso.nautilus.costs import (
     reset,
     tick_slip,
 )
-from kanso.nautilus.cross_section import is_marker
+from kanso.nautilus.cross_section import BAR, BOOK, QUOTE, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -169,7 +180,9 @@ __all__ = [
     "main",
     "run",
     "run_subprocess",
+    "run_subprocesses",
     "stage_of",
+    "touched_names",
     "tunable",
     "wanted",
     "warmup_prefix",
@@ -246,10 +259,10 @@ OUTPUT_FILE: Final = "stderr.txt"
 
 READ_TICK_NS: Final = 3_600 * NS_PER_SECOND
 """The step a window of prints, quotes or a book is read from the catalog in; any other
-window's step is a day. A read is one step, or that step and as many after it as the files
-it reads hold at most `READ_POINTS` points over (`_reads`; one name's bars and custom points
-excepted, `_chunked`), so a dense feed is read a step at a time and a sparse one in as few
-reads as its points need. Measured on one perpetual swap's
+window's step is a day. A read is one step, or that step and as many after it as hold at
+most `READ_POINTS` points (`_reads`; one name's bars and custom points excepted,
+`_chunked`), so a dense feed is read a step at a time and a sparse one in as few reads as
+its points need. Measured on one perpetual swap's
 level-two book and prints: an hour's read costs at most 2.6 times per point what a
 twelve-hour read does, about three seconds over a whole day of BTC."""
 
@@ -261,15 +274,22 @@ caps of 10,000, 50,000, 200,000 and none gave the identical card, at about 10 ms
 per extra chunk."""
 
 READ_POINTS: Final = CHUNK_POINTS
-"""The most points a read longer than its step may hold, counted off the footers of the
-files it reads before it is made (`_reads`). One chunk's worth, so a read lengthened past its
+"""The most points a read longer than its step may hold, counted off the files it reads
+before it is made (`_row_groups`, `_reads`). One chunk's worth, so a read lengthened past its
 step is a single chunk, and the parent holds no more of a sparse window at once than the
 child holds of a chunk. Measured on 2026-10-10 on a workspace holding fifteen names' quotes
 and prints at whole minutes of the regular session, filed a month a file: over January 2022,
 696 hourly reads, 160 of them holding anything, took 207.5 s, and two reads took 0.8 s to
 hand on the same 235,229 points and their markers byte for byte; over 2022-01-03..2024-12-31,
 76 reads took 23.5 s, where 26,256 hourly reads had taken 70 to 110 minutes. Three hours of
-one name's prints at 360,000 an hour were still read an hour at a time."""
+one name's prints at 360,000 an hour were still read an hour at a time.
+
+Measured on 2026-10-17 on 82 names' daily bars, a file a name in row groups reaching across
+twenty years, over a card's window of 2006-08-22..2024-07-31: counted a whole group to every
+day it met, each of the 6,554 days held 410,000 rows and was read alone, 537,428 queries
+of which 61 days' took 546 s; counted by step it is two reads of 82 queries, handing on the
+370,230 bars and markers the window read whole hands on, byte for byte, in 10.3 s with the
+catalog listed once a window (`_catalog`)."""
 
 FEED_BYTES: Final = 64 * 1024
 """The most the parent writes to a card's standard input in one step of its watch."""
@@ -307,23 +327,26 @@ def resume() -> None:
     _INTERRUPT.clear()
 
 
-_WANTED: list[Callable[[], None]] = []
+_WANTED: list[Callable[[], object]] = []
 """The checks the `wanted` blocks this process is inside have registered, innermost last."""
 
 
 @contextlib.contextmanager
-def wanted(check: Callable[[], None]) -> Iterator[None]:
+def wanted(check: Callable[[], object]) -> Iterator[None]:
     """Read windows and run cards, inside the block, only for as long as `check` passes.
 
     `check` raises once the work is not wanted any more — a lane's claim on the hypothesis
     whose baseline it is preparing, taken back by `research queue remove`
-    (`kanso.research.loop.begin`) — and is asked before every catalog query for points this
-    process makes (the one lookup of the universe's definitions a read begins with is not
-    one), before a card is spawned, and every `WANTED_POLL_S` while one runs, which is
-    killed before the refusal is raised. So a refusal costs at most the query in flight or
-    a poll of the card. Measured before this, on 0.13.1.dev1: four lanes whose claims were
-    taken back went on reading their windows for nineteen minutes, because the claim was
-    asked about only once the window had been read and the baseline had run on it.
+    (`kanso.research.loop.begin`), or the run whose card it is, ended by `research end`
+    (`kanso.research.loop.ongoing`) — and is asked before every catalog query for points
+    this process makes (the one lookup of the universe's definitions a read begins with is
+    not one), before a card is spawned, every `WANTED_POLL_S` while one runs, which is
+    killed before the refusal is raised, and once more when it has exited, before anything
+    it wrote is read: the work that stopped being wanted may have taken the card's room
+    with it. So a refusal costs at most the query in flight or a poll of the card. Measured
+    before this, on 0.13.1.dev1: four lanes whose claims were taken back went on reading
+    their windows for nineteen minutes, because the claim was asked about only once the
+    window had been read and the baseline had run on it.
     """
     _WANTED.append(check)
     try:
@@ -633,12 +656,10 @@ def warmup_prefix(
     at the instant after its clock, inside a window that opens on the clock's day, and
     what it warms on is what it replayed before.
     """
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
     if hyp.warmup is None:
         return None
     wanted = hyp.warmup.sessions
-    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog = _catalog(catalog_path)
     held = _held(catalog, hyp)
     grain = (tuple(grains) or (hyp.resolution,))[0]
     end = midnight_ns(window[0]) - 1 if until_ns is None else until_ns
@@ -649,8 +670,7 @@ def warmup_prefix(
     for _ in range(LOOKBACK_DOUBLINGS):
         lookback *= 2
         start = max(0, end + 1 - lookback * NS_PER_DAY)
-        points = _primary_points(catalog, hyp, held, grain, start, end)
-        days = sorted({day_of(int(point.ts_init)) for point in points})  # type: ignore[attr-defined]
+        days = sorted(_primary_days(catalog, hyp, held, grain, start, end))
         if len(days) >= wanted:
             return days[-wanted], days[-1]
     raise PreconditionError(
@@ -658,6 +678,109 @@ def warmup_prefix(
         f"{len(days)} in the {lookback} calendar days before it",
         remedy=f"load {', '.join(hyp.universe)} at {grain} back to at least {day_of(start)} "
         "with `kanso data load`, then `kanso data snapshot`; or lower warmup.sessions",
+    )
+
+
+def _catalog(catalog_path: Path) -> Any:
+    """A catalog of `catalog_path` of the caller's own, listing each class's files once for as
+    long as it is held: what one window's reads, or a warmup's lookback, open it for.
+
+    On nautilus_trader 1.231.0 a query not handed its files — every query of bars, and of a
+    custom type — lists them through the catalog's own `get_file_list_from_data_cls`, a glob
+    of the class's whole directory, before it keeps the series asked for; and
+    `ParquetDataCatalog(path)` is one instance per path for the whole process
+    (`kanso.nautilus.facts`). So a window of many names read in many reads globbed that
+    directory once for every name in every read: measured on 2026-10-17 on a workspace
+    holding 2,935 files of bars in 1,795 directories, the glob was about 90 ms of a 100 ms
+    query of one name's day. The listing is held on a copy of the engine's instance, so it
+    goes with the window and nothing else in the process reads it.
+
+    What a read takes from the listing differs by type. A read of quotes, prints, book
+    changes or custom points is handed the listed files that meet its span, so it reads the
+    files its reads were planned on (`_files_read`). A read of bars is not: the engine
+    registers the directory of each listed file that meets the span and reads whatever that
+    directory holds when the query runs, so the listing decides only which series'
+    directories a bar read takes. Each query is otherwise the engine's own.
+
+    A listed file that has gone by the time a query reads it — a `kanso data load --replace`
+    or `--supersedes` of the series landing while the window streams — is a miss: the class
+    is listed again for the window and the query made again (`_read_listed`), so it reads
+    the files that replaced it, as a query listing the class itself reads them. A file
+    written where no listed file of the series meets a read misses nothing, and is read
+    only once a later miss of its class lists it, or by the next window.
+    """
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    catalog: Any = copy.copy(ParquetDataCatalog(str(catalog_path)))
+    lister = catalog.get_file_list_from_data_cls
+    listed: dict[type, list[str]] = {}
+
+    def listing(data_cls: type) -> list[str]:
+        if data_cls not in listed:
+            listed[data_cls] = lister(data_cls)
+        return list(listed[data_cls])
+
+    catalog.get_file_list_from_data_cls = listing
+    catalog.kanso_listed = listed
+    return catalog
+
+
+def _read_listed(
+    catalog: Any,
+    data_cls: type,
+    identifiers: list[str] | None,
+    span: tuple[int, int],
+    read: Callable[[], tuple[object, ...]],
+) -> tuple[object, ...]:
+    """`read()`, one query of `data_cls` over `span`, made once more on a fresh listing of
+    the class when it misses a file the listing named.
+
+    A miss is a query raising `FileNotFoundError` naming a file the listing gives it — the
+    listed files `filter_files` keeps for its identifiers and span, as the engine and
+    `_in_file_order` keep them — or raising it or `RuntimeError` once one of those files is
+    gone: on nautilus_trader 1.231.0 a query handed a file that has gone raises
+    `FileNotFoundError` naming it, and a query of bars whose listed directory holds no file
+    raises `RuntimeError` (`kanso.nautilus.facts`). The class is then listed again, which
+    the window's later reads take too, and the query made again over what the series holds
+    now. A miss again is refused, naming the series; any other error is raised as it came.
+    A catalog `_catalog` did not open lists the class afresh at every query, so a query of
+    one can miss only a file that went while it read, and nothing is made again.
+    """
+    try:
+        return read()
+    except (FileNotFoundError, RuntimeError) as exc:
+        if not _missed(exc, catalog, data_cls, identifiers, span):
+            raise
+    getattr(catalog, "kanso_listed", {}).pop(data_cls, None)
+    _refuse_if_unwanted()
+    try:
+        return read()
+    except (FileNotFoundError, RuntimeError) as exc:
+        if not _missed(exc, catalog, data_cls, identifiers, span):
+            raise
+        series = data_cls.__name__ + ("" if identifiers is None else f" of {identifiers[0]}")
+        days = "..".join(str(day) for day in sorted({day_of(span[0]), day_of(span[1])}))
+        raise PreconditionError(
+            f"data: {series} lost a file the window listed while {days} was read, and lost "
+            f"one again once listed afresh: {exc}",
+            remedy="let the `kanso data load` rewriting the series finish, then run again; "
+            "`kanso data show` lists what it holds",
+        ) from exc
+
+
+def _missed(
+    exc: Exception,
+    catalog: Any,
+    data_cls: type,
+    identifiers: list[str] | None,
+    span: tuple[int, int],
+) -> bool:
+    """Whether `exc`, raised by a query of `data_cls` over `span`, is a miss (`_read_listed`)."""
+    listed = catalog.get_file_list_from_data_cls(data_cls)
+    said = str(exc) if isinstance(exc, FileNotFoundError) else ""
+    return any(
+        path in said or not os.path.isfile(path)
+        for path in catalog.filter_files(data_cls, listed, identifiers, *span)
     )
 
 
@@ -674,26 +797,73 @@ def _held(catalog: Any, hyp: Hypothesis) -> dict[str, Any]:
     return held
 
 
-def _primary_points(
+def _primary_days(
     catalog: Any, hyp: Hypothesis, held: Mapping[str, Any], grain: str, start: int, end: int
-) -> tuple[object, ...]:
-    """The series a session is counted on: the sleeve's own grain of its first market type.
+) -> set[date]:
+    """The UTC days the series a session is counted on holds a point in, `start <= ts_init
+    <= end`: the sleeve's own grain of its first market type.
 
     Bars at the sleeve's grain when the hypothesis requires bars, else its quotes, else its
     trades — one of the three is always required, because a resolution is a bar size or
     one of the unaggregated grains and the schema requires the type it names. The names
     are taken together, so a day any of them printed is a session.
+
+    Bars are read as the window reads them (`market_points`), a bar an instant. Quotes and
+    prints are not: only their days are wanted, and a name's quotes over twice the sessions
+    asked for are tens of millions of objects — measured on 2026-10-22, the 20 names of a
+    tick hypothesis held 67.8 million quotes over ten days before the window, 736 bytes
+    each once read, and a parent asking five sessions of them passed 9 GB in 103 s. Their
+    days are read off the `ts_init` column of the very files `_in_file_order` would hand the
+    query (`_days_filed`), which the query filters on `ts_init`, inclusively at both ends,
+    and turns into one point a row, so the days are the days of the points it would return.
     """
     from kanso.nautilus.strategy import BAR, QUOTE, TRADE
 
     requirement = next(kind for kind in (BAR, QUOTE, TRADE) if kind in hyp.data_requirements)
-    resolution = grain if requirement == BAR else hyp.resolution
-    return tuple(
-        chain.from_iterable(
-            market_points(catalog, requirement, held[name], resolution, start, end)
-            for name in sorted(hyp.universe)
+    days: set[date] = set()
+    for name in sorted(hyp.universe):
+        if requirement == BAR:
+            points = market_points(catalog, requirement, held[name], grain, start, end)
+            days.update(day_of(int(point.ts_init)) for point in points)  # type: ignore[attr-defined]
+        else:
+            days.update(_days_filed(catalog, requirement, held[name], hyp.resolution, start, end))
+    return days
+
+
+def _days_filed(
+    catalog: Any, requirement: str, instrument: Any, resolution: str, start: int, end: int
+) -> tuple[date, ...]:
+    """The UTC days of one instrument's quotes or prints with `start <= ts_init <= end`, read
+    off the `ts_init` column of the files `_in_file_order` reads, one file at a time, through
+    the same `wanted` check and the same miss handling (`_read_listed`) as `market_points`.
+
+    The engine names no reader of one column, so this reads the files with `pyarrow`, as
+    `_row_groups` does. On nautilus_trader 1.231.0 a query handed files reads them as one
+    dataset, keeps the rows with `start <= ts_init <= end` and deserialises every row it
+    keeps into one point carrying that row's `ts_init`
+    (`ParquetDataCatalog._query_pyarrow` and `_handle_table_nautilus`); a file that is gone
+    raises `FileNotFoundError` naming it, from `pyarrow` as from the query.
+    """
+    import numpy
+    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+
+    _refuse_if_unwanted()
+    data_cls, identifier = _filed_as(requirement, instrument, resolution)
+
+    def read() -> tuple[object, ...]:
+        files = catalog.filter_files(
+            data_cls, catalog.get_file_list_from_data_cls(data_cls), [identifier], start, end
         )
-    )
+        held: set[int] = set()
+        for path in sorted(files):
+            with pq.ParquetFile(path) as handle:
+                column = handle.read(columns=["ts_init"], use_threads=False).column(0)
+            instants = column.to_numpy().astype(numpy.int64)
+            inside = instants[(instants >= start) & (instants <= end)]
+            held.update(numpy.unique(inside // NS_PER_DAY).tolist())
+        return tuple(day_of(number * NS_PER_DAY) for number in sorted(held))
+
+    return _read_listed(catalog, data_cls, [identifier], (start, end), read)  # type: ignore[return-value]
 
 
 def window_data(
@@ -708,10 +878,8 @@ def window_data(
     call. The upper bound is the window's, prefix or not. A card child is handed the same
     points a chunk at a time (`_payload`), through the same reader.
     """
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
     hyp = request.hyp
-    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog = _catalog(catalog_path)
     held = _held(catalog, hyp)
     opens, closes = request.delivered
     scope = _scope_days(catalog, hyp, opens, closes - 1)
@@ -804,9 +972,13 @@ def market_points(
 
     _refuse_if_unwanted()
     data_cls, identifier = _filed_as(requirement, instrument, resolution)
-    if requirement == BAR:
-        return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
-    return _in_file_order(catalog, data_cls, identifier, start, end)
+
+    def read() -> tuple[object, ...]:
+        if requirement == BAR:
+            return tuple(catalog.query(data_cls, identifiers=[identifier], start=start, end=end))
+        return _in_file_order(catalog, data_cls, identifier, start, end)
+
+    return _read_listed(catalog, data_cls, [identifier], (start, end), read)
 
 
 def _filed_as(requirement: str, instrument: Any, resolution: str) -> tuple[type, str]:
@@ -908,7 +1080,11 @@ def _custom_points(
     """
     _refuse_if_unwanted()
     admissible = {*universe, None}
-    found = catalog.query(data_cls, identifiers=None, start=start, end=end)
+
+    def read() -> tuple[object, ...]:
+        return tuple(catalog.query(data_cls, identifiers=None, start=start, end=end))
+
+    found = _read_listed(catalog, data_cls, None, (start, end), read)
     return tuple(point for point in found if _instrument_of(point) in admissible)
 
 
@@ -1041,6 +1217,70 @@ def _modifier(
 # --- the engine --------------------------------------------------------------
 
 
+def engine_for() -> Any:
+    """The backtest engine every run is built in: no logging, no analysis, and an order rate
+    no replay or backtest reaches (`SUBMIT_RATE`)."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
+
+    return BacktestEngine(
+        config=BacktestEngineConfig(
+            logging=LoggingConfig(bypass_logging=True),
+            risk_engine=RiskEngineConfig(
+                max_order_submit_rate=SUBMIT_RATE,
+                max_order_modify_rate=SUBMIT_RATE,
+            ),
+            run_analysis=False,
+        )
+    )
+
+
+def add_venue(engine: Any, venue: Any) -> None:
+    """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
+    with the simulation modules every kanso venue loads."""
+    from nautilus_trader.backtest.node import (
+        get_account_type,
+        get_base_currency,
+        get_book_type,
+        get_fill_model,
+        get_latency_model,
+        get_oms_type,
+        get_starting_balances,
+    )
+    from nautilus_trader.model.identifiers import Venue
+
+    from kanso.nautilus.actions import modules
+
+    engine.add_venue(
+        venue=Venue(venue.name),
+        oms_type=get_oms_type(venue),
+        account_type=get_account_type(venue),
+        base_currency=get_base_currency(venue),
+        starting_balances=get_starting_balances(venue),
+        # Through a string, so a leverage is the decimal it was written as rather than the
+        # binary float that happens to be nearest to it.
+        default_leverage=Decimal(str(venue.default_leverage)),
+        bar_execution=venue.bar_execution,
+        # A level-two book with queue position when the hypothesis holds one; see
+        # `kanso.nautilus.venue`.
+        book_type=get_book_type(venue),
+        trade_execution=venue.trade_execution,
+        queue_position=venue.queue_position,
+        # Whether a resting limit the market only touched fills: the venue model's
+        # `limit_fill`, built from the configuration the node's venue is built from — kanso's
+        # own fill model under the print rules (`kanso.nautilus.tape`).
+        fill_model=get_fill_model(venue),
+        # How long the venue takes to see an order: the venue model's `latency_ms`, none when
+        # it states none.
+        latency_model=get_latency_model(venue),
+        # The venue applies a corporate action one call before it matches the point that
+        # carried the market past it, applies every quote and print the sleeve is handed, and,
+        # under `print_through`, lands what is due by a print before it; see
+        # `kanso.nautilus.actions`, `availability` and `tape`.
+        modules=modules(venue.name),
+    )
+
+
 def execute(
     request: RunRequest,
     instruments: Sequence[object],
@@ -1091,66 +1331,16 @@ def execute_chunked(
     after the data it holds is exhausted without finalising; `clear_data` drops the stream
     and keeps the instruments; `end` finalises once every chunk has run.
     """
-    from nautilus_trader.backtest.engine import BacktestEngine
-    from nautilus_trader.backtest.node import (
-        get_account_type,
-        get_base_currency,
-        get_book_type,
-        get_fill_model,
-        get_latency_model,
-        get_oms_type,
-        get_starting_balances,
-    )
-    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
-    from nautilus_trader.model.identifiers import Venue
-
-    from kanso.nautilus.actions import modules
-    from kanso.nautilus.cross_section import BOOK, coincident, is_marker, warm
+    from kanso.nautilus.cross_section import coincident, warm
 
     model = VenueModel.model_validate(dict(request.venue_model))
     marks = Marks(request, model)
     _seed_globals(request.snapshot_id)
     started = time.perf_counter()
-    engine = BacktestEngine(
-        config=BacktestEngineConfig(
-            logging=LoggingConfig(bypass_logging=True),
-            risk_engine=RiskEngineConfig(
-                max_order_submit_rate=SUBMIT_RATE,
-                max_order_modify_rate=SUBMIT_RATE,
-            ),
-            run_analysis=False,
-        )
-    )
+    engine = engine_for()
     try:
         for venue in venue_configs(request.hyp, request.venue_model, request.capital):
-            engine.add_venue(
-                venue=Venue(venue.name),
-                oms_type=get_oms_type(venue),
-                account_type=get_account_type(venue),
-                base_currency=get_base_currency(venue),
-                starting_balances=get_starting_balances(venue),
-                # Through a string, so a leverage is the decimal it was written as rather
-                # than the binary float that happens to be nearest to it.
-                default_leverage=Decimal(str(venue.default_leverage)),
-                bar_execution=venue.bar_execution,
-                # A level-two book with queue position when the hypothesis holds one; see
-                # `kanso.nautilus.venue`.
-                book_type=get_book_type(venue),
-                trade_execution=venue.trade_execution,
-                queue_position=venue.queue_position,
-                # Whether a resting limit the market only touched fills: the venue model's
-                # `limit_fill`, built from the configuration the node's venue is built from —
-                # kanso's own fill model under the print rules (`kanso.nautilus.tape`).
-                fill_model=get_fill_model(venue),
-                # How long the venue takes to see an order: the venue model's `latency_ms`,
-                # none when it states none.
-                latency_model=get_latency_model(venue),
-                # The venue applies a corporate action one call before it matches the point
-                # that carried the market past it, applies every quote and print the sleeve is
-                # handed, and, under `print_through`, lands what is due by a print before it;
-                # see `kanso.nautilus.actions`, `availability` and `tape`.
-                modules=modules(venue.name),
-            )
+            add_venue(engine, venue)
         for instrument in instruments:
             engine.add_instrument(instrument)
         cls, config = _sleeve(request)
@@ -1167,6 +1357,7 @@ def execute_chunked(
         marked = coincident(request.hyp)
         book = BOOK in request.hyp.data_requirements
         ran = False
+        snapshots_read: dict[object, tuple[list[bytes], int]] = {}
         for points in checked_chunks(request, instruments, chunks, marks):
             strategy._hold_until_cross_section = marked or any(is_marker(p) for p in points)
             if ran and strategy._hold_until_cross_section:
@@ -1177,7 +1368,8 @@ def execute_chunked(
             del points
             engine.run(start=opens, end=closes - 1, streaming=True)
             ran = True
-            marks.price(_fill_events(_positions(engine.cache))[0])
+            if marks.quotes:
+                marks.price(_fills_since(engine.cache, snapshots_read))
             marks.next_chunk()
             engine.clear_data()
         if ran:
@@ -1217,7 +1409,7 @@ def checked_chunks(
     last day without its book. A consumer that stops early — a node that halted — is not
     asked about the days it never reached.
     """
-    from kanso.nautilus.cross_section import BOOK, coincident
+    from kanso.nautilus.cross_section import coincident
 
     marked = coincident(request.hyp)
     book = BOOK in request.hyp.data_requirements
@@ -1792,6 +1984,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
     cache = engine.cache
     multipliers = multipliers_of(cache.instruments())
     increments = increments_of(cache.instruments())
+    touched = touched_names(request.hyp)
     positions = _positions(cache)
     events, owners = _fill_events(positions)
     marks.price(events)
@@ -1803,6 +1996,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
             model,
             increments.get(str(event.instrument_id), 0.0),
             limit_at(cache.order(event.client_order_id), event.trade_id),
+            touched=str(event.instrument_id) in touched,
         )
         for event in events
     )
@@ -1892,6 +2086,57 @@ def _fill_events(positions: Sequence[Any]) -> tuple[tuple[Any, ...], tuple[int, 
     return tuple(event for event, _ in owned), tuple(index for _, index in owned)
 
 
+def _fills_since(cache: Any, read: dict[object, tuple[list[bytes], int]]) -> list[Any]:
+    """The fills `Marks.price` is handed after a chunk: every fill of the positions the cache
+    holds, and of each position snapshot taken since the last call; `read` is what the calls
+    before this one read of each snapshot list, and is brought up to date.
+
+    `Marks.price` charges a fill once, keyed by its event id, from the fill's own instant and
+    name, so the fills it has priced are passed over and the order it is handed them in moves
+    nothing. Handed every fill the run holds after every chunk (`_fill_events`), it prices
+    exactly what it prices handed these: a snapshot is immutable, and every fill of one read
+    here was handed over, and priced, when it was read. What differs is the cost. The cache
+    keeps its snapshots pickled and `position_snapshots` unpickles every one on every call, so
+    the scan grew with the fills times the chunks of a window; here each is unpickled once.
+
+    Engine facts this relies on (nautilus_trader 1.231.0, `cache/cache.pyx` and
+    `execution/engine.pyx`): a position closed and reopened under NETTING, or flipped, is
+    snapshotted and a new position object takes its id, so a position the cache holds holds
+    only the fills since its own opening; `position_snapshot_bytes` hands back the cache's
+    own list of an id's pickled snapshots, which only `snapshot_position` adds to, at its
+    end. A list that is not the one read before — a purge drops one, and kanso purges
+    nothing — is read whole again. `kanso doctor` re-checks the last against the installed
+    engine (`kanso.nautilus.facts`).
+    """
+    found = [event for position in cache.positions() for event in position.events]
+    for position_id in cache.position_snapshot_ids():
+        frames = cache.position_snapshot_bytes(position_id)
+        held = read.get(position_id)
+        start = held[1] if held is not None and held[0] is frames else 0
+        for frame in frames[start:]:
+            found.extend(pickle.loads(frame).events)
+        read[position_id] = (frames, len(frames))
+    return found
+
+
+def touched_names(hyp: Hypothesis) -> frozenset[str]:
+    """The instruments the venue books from quotes or a level-two book, whose fills are
+    struck at the touch and carry the spread in their price: every name the hypothesis asks
+    for `quote` or `book` and not for `bar` (`data_by_instrument` narrowing
+    `data_requirements`). A name fed bars beside its quotes is left out: the engine walks each
+    bar through the book as prints and settles the venue after every point, so an order in
+    flight at a bar's instant fills at the bar's close — measured on a daily bar and a quote
+    at one instant, a market buy filled at the close of 10.00 against a quote of 9.99/10.01 —
+    and the price carries no spread. The harness reads the same rule off its configuration
+    (`KansoStrategy._touched`), so the balance a sleeve sizes against charges a fill what the
+    extraction charges it."""
+    return frozenset(
+        name
+        for name in hyp.universe
+        if {QUOTE, BOOK} & set(hyp.required_of(name)) and BAR not in hyp.required_of(name)
+    )
+
+
 def _fill(
     event: Any,
     multipliers: Mapping[str, float],
@@ -1899,6 +2144,8 @@ def _fill(
     model: VenueModel,
     tick: float = 0.0,
     limit: float | None = None,
+    *,
+    touched: bool = False,
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
@@ -1907,8 +2154,10 @@ def _fill(
     every other fill pays commission, slippage and half the spread, the per-share commission
     on each share when the model states one, and `slippage_ticks` of the instrument's
     increment `tick` on each share, no further than the order's `limit`; a sale pays the
-    sell-side fees the model states on top, maker or taker (`costs.fill_cost`). The increment
-    and the limit are recorded on the fill, so a model re-applied to it charges the same.
+    sell-side fees the model states on top, maker or taker (`costs.fill_cost`). A fill
+    struck at the touch (`touched`) pays no half-spread, since its price carries the spread.
+    The increment, the limit and whether it was touched are recorded on the fill, so a model
+    re-applied to it charges the same.
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -1925,7 +2174,7 @@ def _fill(
         qty,
         costs.commission_bps,
         costs.slippage_bps,
-        half,
+        0.0 if touched else half,
         costs.maker_bps,
         costs.commission_per_share,
         maker=maker,
@@ -1947,6 +2196,7 @@ def _fill(
         multiplier=multiplier,
         tick=tick,
         limit=limit,
+        touched=touched,
     )
 
 
@@ -2310,6 +2560,270 @@ def run_subprocess(
         shutil.rmtree(room, ignore_errors=True)
 
 
+def run_subprocesses(
+    requests: Sequence[RunRequest],
+    catalog_path: Path,
+    workdir: Path,
+    extensions: Sequence[tuple[str, str]] = (),
+) -> list[RunResult]:
+    """Run several cards of one window in children of their own, from one read of it.
+
+    Each request is one slot: its own strategy bytes, its own budget and its own memory
+    cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once. The points are
+    written to every child that is still running, and a child killed for its own memory
+    or its own clock is a crash of that slot alone. The parent holds the read a chunk is
+    cut from and the newest chunk, never the window (`_fan`). An empty list runs nothing.
+    A window that is not the research window is refused before any child exists, as one
+    card is.
+    """
+    if not requests:
+        return []
+    stage = stage_of(requests[0].hyp, requests[0].window)
+    if stage != RESEARCH:
+        raise PreconditionError(
+            f"window: {requests[0].window[0]}..{requests[0].window[1]} is the {stage} window of "
+            f"{requests[0].hyp.id}; a card runs on research data only, because the embargo keeps "
+            "the window that judges a strategy out of the loop that writes it",
+            remedy=f"run the research window {requests[0].hyp.windows.research.start}.."
+            f"{requests[0].hyp.windows.research.end}",
+        )
+    _refuse_if_interrupted()
+    root = workdir / CARD_ROOM
+    shutil.rmtree(root, ignore_errors=True)
+    rooms = []
+    for index in range(len(requests)):
+        room = root / str(index)
+        room.mkdir(parents=True)
+        rooms.append(room)
+    try:
+        instruments, chunks = window_chunks(requests[0], catalog_path)
+        gc.collect()
+        return _fan(
+            requests, instruments, _marked_chunks(requests[0], chunks), extensions, rooms, workdir
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _marked_chunks(
+    request: RunRequest, chunks: Iterator[tuple[tuple[object, ...], ...]]
+) -> Iterator[tuple[tuple[object, ...], ...]]:
+    """The chunks of `request`, refused when none of them falls inside the measured window."""
+    measured, _ = request.bounds
+    inside = False
+    for chunk in chunks:
+        inside = inside or any(
+            int(point.ts_init) >= measured  # type: ignore[attr-defined]
+            for point in chain.from_iterable(chunk)
+        )
+        yield chunk
+    if not inside:
+        raise PreconditionError(
+            f"data: the catalog holds nothing for {request.hyp.id} over "
+            f"{request.window[0]}..{request.window[1]}",
+            remedy="run `kanso data load` for the window, then take a snapshot",
+        )
+
+
+_NOTHING: Final = memoryview(b"")
+"""What a slot has pending once it has written all it was handed: a view of nothing, so no
+written chunk is kept alive by an empty slice of it."""
+
+
+class _Slot:
+    """One child of a fanned card, and how far it has read the stream the others share."""
+
+    def __init__(self, child: Any, pipe: Any, room: Path, errors: Any, started: float) -> None:
+        fd = pipe.fileno()
+        os.set_blocking(fd, False)
+        self.child = child
+        self.pipe = pipe
+        self.fd = fd
+        self.room = room
+        self.errors = errors
+        self.started = started
+        self.ready = select.poll()
+        self.ready.register(fd, select.POLLOUT)
+        self.queue: list[bytes] = []
+        self.pending = _NOTHING
+        self.chunk_index = 0
+        self.sent_end = False
+        self.alive = True
+        self.breach: str | None = None
+        self.peak = 0.0
+        self.wall = 0.0
+        self.checked = started
+        self.asked = started
+
+    def close(self) -> None:
+        with contextlib.suppress(OSError):
+            self.pipe.close()
+
+
+def _fan(
+    requests: Sequence[RunRequest],
+    instruments: tuple[Any, ...],
+    chunks: Iterator[tuple[tuple[object, ...], ...]],
+    extensions: Sequence[tuple[str, str]],
+    rooms: Sequence[Path],
+    workdir: Path,
+) -> list[RunResult]:
+    """Start one child per request and write one window to all of them.
+
+    The feed is lockstep: the next chunk is read only once every child still running has
+    been written every chunk before it, so the slowest child sets the pace. A chunk is
+    dropped the moment every child still running has taken it, and a child's view of a
+    chunk it has written is let go with it, so the parent holds the newest chunk and none
+    before it however long the window is — the one-card path's bound (`_Feed`). Measured
+    before this, on 0.18.0: every chunk's pickle was kept for the whole turn, about 88 bytes
+    a quote and 78 a print, so the lane fanning a twenty-name, sixty-session tick window
+    held about 44 GB of it and was killed before its first turn ended.
+    """
+    ext = _pickled({"extensions": [list(source) for source in extensions]})
+    slots: list[_Slot] = []
+    for request, room in zip(requests, rooms, strict=True):
+        errors = (room / OUTPUT_FILE).open("wb")
+        started = time.monotonic()
+        child = subprocess.Popen(
+            [sys.executable, "-c", _BOOTSTRAP, str(room / RESULT_FILE), str(os.getpid())],
+            cwd=str(workdir),
+            env=child_env(),
+            stdin=subprocess.PIPE,
+            stdout=errors,
+            stderr=errors,
+            start_new_session=True,
+            pass_fds=tuple(_HANDED),
+        )
+        slot = _Slot(child, child.stdin, room, errors, started)
+        slot.queue = [ext, _pickled({"request": request.plain(), "instruments": instruments})]
+        slots.append(slot)
+    held: deque[bytes] = deque()
+    first = 0  # the stream index of `held[0]`: every chunk before it has been dropped
+    catalog_done = False
+    end = _pickled(END)
+    try:
+        while any(slot.alive for slot in slots):
+            if _INTERRUPT.is_set():
+                _stop_slots(slots, INTERRUPTED)
+                raise _interrupted()
+            for slot in slots:
+                if slot.alive:
+                    _poll_slot(slot, requests[slots.index(slot)])
+            if all(_idle(slot, first + len(held)) for slot in slots if slot.alive):
+                if not catalog_done:
+                    try:
+                        held.append(_pickled({"groups": next(chunks)}))
+                    except StopIteration:
+                        catalog_done = True
+                else:
+                    for slot in slots:
+                        if slot.alive and not slot.sent_end and _idle(slot, first + len(held)):
+                            slot.queue.append(end)
+                            slot.sent_end = True
+            progressed = False
+            for slot in slots:
+                if not slot.alive or slot.sent_end and not slot.queue and not slot.pending:
+                    continue
+                if slot.chunk_index < first + len(held) and not slot.queue and not slot.pending:
+                    slot.queue.append(held[slot.chunk_index - first])
+                    slot.chunk_index += 1
+                if _write_slot(slot):
+                    progressed = True
+            while held and all(slot.chunk_index > first for slot in slots if slot.alive):
+                held.popleft()
+                first += 1
+            if not progressed:
+                time.sleep(POLL_S)
+                _refuse_if_unwanted()
+    except BaseException:
+        _stop_slots(slots, None)
+        raise
+    return [_slot_result(slot, request) for slot, request in zip(slots, requests, strict=True)]
+
+
+def _idle(slot: _Slot, n_read: int) -> bool:
+    """Whether `slot` has written every chunk read so far and has nothing left to send."""
+    return (
+        slot.chunk_index == n_read
+        and not slot.queue
+        and not slot.pending
+        and not slot.sent_end
+        or (slot.sent_end and not slot.queue and not slot.pending)
+    )
+
+
+def _poll_slot(slot: _Slot, request: RunRequest) -> None:
+    """Reap `slot` if it has exited, or kill it when its own clock or memory is past."""
+    pid, status, usage = os.wait4(slot.child.pid, os.WNOHANG)
+    if pid != 0:
+        slot.child.returncode = os.waitstatus_to_exitcode(status)
+        slot.peak = usage.ru_maxrss * _MAXRSS_BYTES / GIB
+        slot.wall = time.monotonic() - slot.started
+        slot.alive = False
+        slot.close()
+        return
+    now = time.monotonic()
+    breach: str | None = None
+    if request.budget_s is not None and now - slot.started > request.budget_s:
+        breach = BUDGET
+    elif request.mem_cap_gb is not None and now - slot.checked >= MEMORY_POLL_S:
+        slot.checked = now
+        if _resident_gb(slot.child.pid) > request.mem_cap_gb:
+            breach = MEMORY
+    if breach is not None:
+        slot.breach = breach
+        slot.peak = _killed(slot.child)
+        slot.wall = time.monotonic() - slot.started
+        slot.alive = False
+        slot.close()
+        return
+    if now - slot.asked >= WANTED_POLL_S:
+        slot.asked = now
+        _refuse_if_unwanted()
+
+
+def _write_slot(slot: _Slot) -> bool:
+    """Write what `slot`'s pipe will take. A pipe the child has closed ends the write."""
+    if not slot.pending:
+        if not slot.queue:
+            return False
+        slot.pending = memoryview(slot.queue.pop(0))
+    if not slot.ready.poll(0):
+        return False
+    try:
+        written = os.write(slot.fd, slot.pending[:FEED_BYTES])
+    except BrokenPipeError:
+        slot.close()
+        return False
+    except BlockingIOError:  # pragma: no cover - poll said the pipe would take some
+        return False
+    slot.pending = slot.pending[written:] if written < len(slot.pending) else _NOTHING
+    return written > 0
+
+
+def _stop_slots(slots: Sequence[_Slot], breach: str | None) -> None:
+    """Kill every child still running. `breach` is recorded when one was not already set."""
+    for slot in slots:
+        if not slot.alive:
+            continue
+        if breach is not None:
+            slot.breach = breach
+        slot.peak = _killed(slot.child)
+        slot.wall = time.monotonic() - slot.started
+        slot.alive = False
+        slot.close()
+
+
+def _slot_result(slot: _Slot, request: RunRequest) -> RunResult:
+    """What one slot's child left, read after every sibling has been reaped."""
+    slot.errors.close()
+    tail = _tail((slot.room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
+    wall = slot.wall or time.monotonic() - slot.started
+    if slot.breach is not None:
+        return _crashed(request, wall, slot.peak, slot.breach, tail)
+    return _reported(request, slot.room / RESULT_FILE, wall, slot.peak, tail)
+
+
 def window_chunks(
     request: RunRequest, catalog_path: Path
 ) -> tuple[tuple[object, ...], Iterator[tuple[tuple[object, ...], ...]]]:
@@ -2340,13 +2854,11 @@ def _opened(
 ) -> tuple[Any, dict[str, Any], tuple[Any, ...], Scope | None]:
     """The catalog, the universe's definitions in universe order, and the session scope,
     with the refusals that come before a window's points are read made."""
-    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
-
     from kanso.data.types import CorporateAction
     from kanso.data.types.corporate_action import TYPE_ID
 
     hyp = request.hyp
-    catalog = ParquetDataCatalog(str(catalog_path))
+    catalog = _catalog(catalog_path)
     held = _held(catalog, hyp)
     instruments = tuple(held[name] for name in sorted(hyp.universe))
     opens, closes = request.delivered
@@ -2375,8 +2887,8 @@ def _chunked(
     points — is marked chunk by chunk, where some instant of the chunk holds two points of a
     kind, so a read of several days would mark the instants of days a day's read left
     unmarked, and under a latency move where a command lands. Such a window is read a step
-    at a time wherever a row group meets the step, in exactly the chunks it always was, and
-    only the stretches no row group meets are read together.
+    at a time wherever the step holds a point, in exactly the chunks it always was, and only
+    the stretches holding none are read together.
     """
     from kanso.nautilus.cross_section import TICK_KINDS, coincident
 
@@ -2386,7 +2898,7 @@ def _chunked(
     loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
     first = midnight_ns(day_of(opens))
     edge = first + (opens - first) // step * step
-    counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1))
+    counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1), edge, step)
     for start, end in _reads(counted, edge, step, (opens, closes), cap):
         groups, counts = _window_points(request, catalog, held, scope, start, end)
         for grain, count in counts.items():
@@ -2406,12 +2918,12 @@ def _reads(
     """The reads `[start, end]` of `span`, `[opens, closes)`, in steps of `step` from `edge`.
 
     Each read begins at a step's edge and holds that step and every step after it for as
-    long as the row groups that meet them — `counted`, each a first and a last `ts_init` and
-    the rows between — hold at most `cap` rows together. A point is a row of a group whose
-    range holds its instant, so a read longer than one step holds at most `cap` points
-    however the points lie inside their groups; a step whose groups alone hold more is read
-    alone, as every step was before; and a run of steps no group meets is never read a step
-    at a time. Where the reads fall changes nothing a card is handed (`_cut`,
+    long as the spans of rows that meet them — `counted` (`_row_groups`), each a first and a
+    last `ts_init` and the rows between — hold at most `cap` rows together. A point is a row
+    of a span that holds its instant, so a read longer than one step holds at most `cap`
+    points however the points lie inside their spans; a step whose spans alone hold more is
+    read alone, as every step was before; and a run of steps no span meets is never read a
+    step at a time. Where the reads fall changes nothing a card is handed (`_cut`,
     `_in_file_order`).
 
     The rows of the groups that meet steps `a` to `b` are those of the groups begun by step
@@ -2462,31 +2974,52 @@ def _files_read(
     return list(files)
 
 
-def _row_groups(files: Iterable[str]) -> list[tuple[int, int, int]]:
-    """The first and last `ts_init` of every row group of `files`, and its rows, read off
-    each file's footer and not its data.
+def _row_groups(files: Iterable[str], edge: int, step: int) -> list[tuple[int, int, int]]:
+    """The rows of `files` as a first and a last `ts_init` and the rows between, each within
+    one step of `step` from `edge` wherever the files say where their rows lie.
 
-    The engine names no count of a file's rows, so this reads the footers with `pyarrow`, as
+    The engine names no count of a file's rows, so this reads the files with `pyarrow`, as
     `kanso.data.catalog` does. On nautilus_trader 1.231.0 `write_data` writes a file in row
     groups of 5,000 rows, each stating the least and greatest `ts_init` it holds
-    (`kanso.nautilus.facts`), so the rows of the groups that meet a span overstate what it
-    holds by no more than the part of a group at each of its ends, for each series. A group
-    that states no range is counted at every instant.
+    (`kanso.nautilus.facts`). A group whose range lies within one step is that range and its
+    rows, read off the footer. A group whose range spans more has its `ts_init` column read,
+    that column alone, and is counted step by step, every step it holds rows in as that
+    step's first and last instant and the rows it holds there; so a span of whole steps is
+    counted at exactly the rows it holds, however far the groups that meet it reach. A
+    group that states no range is counted at every instant. Measured on 2026-10-17, a card
+    window of 82 names' daily bars, 164 groups each reaching across years, was counted by
+    step in 0.2-0.4 s, and one of three funds' five-second bars over a year, 5.1 million
+    rows, in 0.3 s, where the footers alone took 0.01 s; neither held 5 MB more.
     """
-    import pyarrow.parquet as pq  # type: ignore[import-untyped]
+    import numpy
+    import pyarrow.parquet as pq  # type: ignore[import-untyped,unused-ignore]
 
     counted: list[tuple[int, int, int]] = []
+    stepped: dict[int, int] = {}
     for path in files:
-        footer = pq.read_metadata(path)
-        names = footer.schema.names
-        column = names.index("ts_init") if "ts_init" in names else None
-        for index in range(footer.num_row_groups):
-            group = footer.row_group(index)
-            stated = None if column is None else group.column(column).statistics
-            if stated is not None and stated.has_min_max:
-                counted.append((int(stated.min), int(stated.max), group.num_rows))
-            else:
-                counted.append((0, 2**64 - 1, group.num_rows))
+        with pq.ParquetFile(path) as handle:
+            footer = handle.metadata
+            names = footer.schema.names
+            column = names.index("ts_init") if "ts_init" in names else None
+            for index in range(footer.num_row_groups):
+                group = footer.row_group(index)
+                stated = None if column is None else group.column(column).statistics
+                if stated is None or not stated.has_min_max:
+                    counted.append((0, 2**64 - 1, group.num_rows))
+                    continue
+                first, last = int(stated.min), int(stated.max)
+                if (first - edge) // step == (last - edge) // step:
+                    counted.append((first, last, group.num_rows))
+                    continue
+                read = handle.read_row_group(index, columns=["ts_init"], use_threads=False)
+                instants = read.column(0).to_numpy().astype(numpy.int64)
+                held, rows = numpy.unique((instants - edge) // step, return_counts=True)
+                for number, count in zip(held.tolist(), rows.tolist(), strict=True):
+                    stepped[number] = stepped.get(number, 0) + count
+    counted.extend(
+        (edge + number * step, edge + (number + 1) * step - 1, rows)
+        for number, rows in stepped.items()
+    )
     return counted
 
 
@@ -2633,9 +3166,10 @@ def _supervised(
         mem_cap_gb=request.mem_cap_gb,
         feed=payload,
     )
-    tail = _tail((room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
     if breach == INTERRUPTED:
         raise _interrupted()
+    _refuse_if_unwanted()  # the child may have exited after the watch last asked
+    tail = _tail((room / OUTPUT_FILE).read_text(encoding="utf-8", errors="replace"))
     if breach is not None:
         return _crashed(request, wall_s, peak_gb, breach, tail)
     return _reported(request, result_path, wall_s, peak_gb, tail)

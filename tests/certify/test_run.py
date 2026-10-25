@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 import yaml
-from nautilus_trader.model.data import Bar, BarType, QuoteTick
+from nautilus_trader.model.data import Bar, BarType, QuoteTick, TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -28,8 +28,9 @@ from kanso.certify import certificate, run
 from kanso.certify.run import certify, show
 from kanso.config import CertifyConfig
 from kanso.criteria import library
+from kanso.criteria.digest import session_edge
 from kanso.criteria.gates.parity_replay import NO_PARITY
-from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_vs_hold
+from kanso.criteria.objectives import wf_contribution_bps, wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.run import BPS, day_of, midnight_ns
 from kanso.data import snapshot as snapshots
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
@@ -52,6 +53,7 @@ from kanso.schemas import (
 )
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.criteria.builders import build_run
 from tests.research.conftest import (
     CERTIFICATION,
     DOCUMENT,
@@ -91,6 +93,14 @@ CERT_GATES: list[dict[str, Any]] = [
     },
 ]
 """The three cert gates every plan must carry, since all three are structural invariants."""
+
+SEARCHED: dict[str, Any] = {
+    "id": "deflated_sharpe",
+    "stage": "cert",
+    "params": {"min_dsr": 0.9},
+    "rationale": "required behind two trials: the search correction for a Sharpe",
+}
+"""The gate a plan for the demo's Sharpe carries once the search has two trials."""
 
 TAIL_GATES: list[dict[str, Any]] = [
     {
@@ -325,6 +335,7 @@ A_WEEK = document(
         "forward": {"start": date(2024, 3, 1)},
     },
     objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    required_constraints=[{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.0}}],
 )
 """The demo sleeve certified over one week, on its return on the capital."""
 
@@ -370,6 +381,62 @@ def test_a_certificate_is_immutable_and_reads_back_as_it_was_written(
 
     assert load_yaml(Certificate, certificate.certificate_file(ws, made)) == made
     assert show(ws, store, HYP_ID) == made
+    assert made.power is not None, "the row reads back the power the file states"
+
+
+def test_a_certificate_states_its_power_from_the_research_window_it_ran_again(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The research estimate and its error are the objective's over the research window the
+    certification ran again; the certification window's expected error is that one scaled by
+    the root of the two windows' lengths; the bar is the plan's `min_fraction` of research."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=[{**CERT_GATES[0], "params": {"min_fraction": 0.5}}, *CERT_GATES[1:]])
+
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    measured = run._measure(subject)
+    research, error = wf_sharpe_net.compute(measured.research, subject.folds)
+    days = [(end - start).days + 1 for start, end in (subject.research, subject.certification)]
+    stated = made.power
+    assert stated is not None
+    assert (stated.research, stated.research_se) == pytest.approx((research, error))
+    assert stated.standard_error == pytest.approx(error * (days[0] / days[1]) ** 0.5)
+    assert stated.bar == pytest.approx(max(0.0, 0.5 * research))
+
+
+def test_a_certificate_records_its_window_s_net_per_trade_from_the_run_it_judged(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The net per trade a book ranks a member by is the certification run's own, struck
+    once and read back from the file: the run the gates judged, made again here only to
+    show the arithmetic is the session-clustered edge of that very run."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+
+    made = certify(ws, store, HYP_ID)
+
+    subject = run._subject(ws, store, HYP_ID, None)
+    measured = run._measure(subject)
+    assert made.net_per_trade is not None, "the reverting sleeve closes trades there"
+    assert made.net_per_trade == run.net_per_trade(measured.certification)
+    value, se, sessions, trades = session_edge(measured.certification) or (0.0, None, 0, 0)
+    assert made.net_per_trade.net_per_trade_bp == value
+    assert (made.net_per_trade.sessions_with_trades, made.net_per_trade.trades) == (
+        sessions,
+        trades,
+    )
+    assert made.net_per_trade.net_se_session == se
+    assert load_yaml(Certificate, certificate.certificate_file(ws, made)).net_per_trade == (
+        made.net_per_trade
+    )
+
+
+def test_a_window_that_closed_no_trade_records_no_net_per_trade() -> None:
+    assert run.net_per_trade(build_run((0.0, 0.0))) is None
 
 
 def test_the_name_the_refusal_checks_is_the_certificate_own(
@@ -442,7 +509,7 @@ def test_the_failure_count_escalates_on_a_cadence_rather_than_once(
 ) -> None:
     """Every `n_fail`-th failure speaks. A threshold would have spoken once and stopped."""
     classify(ws, store, DOCUMENT, FLAT)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     policy = with_n_fail(ws, 2)
 
     seen: list[int] = []
@@ -464,10 +531,10 @@ def test_a_failing_certificate_hands_the_proposer_gate_ids_and_no_measurement(
 ) -> None:
     """The proposer learns which gate to work on. It never learns what the gate measured.
 
-    `embargoed_window` and `walk_forward_consistency` both record the objective over the
-    certification window in their evidence, and the proposer writes the next
-    `strategy.py`. Handing it that dict is a route from the embargoed window into
-    research, arriving as feedback rather than as a backtest request.
+    `embargoed_window` records the objective over the certification window in its
+    evidence, and the proposer writes the next `strategy.py`. Handing it that dict is a
+    route from the embargoed window into research, arriving as feedback rather than as a
+    backtest request.
     """
     classify(ws, store, DOCUMENT, FLAT)
     a_card(ws, store, FLAT)
@@ -556,7 +623,7 @@ def test_re_pinning_the_hypothesis_makes_the_same_bytes_a_fresh_certification(
     a new claim, not a repeat, and the two certificates sit side by side under two names."""
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     first = certify(ws, store, HYP_ID)
 
     moved = {**DOCUMENT, "costs": {**DOCUMENT["costs"], "commission_bps": 2.0}}
@@ -580,7 +647,7 @@ def test_the_same_bytes_under_the_same_pin_are_still_a_repeat(
 ) -> None:
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
     certify(ws, store, HYP_ID)
     a_card(ws, store, REVERTING, seq=2)
 
@@ -744,6 +811,7 @@ def test_a_snapshot_of_unknown_publication_records_a_failing_verdict(
     assert made.verdict == "fail"
     assert all(not gate.passed for gate in made.gates)
     assert "nobody declared when its points became public" in str(made.gates[0].evidence)
+    assert made.power is None, "nothing was measured, so nothing is stated about power"
     assert _status(store, HYP_ID) == "researching", "a recorded fail, not an exit code"
 
 
@@ -852,7 +920,7 @@ def test_the_named_sha_is_certified_rather_than_the_best(ws: Workspace, store: S
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, FLAT, seq=1)
     named = a_card(ws, store, REVERTING, seq=2, best=False)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
 
     made = certify(ws, store, HYP_ID, sha=named[:10])
 
@@ -1059,7 +1127,7 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
             {
                 "id": "deflated_sharpe",
                 "stage": "cert",
-                "params": {"min_dsr": 0.5},
+                "params": {"min_dsr": 0.9},
                 "rationale": "how wide the search was",
             },
         ],
@@ -1068,8 +1136,120 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     made = certify(ws, store, HYP_ID)
 
     (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
-    assert deflated.evidence["trials"] == len(records.trial_metrics(store, HYP_ID)) == 2
+    trials = records.trial_metrics(store, HYP_ID, "wf_sharpe_net")
+    assert deflated.evidence["trials"] == len(trials) == 2
     assert records.n_trials(store, HYP_ID) == made.n_trials == 4
+
+
+# --- a search carried across a re-pin to another objective ---------------------
+
+SWITCHED = document(
+    objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    required_constraints=[{"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.0}}],
+)
+"""The demo sleeve re-pinned from its Sharpe to its return on the capital."""
+
+PRICED: dict[str, Any] = {
+    "id": "deflated_contribution",
+    "stage": "cert",
+    "params": {"min_probability": 0.9},
+    "rationale": "required behind two trials: the search correction for a contribution",
+}
+
+
+def searched_then_switched(ws: Workspace, store: StateStore, *, after: int) -> str:
+    """Three cards scored on the Sharpe, then `after` scored on the contribution, the last
+    of them the best: the strategy the Sharpe's search chose, carried across the re-pin."""
+    classify(ws, store, SWITCHED, REVERTING)
+    for seq, metric in enumerate((0.4, 0.9, 1.3), start=1):
+        a_card(ws, store, blob_from(str(seq)), seq=seq, metric=metric, best=False)
+    best = ""
+    for seq in range(4, 4 + after):
+        best = a_card(
+            ws,
+            store,
+            REVERTING if seq == 3 + after else FLAT,
+            document=SWITCHED,
+            seq=seq,
+            metric=0.5 + seq / 10,
+            best=seq == 3 + after,
+        )
+    write_plan(ws, gates=[*CERT_GATES, PRICED])
+    return best
+
+
+def test_the_carried_strategy_is_not_certified_before_two_cards_score_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Row 173: the re-pin cleared the best, the carried bytes became the next run's baseline
+    and its best, and the first certificate deflated it by one trial — which skipped, and a
+    skip passes — while it was stamped with the four cards behind it."""
+    searched_then_switched(ws, store, after=1)
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "demo_mr has 4 cards that ran and traded behind it and 1 of them scored under "
+        "wf_contribution_bps, so deflated_contribution cannot read the spread of the search "
+        "that selected this card: it prices the search from two cards in its units"
+    )
+    assert refused.value.remedy == (
+        "research it further with `kanso research begin demo_mr` until two cards are scored "
+        "under wf_contribution_bps"
+    )
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+
+
+def test_the_carried_strategy_is_priced_for_every_card_behind_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The spread is the contribution's own, from its two cards; the count of draws the
+    maximum is taken over is all five, the three the Sharpe's search spent among them."""
+    searched_then_switched(ws, store, after=2)
+
+    made = certify(ws, store, HYP_ID)
+
+    (deflated,) = [gate for gate in made.gates if gate.id == "deflated_contribution"]
+    assert deflated.skipped is None
+    assert deflated.evidence["trials"] == records.candidates(store, HYP_ID) == 5
+    assert deflated.evidence["scored_trials"] == 2
+    assert made.n_trials == 5
+
+
+def test_a_card_scored_under_the_objective_before_the_re_pin_is_not_certified_by_name(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`cert run --sha` of a pre-switch card: the plan was made for the contribution, so it
+    carries the contribution's correction, which skips on a Sharpe, and not the Sharpe's."""
+    searched_then_switched(ws, store, after=2)
+    before = a_card(ws, store, blob_from("9"), seq=9, metric=2.0, best=False)
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr "
+        "carries no deflated_sharpe with its threshold, the search correction for it, so the "
+        "search that selected it would go unpriced"
+    )
+    assert refused.value.remedy == (
+        "certify a card scored under wf_contribution_bps, as the best is: `kanso cert run demo_mr`"
+    )
+
+
+def test_a_card_of_another_objective_is_certified_when_the_plan_carries_its_correction(
+    ws: Workspace, store: StateStore
+) -> None:
+    searched_then_switched(ws, store, after=2)
+    before = a_card(ws, store, REVERTING, seq=9, metric=2.0, best=False)
+    write_plan(ws, gates=[*CERT_GATES, PRICED, SEARCHED])
+
+    made = certify(ws, store, HYP_ID, sha=before[:12])
+
+    (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
+    assert deflated.skipped is None
+    assert deflated.evidence["trials"] == 6 and deflated.evidence["scored_trials"] == 4
 
 
 # --- a construct attached to a host -------------------------------------------
@@ -1124,12 +1304,65 @@ def test_the_instrument_a_point_belongs_to_is_read_off_the_point() -> None:
     assert run._instrument_of(object()) == "", "a market-wide series belongs to no instrument"
 
 
-def test_only_bars_carry_the_volume_a_capacity_gate_reads() -> None:
+def test_a_quote_carries_no_volume_a_capacity_gate_reads() -> None:
     evidence = run._Evidence(0, ())
     evidence.take([(a_quote(),)])
 
     assert evidence.daily_volume == {}, "a quote is not a day's traded notional"
     assert evidence.lags == {(INSTRUMENT, "quote"): 0.0}, "but it was published, and when"
+
+
+def a_print_of(instrument: Any, size: int, price: str, hour: int = 15) -> TradeTick:
+    """One print of the instrument, `size` of its unit at `price`, on 2024-01-02."""
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+
+    ts = midnight_ns(date(2024, 1, 2)) + hour * 3_600 * 1_000_000_000
+    return TradeTick(
+        instrument.id,
+        Price.from_str(price),
+        Quantity.from_int(size),
+        AggressorSide.BUYER,
+        TradeId(f"T-{size}-{price}-{hour}"),
+        ts_event=ts,
+        ts_init=ts,
+    )
+
+
+def test_under_the_print_rules_a_day_s_volume_is_summed_from_its_prints() -> None:
+    """Under the print rules a window holds no bars and the trade series is the tape the
+    venue fills from, so the prints are the day's volume: each at its own price, summed over
+    the day, through the contract multiplier."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    evidence = run._Evidence(0, (share,), prints=True)
+
+    evidence.take([(a_print_of(share, 300, "10.00", 10), a_print_of(share, 100, "12.00", 11))])
+
+    assert evidence.daily_volume == {"OTHER.XNAS": [300 * 10.0 + 100 * 12.0]}
+
+
+def test_under_touch_and_through_prints_are_a_signal_and_no_volume() -> None:
+    """A trade series under `touch` or `through` may be a few prints a session loaded beside
+    a grid of quotes; read as the day's volume they would refuse every fill against a
+    thousandth of the market, so they are not read, and the gate skips as it did."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    evidence = run._Evidence(0, (share,))
+
+    evidence.take([(a_print_of(share, 300, "10.00", 10), a_print_of(share, 100, "12.00", 11))])
+
+    assert evidence.daily_volume == {}
+    assert evidence.lags == {("OTHER.XNAS", "trade"): 0.0}
+
+
+def test_a_name_with_bars_beside_its_prints_is_read_from_the_bars_alone() -> None:
+    """A day's bars already hold its prints' volume, so where both are carried the bars are
+    the volume and the prints are not counted a second time."""
+    share = a_manual("OTHER.XNAS", {"currency": "USD", "price_increment": "0.01", "lot_size": "1"})
+    evidence = run._Evidence(0, (share,), prints=True)
+
+    evidence.take([(a_bar_of(share, 1_000, "10.00"),), (a_print_of(share, 300, "10.00"),)])
+
+    assert evidence.daily_volume == {"OTHER.XNAS": [10_000.0]}
 
 
 def test_the_evidence_is_folded_a_chunk_at_a_time_and_each_chunk_handed_on_as_it_came() -> None:

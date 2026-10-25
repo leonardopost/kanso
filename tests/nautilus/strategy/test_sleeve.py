@@ -591,6 +591,26 @@ def test_an_exit_that_floors_to_nothing_places_nothing(backtest) -> None:
     assert run.strategy.result is None
 
 
+# --- the universe -------------------------------------------------------------
+
+
+def test_the_universe_is_parsed_once_and_the_same_ids_answer_every_read() -> None:
+    sleeve = KansoStrategy(config(universe=("DEMO.XNAS", "HEDGE.XNAS")))
+
+    first = sleeve.universe
+
+    assert first == (DEMO, HEDGE)
+    assert sleeve.universe is first
+
+
+def test_a_universe_name_that_does_not_parse_raises_on_every_read() -> None:
+    sleeve = KansoStrategy(config(universe=("not an id",)))
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="not an id"):
+            sleeve.universe  # noqa: B018 - the read is what raises
+
+
 # --- the names a modifier may attach by --------------------------------------
 
 

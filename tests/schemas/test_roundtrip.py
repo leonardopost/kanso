@@ -8,7 +8,9 @@ from hypothesis import given
 from kanso.errors import ValidationError
 from kanso.replay.record import Session
 from kanso.schemas import (
+    DIGEST_COLUMNS,
     Card,
+    CardDigest,
     Certificate,
     CertificationPlan,
     ConstructItem,
@@ -17,7 +19,9 @@ from kanso.schemas import (
     Hypothesis,
     InstrumentsFile,
     ModelsFile,
+    NetPerTrade,
     Portfolio,
+    Power,
     RunRecord,
     StrategyFile,
     VenueModel,
@@ -43,6 +47,19 @@ def test_card_round_trips(value: Card) -> None:
     assert parse_yaml(Card, dump_yaml(value)) == value
 
 
+@given(gen.digests())
+def test_card_digest_round_trips_through_the_json_a_card_row_holds(value: CardDigest) -> None:
+    """The digest is stored as JSON in its card's row and read back whole; gross less cost
+    is net, per trade and per session, whatever the numbers."""
+    assert CardDigest.model_validate(value.model_dump(mode="json")) == value
+    assert len(value.cells()) == len(DIGEST_COLUMNS)
+    if value.net_bps_per_trade is not None:
+        assert value.gross_bps_per_trade is not None and value.cost_bps_per_trade is not None
+        assert abs(
+            value.gross_bps_per_trade - value.cost_bps_per_trade - value.net_bps_per_trade
+        ) <= 1e-9 * max(1.0, abs(value.gross_bps_per_trade), abs(value.cost_bps_per_trade))
+
+
 @given(gen.plans())
 def test_plan_round_trips(value: CertificationPlan) -> None:
     assert parse_yaml(CertificationPlan, dump_yaml(value)) == value
@@ -51,6 +68,24 @@ def test_plan_round_trips(value: CertificationPlan) -> None:
 @given(gen.certificates())
 def test_certificate_round_trips(value: Certificate) -> None:
     assert parse_yaml(Certificate, dump_yaml(value)) == value
+
+
+@given(gen.net_per_trades())
+def test_net_per_trade_round_trips(value: NetPerTrade) -> None:
+    """A certificate's net per trade reads back whole, its t the value over its error and
+    stated only where the error is above zero, which a single session never has."""
+    assert NetPerTrade.model_validate(value.model_dump(mode="json")) == value
+    assert (value.net_t is None) == (not value.net_se_session)
+    assert value.sessions_with_trades >= 2 or value.net_se_session is None
+    if value.net_t is not None and value.net_se_session is not None:
+        assert value.net_t * value.net_se_session == pytest.approx(value.net_per_trade_bp)
+
+
+@given(gen.powers())
+def test_power_round_trips(value: Power) -> None:
+    """A certificate's power statement reads back whole, either side of a judged bar."""
+    assert Power.model_validate(value.model_dump(mode="json")) == value
+    assert (value.bar is None) == (value.pass_at_research is None) == (value.pass_at_zero is None)
 
 
 @given(gen.strategy_files())

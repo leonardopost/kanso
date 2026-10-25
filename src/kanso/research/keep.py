@@ -3,13 +3,15 @@
 Three ideas, and the whole of the loop's defence against fitting noise.
 
 **A metric arrives with its own noise floor.** The objective is computed on each of the
-research window's contiguous folds; the metric is their mean and `metric_se` their
-standard error. An improvement counts only when it clears `max(min_delta, k_se x se)` —
-the operator's smallest interesting difference, and the spread of the folds that produced
-the number. Both parameters come from the hypothesis's own `objective.params`, chosen at
-classification, so the bar is set before any result is seen. That floor is the one scale
-on which this hypothesis calls two numbers different, so the redundancy rule reads it from
-here too rather than choosing a second one (`noise_floor`, `research/records.py`).
+research window's contiguous folds; the metric is their mean and `metric_se` the error of
+that mean, read off the window's per-period returns or per-trade edges and widened for
+serial correlation (`kanso.criteria.objectives`). An improvement counts only when it
+clears `max(min_delta, k_se x se)` — the operator's smallest interesting difference, and
+the error of the number it would replace the best with. Both parameters come from the
+hypothesis's own `objective.params`, chosen at classification, so the bar is set before any
+result is seen. That floor is the one scale on which this hypothesis calls two numbers
+different, so the redundancy rule reads it from here too rather than choosing a second one
+(`noise_floor`, `research/records.py`).
 
 **The comparison is strict.** Equal is not better. A loop that kept ties would drift
 across a plateau of indistinguishable strategies and call the drift progress.

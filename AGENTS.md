@@ -49,7 +49,10 @@ declared publication rule is refused at write (`data/publication.py`).
 **Costs are applied once, by the runner, in the extraction.** Commission — in basis points
 and, where the model states it, per share — slippage — in basis points and, on a fill that took
 liquidity where the model states it, in ticks of the instrument's increment no further than
-its order's limit — and half the spread each side — or, on a
+its order's limit — and half the spread each side, where the price does not already carry
+it: a fill in a name the venue books from quotes or a level-two book, with no bars beside
+them, is struck at the touch, so its price carries the spread and it is charged no
+half-spread, and a fill in a name fed bars or prints pays the model's — or, on a
 fill that rested on the book under a venue model that states a maker's schedule, `maker_bps`
 of its notional and `maker_per_share` on each share alone —
 plus, on a sale, the sell-side fees the model states, maker or taker —
@@ -94,7 +97,19 @@ and which construct are chosen at runtime by a model from catalogues that declar
 capabilities and ranges. There are no default plans, no default thresholds and no non-LLM
 fallback for a decision an agent is supposed to make: with no model configured the step
 exits 2. The framework's own opinions are structural invariants and the construct taxonomy,
-and nothing else.
+and nothing else. One of those invariants is that a search is priced: every objective is
+claimed by exactly one deflation gate, the one whose library file `deflates` it, and once a
+hypothesis's `n_trials` — every card it has — reaches two, a plan that leaves that gate out,
+or names it without its threshold, is refused — by the planner's own check, and again by
+`cert plan` and `cert run` on a plan already pinned — with `kanso cert plan ID --replan` as
+the way out. Whether a search is corrected for is not a decision; how high the bar sits is,
+and stays the model's. `criteria/library.py` holds the rule and
+`tests/criteria/test_library.py` fails when an objective has no gate or a plan escapes it.
+The objective itself is the classifying model's to name, from the set the toolbox's
+`applies` admits; the predicate bounds the set and picks nothing in it. Another invariant is
+that a contribution, which rewards trading less once every trade loses, is scored only
+beside `edge_per_trade` with both its thresholds set: the gate's library file declares it
+`required_for` both contributions, and classification and `hyp validate` refuse it missing.
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
 `httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable

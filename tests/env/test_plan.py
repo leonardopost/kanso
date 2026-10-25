@@ -94,6 +94,29 @@ def test_the_written_memory_per_lane_reproduces_the_lane_count() -> None:
     assert plan.lanes == max(1, min(31, math.floor(60 / plan.mem_per_lane_gb)))
 
 
+def test_cards_per_turn_divides_the_lane_share() -> None:
+    plan = plan_for(detected(8, 16), mem_per_lane_gb=2.5, cards_per_turn=4)
+    assert plan.cards_per_turn == 4
+    assert plan.mem_per_lane_gb == 2.5
+    assert plan.mem_per_card_gb == 0.62
+
+
+@pytest.mark.parametrize(
+    "cores_per_lane, cards_per_turn, lane_cores, lanes",
+    [(None, 1, 2, 7), (None, 4, 5, 3), (1, 1, 1, 15), (1, 8, 8, 1), (1, 3, 3, 5)],
+)
+def test_a_lane_is_charged_a_core_for_every_card_its_turn_runs(
+    cores_per_lane: int | None, cards_per_turn: int, lane_cores: int, lanes: int
+) -> None:
+    """A turn of several cards runs that many children at once. Before this the width only
+    divided a lane's memory, so a host declared at one core a lane planned fifteen lanes of
+    eight cards: a hundred and twenty children on fifteen cores."""
+    plan = plan_for(detected(16, 256), cores_per_lane=cores_per_lane, cards_per_turn=cards_per_turn)
+    assert plan.lane_cores == lane_cores
+    assert plan.lanes == lanes
+    assert plan.cores_per_lane == (2 if cores_per_lane is None else cores_per_lane)
+
+
 def test_a_declared_memory_per_lane_replaces_the_derived_figure() -> None:
     """Measured: a 4.3 GB overlay peak charges every lane 6.45 GB, and a 16 GB machine
     then plans one lane while the hypothesis actually researching peaks at 0.25 GB."""
@@ -208,11 +231,14 @@ def test_every_plan_is_usable(
 @given(
     cores_total=st.integers(min_value=1, max_value=1024),
     mem_gb=st.integers(min_value=1, max_value=4096),
+    cards_per_turn=st.integers(min_value=1, max_value=8),
 )
-def test_the_plan_never_exceeds_what_the_machine_holds(cores_total: int, mem_gb: int) -> None:
+def test_the_plan_never_exceeds_what_the_machine_holds(
+    cores_total: int, mem_gb: int, cards_per_turn: int
+) -> None:
     host = detected(cores_total, mem_gb)
-    plan = plan_for(host)
-    fits_cores = plan.lanes * plan.cores_per_lane + plan.reserved_cores <= host.cores_total
+    plan = plan_for(host, cards_per_turn=cards_per_turn)
+    fits_cores = plan.lanes * plan.lane_cores + plan.reserved_cores <= host.cores_total
     fits_memory = plan.lanes * plan.mem_per_lane_gb + plan.reserved_mem_gb <= host.mem_gb
     # Exactly one lane is the floor, and a machine may be too small even for that.
     assert (fits_cores and fits_memory) or plan.lanes == 1

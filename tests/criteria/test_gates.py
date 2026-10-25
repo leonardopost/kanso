@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date, timedelta
 from math import nextafter
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any
 
 import pytest
@@ -20,6 +21,8 @@ from kanso.criteria.gates import (
     cost_stress,
     deflated_sharpe,
     embargoed_window,
+    expected_maximum,
+    intraday_drawdown,
     leg_edge,
     maintenance_margin,
     max_drawdown,
@@ -32,6 +35,7 @@ from kanso.criteria.gates import (
     walk_forward_consistency,
 )
 from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
+from kanso.criteria.quantities import periods_per_year, variance
 from kanso.criteria.run import NS_PER_SECOND, Fill
 from kanso.errors import PreconditionError
 from tests.criteria.builders import (
@@ -563,6 +567,105 @@ def test_max_drawdown_passes_inside_the_limit() -> None:
     assert max_drawdown.evaluate(context(run)).passed
 
 
+# --- intraday_drawdown ------------------------------------------------------------
+
+
+def _round_trip(
+    day: date, qty: float, buy_px: float, sell_px: float, hours: tuple[int, int]
+) -> tuple[Fill, Fill]:
+    """A buy and a sell of `qty` inside one session, a share each, at the stated hours."""
+    return (
+        Fill(at(day, hours[0]), "DEMO", "BUY", qty, buy_px, 0.0),
+        Fill(at(day, hours[1]), "DEMO", "SELL", qty, sell_px, 0.0),
+    )
+
+
+def test_intraday_drawdown_sees_a_fall_the_period_ends_never_show() -> None:
+    """Buy 100 at 100, sell at 94 at noon — a 6% fall on a 10,000 book — then buy at 94 and
+    sell at 100 before the close: the day ends where it began, so `max_drawdown` reads 0%
+    and the fill path reads the 6% the book took."""
+    fills = _round_trip(DAYS[0], 100.0, 100.0, 94.0, (10, 12)) + _round_trip(
+        DAYS[0], 100.0, 94.0, 100.0, (13, 15)
+    )
+    run = build_run((0.0,), fills=fills, capital=10_000.0)
+    tight = make_hyp(risk_limits={"max_position_pct": 20, "max_drawdown_pct": 5, "max_leverage": 1})
+
+    period_end = max_drawdown.evaluate(context(run, hyp=tight))
+    intraday = intraday_drawdown.evaluate(context(run, hyp=tight))
+
+    assert period_end.passed and period_end.evidence["max_drawdown_pct"] == 0.0
+    assert not intraday.passed
+    assert intraday.evidence["max_drawdown_pct"] == pytest.approx(6.0)
+    assert intraday.evidence["period_end_pct"] == 0.0
+    assert intraday.evidence["trough_ns"] == at(DAYS[0], 12)
+    assert intraday.evidence["limit_pct"] == 5.0
+    assert intraday.evidence["fills"] == 4
+
+
+def test_intraday_drawdown_marks_an_open_position_at_its_last_fill_and_meets_the_period_end() -> (
+    None
+):
+    """Bought at 100 and still held: between fills the position is marked at 100, so no fall
+    is read until the period end, where the runner struck the equity at the day's mark —
+    9,500 — and the path re-anchors to it: a 5% fall read at the end, exactly as
+    `max_drawdown` reads it, and the two agree."""
+    fills = (Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 100.0, 0.0),)
+    run = build_run((-500.0,), fills=fills, capital=10_000.0)
+
+    intraday = intraday_drawdown.evaluate(context(run))
+
+    assert intraday.passed
+    assert intraday.evidence["max_drawdown_pct"] == pytest.approx(5.0)
+    assert intraday.evidence["period_end_pct"] == pytest.approx(5.0)
+    assert intraday.evidence["trough_ns"] == run.period_ends_ns[0]
+
+
+def test_intraday_drawdown_is_never_shallower_than_the_period_end_reading() -> None:
+    """A path through fills and ends holds every end the period-end path holds."""
+    fills = _round_trip(DAYS[0], 100.0, 100.0, 98.0, (10, 12))
+    run = build_run((-200.0, -300.0, 100.0), fills=fills, capital=10_000.0)
+
+    intraday = intraday_drawdown.evaluate(context(run))
+
+    assert intraday.evidence["max_drawdown_pct"] >= intraday.evidence["period_end_pct"]
+    assert intraday.evidence["period_end_pct"] == pytest.approx(5.0)
+
+
+def test_intraday_drawdown_re_anchors_at_each_period_end_a_fill_passes() -> None:
+    """A fill on the third day: the two period ends before it are folded into the path first
+    — the peak and the trough they hold, and the re-anchor to the equity struck at each — so a
+    fall across the ends and a fall inside the day are read on one path."""
+    fills = _round_trip(DAYS[2], 100.0, 100.0, 97.0, (10, 12))
+    run = build_run((300.0, -600.0, -300.0), fills=fills, capital=10_000.0)
+
+    result = intraday_drawdown.evaluate(context(run))
+
+    # the peak is 10,300 after day one; the day-three round trip loses 300 on a book the
+    # runner struck at 9,700 at that day's end: the trough is 9,700 − 300 = 9,400 at noon
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(9.0)
+    assert result.evidence["trough_ns"] == at(DAYS[2], 12)
+    assert result.evidence["period_end_pct"] == pytest.approx(9.0)
+
+
+def test_intraday_drawdown_with_no_fills_is_the_period_end_path() -> None:
+    run = build_run((100.0, -200.0, 50.0), capital=1_000.0)
+    result = intraday_drawdown.evaluate(context(run))
+    assert not result.passed
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(20.0)
+    assert result.evidence["trough_ns"] == run.period_ends_ns[1]
+
+
+def test_a_fill_s_cost_is_in_the_path() -> None:
+    """A round trip at one price loses its costs and nothing else: the path falls by them."""
+    fills = (
+        Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 100.0, 50.0),
+        Fill(at(DAYS[0], 12), "DEMO", "SELL", 100.0, 100.0, 50.0),
+    )
+    run = build_run((-100.0,), fills=fills, capital=10_000.0)
+    result = intraday_drawdown.evaluate(context(run))
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(1.0)
+
+
 # --- maintenance_margin -----------------------------------------------------------
 
 FLOORED = {"book": {"maintenance_pct": 30.0}}
@@ -627,10 +730,10 @@ def test_strategy_integrity_fails_a_lane_that_reaches_the_catalog(lane: Path) ->
     assert result.evidence["n_problems"] == 1
 
 
-def test_strategy_integrity_refuses_the_bus_only_under_depth(lane: Path) -> None:
-    """Under `depth` the bus carries every change of the book the strategy is shown a view
-    of; without the key it is an ordinary attribute."""
-    (lane / "strategy.py").write_text("x = self.msgbus\n", encoding="utf-8")
+def test_strategy_integrity_refuses_a_book_subscription_only_under_depth(lane: Path) -> None:
+    """Under `depth` a subscription of its own hands the strategy every change of the book it
+    is shown a view of; without the key it is an ordinary attribute."""
+    (lane / "strategy.py").write_text("x = self.subscribe_order_book_depth\n", encoding="utf-8")
     shown = make_hyp(
         resolution="tick",
         data_requirements=["book", "trade"],
@@ -641,6 +744,16 @@ def test_strategy_integrity_refuses_the_bus_only_under_depth(lane: Path) -> None
     refused = strategy_integrity.evaluate(context(build_run((1.0,)), lane_dir=lane, hyp=shown))
     assert not refused.passed
     assert "denied under depth" in refused.evidence["problems"][0]
+
+
+def test_strategy_integrity_refuses_the_bus_with_depth_or_without(lane: Path) -> None:
+    """The bus hands the execution engine a command or a fill past the strategy's own
+    methods, whatever the hypothesis declares."""
+    (lane / "strategy.py").write_text("x = self.msgbus\n", encoding="utf-8")
+
+    refused = strategy_integrity.evaluate(context(build_run((1.0,)), lane_dir=lane))
+    assert not refused.passed
+    assert "the engine's message bus" in refused.evidence["problems"][0]
 
 
 def test_strategy_integrity_without_a_lane_directory_judges_nothing() -> None:
@@ -746,9 +859,6 @@ def test_walk_forward_consistency_reads_the_research_folds_against_the_benchmark
     assert result.evidence["folds"] == pytest.approx(
         list(wf_sharpe_vs_hold.fold_values(RISING, 4, benchmark=HOLDING))
     )
-    assert result.evidence["certification"] == pytest.approx(
-        wf_sharpe_vs_hold.compute(RISING, 4, benchmark=RISING)[0]
-    ), "the certified run is differenced against the certification window's hold"
 
 
 def test_walk_forward_consistency_counts_positive_folds() -> None:
@@ -774,14 +884,20 @@ def test_walk_forward_consistency_fails_too_few_positive_folds() -> None:
     ).passed
 
 
-def test_walk_forward_consistency_fails_when_certification_is_the_worst_fold() -> None:
-    assert not walk_forward_consistency.evaluate(
+def test_walk_forward_consistency_does_not_judge_the_certification_window() -> None:
+    """A certification window worse than every research fold is `embargoed_window`'s to
+    refuse. Ranked against four selected research folds it is the worst a fifth of the time
+    or more whatever the edge, so a clause asking it not to be refused sound candidates at
+    random and was deleted; the gate reads the research folds and nothing else."""
+    result = walk_forward_consistency.evaluate(
         context(
             trading_run(-100.0, -100.0, -100.0, -100.0),
             params={"min_positive_folds": 1},
             research_run=trading_run(100.0, -50.0, 200.0, 300.0),
         )
-    ).passed
+    )
+    assert result.passed
+    assert "certification" not in result.evidence
 
 
 @pytest.mark.parametrize(
@@ -999,13 +1115,37 @@ def test_deflated_sharpe_without_its_context_judges_nothing(overrides: Any) -> N
     assert result.passed and result.skipped is not None
 
 
-def test_deflated_sharpe_is_skipped_when_the_deflation_denominator_collapses() -> None:
-    skewed = build_run((1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.2, 1.2))
-    result = deflated_sharpe.evaluate(
-        sharpe_context(research_run=skewed, run=skewed, research_folds=1)
+def test_deflated_sharpe_deflates_by_the_error_the_card_carried() -> None:
+    """The estimate, its error and the trials' spread, all out of annualised units: the
+    error is the objective's own — Mertens' variance of a Sharpe, fold by fold — and not one
+    the gate computes for itself, so the deflation reads the number the card reported."""
+    research = build_run((3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0))
+    result = deflated_sharpe.evaluate(sharpe_context())
+    scale = periods_per_year(research) ** 0.5
+    estimate, error = wf_sharpe_net.compute(research, 4)
+    expected = expected_maximum(variance((1.0, 1.2, 0.9, 1.1)) / scale**2, 4)
+    assert result.evidence["sharpe"] == pytest.approx(estimate / scale)
+    assert result.evidence["standard_error"] == pytest.approx(error / scale)
+    assert result.evidence["expected_maximum"] == pytest.approx(expected)
+    assert result.evidence["dsr"] == pytest.approx(
+        NormalDist().cdf((estimate / scale - expected) / (error / scale))
     )
+
+
+def test_deflated_sharpe_judges_nothing_on_a_research_window_too_short_for_an_error() -> None:
+    short = build_run((3.0, -1.0))
+    result = deflated_sharpe.evaluate(sharpe_context(research_run=short, research_folds=1))
     assert result.passed
-    assert result.skipped is not None and "not positive" in result.skipped
+    assert result.skipped is not None and "too short" in result.skipped
+
+
+def test_deflated_sharpe_judges_nothing_when_a_marginal_sharpe_has_no_host() -> None:
+    marginal = make_hyp(
+        objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    result = deflated_sharpe.evaluate(sharpe_context(hyp=marginal))
+    assert result.passed
+    assert result.skipped is not None and "host's run" in result.skipped
 
 
 # --- cost_stress ------------------------------------------------------------------
@@ -1159,6 +1299,7 @@ def test_bootstrap_resamples_the_trade_sequence_and_passes_an_edge_inside_the_li
     result = bootstrap.evaluate(context(run, params={"n": 200}, strategy_sha="a" * 64))
     assert result.evidence["mdd_p95"] == pytest.approx(0.0)
     assert result.evidence["objective_ci90"] == pytest.approx([10.0, 10.0])
+    assert result.evidence["statistic"] == "edge_bps"
     assert result.passed
 
 
@@ -1219,6 +1360,7 @@ def test_bootstrap_of_a_sharpe_objective_reports_a_sharpe_interval() -> None:
     )
     low, high = result.evidence["objective_ci90"]
     assert low < high
+    assert result.evidence["statistic"] == "trade_sharpe"
 
 
 def test_bootstrap_of_a_benchmark_objective_is_a_band_of_differences_from_the_hold() -> None:
@@ -1260,6 +1402,73 @@ def test_bootstrap_of_a_benchmark_objective_is_a_band_of_differences_from_the_ho
 def test_bootstrap_without_its_context_judges_nothing(overrides: Any) -> None:
     result = bootstrap.evaluate(context(trading_run(1.0, 1.0, 1.0, 1.0), **overrides))
     assert result.passed and result.skipped is not None
+
+
+def _clips(day: date, values: tuple[float, ...]) -> tuple[Trade, ...]:
+    """Several trades closed inside one session, a minute apart, each on 10,000 notional."""
+    made = []
+    for index, pnl in enumerate(values):
+        opened = at(day, 10) + index * 60 * NS_PER_SECOND
+        made.append(
+            Trade(
+                opened_ns=opened,
+                closed_ns=opened + 30 * NS_PER_SECOND,
+                instrument_id="DEMO",
+                qty=100.0,
+                avg_open=100.0,
+                avg_close=100.0 + pnl / 100.0,
+                pnl_net=pnl,
+                cost=0.0,
+                fills=(fill(day, px=100.0),),
+            )
+        )
+    return tuple(made)
+
+
+def test_bootstrap_draws_a_trade_statistic_by_session_so_clips_share_their_session_s_luck() -> None:
+    """Twenty clips of +5 bp on one session and twenty of −5 bp on the next: drawn trade by
+    trade the forty would band tightly around zero, as forty independent draws; drawn by
+    session the band runs from the all-losing pair to the all-winning one, which is what two
+    sessions' evidence is worth."""
+    run = build_run(
+        (0.0, 0.0),
+        trades=_clips(DAYS[0], (5.0,) * 20) + _clips(DAYS[1], (-5.0,) * 20),
+        capital=1_000_000.0,
+    )
+    result = bootstrap.evaluate(context(run, params={"n": 2_000}, strategy_sha="d" * 64))
+    low, high = result.evidence["objective_ci90"]
+    assert low == pytest.approx(-5.0)
+    assert high == pytest.approx(5.0)
+    assert result.evidence["resampled"] == "sessions"
+    assert result.evidence["drawn_from"] == 2
+    assert low < 0 < high, "two sessions of opposite sign are evidence of neither direction"
+
+
+def test_bootstrap_s_drawdown_keeps_the_trough_inside_a_session() -> None:
+    """A session that falls 300 before it recovers to +50 is drawn whole: the path through
+    it still visits the trough, so the drawdown is the session's own 30% of the capital and
+    not the 0% its total would say."""
+    run = build_run(
+        (0.0, 0.0),
+        trades=_clips(DAYS[0], (100.0, -300.0, 250.0)) + _clips(DAYS[1], (10.0, 10.0)),
+        capital=1_000.0,
+    )
+    result = bootstrap.evaluate(context(run, params={"n": 500}, strategy_sha="e" * 64))
+    assert result.evidence["mdd_p95"] >= 30.0
+
+
+def test_sessions_of_folds_each_session_s_trades_into_its_sums_and_its_path() -> None:
+    from kanso.criteria.gates import _sessions_of
+
+    folded = _sessions_of(_clips(DAYS[1], (10.0, 10.0)) + _clips(DAYS[0], (100.0, -300.0, 250.0)))
+    assert folded.count.tolist() == [3.0, 2.0], "sessions in the order they closed"
+    assert folded.total.tolist() == [50.0, 20.0]
+    assert folded.crest.tolist() == [100.0, 20.0]
+    assert folded.trough.tolist() == [-200.0, 0.0]
+    assert folded.inner.tolist() == [300.0, 0.0]
+    assert folded.pnl_sum.tolist() == [50.0, 20.0]
+    assert folded.pnl_sumsq.tolist() == [100.0**2 + 300.0**2 + 250.0**2, 200.0]
+    assert folded.edge_sum.tolist() == pytest.approx([50.0, 20.0])
 
 
 # --- book_correlation -------------------------------------------------------------

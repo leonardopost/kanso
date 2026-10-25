@@ -23,6 +23,7 @@ from kanso.schemas.base import (
     Sha256,
     Versioned,
 )
+from kanso.schemas.book import BookLeverage, SharedBook
 from kanso.schemas.catalogue import (
     Applies,
     ConstructItem,
@@ -39,9 +40,11 @@ from kanso.schemas.certification import (
     DataAvailability,
     EvaluatedGate,
     ExcludedGate,
+    NetPerTrade,
     ObjectiveResult,
     PlanInputs,
     PlannedGate,
+    Power,
     Span,
     Verdict,
 )
@@ -91,10 +94,12 @@ from kanso.schemas.models import (
 )
 from kanso.schemas.portfolio import Deployment, Limits, Portfolio, Stage, Stages
 from kanso.schemas.run import (
+    DIGEST_COLUMNS,
     RESULTS_COLUMNS,
     RESULTS_HEADER,
     TAGS,
     Card,
+    CardDigest,
     CardStatus,
     GateResult,
     RunRecord,
@@ -127,6 +132,7 @@ from kanso.schemas.venue import (
 from kanso.schemas.yamlio import dump_yaml, load_yaml, parse_yaml, write_yaml
 
 __all__ = [
+    "DIGEST_COLUMNS",
     "DURATION_PATTERN",
     "RESOLUTION_PATTERN",
     "RESULTS_COLUMNS",
@@ -141,6 +147,7 @@ __all__ = [
     "Applies",
     "AttachedRef",
     "Card",
+    "CardDigest",
     "CardStatus",
     "CatalogueId",
     "Certificate",
@@ -177,10 +184,12 @@ __all__ = [
     "Mechanism",
     "ModelSpec",
     "ModelsFile",
+    "NetPerTrade",
     "NonEmpty",
     "ObjectiveParams",
     "ObjectiveRef",
     "ObjectiveResult",
+    "Power",
     "OpenWindow",
     "Origins",
     "ParamType",
@@ -196,6 +205,7 @@ __all__ = [
     "Resolved",
     "RiskLimits",
     "Book",
+    "BookLeverage",
     "Sizing",
     "Benchmark",
     "FIRST_LEG",
@@ -205,6 +215,7 @@ __all__ = [
     "RoutingEntry",
     "RunRecord",
     "Sha256",
+    "SharedBook",
     "SleeveRef",
     "Span",
     "Stage",

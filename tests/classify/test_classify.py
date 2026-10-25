@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from kanso.classify.classify import classify
+from kanso.classify.classify import StatedObjective, classify
 from kanso.classify.features import features
 from kanso.env import detect
 from kanso.env import write as write_envelope
@@ -77,11 +77,15 @@ STATED = DRAFT.split("construct:")[0] + (
 
 SHA = "a" * 64
 
+RELATIVE = "marginal_net_edge_bps"
+"""What a model names for a construct attached to a host held under a day."""
+
 
 def answer(**changes: Any) -> dict[str, Any]:
     """A usable classification, with these fields replaced."""
     return {
         "construct": {"id": "sleeve"},
+        "objective": "net_edge_bps",
         "objective_params": {"min_delta": 0.0, "k_se": 1.0},
         "constraints": [
             {"id": "strategy_integrity", "params": pairs()},
@@ -135,7 +139,7 @@ def test_a_sleeve_is_written_pinned_and_left_readable(ws: Workspace, store: Stat
     register(ws, store, HYP_ID, DRAFT)
     script(ws, classify=[answer()])
 
-    classified = classify(ws, store, HYP_ID)
+    classified = classify(ws, store, HYP_ID).hyp
 
     assert classified.construct is not None
     assert classified.construct.id == "sleeve"
@@ -174,11 +178,14 @@ def test_the_parameters_the_model_chose_survive_the_wire_whole(
     script(
         ws,
         classify=[
-            answer(construct={"id": "filter", "host": HOST_ID, "params": pairs({"scope": "time"})})
+            answer(
+                construct={"id": "filter", "host": HOST_ID, "params": pairs({"scope": "time"})},
+                objective=RELATIVE,
+            )
         ],
     )
 
-    classified = classify(ws, store, HYP_ID)
+    classified = classify(ws, store, HYP_ID).hyp
 
     assert classified.construct is not None
     assert classified.construct.params == {"scope": "time"}
@@ -191,19 +198,251 @@ def test_the_parameters_the_model_chose_survive_the_wire_whole(
     assert "min: 30" in written
 
 
-def test_the_objective_follows_from_the_horizon_not_from_the_model(
-    ws: Workspace, store: StateStore
+GUARD = {"id": "edge_per_trade", "params": pairs({"min_bps": 0.0, "k_se": 1.0})}
+"""The gate every hypothesis scored on a contribution carries, both thresholds the model's."""
+
+CONTRIBUTION = answer(
+    objective="wf_contribution_bps",
+    constraints=[{"id": "strategy_integrity", "params": pairs()}, GUARD],
+)
+"""A sleeve the model scores on the return per period of the capital."""
+
+
+@pytest.mark.parametrize(
+    "named", [answer(), CONTRIBUTION], ids=["net_edge_bps", "wf_contribution_bps"]
+)
+def test_the_objective_written_is_the_one_the_model_names(
+    ws: Workspace, store: StateStore, named: dict[str, Any]
+) -> None:
+    """A hypothesis held for thirty minutes admits both absolute objectives, and the toolbox
+    picks neither: what is written is what the model named, with the keep rule it chose.
+    It used to be the lowest priority admitted, the per-trade edge, whatever was answered."""
+    register(ws, store, HYP_ID, DRAFT)
+    script(ws, classify=[named])
+
+    classified = classify(ws, store, HYP_ID)
+
+    assert classified.hyp.objective is not None
+    assert classified.hyp.objective.id == named["objective"]
+    assert classified.stated is None
+    assert show(ws, store, HYP_ID).objective == named["objective"]
+
+
+def test_the_wire_holds_the_answer_to_the_objectives_either_mode_admits(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(ws, store, HYP_ID, DRAFT)
+    script(ws, classify=[answer()])
+    seen = prompts(monkeypatch)
+
+    classify(ws, store, HYP_ID)
+
+    assert seen[0].schema["properties"]["objective"] == {  # type: ignore[index]
+        "type": "string",
+        "enum": [
+            "marginal_net_edge_bps",
+            "marginal_wf_contribution_bps",
+            "net_edge_bps",
+            "wf_contribution_bps",
+        ],
+    }
+    assert '"selected"' not in seen[0].system, "nothing in the prompt marks one as the answer"
+
+
+def test_an_objective_of_the_other_mode_is_retried_with_the_ones_that_apply(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(ws, store, HYP_ID, DRAFT)
+    script(ws, classify=[answer(objective=RELATIVE), answer()])
+    seen = prompts(monkeypatch)
+
+    classified = classify(ws, store, HYP_ID).hyp
+
+    assert classified.objective is not None
+    assert classified.objective.id == "net_edge_bps"
+    assert (
+        "objective: marginal_net_edge_bps is a relative objective, and a sleeve is measured "
+        "absolute; name one of net_edge_bps, wf_contribution_bps" in seen[1].user
+    )
+
+
+def test_a_daily_horizon_is_offered_the_sharpe_and_not_the_edge(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     daily = DRAFT.replace("horizon: 30m", "horizon: 2d").replace(
         "certification: {start: 2025-01-06", "certification: {start: 2025-01-20"
     )
     register(ws, store, HYP_ID, daily)
+    script(ws, classify=[answer(), answer(objective="wf_sharpe_net")])
+    seen = prompts(monkeypatch)
+
+    classified = classify(ws, store, HYP_ID).hyp
+
+    assert classified.objective is not None
+    assert classified.objective.id == "wf_sharpe_net"
+    assert "net_edge_bps" not in seen[0].schema["properties"]["objective"]["enum"]  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("constraints", "complaint"),
+    [
+        (
+            [{"id": "strategy_integrity", "params": pairs()}],
+            "constraints: edge_per_trade is required of a hypothesis scored on "
+            "wf_contribution_bps, with min_bps, k_se set",
+        ),
+        (
+            [
+                {"id": "strategy_integrity", "params": pairs()},
+                {"id": "edge_per_trade", "params": pairs({"min_bps": 0.0})},
+            ],
+            "constraints.edge_per_trade.k_se: is not set, and edge_per_trade judges nothing "
+            "without every one of min_bps, k_se",
+        ),
+    ],
+    ids=["missing", "half-stated"],
+)
+def test_a_contribution_without_its_guard_is_retried(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    constraints: list[dict[str, Any]],
+    complaint: str,
+) -> None:
+    """A contribution moves toward zero as losing trades are dropped, so a lane scored on one
+    and not carrying `edge_per_trade` keeps a card that trades less at a worse loss per
+    trade. The gate is not the model's to leave out, and half its rule judges nothing; both
+    thresholds are the model's to set."""
+    register(ws, store, HYP_ID, DRAFT)
+    script(
+        ws,
+        classify=[answer(objective="wf_contribution_bps", constraints=constraints), CONTRIBUTION],
+    )
+    seen = prompts(monkeypatch)
+
+    classified = classify(ws, store, HYP_ID).hyp
+
+    assert complaint in seen[1].user
+    assert {ref.id: ref.params for ref in classified.card_gates}["edge_per_trade"] == {
+        "min_bps": 0.0,
+        "k_se": 1.0,
+    }
+
+
+def test_the_operators_own_guard_counts(ws: Workspace, store: StateStore) -> None:
+    register(ws, store, HYP_ID, DRAFT)
+    path = hypothesis_file(ws, HYP_ID)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "required_constraints: [{id: edge_per_trade, params: {min_bps: 2.0, k_se: 1.5}}]\n",
+        encoding="utf-8",
+    )
+    script(
+        ws,
+        classify=[
+            answer(
+                objective="wf_contribution_bps",
+                constraints=[{"id": "strategy_integrity", "params": pairs()}],
+            )
+        ],
+    )
+
+    classified = classify(ws, store, HYP_ID).hyp
+
+    assert classified.objective is not None
+    assert classified.objective.id == "wf_contribution_bps"
+    assert classified.card_gates[0].params == {"min_bps": 2.0, "k_se": 1.5}
+
+
+# --- an objective the file already names ------------------------------------
+
+STATED_CONTRIBUTION = DRAFT.split("construct:")[0] + (
+    "required_constraints: [{id: edge_per_trade, params: {min_bps: 0.0, k_se: 1.0}}]\n"
+    "construct:\n"
+    "objective: {id: wf_contribution_bps, params: {min_delta: 0.5, k_se: 1.5}}\n"
+    "constraints:\n"
+)
+"""A sub-daily file whose operator named its return target before anything classified it."""
+
+
+def test_an_objective_the_operator_states_is_kept_and_said_to_be(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One `classify` used to replace a hand-written contribution with the per-trade edge,
+    reporting only the new objective, before the first card ran (R2-3-02)."""
+    register(ws, store, HYP_ID, DRAFT)
+    hypothesis_file(ws, HYP_ID).write_text(STATED_CONTRIBUTION, encoding="utf-8")
+    script(ws, classify=[answer()])
+    seen = prompts(monkeypatch)
+
+    classified = classify(ws, store, HYP_ID)
+
+    assert classified.hyp.objective is not None
+    assert classified.hyp.objective.id == "wf_contribution_bps"
+    assert classified.hyp.objective.params.min_delta == 0.5, "its keep rule is the operator's"
+    assert classified.stated == StatedObjective(id="wf_contribution_bps", kept=True)
+    assert '"objective_stated"' in seen[0].system
+    assert "objective_replaced" not in [event.kind for event in store.events(subject=HYP_ID)]
+
+
+def test_a_stated_objective_the_construct_cannot_be_scored_on_is_replaced_and_said_to_be(
+    ws: Workspace, store: StateStore
+) -> None:
+    certify(ws, store)
+    register(ws, store, HYP_ID, DRAFT)
+    hypothesis_file(ws, HYP_ID).write_text(STATED_CONTRIBUTION, encoding="utf-8")
+    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID}, objective=RELATIVE)])
+
+    classified = classify(ws, store, HYP_ID)
+
+    assert classified.hyp.objective is not None
+    assert classified.hyp.objective.id == RELATIVE
+    reason = "wf_contribution_bps is an absolute objective, and a filter is measured relative"
+    assert classified.stated == StatedObjective(id="wf_contribution_bps", kept=False, reason=reason)
+    replaced = [
+        event for event in store.events(subject=HYP_ID) if event.kind == "objective_replaced"
+    ]
+    assert [event.detail for event in replaced] == [
+        {"stated": "wf_contribution_bps", "objective": RELATIVE, "reason": reason}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("objective", "reason"),
+    [
+        (
+            "{id: wf_sharpe_net, params: {min_delta: 0.0, k_se: 1.0}}",
+            "wf_sharpe_net does not apply to this hypothesis",
+        ),
+        (
+            "{id: no_such_thing, params: {min_delta: 0.0, k_se: 1.0}}",
+            "is not an objective in the toolbox",
+        ),
+        (
+            "{id: net_edge_bps, params: {min_delta: 0.0, k_se: 9.0}}",
+            "its keep rule is outside the toolbox's ranges: k_se: 9.0 is outside the range",
+        ),
+        ("{id: net_edge_bps}", "it is not an objective: params"),
+        ("[unbalanced", "it does not parse"),
+    ],
+    ids=["inapplicable", "unknown", "out-of-range", "malformed", "not-yaml"],
+)
+def test_a_stated_objective_that_cannot_stand_is_replaced_with_the_reason(
+    ws: Workspace, store: StateStore, objective: str, reason: str
+) -> None:
+    register(ws, store, HYP_ID, DRAFT)
+    hypothesis_file(ws, HYP_ID).write_text(
+        DRAFT.replace("objective:\n", f"objective: {objective}\n"), encoding="utf-8"
+    )
     script(ws, classify=[answer()])
 
     classified = classify(ws, store, HYP_ID)
 
-    assert classified.objective is not None
-    assert classified.objective.id == "wf_sharpe_net"
+    assert classified.hyp.objective is not None
+    assert classified.hyp.objective.id == "net_edge_bps"
+    assert classified.stated is not None
+    assert not classified.stated.kept
+    assert reason in str(classified.stated.reason)
 
 
 def test_a_second_classification_replaces_the_first(ws: Workspace, store: StateStore) -> None:
@@ -211,7 +450,7 @@ def test_a_second_classification_replaces_the_first(ws: Workspace, store: StateS
     script(ws, classify=[answer(), answer(constraints=[{"id": "strategy_integrity"}])])
 
     classify(ws, store, HYP_ID)
-    again = classify(ws, store, HYP_ID)
+    again = classify(ws, store, HYP_ID).hyp
 
     assert [one.id for one in again.constraints or []] == ["strategy_integrity"]
     assert hypothesis_file(ws, HYP_ID).read_text(encoding="utf-8").count("min_trades") == 0
@@ -238,8 +477,8 @@ def test_what_the_operator_requires_survives_every_classification(
         ws, classify=[answer(), answer(constraints=[{"id": "min_trades", "params": {"min": 12}}])]
     )
 
-    first = classify(ws, store, HYP_ID)
-    again = classify(ws, store, HYP_ID)
+    first = classify(ws, store, HYP_ID).hyp
+    again = classify(ws, store, HYP_ID).hyp
 
     written = path.read_text(encoding="utf-8")
     assert "the operator's, and not the classifier's to reprice" in written
@@ -266,9 +505,9 @@ def test_a_classification_whose_host_has_gone_can_be_redone(
         "constraints: [{id: strategy_integrity, params: {}}]\n"
     )
     path.write_text(stale, encoding="utf-8")
-    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID})])
+    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID}, objective=RELATIVE)])
 
-    classified = classify(ws, store, HYP_ID)
+    classified = classify(ws, store, HYP_ID).hyp
 
     assert classified.construct is not None
     assert classified.construct.host == HOST_ID
@@ -282,7 +521,7 @@ def test_a_changed_construct_clears_the_best(ws: Workspace, store: StateStore) -
     run = records.insert(store, run_record())
     records.set_best(store, run, SHA, 1.5)
     records.close(store, run)
-    script(ws, classify=[answer(construct={"id": "exit", "host": HOST_ID})])
+    script(ws, classify=[answer(construct={"id": "exit", "host": HOST_ID}, objective=RELATIVE)])
 
     classify(ws, store, HYP_ID)
 
@@ -306,7 +545,7 @@ def test_a_hypothesis_stripped_to_a_draft_does_not_carry_its_best_into_another_c
     records.set_best(store, run, SHA, 1.5)
     records.close(store, run)
     register(ws, store, HYP_ID, DRAFT)
-    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID})])
+    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID}, objective=RELATIVE)])
 
     classify(ws, store, HYP_ID)
 
@@ -319,11 +558,28 @@ def test_an_unchanged_construct_keeps_the_best(ws: Workspace, store: StateStore)
     run = records.insert(store, run_record())
     records.set_best(store, run, SHA, 1.5)
     records.close(store, run)
-    script(ws, classify=[answer()])
+    script(ws, classify=[answer(constraints=[{"id": "strategy_integrity", "params": pairs()}])])
 
     classify(ws, store, HYP_ID)
 
     assert records.best_of(store, HYP_ID) == (SHA, 1.5)
+
+
+def test_a_classification_adding_a_card_gate_clears_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The best was kept without `min_trades`, so nothing says it would pass it."""
+    register(ws, store, HYP_ID, STATED)
+    run = records.insert(store, run_record())
+    records.set_best(store, run, SHA, 1.5)
+    records.close(store, run)
+    script(ws, classify=[answer()])
+
+    classify(ws, store, HYP_ID)
+
+    assert records.best_of(store, HYP_ID) == (None, None)
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert cleared[0].detail["gates_added"] == ['min_trades {"min": 30}']
 
 
 # --- the stub ----------------------------------------------------------------
@@ -335,7 +591,10 @@ def test_an_attached_construct_gets_its_modifier_stub(ws: Workspace, store: Stat
     script(
         ws,
         classify=[
-            answer(construct={"id": "filter", "host": HOST_ID, "params": pairs({"scope": "time"})})
+            answer(
+                construct={"id": "filter", "host": HOST_ID, "params": pairs({"scope": "time"})},
+                objective=RELATIVE,
+            )
         ],
     )
 
@@ -352,7 +611,7 @@ def test_an_edited_strategy_is_never_overwritten(ws: Workspace, store: StateStor
     register(ws, store, HYP_ID, DRAFT)
     edited = f"# {SECRET}\n" + stub(HYP_ID)
     ws.path("hypotheses", HYP_ID, STRATEGY_FILE).write_text(edited, encoding="utf-8")
-    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID})])
+    script(ws, classify=[answer(construct={"id": "filter", "host": HOST_ID}, objective=RELATIVE)])
 
     classify(ws, store, HYP_ID)
 
@@ -376,7 +635,7 @@ def test_a_construct_this_version_cannot_run_is_classified_and_left_alone(
     register(ws, store, HYP_ID, DRAFT)
     script(ws, classify=[answer(construct={"id": "alpha", "host": HOST_ID})])
 
-    classified = classify(ws, store, HYP_ID)
+    classified = classify(ws, store, HYP_ID).hyp
 
     assert classified.construct is not None
     assert classified.construct.id == "alpha"
@@ -490,7 +749,7 @@ def test_a_rejected_answer_is_retried_with_the_reason(
     script(ws, classify=[answer(construct={"id": "nonsense"}), answer()])
     seen = prompts(monkeypatch)
 
-    classified = classify(ws, store, HYP_ID)
+    classified = classify(ws, store, HYP_ID).hyp
 
     assert classified.construct is not None
     assert classified.construct.id == "sleeve"
@@ -516,7 +775,7 @@ def test_a_keep_rule_the_wire_no_longer_bounds_is_named_in_the_retry(
     script(ws, classify=[answer(objective_params={"min_delta": 0.0, "k_se": 0.0}), answer()])
     seen = prompts(monkeypatch)
 
-    classified = classify(ws, store, HYP_ID)
+    classified = classify(ws, store, HYP_ID).hyp
 
     assert classified.objective is not None
     assert classified.objective.params.k_se == 1.0
@@ -630,11 +889,11 @@ def test_a_construct_no_objective_can_measure_is_refused(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     register(ws, store, HYP_ID, DRAFT)
-    script(ws, classify=[answer()])
+    script(ws, classify=[answer(objective=RELATIVE)])
 
     def blind(ws_: Workspace, store_: StateStore, hyp_: Any) -> Any:
         computed = features(ws_, store_, hyp_)
-        computed["objectives"]["absolute"]["selected"] = None
+        computed["objectives"]["absolute"]["applicable"] = []
         return computed
 
     monkeypatch.setattr("kanso.classify.classify.features", blind)

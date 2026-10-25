@@ -318,6 +318,15 @@ class Hypothesis(Versioned):
     benchmark: Benchmark | None = None
     book: Book | None = None
     depth: Depth | None = None
+    derived_from: list[HypId] = Field(default_factory=list)
+    """The hypotheses whose research chose this one — the parent an `explore` draft was
+    written from, or the searched sibling an operator drafted a variation of. A trial is a
+    card the selection could have kept, and the cards that chose a draft are among them: the
+    search a certificate prices, the trials `edge_per_trade` holds a card to and the
+    `n_trials` a certificate is stamped with count every card of the hypothesis and of every
+    hypothesis it derives from, transitively. A hypothesis that names none counts its own.
+    Operator-owned: classification neither reads nor writes it, and `kanso hyp validate`
+    refuses a name the workspace has not registered."""
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None
@@ -356,6 +365,10 @@ class Hypothesis(Versioned):
             raise ValueError("data_requirements: repeats a type")
         if parse_duration(self.horizon, "horizon") <= timedelta(0):
             raise ValueError("horizon: must be longer than zero")
+        if len(set(self.derived_from)) != len(self.derived_from):
+            raise ValueError("derived_from: repeats an id")
+        if self.id in self.derived_from:
+            raise ValueError(f"derived_from: {self.id!r} cannot derive from itself")
         self.windows.check_embargo(self.horizon)
         self._check_resolution()
         self._check_by_instrument()

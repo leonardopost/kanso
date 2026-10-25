@@ -17,7 +17,12 @@ Rust bridge, and the bridge, the persistence layer and the backtest package each
 data catalog and therefore the certification window. `kanso.nautilus.strategy` is the only
 kanso module a strategy may see. Beyond those, numpy and a short standard-library set of
 pure computation. A star import binds names nobody declared, so it is refused whatever it
-comes from.
+comes from. A path names a module, not what the module holds, and the path is all this rule
+reads: what an allowed module holds from elsewhere, and what a dotted read off an imported
+module reaches, are not resolved (*What the scan does not see*, below). The scan imports no
+module because a strategy names it — its only import is kanso's own strategy base — so a
+module's import-time code runs in the card's child process, never in the process that gates
+it.
 
 **Identifiers** are refused wherever they appear — as a name, as an attribute or as an
 import alias — so that a denied capability cannot be reached by a second route. That
@@ -69,11 +74,19 @@ model and a refusal it cannot act on is a loop.
 **Under `depth`**, a fifth set. The harness keeps every change of the book for the venue
 and hands the author the book on the hypothesis's grid and level one on every change, so
 the harness's own copy and the methods that show it are denied to every strategy, and under
-`depth` so are the message bus under both the names the engine gives it, which carries every
-change on the data engine's topics, and the three subscriptions that would hand the author
-a book of its own: every change, snapshots on an interval, and the ten-level depth an
-account on a sampled channel is not served. The last three bind an attached construct too,
-which is an engine actor the harness hands no view.
+`depth` so are the three subscriptions that would hand the author a book of its own: every
+change, snapshots on an interval, and the ten-level depth an account on a sampled channel is
+not served. They bind an attached construct too, which is an engine actor the harness hands
+no view.
+
+**The bus and the events are the engine's**, sized or not, with `depth` or without. On the
+message bus, under both the names the engine gives it (`msgbus`, `_msgbus`), a strategy can
+send the execution engine a command — an order, a modify — or a fill, past its own methods
+and a book's check, and take a book's handler off; its data engine topics carry every change
+of a book as well. `apply` hands an order or a position an event as if the engine had applied
+it, and an order moved that way at the venue sends no modify; which receiver is an order the
+scan cannot tell, so the word is denied on any. What these routes do is measured where the
+sets are declared (`DENIED_BUS`, `DENIED_EVENTS`).
 
 **The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
 `KansoModifier` — it names one among its bases, through an alias, a module or a class of the
@@ -87,6 +100,52 @@ attribute scan can see. What the base owns is read from the installed classes wh
 runs, never kept as a list: everything `dir` shows of it, the engine's names beneath
 included, and every attribute kanso's own classes set on `self`. What it leaves to its
 author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
+
+**The harness's sends are its own.** A sleeve hands the engine an order through the base's
+`submit_order`, `submit_order_list` and `modify_order`, which record the intent, ask the
+limits, size and refuse, and which a book reads to refuse what kanso did not send
+(`kanso.nautilus.book`). Two kinds of read reach past them, and both are refused, sized or
+not. The base's private helpers that send an order as the harness's own — `_submitted`,
+`_booked`, `_close` and every private method of kanso's classes that calls `submit_order`,
+`submit_order_list` or `modify_order` on the instance or on `super()`, or calls one that does
+(`sends`) — and the mark and the ledger a book recognises kanso's order by (`_sending`,
+`_book_ledger`) are refused when read off anything but the instance of a method of a class
+the base does not hold, where the name is that class's own: called by a strategy, such a
+helper sends whatever it is handed as an order kanso sized. A method the engine defines and
+the base overrides — `submit_order`, `modify_order`, `cancel_order`, the `handle_*` handlers
+and the rest (`overridden`) — is refused when read off anything but `self`, the instance a
+method receives, or `super()` with no arguments: off the engine's class
+(`Strategy.submit_order(self, order)`) or a two-argument `super(KansoStrategy, self)` it is
+the engine's own method, which skips the base's. Both sets are read from the installed
+classes when the scan runs, never kept as a list. The instance read through another name —
+handed to a module-level function, or kept as `me = self` — is refused as well, which is the
+price of seeing the rest.
+
+**What the scan does not see** is a spelling it does not follow, and each of these reaches
+what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211):
+
+* the engine's class held under the name `self` — the first parameter of a module-level
+  function handed `Strategy` — whose `submit_order` is the engine's own, which in a book the
+  book still refuses on the bus (`kanso.nautilus.book`) and a sleeve alone sends;
+* a module an allowed leaf holds, which its path passes: `from typing import operator` is the
+  `operator` module, `from dataclasses import inspect` the `inspect` module, `from
+  nautilus_trader.model.data import pickle` the `pickle` module, and `from
+  kanso.nautilus.strategy import actions` kanso's `actions`;
+* a dotted read off an imported module, which is not followed: `import nautilus_trader.model`
+  binds the package `nautilus_trader`, so `nautilus_trader.execution` and
+  `nautilus_trader.core.rust` read packages the allow-list refuses to import, which the
+  engine has imported by the time a strategy runs; `from nautilus_trader import model`
+  reaches `pickle` as `model.data.pickle`; and a module kept under another name is read there
+  unfollowed as well;
+* a class or a function an allowed leaf takes from a module that is not allowed: the engine's
+  `resolve_path`, which `nautilus_trader.trading.config` takes from
+  `nautilus_trader.common.config` and which imports whatever path it is handed as a string;
+  `itemgetter`, which `nautilus_trader.model.book` takes from `operator`; and
+  `numpy.lib._datasource._open`, which is the builtin `open`;
+* numpy, allowed whole, past its file functions (`DENIED_NUMPY_FILE`): the `open` of
+  `numpy.lib.npyio.DataSource` opens a path, or downloads a URL and opens that,
+  `numpy.lib.format.open_memmap` maps a file, and `numpy.ctypeslib.load_library` loads a
+  shared library.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -317,6 +376,39 @@ DENIED_DEPTH: Final = frozenset(
 """The harness's own copy of a book a `depth` hypothesis holds, at every change, and the
 methods that show the author its view of it."""
 
+DENIED_BUS: Final = frozenset({"msgbus", "_msgbus"})
+"""The engine's message bus, under both the names every `Strategy` and `Actor` holds it by
+(nautilus_trader 1.231.0). Measured through the backtest runner in a book at no latency and
+at 20 ms, and alone at no latency: a `SubmitOrder` or a `ModifyOrder` sent on it to
+`ExecEngine.execute` or `RiskEngine.execute` reached the venue past the strategy's own
+methods, and a book did not refuse it; an `OrderFilled` sent to `ExecEngine.process` was
+recorded as a fill at a price no venue printed; and unsubscribing the bus's `events.order.*`
+handlers took the book's check away. Its data engine topics carry every change of a book as
+well."""
+
+DENIED_EVENTS: Final = frozenset({"apply"})
+"""`Order.apply` and `Position.apply`, which take an event — an `OrderUpdated`, an
+`OrderFilled` — as if the engine had applied it. Measured on nautilus_trader 1.231.0
+through the backtest runner, in a book at no latency and at 20 ms and alone at no latency:
+an `OrderUpdated` to 5,000 at 5.00 that a strategy applied to its own resting sale of 1,000
+at 100 sold 5,000 at 5.00, with no modify sent. Every event a strategy's order takes is the
+engine's to apply, and which receiver is an order the scan cannot tell, so the word is denied
+on any receiver."""
+
+WHY_BUS: Final = (
+    "it is the engine's message bus, which hands the execution engine a command or a fill "
+    "past the strategy's own methods and a book's check; place orders through "
+    "submit_entry(instrument_id, side) and submit_exit(instrument_id), and read data in the "
+    "on_* handlers"
+)
+
+WHY_EVENTS: Final = (
+    "it applies an event to an order or a position — a fill, a modify — as if the engine had, "
+    "past the venue and kanso's own methods; the engine applies every event itself, so send "
+    "orders through submit_entry(instrument_id, side) and submit_exit(instrument_id), and "
+    "take one back with cancel_order"
+)
+
 WHY_DEPTH: Final = (
     "the account sees a book's depth only on the grid `depth.every_ms` sets and level one on "
     "every change, which the harness hands to on_order_book_deltas and on_quote_tick; read "
@@ -347,6 +439,8 @@ WHY: Final = {
         "what the book set aside; read the book the policy left from `balance`",
     ),
     **dict.fromkeys(DENIED_DEPTH, f"it is the harness's book at every change, and {WHY_DEPTH}"),
+    **dict.fromkeys(DENIED_BUS, WHY_BUS),
+    **dict.fromkeys(DENIED_EVENTS, WHY_EVENTS),
 }
 """Why each denial that carries a reason exists, said in the refusal so a proposer can act on it."""
 
@@ -362,6 +456,8 @@ DENIED_ATTRIBUTES: Final = (
     | DENIED_HISTORY
     | DENIED_BOOK
     | DENIED_DEPTH
+    | DENIED_BUS
+    | DENIED_EVENTS
 )
 
 SIZE_HELPERS: Final = frozenset({"submit_entry", "submit_exit"})
@@ -391,20 +487,17 @@ WHY_UNDER_SIZING: Final = "because the harness sizes every order to the budget"
 
 DENIED_UNDER_DEPTH: Final = frozenset(
     {
-        "msgbus",
-        "_msgbus",
         "subscribe_order_book_deltas",
         "subscribe_order_book_at_interval",
         "subscribe_order_book_depth",
     }
 )
-"""What reaches a book at every change, or as snapshots the account is not served, around
-the view the harness hands; denied only when the hypothesis declares `depth`. The bus
-carries the data engine's own topics, every change of the book among them, and every
-`Strategy` and `Actor` holds it twice, as `msgbus` and as `_msgbus` (nautilus_trader
-1.231.0). The harness subscribes a sleeve's book itself, so `subscribe_order_book_deltas`
-is a second subscription only an attached construct, which the harness does not gate,
-would be handed every change through."""
+"""The subscriptions that hand a book at every change, or as snapshots the account is not
+served, around the view the harness hands; denied only when the hypothesis declares
+`depth`. The bus, which carries every change on the data engine's topics, is denied to
+every strategy (`DENIED_BUS`). The harness subscribes a sleeve's book itself, so
+`subscribe_order_book_deltas` is a second subscription only an attached construct, which
+the harness does not gate, would be handed every change through."""
 
 OVERLAY_CONSTRUCT: Final = "overlay"
 SIZED_OVERLAY_NAMES: Final = frozenset({"Hedge"})
@@ -419,6 +512,21 @@ AUTHORED: Final = frozenset({"config_cls", "construct", *OWN_HOOKS})
 the construct a modifier is, and a modifier's two hooks. The dunders and the engine's
 `on_*` handlers are the author's too, because the harness hooks the engine through
 `handle_*` and names of its own."""
+
+SEND_MARKS: Final = frozenset({"_sending", "_book_ledger"})
+"""What a book lets kanso's own order through by: the mark on the order kanso is sending, and
+the book's ledger; denied beside the base's private sends (`sends`)."""
+
+ENGINE_SENDS: Final = frozenset({"submit_order", "submit_order_list", "modify_order"})
+"""The engine's methods that hand it an order or move one; a private method of kanso's that
+calls one on the instance or on `super()` is a send (`sends`)."""
+
+WHY_SEND: Final = (
+    "it is the harness's own send, which hands the engine whatever it is given as an order "
+    "kanso sized, past the limits, the room and a book's check; call "
+    "submit_entry(instrument_id, side) or submit_exit(instrument_id), and give a name of "
+    "your own another spelling"
+)
 
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
@@ -503,6 +611,7 @@ def scan(
     problems: list[str] = [
         *_sizing_problems(tree, sized=sized, construct=construct),
         *(clash.problem for clash in _clashes(tree)),
+        *_receiver_problems(tree),
     ]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -665,6 +774,151 @@ def _names_helper(func: ast.expr) -> str | None:
     return None
 
 
+def _bases() -> tuple[type, ...]:
+    """The harness bases a researched file's classes reach, imported when first asked for."""
+    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
+
+    return (KansoStrategy, KansoModifier)
+
+
+def _kanso_classes(base: type) -> list[type]:
+    return [klass for klass in base.__mro__ if klass.__module__.partition(".")[0] == "kanso"]
+
+
+@cache
+def sends(base: type) -> frozenset[str]:
+    """Every private method of kanso's classes in `base`'s MRO that hands the engine an order:
+    one whose body calls an `ENGINE_SENDS` method on `self` or on `super()`, or calls another
+    such private method there; read from the installed classes' source. A public method —
+    `submit_entry`, `submit_exit` and the engine's own — is not one: it asks what it is meant
+    to ask before it sends.
+    """
+    calls: dict[str, set[str]] = {}
+    for klass in _kanso_classes(base):
+        for node in ast.parse(inspect.getsource(klass)).body[0].body:  # type: ignore[attr-defined]
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name.startswith("_")
+                and not node.name.startswith("__")
+            ):
+                calls.setdefault(node.name, set()).update(_calls_on_self(node))
+    found = {name for name, called in calls.items() if called & ENGINE_SENDS}
+    while more := {name for name, called in calls.items() if called & found} - found:
+        found |= more
+    return frozenset(found)
+
+
+def _calls_on_self(node: ast.FunctionDef) -> Iterator[str]:
+    """The methods a function calls on `self` or on `super()`."""
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and (_is_name(child.func.value, "self") or _is_bare_super(child.func.value))
+        ):
+            yield child.func.attr
+
+
+@cache
+def overridden(base: type) -> frozenset[str]:
+    """Every method the engine defines that a kanso class in `base`'s MRO defines again, read
+    from the installed classes, less what the base leaves its author (`AUTHORED`, the
+    dunders and the `on_*` handlers)."""
+    engine = [klass for klass in base.__mro__ if klass.__module__.partition(".")[0] != "kanso"]
+    return frozenset(
+        name
+        for klass in _kanso_classes(base)
+        for name in vars(klass)
+        if any(name in vars(beneath) for beneath in engine)
+        and name not in AUTHORED
+        and not name.startswith("on_")
+        and not (name.startswith("__") and name.endswith("__"))
+    )
+
+
+def _is_name(node: ast.expr, name: str | None) -> bool:
+    return name is not None and isinstance(node, ast.Name) and node.id == name
+
+
+def _is_bare_super(node: ast.expr) -> bool:
+    """Whether `node` is `super()` with no arguments, which resolves past the class the
+    method is written in and so reaches the harness base's own methods."""
+    return (
+        isinstance(node, ast.Call)
+        and _is_name(node.func, "super")
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _receiver_problems(tree: ast.Module) -> list[str]:
+    """Every read of the harness's own sends, and of a method it overrides, off a receiver
+    that can reach past the harness base.
+
+    A send (`sends`, `SEND_MARKS`) is refused when read off anything but the instance of a
+    method of a class that is not held to the base that owns it, where the name is that
+    class's own; a binding of one is the clash rule's (`_clashes`). An overridden method
+    (`overridden`) is refused when read off anything but `self`, the instance a method
+    receives, or `super()` with no arguments.
+    """
+    holding: dict[int, set[type]] = {}
+    for node, base in _harness_classes(tree):
+        holding.setdefault(id(node), set()).add(base)
+    sent = {base: sends(base) | SEND_MARKS for base in _bases()}
+    names = frozenset().union(*(overridden(base) for base in _bases()))
+    found: list[str] = []
+
+    def visit(
+        node: ast.AST, scope: tuple[str | None, frozenset[type]], held: set[type] | None
+    ) -> None:
+        """`scope` is the instance in reach and the bases its class is held to; `held` the
+        bases of the class whose body `node` is directly in, `None` outside one."""
+        instance, owners = scope
+        if isinstance(node, ast.ClassDef):
+            held = holding.get(id(node), set())
+            for child in ast.iter_child_nodes(node):
+                visit(child, (None, frozenset()), held)
+            return
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            positional = [*node.args.posonlyargs, *node.args.args]
+            if held is not None and positional and not _static(node) and not _classwide(node):
+                scope = (positional[0].arg, frozenset(held))
+            for child in ast.iter_child_nodes(node):
+                visit(child, scope, None)
+            return
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            own = _is_name(node.value, instance) or _is_name(node.value, "self")
+            if node.attr in names and not (own or _is_bare_super(node.value)):
+                found.append(
+                    f"line {node.lineno}: '{node.attr}' is read off "
+                    f"'{ast.unparse(node.value)}', where it can be the engine's own "
+                    f"{node.attr} past the one the harness base defines, which skips what the "
+                    f"harness does there; call self.{node.attr}(...), or "
+                    f"super().{node.attr}(...) with no arguments"
+                )
+            mine = _is_name(node.value, instance)
+            for base, held_names in sent.items():
+                if node.attr in held_names and not (mine and base not in owners):
+                    found.append(
+                        f"line {node.lineno}: attribute '.{node.attr}' is denied, because "
+                        f"{WHY_SEND}"
+                    )
+                    break
+        for child in ast.iter_child_nodes(node):
+            visit(child, scope, held)
+
+    visit(tree, (None, frozenset()), None)
+    return found
+
+
+def _classwide(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the method is a `classmethod`, whose first parameter is the class."""
+    return any(
+        isinstance(decorator, ast.Name) and decorator.id == "classmethod"
+        for decorator in node.decorator_list
+    )
+
+
 class Clash(NamedTuple):
     """One binding of a name a harness base owns, where it is and how it was made."""
 
@@ -748,9 +1002,7 @@ def _harness_classes(tree: ast.Module) -> list[tuple[ast.ClassDef, type]]:
     alias or as a module's attribute — or by naming a class of the file that reaches one;
     every class of the file in that line, a mixin included, is held to the same base.
     """
-    from kanso.nautilus.strategy import KansoModifier, KansoStrategy
-
-    harness = {base.__name__: base for base in (KansoStrategy, KansoModifier)}
+    harness = {base.__name__: base for base in _bases()}
     aliases = {
         alias.asname: alias.name
         for node in ast.walk(tree)

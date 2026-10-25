@@ -27,6 +27,7 @@ from kanso.criteria import criteria_version
 from kanso.env.envelope import engine_version
 from kanso.hyp import HYPOTHESIS_FILE, Registration
 from kanso.hyp import show as registration_of
+from kanso.portfolio import files as portfolio_files
 from kanso.schemas import (
     Certificate,
     CertificationPlan,
@@ -304,6 +305,18 @@ def certified_filter(
 def sleeve(ws: Workspace, store: StateStore) -> Certificate:
     """The certified demo sleeve, ready to compose."""
     return certified_sleeve(ws, store)
+
+
+PAPER_SHARE = 40_000.0
+"""What the template's paper stage funds a first strategy with: 40% of its 100,000."""
+
+
+def whole_paper_stage(ws: Workspace) -> None:
+    """Let one strategy hold the paper stage's whole 100,000, so a version is struck at the
+    capital its certificate measured at and the certificate's band can be reused."""
+    held = portfolio_files.read(ws)
+    limits = held.limits.model_copy(update={"per_strategy_max_pct": 100.0})
+    portfolio_files.write(ws, held.model_copy(update={"limits": limits}))
 
 
 def pinned(ws: Workspace, store: StateStore, hyp_id: str = HYP_ID) -> Hypothesis:

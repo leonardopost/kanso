@@ -150,6 +150,12 @@ PLAN: dict[str, Any] = {
             "rationale": "required; the deployed code path must be the researched one",
         },
         {
+            "id": "deflated_sharpe",
+            "stage": "cert",
+            "params": pairs({"min_dsr": 0.9}),
+            "rationale": "required behind two trials: the search correction for a Sharpe",
+        },
+        {
             "id": "paper_forward",
             "stage": "paper",
             "params": pairs({"min_duration": "5d", "horizon_mult": 20.0}),
@@ -164,8 +170,9 @@ PLAN: dict[str, Any] = {
     ],
     "excluded": [{"id": "bootstrap", "reason": "the two required gates are proof enough here"}],
 }
-"""The smallest plan the validator accepts. A run that stalls on a keep certifies it, so
-a driver test that stalls needs a planner answer as much as it needs a proposer."""
+"""The smallest plan the validator accepts behind a search: the required gates and the
+correction for the demo's Sharpe. A run that stalls on a keep certifies it, so a driver test
+that stalls needs a planner answer as much as it needs a proposer."""
 
 
 def model(model_id: str, tier: str) -> dict[str, Any]:

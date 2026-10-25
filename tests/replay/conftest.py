@@ -701,12 +701,17 @@ def composed(
         "snapshot_id": frozen.snapshot_id,
         "venue_model": venue_model(doc).model_dump(),
     }
+    # Struck at the share the template's paper stage gives a first strategy, 40% of its
+    # 100,000, so a deployment at that share runs nothing to strike it again.
     expectation = {
         "objective_id": "wf_sharpe_net",
         "value": 1.0,
         "ci90": [0.5, 1.5],
         "mdd_p95": 0.1,
         "window": {"start": CERTIFICATION[0], "end": CERTIFICATION[1]},
+        "se": 0.25,
+        "periods": 20,
+        "capital": 0.4 * CAPITAL,
     }
     version: dict[str, Any] = {
         "version": 1,
