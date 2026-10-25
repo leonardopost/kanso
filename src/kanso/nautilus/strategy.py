@@ -3224,8 +3224,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _fill_arrived(self, event: Any) -> None:
         """Pin the quote a fill is read against when the engine hands it over: its name's last
         quote delivered so far, which a quote of the fill's own instant delivered after it
-        replaces (`_quoted`) until a later instant is (`_struck`)."""
-        if event.id in self._refs:
+        replaces (`_quoted`) until a later instant is (`_struck`). On a venue that matches a
+        level-two book every fill is struck at the touch whatever the quote (`_charge`), so
+        nothing is pinned: a sleeve that holds only the book is handed no point that lets a
+        fill go (`_turn`), and would keep every fill of the run."""
+        if self._levelled or event.id in self._refs:
             return
         quote = self._last_quote.get(event.instrument_id.value)
         self._refs[event.id] = (
