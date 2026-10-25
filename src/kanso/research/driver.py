@@ -42,12 +42,18 @@ families, and not one of the five was ever judged. So the turn after a crash is 
 the proposer is given the traceback and the diff that produced it, over the file it now
 holds, and asked to make the same change with the fault fixed. `REPAIRS` of them, then the
 idea is dropped and the next turn asks for a new one — a proposer that cannot fix its own
-`AttributeError` in two goes is not going to, and the run has other things to try.
+`AttributeError` in two goes is not going to, and the run has other things to try. A card
+the runner killed for its memory or its clock is a crash with no fault in its code to fix:
+it carries a failed `resources` verdict, it is owed no repair and it ends a streak of
+crashes as any other card does. Before this a kill was owed two repairs like any crash,
+and the proposer was shown the word `memory` or `budget` as the end of its traceback.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
 hypothesis, the objective's definition — is byte-identical on every call of a run, so a
-provider cache hits; the moving half is the current file, the last `context_cards` cards
-of the hypothesis under the run's pins — across runs, so a run that begins after a stall
+provider cache hits; the moving half is the current file, the last `context_cards` times
+`cards_per_turn` cards of the hypothesis under the run's pins — so a proposer asked for
+eight diffs a turn remembers as many turns as one asked for one, where twenty cards were
+two and a half turns of eight — across runs, so a run that begins after a stall
 is not shown a blank slate and made to re-walk the last run's discards — the previous
 diff, the tail of a crash if the last card crashed with the repair it owes, and the
 coverage table: every card
@@ -214,6 +220,7 @@ class Outcome:
     keeps: int
     discards: int
     crashes: int
+    runner_ups: int
     missed: int
     redundant: int
     checks: int
@@ -233,6 +240,7 @@ class Outcome:
             "keeps": self.keeps,
             "discards": self.discards,
             "crashes": self.crashes,
+            "runner_ups": self.runner_ups,
             "missed": self.missed,
             "redundant": self.redundant,
             "checks": self.checks,
@@ -283,7 +291,7 @@ def run(
     active = records.require_active(store, hyp_id, lane)
     settings = ws.config.research
     directory = ws.root / active.dir
-    tally = {"keep": 0, "discard": 0, "crash": 0}
+    tally = {"keep": 0, "discard": 0, "crash": 0, research_loop.RUNNER_UP: 0}
     proposed = missed = redundant = checks = drifts = 0
     misses = _trailing_non_keeps(store, active)
     waiting = align.since(store, active)
@@ -296,6 +304,7 @@ def run(
             break
         source = align.lane_strategy(store, active, directory)
         if settings.cards_per_turn > 1 and _repair(store, active, source) is None:
+            research_loop.mem_cap(ws, active, slots=settings.cards_per_turn)
             try:
                 batch = _propose_batch(ws, store, active, source, previous, lane, misses)
             except NothingNewError as exc:
@@ -329,8 +338,8 @@ def run(
             for card in made_batch:
                 if card.status == "keep":
                     tally["keep"] += 1
-                elif card.status == "crash":
-                    tally["crash"] += 1
+                elif card.status in ("crash", research_loop.RUNNER_UP):
+                    tally[card.status] += 1
                 elif card.status == "redundant":
                     redundant += 1
                 else:
@@ -350,7 +359,7 @@ def run(
                     "max_seq": _max_seq(store, active.run_id),
                     "n": len(made_batch),
                     "crash_sha": next(
-                        (card.strategy_sha for card in made_batch if card.status == "crash"),
+                        (card.strategy_sha for card in made_batch if _repairable(card)),
                         None,
                     ),
                 },
@@ -425,6 +434,7 @@ def run(
         keeps=tally["keep"],
         discards=tally["discard"],
         crashes=tally["crash"],
+        runner_ups=tally[research_loop.RUNNER_UP],
         missed=missed,
         redundant=redundant,
         checks=checks,
@@ -578,6 +588,7 @@ def _propose_batch(
         dynamic=_dynamic(ws, store, active, source, previous, misses),
         check=judge,
         answer_schema=propose_schema(width),
+        answers=width,
     )
     try:
         route(ws, store, TASK, inputs, lane=lane)
@@ -623,11 +634,11 @@ def _batched_repair(
     if int(later[0]) != 0:
         return None
     row = store.connection.execute(
-        "SELECT description, status FROM cards WHERE run_id = ? AND strategy_sha = ?"
-        " ORDER BY seq DESC LIMIT 1",
+        "SELECT description, status, gate_results FROM cards WHERE run_id = ?"
+        " AND strategy_sha = ? ORDER BY seq DESC LIMIT 1",
         (active.run_id, sha),
     ).fetchone()
-    if row is None or str(row["status"]) != "crash":
+    if row is None or not _faulted(row):
         return None
     return {
         "attempt": 1,
@@ -666,7 +677,8 @@ def _dynamic(
     cards, as the record of what was tried, and never as a traceback over a file it does
     not hold.
     """
-    recent = _recent(store, active, ws.config.research.context_cards)
+    settings = ws.config.research
+    recent = _recent(store, active, settings.context_cards * settings.cards_per_turn)
     facts: dict[str, object] = {
         STRATEGY_FILE: source.decode("utf-8", errors="replace"),
         "recent_cards": [_summary(row) for row in recent],
@@ -680,7 +692,7 @@ def _dynamic(
         "last_diff": previous,
         "cards_per_turn": ws.config.research.cards_per_turn,
     }
-    if recent and recent[-1]["crash_tail"]:
+    if recent and recent[-1]["crash_tail"] and not _resource_kill(recent[-1]["gate_results"]):
         facts["crash_tail"] = _tail(str(recent[-1]["crash_tail"]), CRASH_TAIL_LINES)
     owed = _repair(store, active, source)
     if owed is not None:
@@ -722,20 +734,26 @@ def _repair(store: StateStore, active: RunRecord, source: bytes) -> dict[str, ob
     The diff runs from the file in hand to the bytes that crashed, so applying it exactly
     reproduces the crash — which the `_carded` check then refuses, making a repair that
     changes nothing a wrong answer on the ladder rather than a second identical card.
+
+    A card killed for its memory or its clock owes none and counts in no streak: it is a
+    crash with no fault in the code (`_faulted`).
     """
-    newest: sqlite3.Row | None = store.connection.execute(
-        "SELECT strategy_sha, status, description FROM cards WHERE run_id = ?"
-        " ORDER BY seq DESC LIMIT 1",
+    trailing = store.connection.execute(
+        "SELECT strategy_sha, status, description, gate_results FROM cards WHERE run_id = ?"
+        " ORDER BY seq DESC",
         (active.run_id,),
-    ).fetchone()
-    if newest is None or str(newest["status"]) != "crash":
+    )
+    newest: sqlite3.Row | None = trailing.fetchone()
+    if newest is None or not _faulted(newest):
+        trailing.close()
         return _batched_repair(store, active, source)
-    streak = store.connection.execute(
-        "SELECT COUNT(*) FROM cards WHERE run_id = ? AND seq > COALESCE("
-        " (SELECT MAX(seq) FROM cards WHERE run_id = ? AND status != 'crash'), 0)",
-        (active.run_id, active.run_id),
-    ).fetchone()
-    attempt = int(streak[0]) % (REPAIRS + 1)
+    streak = 1
+    for row in trailing:
+        if not _faulted(row):
+            break
+        streak += 1
+    trailing.close()
+    attempt = streak % (REPAIRS + 1)
     if attempt == 0:
         return None
     return {
@@ -843,6 +861,27 @@ def _edge_evidence(refused: list[dict[str, object]]) -> dict[str, Any] | None:
         evidence = gate.get("evidence")
         return evidence if isinstance(evidence, dict) else {}
     return None
+
+
+def _resource_kill(raw: object) -> bool:
+    """Whether `raw` gate results hold the failed verdict of a card killed for its memory
+    or its clock (`research_loop.RESOURCES`)."""
+    return any(
+        gate.get("id") == research_loop.RESOURCES and not gate.get("pass", True)
+        for gate in _gates(raw)
+    )
+
+
+def _faulted(row: sqlite3.Row) -> bool:
+    """Whether a card row is a crash whose code raised, the one kind a repair is owed for."""
+    return str(row["status"]) == "crash" and not _resource_kill(row["gate_results"])
+
+
+def _repairable(card: Card) -> bool:
+    """`_faulted`, of a card in hand rather than a row."""
+    return card.status == "crash" and not any(
+        gate.id == research_loop.RESOURCES and not gate.passed for gate in card.gate_results
+    )
 
 
 def _failed_edge(raw: object) -> bool:

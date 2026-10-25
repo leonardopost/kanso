@@ -45,6 +45,12 @@ class Plan(KansoModel):
     mem_per_card_gb: float = Field(default=0, ge=0)
     lanes: int = Field(ge=1)
 
+    @property
+    def lane_cores(self) -> int:
+        """The cores one lane is charged: `cores_per_lane` for its first card and one more for
+        every card its turn runs beside it, each a child of its own."""
+        return self.cores_per_lane + self.cards_per_turn - 1
+
     @model_validator(mode="after")
     def _fill_card_share(self) -> Plan:
         """A plan written before `mem_per_card_gb` names the lane's whole share for its one card."""

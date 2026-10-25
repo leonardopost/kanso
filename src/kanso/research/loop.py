@@ -18,9 +18,18 @@ moves the hypothesis's best only when a keep beats it.
 **The baseline calibrates the run.** It runs the unmodified `strategy.py` under
 `[research] baseline_budget_s` with memory uncapped, and what it costs becomes what a
 card is allowed: three times its wall time (never under a minute) and, for memory, the
-lane's own share floored at three times what the baseline actually needed. A baseline
-that times out or raises leaves no run record at all — a hypothesis whose starting point
-cannot run has nothing to research.
+lane's own share floored at three times what the baseline actually needed. A turn that runs
+several cards at once allows each the same: its clock is the card budget times the cards
+the turn runs, because they share the lane's cores and the baseline had them to itself, and
+its memory is the share divided across them, never under that floor — a width whose part
+of the share would fall under it is refused before the turn is proposed (`mem_cap`). A
+baseline that times out or raises leaves no run record at all — a hypothesis whose
+starting point cannot run has nothing to research.
+
+**A kill is not a fault in the code.** A card the runner killed for its memory or its
+clock measured nothing and is a crash, but it carries a failed `resources` verdict naming
+the limit and what the card reached, and the driver owes it no repair: a repair is the
+same idea with its traceback's fault fixed, and a kill has no traceback to fix.
 
 **The order of the card sequence is the embargo.** The static half of
 `strategy_integrity` is evaluated *before* the backtest, so a `strategy.py` that reaches
@@ -75,9 +84,10 @@ child reported and none of what producing it cost.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from functools import partial
 from hashlib import sha256
@@ -143,6 +153,8 @@ __all__ = [
     "MIN_CARD_BUDGET_S",
     "REDUNDANT",
     "RESEARCHABLE",
+    "RESOURCES",
+    "RUNNER_UP",
     "SAME_BOOK",
     "RedundantError",
     "Setup",
@@ -162,6 +174,18 @@ MIN_CARD_BUDGET_S: Final = 60.0
 
 HEADROOM: Final = 3.0
 """What a card is allowed over what the baseline needed, in time and in memory alike."""
+
+RUNNER_UP: Final = "runner_up"
+"""The status of a card of a turn that ran several which cleared the keep floor against the
+best the turn began from while a sibling scored higher and was kept. Not a discard, which
+says the change did not beat the best: this one did, against the best it was judged by, and
+lost only to a card it was never compared with. Never a keep, since a turn keeps one."""
+
+RESOURCES: Final = "resources"
+"""The verdict a card killed for its memory or its clock carries, failed, beside the
+integrity verdict: what killed it (`memory` or `budget`), the limit and what the card
+reached, and how many cards its turn ran at once. Not a gate of the criteria library: a
+card is judged by none of those once it is killed, and this says why."""
 
 RESEARCHABLE: Final = frozenset({"classified", "researching", "candidate", "certified", "failed"})
 """The statuses a run may begin from: every one but a draft, which has no construct yet.
@@ -661,11 +685,63 @@ def mem_cap(ws: Workspace, run: RunRecord, *, slots: int = 1) -> float:
     string of kills. The lane's share is `[env] mem_per_lane_gb` where one is declared,
     which is the only way this threshold falls under the plan's own 4 GB floor
     (`docs/workspace.md`, `envelope.yaml`).
+
+    No card is held to less than the floor, one at a time or several, so a width whose
+    part of the share falls under it is refused rather than run, with the widest turn the
+    share funds and the share the width needs as the remedy. A child of a dense tick
+    window holds about 0.4 GB (`backtest.CHUNK_POINTS`), and before this 0.18.0 divided a
+    2.5 GB share across seven cards to 0.36 GB each, under what any of them needs.
     """
     floor = HEADROOM * run.baseline_peak_mem_gb
     envelope = read_envelope(ws)
     share = floor if envelope is None else max(envelope.plan.mem_per_lane_gb, floor)
-    return share / max(1, slots)
+    width = max(1, slots)
+    if round(share / width, 6) < round(floor, 6):
+        funded = max(1, int(round(share / floor, 6)))
+        needed = math.ceil(round(width * floor * 100, 6)) / 100
+        raise PreconditionError(
+            f"memory: {run.hyp_id}'s lane share of {share:.2f} GB across {width} cards a turn "
+            f"is {share / width:.2f} GB a card, under the {floor:.2f} GB no card of this run is "
+            f"held to less than — {HEADROOM:g} times the {run.baseline_peak_mem_gb:.2f} GB its "
+            "baseline needed — so a card doing what the baseline did could be killed for it",
+            remedy=f"set `[research] cards_per_turn = {funded}` in kanso.toml, or declare "
+            f"`[env] mem_per_lane_gb = {needed:.2f}` and run `kanso env detect`",
+        )
+    return share / width
+
+
+def _killed(
+    result: backtest.RunResult, request: backtest.RunRequest, slots: int = 1
+) -> list[GateResult]:
+    """The failed `RESOURCES` verdict of a card the runner killed for its memory or its
+    clock, or nothing for any other card."""
+    if result.reason == backtest.MEMORY:
+        return [
+            verdict(
+                RESOURCES,
+                False,
+                {
+                    "killed": backtest.MEMORY,
+                    "cap_gb": round(request.mem_cap_gb or 0.0, 3),
+                    "peak_gb": round(result.peak_mem_gb, 3),
+                    "slots": slots,
+                },
+            )
+        ]
+    if result.reason == backtest.BUDGET:
+        return [
+            verdict(
+                RESOURCES,
+                False,
+                {
+                    "killed": backtest.BUDGET,
+                    "budget_s": round(request.budget_s or 0.0, 1),
+                    "wall_s": round(result.wall_s, 1),
+                    "slots": slots,
+                },
+            )
+        ]
+    return []
 
 
 # --- judging one card --------------------------------------------------------
@@ -899,6 +975,7 @@ def _judge(
     tags: Sequence[Tag] = (),
     baseline: bool = False,
     benchmark_run: CardRun | None = None,
+    request: backtest.RunRequest | None = None,
 ) -> Card:
     """Steps 3 to 5: the constraints, the keep rule, the redundancy check and the record.
 
@@ -948,7 +1025,7 @@ def _judge(
             wall_s=result.wall_s,
             peak_mem_gb=result.peak_mem_gb,
             n_trials=n_trials,
-            gate_results=[integrity],
+            gate_results=[integrity, *([] if request is None else _killed(result, request))],
             crash_tail=result.traceback_tail or result.reason,
             directory=directory,
             tags=tags,
@@ -1425,18 +1502,14 @@ def card(
             directory=directory,
             cache=_HOST_RUNS.setdefault(run.run_id, {}),
         )
-        result = backtest.run_subprocess(
-            _request(
-                setup,
-                source,
-                run.snapshot_id,
-                budget_s=run.card_budget_s,
-                mem_cap_gb=mem_cap(ws, run),
-            ),
-            setup.catalog,
-            directory,
-            setup.extensions,
+        request = _request(
+            setup,
+            source,
+            run.snapshot_id,
+            budget_s=run.card_budget_s,
+            mem_cap_gb=mem_cap(ws, run),
         )
+        result = backtest.run_subprocess(request, setup.catalog, directory, setup.extensions)
     still()  # the card's last poll may have come before the end did
     return _judge(
         ws,
@@ -1452,7 +1525,30 @@ def card(
         directory=directory,
         tags=tags,
         benchmark_run=benchmark_run,
+        request=request,
     )
+
+
+@dataclass(frozen=True)
+class _Decided:
+    """One slot of a turn as it was judged, before it is recorded: what `_record` takes,
+    and the book it matched, when it matched one, for the event that names it."""
+
+    desc: str
+    source: bytes
+    sha: str
+    tags: Sequence[Tag]
+    status: CardStatus
+    gates: list[GateResult]
+    metric: float = 0.0
+    se: float = 0.0
+    n_trades: int = 0
+    wall_s: float = 0.0
+    peak_mem_gb: float = 0.0
+    crash_tail: str | None = None
+    like: records.Match | None = None
+    measured_sha: str | None = None
+    digest: CardDigest | None = None
 
 
 def run_batch(
@@ -1466,11 +1562,17 @@ def run_batch(
     """Evaluate every proposal of one turn against the best the turn started from.
 
     The backtests that integrity lets through run together, from one read of the window,
-    each under `slots`' share of the lane's memory. Gates and the keep rule see that
-    pre-turn best and a trial count that already includes every proposal of the turn.
+    each under `slots`' share of the lane's memory (`mem_cap`, which refuses a width the
+    share cannot fund) and `slots` times the run's card budget: the children share the
+    lane's cores, and the baseline the budget was struck from had them to itself. On 0.18.0
+    every slot had one card's budget, so on a host whose lanes already fill its cores each
+    child of a turn of `w` had about a `w`-th of its baseline's core and would run about `w`
+    times its wall: four at the three-times kill line, eight all killed. Gates and the
+    keep rule see that pre-turn best and a trial count that already includes every proposal
+    of the turn.
     The highest metric that clears the floor is the one keep; a tie keeps the earlier
-    slot. Every proposal is recorded, in slot order, and a redundant one does not refuse
-    the rest of the turn.
+    slot, and every other slot that cleared it is a `RUNNER_UP`. Every proposal is
+    recorded, in slot order, and a redundant one does not refuse the rest of the turn.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
@@ -1478,6 +1580,7 @@ def run_batch(
     frozen = run
     margin = records.candidates(store, hyp_id) + len(proposals)
     cap = mem_cap(ws, run, slots=slots)
+    budget = frozen.card_budget_s * max(1, slots)
     prepared: list[tuple[str, bytes, Sequence[Tag], str, GateResult]] = []
     running: list[tuple[int, backtest.RunRequest]] = []
     for desc, source, tags in proposals:
@@ -1493,12 +1596,13 @@ def run_batch(
                         setup,
                         source,
                         frozen.snapshot_id,
-                        budget_s=frozen.card_budget_s,
+                        budget_s=budget,
                         mem_cap_gb=cap,
                     ),
                 )
             )
     results: dict[int, backtest.RunResult] = {}
+    asked: dict[int, backtest.RunRequest] = {}
     if running:
         still = partial(ongoing, store, frozen)
         with backtest.wanted(still):
@@ -1522,73 +1626,45 @@ def run_batch(
                 setup.extensions,
             )
         still()
-        for (index, _request_made), result in zip(running, ran, strict=True):
+        for (index, request_made), result in zip(running, ran, strict=True):
             results[index] = result
+            asked[index] = request_made
     else:
         host_run = None
         benchmark_run = None
-    # desc, status, metric, se, trades, wall, peak, gates, crash, source, sha, tags, like,
-    # and the sha of what the card was measured from
-    decided: list[tuple[Any, ...]] = []
+    decided: list[_Decided] = []
     for index, (desc, source, tags, digest_sha, integrity) in enumerate(prepared):
         if not integrity.passed:
-            decided.append(
-                (
-                    desc,
-                    "discard",
-                    0.0,
-                    0.0,
-                    0,
-                    0.0,
-                    0.0,
-                    [integrity],
-                    None,
-                    source,
-                    digest_sha,
-                    tags,
-                    None,
-                    None,
-                )
-            )
+            decided.append(_Decided(desc, source, digest_sha, tags, "discard", [integrity]))
             continue
         result = results[index]
         if result.refused is not None:
             decided.append(
-                (
+                _Decided(
                     desc,
-                    "discard",
-                    0.0,
-                    0.0,
-                    0,
-                    result.wall_s,
-                    result.peak_mem_gb,
-                    [integrity, verdict(sizing.GATE, False, result.refused.payload())],
-                    None,
                     source,
                     digest_sha,
                     tags,
-                    None,
-                    None,
+                    "discard",
+                    [integrity, verdict(sizing.GATE, False, result.refused.payload())],
+                    wall_s=result.wall_s,
+                    peak_mem_gb=result.peak_mem_gb,
                 )
             )
             continue
         if result.crashed:
             decided.append(
-                (
+                _Decided(
                     desc,
-                    "crash",
-                    0.0,
-                    0.0,
-                    len(result.run.trades),
-                    result.wall_s,
-                    result.peak_mem_gb,
-                    [integrity],
-                    result.traceback_tail or result.reason,
                     source,
                     digest_sha,
                     tags,
-                    None,
-                    None,
+                    "crash",
+                    [integrity, *_killed(result, asked[index], slots)],
+                    n_trades=len(result.run.trades),
+                    wall_s=result.wall_s,
+                    peak_mem_gb=result.peak_mem_gb,
+                    crash_tail=result.traceback_tail or result.reason,
                 )
             )
             continue
@@ -1623,89 +1699,76 @@ def run_batch(
             )
         )
         records.record_signature(store, frozen, digest_sha, held, metric, setup.measured_under)
-        status = "keep" if kept else REDUNDANT if like is not None and like.agreed else "discard"
+        status: CardStatus = (
+            "keep" if kept else REDUNDANT if like is not None and like.agreed else "discard"
+        )
         decided.append(
-            (
+            _Decided(
                 desc,
-                status,
-                metric,
-                se,
-                len(result.run.trades),
-                result.wall_s,
-                result.peak_mem_gb,
-                [integrity, *constraints],
-                None,
                 source,
                 digest_sha,
                 tags,
-                like,
-                measured_sha,
+                status,
+                [integrity, *constraints],
+                metric=metric,
+                se=se,
+                n_trades=len(result.run.trades),
+                wall_s=result.wall_s,
+                peak_mem_gb=result.peak_mem_gb,
+                like=like,
+                measured_sha=measured_sha,
+                digest=digest_of(result.run, result.intents),
             )
         )
     best_at: int | None = None
     for index, item in enumerate(decided):
-        if item[1] == "keep" and (best_at is None or item[2] > decided[best_at][2]):
+        if item.status == "keep" and (best_at is None or item.metric > decided[best_at].metric):
             best_at = index
     if best_at is not None:
         for index, item in enumerate(decided):
-            if item[1] == "keep" and index != best_at:
-                decided[index] = (item[0], "discard", *item[2:])
+            if item.status == "keep" and index != best_at:
+                decided[index] = replace(item, status=RUNNER_UP)
     made: list[Card] = []
     current = frozen
     for item in decided:
-        (
-            desc,
-            status,
-            metric,
-            se,
-            n_trades,
-            wall_s,
-            peak,
-            gates_out,
-            crash_tail,
-            source,
-            digest_sha,
-            tags,
-            like,
-            measured_sha,
-        ) = item
         made.append(
             _record(
                 ws,
                 store,
                 setup,
                 current,
-                strategy_sha=digest_sha,
-                source=source,
-                desc=desc,
-                status=status,
-                metric=metric,
-                se=se,
-                n_trades=n_trades,
-                wall_s=wall_s,
-                peak_mem_gb=peak,
+                strategy_sha=item.sha,
+                source=item.source,
+                desc=item.desc,
+                status=item.status,
+                metric=item.metric,
+                se=item.se,
+                n_trades=item.n_trades,
+                wall_s=item.wall_s,
+                peak_mem_gb=item.peak_mem_gb,
                 n_trials=records.n_trials(store, hyp_id) + 1,
-                gate_results=gates_out,
-                crash_tail=crash_tail,
+                gate_results=item.gates,
+                crash_tail=item.crash_tail,
                 directory=directory,
-                tags=tags,
-                measured_sha=measured_sha,
+                tags=item.tags,
+                digest=item.digest,
+                measured_sha=item.measured_sha,
             )
         )
-        if status == "keep":
-            current = records.set_best(store, current, digest_sha, metric)
-        if like is not None:
+        if item.status == "keep":
+            current = records.set_best(store, current, item.sha, item.metric)
+        if item.like is not None:
             _same_book(
                 store,
                 current,
-                digest_sha,
-                desc,
-                metric,
-                _noise_floor(setup, se),
-                like,
+                item.sha,
+                item.desc,
+                item.metric,
+                _noise_floor(setup, item.se),
+                item.like,
                 refuse=False,
             )
-    kept_bytes = decided[best_at][9] if best_at is not None else None
+    kept_bytes = decided[best_at].source if best_at is not None else None
     if kept_bytes is not None:
         lanes.write_atomic(directory / STRATEGY_FILE, kept_bytes)
     else:
