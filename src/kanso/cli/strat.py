@@ -248,10 +248,20 @@ def _shape(version: StrategyVersion) -> str:
 
 
 def _band(version: StrategyVersion) -> str:
-    """What composition measured of a version, and over which window."""
+    """What composition measured of a version, over which window, and at what capital: the
+    value and its error, the bootstrap's band, the drawdown, and the periods and capital a
+    stage's own band is struck from — which a version composed before kanso recorded them
+    does not carry."""
     expected = version.expectation
     low, high = expected.ci90
+    error = "" if expected.se is None else f" ± {expected.se:.6f}"
+    struck = (
+        ""
+        if expected.periods is None or expected.capital is None
+        else f" · {expected.periods} periods at {expected.capital:,.0f}"
+    )
     return (
-        f"{expected.objective_id} {expected.value:.6f} [{low:.6f}, {high:.6f}] · "
+        f"{expected.objective_id} {expected.value:.6f}{error} [{low:.6f}, {high:.6f}] · "
         f"mdd_p95 {expected.mdd_p95:.2f}% · {expected.window.start}..{expected.window.end}"
+        f"{struck}"
     )

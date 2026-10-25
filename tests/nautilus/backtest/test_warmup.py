@@ -11,9 +11,11 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from kanso.criteria import Fill
-from kanso.criteria.run import midnight_ns
+from kanso.criteria.run import NS_PER_DAY, day_of, midnight_ns
 from kanso.data.types import CorporateAction
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus.backtest import (
@@ -158,6 +160,161 @@ def test_sessions_are_counted_on_quotes_when_the_hypothesis_requires_no_bars(
     )
 
     assert warmup_prefix(quoted, RESEARCH, store) == (date(2023, 12, 29), date(2023, 12, 31))
+
+
+SPAN_DAYS = 6
+
+
+@st.composite
+def _filed(draw: st.DrawFn) -> tuple[str, dict[str, list[list[object]]], int, int]:
+    """Quotes or prints of one or two names over six days, each name's points in one to three
+    files with disjoint spans, some at a midnight or a nanosecond before one; and a span
+    whose ends may fall on a point, before the first or after the last."""
+    from nautilus_trader.model.data import QuoteTick, TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import InstrumentId, TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    kind = draw(st.sampled_from(("quote", "trade")))
+    base = midnight_ns(date(2023, 12, 26))
+    offsets = st.sampled_from((0, 1, NS_PER_DAY // 2, NS_PER_DAY - 1)) | st.integers(
+        0, NS_PER_DAY - 1
+    )
+    filed: dict[str, list[list[object]]] = {}
+    instants: list[int] = []
+    for name in draw(st.sampled_from(((INSTRUMENT,), (INSTRUMENT, OTHER)))):
+        stamps = sorted(
+            {
+                base + day * NS_PER_DAY + offset
+                for day, offset in draw(
+                    st.lists(st.tuples(st.integers(0, SPAN_DAYS - 1), offsets), max_size=12)
+                )
+            }
+        )
+        if not stamps:
+            continue
+        instants.extend(stamps)
+        ident = InstrumentId.from_str(name)
+        points: list[object] = [
+            QuoteTick(
+                ident,
+                Price(9.99, 2),
+                Price(10.01, 2),
+                Quantity.from_int(100),
+                Quantity.from_int(100),
+                ts_event=stamp,
+                ts_init=stamp,
+            )
+            if kind == "quote"
+            else TradeTick(
+                ident,
+                Price(10.0, 2),
+                Quantity.from_int(100),
+                AggressorSide.BUYER,
+                TradeId(f"T-{index}"),
+                ts_event=stamp,
+                ts_init=stamp,
+            )
+            for index, stamp in enumerate(stamps)
+        ]
+        cuts = sorted(draw(st.sets(st.integers(1, max(1, len(points) - 1)), max_size=2)))
+        bounds = [0, *(cut for cut in cuts if cut < len(points)), len(points)]
+        filed[name] = [points[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
+    ends = st.sampled_from(instants) if instants else st.just(base)
+    start = draw(ends | st.integers(base - NS_PER_DAY, base + SPAN_DAYS * NS_PER_DAY))
+    end = draw(ends | st.integers(start, base + (SPAN_DAYS + 1) * NS_PER_DAY))
+    return kind, filed, start, max(start, end)
+
+
+@settings(max_examples=40, deadline=None)
+@given(drawn=_filed())
+def test_the_days_counted_are_the_days_of_the_points_a_query_returns(
+    drawn: tuple[str, dict[str, list[list[object]]], int, int],
+) -> None:
+    """Over quotes or prints in several files a name, the days a warmup counts, read off the
+    files' `ts_init` alone, are the days of the points the window's own read returns over
+    the same span."""
+    import tempfile
+
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    from kanso.nautilus.backtest import _catalog, _held, _primary_days, market_points
+
+    kind, filed, start, end = drawn
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / "catalog"
+        root.mkdir()
+        store = ParquetDataCatalog(str(root))
+        store.write_data([instrument(), instrument("OTHR")])
+        for batches in filed.values():
+            for batch in batches:
+                store.write_data(batch)
+        names = list(filed) or [INSTRUMENT]
+        quoted = Hypothesis.model_validate(
+            {
+                **hypothesis(universe=names).model_dump(by_alias=True, mode="json"),
+                "resolution": kind,
+                "data_requirements": [kind],
+            }
+        )
+        catalog_ = _catalog(root)
+        held = _held(catalog_, quoted)
+
+        counted = _primary_days(catalog_, quoted, held, kind, start, end)
+        returned = {
+            day_of(int(point.ts_init))  # type: ignore[attr-defined]
+            for name in names
+            for point in market_points(catalog_, kind, held[name], kind, start, end)
+        }
+
+    assert counted == returned
+
+
+def test_a_quote_file_gone_after_the_lookback_listed_it_is_counted_as_the_catalog_holds_it_now(
+    tmp_path: Path,
+) -> None:
+    """A lookback's catalog keeps the listing it first read (`_catalog`). A quote file that has
+    gone by its next read is a miss, listed afresh and read again (`_read_listed`), as the
+    window's own query misses it: the days counted are those the catalog holds now, as a read
+    listing afresh returns them, and nothing is raised."""
+    import os
+
+    from nautilus_trader.model.data import QuoteTick
+    from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
+
+    from kanso.nautilus.backtest import _catalog, _held, _primary_days, market_points
+
+    from .conftest import quotes
+
+    root = tmp_path / "catalog"
+    root.mkdir()
+    store = ParquetDataCatalog(str(root))
+    store.write_data([instrument()])
+    store.write_data(quotes((DECEMBER[0], date(2023, 12, 15))))
+    store.write_data(quotes((date(2023, 12, 16), DECEMBER[1])))
+    quoted = Hypothesis.model_validate(
+        {
+            **hypothesis().model_dump(by_alias=True, mode="json"),
+            "resolution": "quote",
+            "data_requirements": ["quote"],
+        }
+    )
+    span = (midnight_ns(DECEMBER[0]), midnight_ns(DECEMBER[1] + timedelta(days=1)) - 1)
+    lookback = _catalog(root)
+    held = _held(lookback, quoted)
+
+    before = _primary_days(lookback, quoted, held, "quote", *span)
+    listed = lookback.get_file_list_from_data_cls(QuoteTick)
+    os.remove(max(listed))
+    after = _primary_days(lookback, quoted, held, "quote", *span)
+    returned = {
+        day_of(int(point.ts_init))  # type: ignore[attr-defined]
+        for point in market_points(_catalog(root), "quote", held[INSTRUMENT], "quote", *span)
+    }
+
+    assert len(listed) == 2
+    assert before == {DECEMBER[0] + timedelta(days=offset) for offset in range(31)}
+    assert after == returned == {DECEMBER[0] + timedelta(days=offset) for offset in range(15)}
 
 
 # --- the request ---------------------------------------------------------------

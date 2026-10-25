@@ -23,10 +23,12 @@ from kanso.hyp import STRATEGY_FILE
 from kanso.models import INSTRUCTIONS, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
+from kanso.schemas import CardDigest
+from kanso.schemas.models import ROUTING_DEFAULTS
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import DOCUMENT, classify, document
+from .conftest import DOCUMENT, classify, document, measured_as_scored
 from .mocked import (  # noqa: F401
     ALIGNED,
     CYCLE,
@@ -254,7 +256,10 @@ def test_a_redundant_card_is_recorded_and_the_next_proposal_is_told_what_it_repe
     kept = records.cards_of(store, prepared_hyp)[1]
     repeat = records.cards_of(store, prepared_hyp)[2]
     assert (repeat.desc, repeat.metric) == ("the same bet again", kept.metric)
-    assert records.trial_metrics(store, prepared_hyp) == [kept.metric, repeat.metric]
+    assert records.trial_metrics(store, prepared_hyp, "wf_sharpe_net") == [
+        kept.metric,
+        repeat.metric,
+    ]
     walked = driver.coverage(store, records.require_active(store, prepared_hyp))
     assert walked["signal_mean_reversion"] == {
         "count": 2,
@@ -427,6 +432,94 @@ def test_the_budget_is_spent_per_idea_and_the_next_crash_has_its_own(
     assert attempts == [None, *range(1, driver.REPAIRS + 1)] * 2
 
 
+def test_a_card_killed_for_its_memory_owes_no_repair(
+    ws: Workspace,
+    store: StateStore,
+    prepared_hyp: str,
+    recorded: Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A kill is the runner's verdict on what a card held, not a fault a traceback names, so
+    the turn after it is a fresh proposal, shown the kill's `resources` verdict and no
+    traceback. Before this a kill was owed two repairs like any crash, each a model call and
+    a child killed again under the same limit."""
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    monkeypatch.setattr(research_loop, "mem_cap", lambda *args, **kwargs: 1e-6)
+    scripted(ws, propose=[proposal("revert"), proposal("weak"), proposal("aaa")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.crashes == 3
+    calls = recorded.of("propose")
+    assert [json.loads(call.user).get("repair") for call in calls] == [None, None, None]
+    assert all("crash_tail" not in json.loads(call.user) for call in calls)
+    shown = json.loads(calls[1].user)["recent_cards"][-1]
+    assert shown["status"] == "crash"
+    assert shown["failed_gates"][0]["id"] == research_loop.RESOURCES
+    assert shown["failed_gates"][0]["evidence"]["killed"] == "memory"
+
+
+def test_a_slot_killed_for_its_clock_owes_no_repair_and_the_next_turn_is_a_batch(
+    ws: Workspace,
+    store: StateStore,
+    prepared_hyp: str,
+    recorded: Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from kanso.nautilus import backtest
+
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("weak"), proposal("revert")]},
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+    real = backtest.run_subprocesses
+
+    def second_out_of_time(requests: Any, *args: Any, **kwargs: Any) -> Any:
+        ran = real(requests, *args, **kwargs)
+        killed = replace(
+            ran[-1],
+            run=backtest._empty(requests[-1]),
+            intents=(),
+            crashed=True,
+            reason=backtest.BUDGET,
+        )
+        return [*ran[:-1], killed] if len(ran) == 2 else ran
+
+    monkeypatch.setattr(research_loop.backtest, "run_subprocesses", second_out_of_time)
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert statuses(store, prepared_hyp)[:3] == ["keep", "discard", "crash"]
+    first, second = recorded.of("propose")
+    assert "proposals" in json.dumps(second.schema), "the next turn is a batch again"
+    assert "repair" not in json.loads(second.user)
+    event = [e for e in store.events(kind="batched", subject=prepared_hyp)][0]
+    assert event.detail["crash_sha"] is None, "no slot of the turn owes a repair"
+
+
+def test_a_width_the_lane_cannot_fund_is_refused_before_a_model_is_asked(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    from .conftest import ENVELOPE, write_envelope
+
+    ws = tuned(ws, cards_per_turn=8)
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 0.5})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    scripted(ws, propose=[{"proposals": [proposal("revert")]}])
+
+    with pytest.raises(PreconditionError, match="cards a turn") as refused:
+        driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert "`[research] cards_per_turn = " in str(refused.value.remedy)
+    assert recorded.of("propose") == []
+
+
 def _fact_keys() -> set[str]:
     """Every key `_dynamic` can put in the user turn, read out of its own source.
 
@@ -471,6 +564,13 @@ def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
     assert {"recent_cards", "coverage", "phase", "redundant"} <= keys, "the scan found them"
     assert [key for key in sorted(keys) if f"`{key}`" not in said] == []
     assert f"`{STRATEGY_FILE}`" in said, "the file itself, which is not a constant key"
+
+
+def test_the_instruction_names_every_number_a_recent_card_s_digest_carries() -> None:
+    """A field the proposer is shown and never told the meaning of is a number it guesses at."""
+    said = INSTRUCTIONS["propose"]
+    assert "`n_trades`" in said and "`digest`" in said
+    assert [name for name in CardDigest.model_fields if f"`{name}`" not in said] == []
 
 
 def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None:
@@ -573,6 +673,30 @@ def test_recent_cards_reach_across_runs_under_the_same_pins(
     # tail and the repair are both read from that one row.
     payload = json.loads(first.user)
     assert "crash_tail" not in payload and "repair" not in payload
+
+
+def test_each_recent_card_that_ran_shows_its_trades_and_its_edge_per_trade(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A metric alone cannot say whether it moved because each trade earned more or because
+    the strategy traded less, so a card that ran reaches the proposer with its trade count
+    and its digest: the same numbers the card recorded. A crash ran to no result and
+    carries neither a digest nor a trade."""
+    scripted(ws, propose=[proposal("revert"), proposal("boom"), proposal("weak")])
+
+    driver.run(ws, store, prepared_hyp, cards=3)
+
+    shown = json.loads(recorded.of("propose")[-1].user)["recent_cards"]
+    baseline, kept, crashed = records.cards_of(store, prepared_hyp)[:3]
+    assert [card["status"] for card in shown] == ["keep", "keep", "crash"]
+    assert [card["n_trades"] for card in shown] == [0, kept.n_trades, 0]
+    assert kept.n_trades > 0 and kept.digest is not None
+    assert shown[1]["digest"]["net_bps_per_trade"] == round(kept.digest.net_bps_per_trade, 4)
+    assert shown[1]["digest"]["sessions"] == kept.digest.sessions
+    assert set(shown[1]["digest"]) == set(type(kept.digest).model_fields)
+    assert shown[0]["digest"]["net_bps_per_trade"] is None, "the flat baseline closed nothing"
+    assert "digest" not in shown[2] and crashed.digest is None
+    assert baseline.digest is not None
 
 
 def test_a_redundant_result_from_an_earlier_run_reaches_the_next_one(
@@ -839,6 +963,34 @@ def test_a_removal_that_lands_during_the_baseline_is_honoured_before_the_run_exi
     assert research_loop.BASELINE_FAILED not in kinds, "the operator's word, not a failure"
 
 
+def test_a_run_ended_while_the_model_answers_is_let_go_and_nothing_is_written(
+    ws: Workspace, store: StateStore, prepared_hyp: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`research end` lands while the proposer is answering: the answer is dropped before it
+    is written into the lane directory the end removed, and no card is recorded for it.
+
+    Writing it first put the directory back, and the card then refused the run as having
+    none, which a daemon lane recorded as its failure and backed off from."""
+    scripted(ws, propose=[proposal("revert")])
+    run = research_loop.begin(ws, store, prepared_hyp, lane="l1")
+    cards = records.cards_of(store, prepared_hyp)
+    propose = driver._propose
+
+    def ending(*args: Any, **kwargs: Any) -> Any:
+        answer = propose(*args, **kwargs)
+        research_loop.end(ws, store, prepared_hyp)
+        return answer
+
+    monkeypatch.setattr(driver, "_propose", ending)
+
+    with pytest.raises(research_loop.TakenError, match="was ended while lane l1 worked it"):
+        driver.run(ws, store, prepared_hyp, cards=1, lane="l1")
+
+    assert records.cards_of(store, prepared_hyp) == cards
+    assert not (ws.root / run.dir).exists(), "the answer put back the directory `end` removed"
+    assert research_loop._HOST_RUNS.get(run.run_id) is None
+
+
 def test_two_lanes_never_touch_each_other_s_files(ws: Workspace, store: StateStore) -> None:
     scripted(ws, propose=[proposal("revert")])
     first = classify(ws, store, DOCUMENT, SEED)
@@ -1065,3 +1217,383 @@ def test_the_outcome_is_json(ws: Workspace, store: StateStore, prepared_hyp: str
     assert payload["id"] == prepared_hyp
     assert payload["reason"] == "cards"
     assert payload["keeps"] == 1
+
+
+def test_gate_results_that_are_not_a_list_of_gates_read_as_none() -> None:
+    """A column that does not parse, or parses to something other than a list, holds no
+    gates; an entry of a list that is not a mapping is left out."""
+    assert driver._gates(None) == []
+    assert driver._gates("not json") == []
+    assert driver._gates(json.dumps({"id": "max_drawdown"})) == []
+    assert driver._gates(json.dumps([{"id": "max_drawdown", "pass": True}, 7])) == [
+        {"id": "max_drawdown", "pass": True}
+    ]
+
+
+def test_a_failed_edge_per_trade_withholds_the_session_score(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A higher session score from fewer losing trades is not a result the next proposal sees.
+
+    The contribution moves toward zero as losing trades are dropped. The card is shown by
+    its per-trade edge, and that card does not become its tag's best metric.
+    """
+    scripted(ws, propose=[proposal("revert", desc="fewer trades", tags=["filter_liquidity"])])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    gates = json.dumps(
+        [
+            {
+                "id": "edge_per_trade",
+                "pass": False,
+                "evidence": {"net_bps_per_trade": -4.1, "se": 0.2, "n_trades": 100},
+            }
+        ]
+    )
+    store.connection.execute(
+        "UPDATE cards SET metric = ?, metric_se = ?, gate_results = ? WHERE description = ?",
+        (-1.0, 0.4, gates, "fewer trades"),
+    )
+    active = records.require_active(store, prepared_hyp)
+    summary = driver._summary(
+        store.connection.execute(
+            "SELECT strategy_sha, status, metric, metric_se, description, n_trades, digest,"
+            " gate_results FROM cards WHERE description = ?",
+            ("fewer trades",),
+        ).fetchone()
+    )
+    assert "metric" not in summary
+    assert summary["failed_gates"][0]["id"] == "edge_per_trade"
+    assert driver.coverage(store, active)["filter_liquidity"]["best_metric"] is None
+    shown = json.dumps(driver._dynamic(ws, store, active, b"", "", 0)["recent_cards"])
+    assert "net_bps_per_trade" in shown
+    assert "-4.1" not in shown or "net_bps_per_trade" in shown
+    assert '"metric": -1.0' not in shown and '"metric": -1' not in shown
+    assert "is withheld" in recorded.of("propose")[-1].system
+
+
+def _batch(ws: Workspace, proposals: list[dict[str, Any]]) -> Workspace:
+    workspace = tuned(ws, cards_per_turn=3)
+    scripted(workspace, propose=[{"proposals": proposals}])
+    return workspace
+
+
+def test_a_batch_keeps_the_best_slot_and_counts_every_card(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    """One call, three cards, one turn: the keep is the best against the pre-turn best."""
+    ws = _batch(ws, [proposal("revert"), proposal("boom"), proposal("weak")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert (outcome.keeps, outcome.crashes, outcome.discards) == (1, 1, 1)
+    assert outcome.missed == 0
+    assert records.n_trials(store, prepared_hyp) == 4
+    assert statuses(store, prepared_hyp) == ["keep", "keep", "crash", "discard"]
+    # Every slot that ran keeps what it was scored from, the slot the turn kept and the one
+    # it did not alike; the crash keeps nothing.
+    baseline, kept, crashed, discarded = records.cards_of(store, prepared_hyp)
+    for ran in (baseline, kept, discarded):
+        measured_as_scored(store, ran)
+    assert crashed.measured_sha is None
+    assert spend(store, lane="op").calls == 1
+    assert records.active(store, prepared_hyp) is not None
+
+
+def test_the_next_turn_is_shown_what_a_batch_s_cards_traded(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Every card of a turn that ran reaches the next proposal with its digest, as one card
+    does, so a batch that scored better by trading less reads as that."""
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("revert"), proposal("weak")]},
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    first, second = recorded.of("propose")
+    assert first.max_output == second.max_output == 2 * ROUTING_DEFAULTS["propose"].max_output
+    shown = json.loads(second.user)["recent_cards"]
+    assert [card["status"] for card in shown] == ["keep", "keep", "discard"]
+    assert all(isinstance(card.get("digest"), dict) for card in shown)
+    assert all(card.digest is not None for card in records.cards_of(store, prepared_hyp))
+
+
+def test_a_turn_s_second_keep_is_a_runner_up_and_its_corner_does_not_read_as_searched(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A turn keeps one card. Another that beat the best the turn began from is a
+    `runner_up`, in the store, in the next proposal's recent cards and as its tag's best
+    status. Before this it was written `discard`, so the condition it tested read as a
+    corner searched and found wanting (assessment N-10-3)."""
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[
+            {
+                "proposals": [
+                    proposal("revert", tags=["signal_mean_reversion"]),
+                    proposal("revert", tagged=False, tags=["exit_target"]),
+                ]
+            },
+            {"proposals": [proposal("weak")]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    baseline, kept, runner_up = records.cards_of(store, prepared_hyp)[:3]
+    assert (kept.status, runner_up.status) == ("keep", "runner_up")
+    assert runner_up.metric > baseline.metric, "it beat the best its turn began from"
+    assert records.best_of(store, prepared_hyp)[0] == kept.strategy_sha
+    assert outcome.runner_ups == 1
+    assert outcome.payload()["runner_ups"] == 1
+    facts = json.loads(recorded.of("propose")[1].user)
+    assert [card["status"] for card in facts["recent_cards"]] == ["keep", "keep", "runner_up"]
+    assert facts["coverage"]["exit_target"]["best_status"] == "runner_up"
+    assert "`runner_up`" in recorded.of("propose")[1].system
+
+
+def test_a_wider_turn_is_shown_as_many_turns_of_cards(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """`context_cards` counts cards a turn's worth at a time: a proposer asked for two diffs a
+    turn is shown twice the cards, so it remembers as many turns as one asked for one. At
+    the default twenty a turn of eight was shown two and a half turns (assessment N-10-4)."""
+    ws = tuned(ws, cards_per_turn=2, context_cards=1)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("revert"), proposal("weak")]},
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+
+    shown = json.loads(recorded.of("propose")[1].user)["recent_cards"]
+    assert [card["desc"] for card in shown] == ["run in revert mode", "run in weak mode"]
+
+
+def test_a_batch_with_no_keep_is_one_miss_and_three_trials(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = _batch(ws, [proposal("aaa"), proposal("bbb"), proposal("ccc")])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert outcome.keeps == 0
+    assert outcome.discards + outcome.redundant == 3
+    assert records.n_trials(store, prepared_hyp) == 4
+    assert driver._trailing_non_keeps(store, records.require_active(store, prepared_hyp)) == 1
+
+
+def test_two_slots_with_the_same_bytes_are_one_card(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = _batch(
+        ws,
+        [proposal("revert", tagged=False), proposal("revert", tagged=False), proposal("weak")],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.proposed == 1
+    assert (outcome.keeps, outcome.discards) == (1, 1)
+    assert records.n_trials(store, prepared_hyp) == 3
+
+
+def test_a_crashed_slot_is_repaired_alone_on_the_next_turn(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=3)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("revert"), proposal("boom"), proposal("weak")]},
+            proposal("flat"),
+            {"proposals": [proposal("aaa")]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.proposed == 3
+    assert outcome.crashes == 1
+    assert records.n_trials(store, prepared_hyp) == 6
+    assert statuses(store, prepared_hyp).count("crash") == 1
+    assert spend(store, lane="op").calls == 3
+
+
+def test_a_batch_with_two_keeps_keeps_the_higher_and_one_miss_stalls(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=3, stall_k=1)
+    scripted(ws, propose=[{"proposals": [proposal("aaa"), proposal("bbb"), proposal("ccc")]}])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.ended is True
+    assert outcome.reason == "stalled"
+    assert outcome.proposed == 1
+
+
+def test_a_batch_discards_a_slot_the_static_gate_refuses_and_keeps_another(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = _batch(
+        ws,
+        [
+            {"desc": "peek at the cache", "diff": DENIED, "tags": ["refactor"]},
+            proposal("revert", tagged=False),
+            proposal("revert"),
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.keeps == 1
+    assert outcome.discards >= 1
+    assert records.n_trials(store, prepared_hyp) == 4
+
+
+def test_a_batch_drops_slots_that_do_not_apply_and_a_repeat_is_a_miss(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=3, stall_k=5)
+    scripted(
+        ws,
+        propose=[
+            {
+                "proposals": [
+                    {"desc": "bad\nline", "diff": NOWHERE, "tags": ["refactor"]},
+                    {"desc": "untouched", "diff": NOOP, "tags": ["refactor"]},
+                    proposal("weak", tagged=False),
+                ]
+            },
+            {"proposals": [proposal("weak", tagged=False)]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert outcome.missed == 1
+    assert outcome.discards == 1
+
+
+def test_a_structural_batch_drops_a_change_that_moves_no_structure(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2, local_cards=1, structural_cards=5, stall_k=5)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("aaa")]},
+            {"proposals": [PARAMETER, proposal("revert")]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert outcome.keeps == 1
+    assert outcome.discards == 1
+
+
+def test_a_stop_during_a_batch_drops_the_answer(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(ws, propose=[{"proposals": [proposal("revert")]}])
+    calls = {"n": 0}
+
+    def stop() -> bool:
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2, stop=stop)
+
+    assert outcome.reason == "stopped"
+    assert outcome.proposed == 0
+
+
+def test_a_batch_checks_alignment_when_the_cadence_falls_due(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2, align_every=1)
+    scripted(ws, propose=[{"proposals": [proposal("aaa")]}], align_check=[ALIGNED])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.checks == 1
+
+
+def test_a_batch_without_a_crash_does_not_owe_a_repair(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(ws, propose=[{"proposals": [proposal("aaa")]}, {"proposals": [proposal("bbb")]}])
+
+    driver.run(ws, store, prepared_hyp, cards=2)
+    active = records.require_active(store, prepared_hyp)
+    assert driver._batched_repair(store, active, b"") is None
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": "other", "max_seq": 1, "n": 1, "crash_sha": active.base_sha},
+    )
+    assert driver._trailing_non_keeps(store, active) >= 0
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": active.run_id, "max_seq": 1, "n": 1, "crash_sha": active.base_sha},
+    )
+    assert driver._batched_repair(store, active, b"x = 1\n") is None
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": active.run_id, "max_seq": 0, "n": 1, "crash_sha": None},
+    )
+    assert driver._trailing_non_keeps(store, active) >= 0
+    store.event(
+        "batched",
+        prepared_hyp,
+        {"run_id": active.run_id, "max_seq": 10**9, "n": 1, "crash_sha": "not-a-card"},
+    )
+    assert driver._batched_repair(store, active, b"x = 1\n") is None
+
+
+def test_a_batch_miss_at_the_stall_ends_the_run(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2, stall_k=2)
+    scripted(
+        ws,
+        propose=[
+            {"proposals": [proposal("weak", tagged=False)]},
+            {"proposals": [proposal("weak", tagged=False)]},
+        ],
+    )
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=3)
+
+    assert outcome.reason == "stalled"
+    assert outcome.missed == 1
+
+
+def test_a_batch_that_never_applies_fails_the_step(
+    ws: Workspace, store: StateStore, prepared_hyp: str
+) -> None:
+    ws = tuned(ws, cards_per_turn=2)
+    scripted(
+        ws,
+        propose=[{"proposals": [{"desc": "never fits", "diff": NOWHERE, "tags": ["refactor"]}]}],
+    )
+
+    with pytest.raises(PreconditionError, match="in 3 attempts"):
+        driver.run(ws, store, prepared_hyp, cards=1)

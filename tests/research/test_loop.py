@@ -46,6 +46,7 @@ from .conftest import (
     classify,
     document,
     load_december,
+    measured_as_scored,
     write_days,
     write_envelope,
     write_hypothesis,
@@ -117,6 +118,17 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
     assert (baseline.status, baseline.metric, baseline.n_trades) == ("keep", 0.0, 0)
     assert baseline.desc == loop.BASELINE
     assert baseline.n_trials == 1
+    # The baseline ran, so it keeps what it was scored from: the pinned objective over the
+    # run's folds, on the research window, with nothing beside it to difference against.
+    # The keep rule's two parameters are the pinned file's, which no number would show.
+    measured = measured_as_scored(store, baseline)
+    assert measured.objective.model_dump() == {
+        "id": "wf_sharpe_net",
+        "params": {"min_delta": 0.0, "k_se": 0.5},
+    }
+    assert measured.folds == ws.config.research.folds
+    assert measured.run.window == RESEARCH
+    assert (measured.host, measured.benchmark) == (None, None)
     assert run.best_sha == baseline.strategy_sha
     assert show(ws, store, registered).status == "researching"  # type: ignore[union-attr]
     assert (
@@ -204,7 +216,9 @@ def test_a_baseline_that_reaches_outside_the_lane_is_never_executed(
     assert records.active(store, hyp_id) is None
 
 
-BUS_RIDER = b'''
+BOOK_RIDER = b'''
+from nautilus_trader.model.identifiers import InstrumentId
+
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
 
@@ -213,16 +227,53 @@ class Config(KansoConfig):
 
 
 class Strategy(KansoStrategy):
-    """Listens to every change of the book on the bus, past the view `depth` hands it."""
+    """Asks for the book's ten levels of its own, past the view `depth` hands it."""
 
     config_cls = Config
 
     def on_start(self) -> None:
-        self._msgbus.subscribe(topic="data.book.deltas.*", handler=self.on_order_book_deltas)
+        for name in self.kanso_config.universe:
+            self.subscribe_order_book_depth(InstrumentId.from_str(name))
 '''
 
 
-def test_a_baseline_that_reaches_the_bus_under_depth_is_never_executed(
+BUS_SENDER = b'''
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.events import OrderFilled
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Hands the execution engine a fill of its own making, past the venue."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        exit = self.submit_exit(bar.bar_type.instrument_id, price=float(bar.close) * 2)
+        if exit is not None:
+            self._msgbus.send(endpoint="ExecEngine.process", msg=OrderFilled)
+'''
+
+
+def test_a_baseline_that_reaches_the_bus_is_never_executed(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The bus hands the execution engine a command or a fill past the strategy's own
+    methods, so a baseline that names it is refused before anything runs, whatever its
+    hypothesis declares."""
+    hyp_id = classify(ws, store, document(), BUS_SENDER)
+
+    with pytest.raises(PreconditionError, match="'._msgbus' is denied, because it is the engine"):
+        loop.begin(ws, store, hyp_id)
+    assert records.active(store, hyp_id) is None
+
+
+def test_a_baseline_that_subscribes_a_book_under_depth_is_never_executed(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The run's own integrity check is the one `depth` widens: under it the baseline is
@@ -236,9 +287,11 @@ def test_a_baseline_that_reaches_the_bus_under_depth_is_never_executed(
         lambda ws_, universe, _, *rest: covering(ws_, universe, ["bar"], *rest),
     )
     shown = document(data_requirements=["bar", "book"], depth={"every_ms": 100, "levels": 3})
-    hyp_id = classify(ws, store, shown, BUS_RIDER)
+    hyp_id = classify(ws, store, shown, BOOK_RIDER)
 
-    with pytest.raises(PreconditionError, match="'._msgbus' is denied under depth"):
+    with pytest.raises(
+        PreconditionError, match="'.subscribe_order_book_depth' is denied under depth"
+    ):
         loop.begin(ws, store, hyp_id)
     assert records.active(store, hyp_id) is None
 
@@ -347,8 +400,17 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     # the refusal denies is that it was a new experiment, not that it was measured.
     again = records.cards_of(store, registered)[-1]
     assert (again.status, again.metric) == ("redundant", kept.metric)
+    # It ran, so it keeps what it measured — the run its anchor measured, so the same bytes,
+    # stored once: one blob names both cards' measurements.
+    measured = measured_as_scored(store, kept)
+    assert measured_as_scored(store, again) == measured
+    assert again.measured_sha == kept.measured_sha
+    assert len(measured.run.trades) == kept.n_trades > 0
     assert records.n_trials(store, registered) == 3
-    assert records.trial_metrics(store, registered) == [kept.metric, again.metric]
+    assert records.trial_metrics(store, registered, "wf_sharpe_net") == [
+        kept.metric,
+        again.metric,
+    ]
     (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
     assert event.detail["like"] == kept.sha7
     assert event.detail["pct"] == 100.0
@@ -536,7 +598,7 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
     opened and closed a position in, and was flat only at the instant it was sampled.
 
     The floor is widened to admit any number, because the share is the clause under test
-    and WEAK's own result is 23 floors from the baseline's, which the test below is for.
+    and not whether WEAK's result is the baseline's, which the test below is about.
     """
     monkeypatch.setattr(loop, "_noise_floor", lambda *_: float("inf"))
     workspace = tuned(ws, redundant_pct=30)
@@ -551,26 +613,40 @@ def test_the_share_of_sessions_that_makes_a_book_redundant_is_read_from_kanso_to
     assert event.detail["like"] == run.base_sha[:7]
 
 
+PEAKING = REVERTING.replace(
+    b"if first > second > third and not self.long", b"if first < second < third and not self.long"
+).replace(
+    b"elif first < second < third and self.long", b"elif first > second > third and self.long"
+)
+"""The trough-buyer turned round: it buys the peak and sells the trough, and loses on every
+tooth of the saw."""
+
+
 def test_a_book_already_held_that_earned_another_number_is_a_discard_not_a_repeat(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     """The matcher's premise, tested rather than asserted, on the run above with its own
-    floor back: WEAK holds the baseline's book on 10 of 31 sessions and scores -0.061605
-    against the baseline's 0.0, twenty-three times the 0.002631 that separates two results
-    here. Its result is not already known, so it is a card of the ordinary kind — counted,
-    coverable and shown to the next proposal as a change that was tried and measured.
-    """
-    workspace = tuned(ws, redundant_pct=30)
-    run = loop.begin(workspace, store, registered)
-    edit(workspace, run, WEAK)
+    floor back: PEAKING holds the baseline's book on 9 of 31 sessions and scores -15.6129
+    against the baseline's 0.0, nine times the 1.6095 that separates two results here — half
+    its error of 3.219, a Sharpe over 31 sessions being known to no better than that. Its
+    result is not already known, so it is a card of the ordinary kind — counted, coverable
+    and shown to the next proposal as a change that was tried and measured.
 
-    made = loop.card(workspace, store, registered, "buy any fall")
+    WEAK was this test's candidate while the error was the spread of four fold Sharpes, which
+    agreed to 0.0026 on the saw-tooth; read off the sessions, its -0.0616 is inside the
+    floor, and a repeat.
+    """
+    workspace = tuned(ws, redundant_pct=29)
+    run = loop.begin(workspace, store, registered)
+    edit(workspace, run, PEAKING)
+
+    made = loop.card(workspace, store, registered, "buy the peak")
 
     assert made.status == "discard"
     assert store.events(kind=loop.REDUNDANT, subject=registered) == []
     setup = loop._setup(workspace, store, loop._pinned(workspace, store, run))
     floor = loop._noise_floor(setup, made.metric_se)
-    assert abs(made.metric - 0.0) > 20 * floor, "the baseline is flat and this one is not"
+    assert abs(made.metric - 0.0) > 9 * floor, "the baseline is flat and this one is not"
     # The book did match at the configured share, so the share is not what let it through.
     books = {
         str(row["strategy_sha"]): json.loads(str(row["signature"]))
@@ -578,7 +654,7 @@ def test_a_book_already_held_that_earned_another_number_is_a_discard_not_a_repea
     }
     base, candidate = books[run.base_sha], books[made.strategy_sha]
     shared = base.keys() & candidate.keys()
-    assert (sum(1 for day in shared if base[day] == candidate[day]), len(shared)) == (10, 31)
+    assert (sum(1 for day in shared if base[day] == candidate[day]), len(shared)) == (9, 31)
 
 
 def test_a_flat_strategy_repeats_the_flat_baseline_but_the_baseline_repeats_nothing(
@@ -696,6 +772,8 @@ def test_a_card_that_raises_is_a_crash_carrying_its_traceback_tail(
 
     assert crashed.status == "crash"
     assert crashed.metric == 0.0
+    assert crashed.measured_sha is None, "a crash measured nothing and keeps nothing"
+    assert records.cards_of(store, registered)[-1].measured_sha is None
     assert crashed.crash_tail is not None
     assert "the card asked for the impossible" in crashed.crash_tail
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
@@ -710,6 +788,7 @@ def test_code_that_violates_the_boundary_is_discarded_before_it_runs(
 
     assert refused.status == "discard"
     assert (refused.metric, refused.wall_s, refused.peak_mem_gb) == (0.0, 0.0, 0.0)
+    assert refused.measured_sha is None, "nothing ran, so there is nothing to keep"
     assert [gate.id for gate in refused.gate_results] == ["strategy_integrity"]
     assert not refused.gate_results[0].passed
     assert (lane_of(ws, run) / "strategy.py").read_bytes() == FLAT
@@ -817,7 +896,7 @@ def test_history_survives_every_restore(ws: Workspace, store: StateStore, regist
     assert statuses(store) == ["keep", "keep", "discard", "crash"]
     rows = results_tsv(store, registered).splitlines()
     assert len(rows) == 5
-    assert [row.split("\t")[-1] for row in rows[1:]] == [
+    assert [row.split("\t")[8] for row in rows[1:]] == [
         loop.BASELINE,
         "the trough rule",
         "one step",
@@ -982,7 +1061,7 @@ def test_the_memory_cap_is_the_lane_share_floored_at_the_baseline_s_need(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
     run = loop.begin(ws, store, registered)
-    assert loop.mem_cap(ws, run) == 8.0
+    assert loop.mem_cap(ws, run) == ENVELOPE.plan.mem_per_lane_gb
 
     heavy = run.model_copy(update={"baseline_peak_mem_gb": 100.0})
     assert loop.mem_cap(ws, heavy) == loop.HEADROOM * 100.0
@@ -1008,6 +1087,183 @@ def test_a_declared_lane_memory_is_what_a_card_of_that_lane_may_hold(
     write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
 
     assert loop.mem_cap(ws, run.model_copy(update={"baseline_peak_mem_gb": peak})) == cap
+
+
+def test_a_turn_s_cards_share_the_lane_and_a_width_it_cannot_fund_is_refused(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """No card is held below three times what the baseline needed, one at a time or several:
+    a width whose part of the share falls under that is refused before anything runs, with
+    the widest turn the share funds and the share the asked width needs. Measured: a child of
+    a dense tick window holds about 0.4 GB, and 0.18.0 held each of seven to 0.36 GB."""
+    run = loop.begin(ws, store, registered)
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 2.5})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    dense = run.model_copy(update={"baseline_peak_mem_gb": 0.4})
+
+    assert loop.mem_cap(ws, dense, slots=2) == 1.25
+    with pytest.raises(PreconditionError, match=r"0\.36 GB a card, under the 1\.20 GB") as refused:
+        loop.mem_cap(ws, dense, slots=7)
+    assert "`[research] cards_per_turn = 2`" in str(refused.value.remedy)
+    assert "`[env] mem_per_lane_gb = 8.40`" in str(refused.value.remedy)
+
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 8.4})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    assert loop.mem_cap(ws, dense, slots=7) == pytest.approx(1.2), "the share it named funds it"
+    plan = ENVELOPE.plan.model_copy(update={"mem_per_lane_gb": 2.4})
+    write_envelope(ws, ENVELOPE.model_copy(update={"plan": plan}))
+    with pytest.raises(PreconditionError) as refused:
+        loop.mem_cap(ws, dense, slots=3)
+    assert "`[research] cards_per_turn = 2`" in str(refused.value.remedy), "2.4 GB funds two"
+
+
+def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.nautilus.backtest import RunResult
+    from kanso.nautilus.sizing import Refusal
+
+    run = loop.begin(ws, store, registered)
+    good = (ws.root / run.dir / "strategy.py").read_bytes()
+    bad = (
+        b"from kanso.nautilus.strategy import KansoStrategy\n"
+        b"class Strategy(KansoStrategy):\n"
+        b"    def on_bar(self, bar):\n"
+        b"        self.cache\n"
+    )
+
+    def fake(
+        requests: object, catalog_path: object, workdir: object, extensions: object = ()
+    ) -> list[RunResult]:
+        request = requests[0]  # type: ignore[index]
+        return [
+            RunResult(
+                run=backtest._empty(request),
+                wall_s=0.1,
+                peak_mem_gb=0.1,
+                intents=(),
+                refused=Refusal("one_position", 0, "DEMO.XNAS", "SELL", {}, "refused"),
+            )
+        ]
+
+    monkeypatch.setattr(loop.backtest, "run_subprocesses", fake)
+    made = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("peek", bad, ["refactor"]), ("refuse", good, ["refactor"])],
+        slots=2,
+    )
+    assert [card.status for card in made] == ["discard", "discard"]
+    assert [card.measured_sha for card in made] == [None, None], "neither ran to a result"
+    only = loop.run_batch(ws, store, registered, [("peek", bad, ["refactor"])], slots=1)
+    assert only[0].status == "discard"
+
+
+def test_a_turn_s_cards_each_run_on_the_card_budget_times_the_turn_s_width(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The children of a turn share the lane's cores, and the budget was struck from a
+    baseline that had them to itself, so each runs on the card budget times the width and
+    the lane's share divided by it. A child the runner killed for its memory or its clock is
+    a crash carrying the `resources` verdict that says which limit and what it reached."""
+    from kanso.nautilus.backtest import RunResult
+
+    run = loop.begin(ws, store, registered)
+    asked: list[backtest.RunRequest] = []
+
+    def fake(
+        requests: Sequence[backtest.RunRequest],
+        catalog_path: object,
+        workdir: object,
+        extensions: object = (),
+    ) -> list[RunResult]:
+        asked.extend(requests)
+        return [
+            RunResult(
+                run=backtest._empty(request),
+                wall_s=[12.5, 3.0][index],
+                peak_mem_gb=[0.2, 2.75][index],
+                intents=(),
+                crashed=True,
+                reason=[backtest.BUDGET, backtest.MEMORY][index],
+                traceback_tail=None,
+            )
+            for index, request in enumerate(requests)
+        ]
+
+    monkeypatch.setattr(loop.backtest, "run_subprocesses", fake)
+    made = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("slow", REVERTING, ["refactor"]), ("big", WEAK, ["refactor"])],
+        slots=4,
+    )
+
+    assert [request.budget_s for request in asked] == [run.card_budget_s * 4] * 2
+    assert [request.mem_cap_gb for request in asked] == [loop.mem_cap(ws, run, slots=4)] * 2
+    assert [card.status for card in made] == ["crash", "crash"]
+    killed = [[gate for gate in card.gate_results if gate.id == loop.RESOURCES] for card in made]
+    assert [gate.passed for gates_of in killed for gate in gates_of] == [False, False]
+    assert killed[0][0].evidence == {
+        "killed": "budget",
+        "budget_s": round(run.card_budget_s * 4, 1),
+        "wall_s": 12.5,
+        "slots": 4,
+    }
+    assert killed[1][0].evidence == {
+        "killed": "memory",
+        "cap_gb": round(loop.mem_cap(ws, run, slots=4), 3),
+        "peak_gb": 2.75,
+        "slots": 4,
+    }
+
+
+def test_a_batched_card_carries_the_digest_one_card_of_the_same_bytes_carries(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A card that ran carries what its trades did, however it was run. Measured before
+    this, on 0.18.0 and 0.19.0: `run_batch` recorded every card with no digest, so a
+    batched card's twelve digest cells in `results.tsv` were empty and the proposer was
+    shown none of its trades — on the path tick lanes were meant to search with."""
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, WEAK)
+    alone = loop.card(ws, store, registered, "weak, one card")
+
+    together = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [("weak, in a turn", WEAK, ["refactor"]), ("revert", REVERTING, ["refactor"])],
+        slots=2,
+    )
+
+    assert alone.digest is not None and alone.digest.fills > 0
+    assert together[0].digest == alone.digest
+    assert together[1].digest is not None
+    cells = together[0].row().split("\t")[9:]
+    assert cells == alone.row().split("\t")[9:] and any(cells)
+
+
+def test_a_card_killed_for_its_memory_says_so_and_one_that_raised_does_not(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    run = loop.begin(ws, store, registered)
+    edit(ws, run, RAISING)
+    raised = loop.card(ws, store, registered, "raises")
+    monkeypatch.setattr(loop, "mem_cap", lambda *args, **kwargs: 1e-6)
+    edit(ws, run, REVERTING)
+    killed = loop.card(ws, store, registered, "outgrows its share")
+
+    assert (raised.status, killed.status) == ("crash", "crash")
+    assert [gate.id for gate in raised.gate_results] == ["strategy_integrity"]
+    (verdict,) = [gate for gate in killed.gate_results if gate.id == loop.RESOURCES]
+    assert verdict.passed is False
+    assert verdict.evidence["killed"] == "memory"
+    assert verdict.evidence["cap_gb"] == 0.0
+    assert verdict.evidence["slots"] == 1
 
 
 def test_one_card_is_costed_with_one_venue_model() -> None:
@@ -1063,6 +1319,7 @@ def test_a_refused_card_is_a_discard_carrying_the_sizing_gate(
 
     assert refused.status == "discard"
     assert (refused.metric, refused.n_trades, refused.crash_tail) == (0.0, 0, None)
+    assert refused.measured_sha is None, "refused during its backtest, it measured nothing"
     assert [gate.id for gate in refused.gate_results] == ["strategy_integrity", "sizing"]
     sizing = refused.gate_results[1]
     assert not sizing.passed
@@ -1378,9 +1635,18 @@ def test_every_card_of_a_run_is_differenced_against_one_hold(
 
     assert derived == [RESEARCH]
     trough = records.cards_of(store, hyp_id)[1]
-    assert (trough.metric, trough.metric_se) == pytest.approx((14.527, 2.255), abs=1e-3), (
-        "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's"
+    assert (trough.metric, trough.metric_se) == pytest.approx((14.527, 2.777), abs=1e-3), (
+        "measured on the saw-tooth: the trough-buyer's 15.689 by wf_sharpe_net, less the hold's,"
+        " its error Memmel's on the two paired return series"
     )
+    # Each card keeps the hold it was differenced against beside its own run, and the
+    # objective on the pair is the card's number exactly; one hold serves every card.
+    measured = measured_as_scored(store, trough)
+    assert measured.objective.id == "wf_sharpe_vs_hold"
+    assert measured.host is None and measured.benchmark is not None
+    assert len(measured.benchmark.fills) == 1 and measured.benchmark.trades == ()
+    weak = measured_as_scored(store, records.cards_of(store, hyp_id)[2])
+    assert weak.benchmark == measured.benchmark
     assert [key for key in loop._HOST_RUNS[run.run_id] if key.startswith("benchmark")] == [
         f"benchmark@{run.snapshot_id}@None"
     ]

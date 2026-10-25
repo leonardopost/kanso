@@ -11,7 +11,10 @@ disagree about a field a version was certified under.
 
 **The simulated venue is deliberately cost-neutral.** No fee model is configured, and the
 fill model slips nothing, because kanso deducts commission, slippage and the spread exactly
-once, in the runner's extraction. A latency model is configured only when the venue model
+once, in the runner's extraction — the spread where the price does not already carry it: a
+venue booked from quotes or a level-two book, with no bars walked through it, fills at the
+touch, and the extraction charges such a fill no half-spread
+(`kanso.nautilus.backtest.touched_names`). A latency model is configured only when the venue model
 states `latency_ms`, and it charges nothing: it delays every order command — insert,
 update and cancel alike — by that long before the simulated book acts on it, so a resting
 order that a print would have filled in the meantime is not there yet, and a cancel sent

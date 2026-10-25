@@ -11,7 +11,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.models import ANSWER_SCHEMAS, INSTRUCTIONS, CallInputs, build, canonical, validate
-from kanso.models.tasks import PARAM_PAIRS, collapse
+from kanso.models.tasks import PARAM_PAIRS, classify_schema, collapse, propose_schema
 from kanso.schemas.models import ROUTING_DEFAULTS, TASK_CLASSES, Route, TaskClass
 from kanso.workspace import TEMPLATES
 
@@ -91,12 +91,40 @@ def test_the_call_carries_the_route_it_was_built_from() -> None:
     assert call.task_class == "align_check"
 
 
+@pytest.mark.parametrize("width", [1, 2, 8])
+def test_a_call_that_asks_for_several_answers_is_capped_for_each(width: int) -> None:
+    """A route's cap is what one answer may spend, thinking included. Before this a turn of
+    eight proposals went out under one proposal's 4096 tokens, where eight diffs of a
+    several-hundred-line strategy and the thinking beside them do not fit, and an answer cut
+    off is not JSON: the turn climbed the ladder and failed the step."""
+    call = build("propose", ROUTE, inputs(answer_schema=propose_schema(width), answers=width))
+    assert call.max_output == ROUTE.max_output * width
+    assert call.retrying(["no"]).max_output == call.at("frontier").max_output == call.max_output
+
+
 def test_the_system_turn_holds_the_instruction_the_schema_and_the_subject() -> None:
     call = build("classify", ROUTE, inputs())
     assert INSTRUCTIONS["classify"] in call.system
     assert '"objective_params"' in call.system
     assert "demo_mr" in call.system
     assert "reverts within four sessions" in call.system
+
+
+def test_the_classify_answer_names_its_objective_from_the_ids_it_is_given() -> None:
+    """The hypothesis decides which objectives are admissible; the wire holds the model to
+    them. With none to name, the field stays a string and the caller's check refuses it."""
+    narrowed = classify_schema(["net_edge_bps", "wf_contribution_bps"])
+
+    assert narrowed["properties"]["objective"] == {  # type: ignore[index]
+        "type": "string",
+        "enum": ["net_edge_bps", "wf_contribution_bps"],
+    }
+    assert "objective" in ANSWER_SCHEMAS["classify"]["required"]  # type: ignore[operator]
+    assert ANSWER_SCHEMAS["classify"]["properties"]["objective"] == {  # type: ignore[index]
+        "type": "string",
+        "minLength": 1,
+    }, "the shared schema is not narrowed by a call"
+    assert classify_schema([]) is ANSWER_SCHEMAS["classify"]
 
 
 def test_a_proposal_owes_at_least_one_tag_from_the_vocabulary() -> None:
@@ -201,6 +229,7 @@ def classification(construct_params: Any, constraint_params: Any) -> dict[str, A
     """A classify answer carrying those two parameter values, whatever shape they are."""
     return {
         "construct": {"id": "sleeve", "params": construct_params},
+        "objective": "net_edge_bps",
         "objective_params": {"min_delta": 0.0, "k_se": 1.0},
         "constraints": [{"id": "min_trades", "params": constraint_params}],
         "rationale": "a sleeve",
@@ -280,6 +309,18 @@ def test_the_shipped_demo_script_answers_every_class_it_lists() -> None:
     for task, answers in script.items():
         for index, answer in enumerate(answers):
             assert validate(answer, ANSWER_SCHEMAS[task]) == [], f"{task}[{index}]"
+
+
+def test_a_batch_propose_schema_is_a_list_and_one_card_is_the_object() -> None:
+    assert propose_schema(1) is ANSWER_SCHEMAS["propose"]
+    schema = propose_schema(3)
+    assert schema["properties"]["proposals"]["maxItems"] == 3
+    answer = {
+        "proposals": [
+            {"desc": "one", "diff": "--- a\n", "tags": ["refactor"]},
+        ]
+    }
+    assert validate(answer, schema) == []
 
 
 @given(st.dictionaries(st.text(max_size=8), st.integers(), max_size=6))

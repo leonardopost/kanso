@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 import re
+import sys
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from nautilus_trader.trading.strategy import Strategy
 
 from kanso.criteria.integrity import (
     AUTHORED,
@@ -21,12 +24,15 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
     DENIED_UNDER_DEPTH,
+    SEND_MARKS,
     check,
     clashes,
     import_allowed,
+    overridden,
     owned,
     scan,
     scope,
+    sends,
 )
 from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 from kanso.workspace import PACKAGE_ROOT
@@ -216,7 +222,7 @@ def test_everything_the_harness_keeps_of_a_depth_book_is_denied() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(DENIED_UNDER_DEPTH))
-def test_the_bus_and_the_book_subscriptions_are_refused_under_depth_alone(name: str) -> None:
+def test_the_book_subscriptions_are_refused_under_depth_alone(name: str) -> None:
     """Under `depth` they reach the book around the view; without it they are ordinary."""
     (problem,) = scan(f"self.{name}", depth=True)
 
@@ -378,29 +384,37 @@ def test_the_routes_refused_reach_what_they_are_refused_for() -> None:
         'shown = "{0.close} {1}".format(bar, 2)',
         'shown = "{ not a field"',
         'shown = "{0[a]b.cache}"',
-        'shown = "{0._msgbus}".format(self)',
+        'shown = "{0.subscribe_order_book_depth}".format(self)',
     ],
 )
 def test_a_format_field_naming_no_denied_attribute_passes(source: str) -> None:
     """An item key is not an attribute, a malformed string or field formats nothing — after
-    an item only `.` or `[` may follow — and the bus is an ordinary attribute without
-    `depth`."""
+    an item only `.` or `[` may follow — and a book subscription is an ordinary attribute
+    without `depth`."""
     assert scan(source) == []
 
 
-def test_a_format_field_naming_the_bus_is_refused_under_depth() -> None:
-    (problem,) = scan('shown = "{0._msgbus}".format(self)', depth=True)
+@pytest.mark.parametrize("depth", [False, True])
+def test_a_format_field_naming_the_bus_is_refused_with_depth_or_without(depth: bool) -> None:
+    (problem,) = scan('shown = "{0._msgbus}".format(self)', depth=depth)
 
     assert "format field '{0._msgbus}'" in problem
+    assert "the engine's message bus" in problem
+
+
+def test_a_format_field_naming_a_book_subscription_is_refused_under_depth() -> None:
+    (problem,) = scan('shown = "{0.subscribe_order_book_depth}".format(self)', depth=True)
+
+    assert "format field '{0.subscribe_order_book_depth}'" in problem
     assert "on_order_book_deltas and on_quote_tick" in problem
 
 
 def test_a_lane_under_depth_is_checked_for_what_depth_refuses(lane: Path) -> None:
-    (lane / "strategy.py").write_text("x = self.msgbus\n", encoding="utf-8")
+    (lane / "strategy.py").write_text("x = self.subscribe_order_book_depth\n", encoding="utf-8")
 
     assert check(lane, {}) == []
     (problem,) = check(lane, {}, depth=True)
-    assert "'.msgbus' is denied under depth" in problem
+    assert "'.subscribe_order_book_depth' is denied under depth" in problem
 
 
 def test_a_strategy_reaching_for_the_schedule_is_refused_by_the_route_it_took() -> None:
@@ -858,3 +872,361 @@ def test_the_program_template_names_what_the_rule_refuses_and_what_it_leaves() -
     assert set(examples) <= owned(KansoStrategy)
     assert "`self._close_col`, not `self._close`" in bullet
     assert "_close_col" not in owned(KansoStrategy)
+
+
+# --- the harness's own sends, and the methods it overrides --------------------------
+
+
+def test_the_harness_s_own_sends_are_read_from_the_installed_class() -> None:
+    """Nobody lists them: every private method of the base that hands the engine an order
+    itself is one, every private method that calls one is one, and no public verb is."""
+    sent = sends(KansoStrategy)
+    direct = {
+        name
+        for name, value in vars(KansoStrategy).items()
+        if name.startswith("_")
+        and not name.startswith("__")
+        and inspect.isfunction(value)
+        and re.search(
+            r"(self|super\(\))\.(submit_order|submit_order_list|modify_order)\(",
+            inspect.getsource(value),
+        )
+    }
+
+    assert direct and direct <= sent
+    assert {"_submitted", "_booked", "_close", "_sized_entry", "_sized_exit"} <= sent
+    assert {"_place_hedges", "_submit_leg", "_submit_own"} <= sent
+    assert sent <= owned(KansoStrategy)
+    assert not sent & {"submit_entry", "submit_exit", "submit_order", "_pay_owed"}
+    assert sends(KansoModifier) == frozenset()
+
+
+@pytest.mark.parametrize("name", sorted(sends(KansoStrategy) | SEND_MARKS))
+def test_a_sleeve_reaching_the_harness_s_own_send_is_refused_sized_or_not(name: str) -> None:
+    """Called by a strategy, a send hands the engine whatever it is given as an order kanso
+    sized, which a book lets through as kanso's own; the mark and the ledger are what the
+    book recognises kanso's order by."""
+    source = f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        x = self.{name}\n"
+
+    for sized in (False, True):
+        (problem,) = (p for p in scan(source, sized=sized) if f"'.{name}'" in p)
+        assert problem.startswith(f"line 4: attribute '.{name}' is denied, because it is the ")
+        assert "submit_entry(instrument_id, side) or submit_exit(instrument_id)" in problem
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        KansoStrategy._submitted(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        me = self\n        me._close(bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        super()._booked(bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        go(self, bar)\n"
+        "def go(strategy, order):\n    strategy._submitted(order)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        (lambda: self._submitted(bar))()\n",
+    ],
+    ids=["the base's class", "a second name", "super()", "a module function", "a lambda"],
+)
+def test_the_harness_s_own_send_is_refused_off_any_receiver_but_a_class_of_its_own(
+    source: str,
+) -> None:
+    (problem,) = scan(source)
+
+    assert "is denied, because it is the harness's own send" in problem
+
+
+def test_a_class_that_is_not_the_harness_s_reads_its_own_names() -> None:
+    """A name kanso sends by is the author's own on a class the base does not hold, a
+    modifier included, whose base sends nothing."""
+    source = (
+        "class Leg:\n"
+        "    def __init__(self):\n"
+        "        self._close = 0.0\n"
+        "    def price(self):\n"
+        "        return self._close + self._submitted\n"
+        f"{MODIFIER_HEAD}"
+        "    def on_start(self):\n"
+        "        self._close = 1.0\n"
+        "    def evaluate(self, ctx):\n"
+        "        return self._close\n"
+    )
+
+    assert scan(source) == []
+
+
+def test_the_methods_the_harness_overrides_are_read_from_the_installed_class() -> None:
+    names = overridden(KansoStrategy)
+
+    assert {"submit_order", "submit_order_list", "modify_order", "cancel_order"} <= names
+    assert {"cancel_orders", "cancel_all_orders", "handle_event", "handle_bar"} <= names
+    assert names == {
+        name for name in vars(KansoStrategy) if hasattr(Strategy, name) and name[:2] != "__"
+    }
+    assert {"subscribe_order_book_deltas", "_stop"} <= overridden(KansoModifier)
+    assert not (overridden(KansoModifier) | names) & AUTHORED
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from nautilus_trader.trading.strategy import Strategy as Engine\n"
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        Engine.submit_order(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n"
+        "        super(KansoStrategy, self).submit_order(bar)\n",
+        "import nautilus_trader.trading.strategy as engine\n"
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n"
+        "        engine.Strategy.submit_order_list(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n"
+        "        type(self).mro()[2].modify_order(self, bar)\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        go(self, bar)\n"
+        "def go(strategy, order):\n    strategy.cancel_order(order)\n",
+        f"{SLEEVE_HEAD}    @classmethod\n    def send(cls, me, order):\n"
+        "        cls.submit_order(me, order)\n",
+    ],
+    ids=[
+        "the engine's class",
+        "a two-argument super",
+        "the engine's module",
+        "the class's lineage",
+        "a module function",
+        "a classmethod",
+    ],
+)
+def test_a_method_the_harness_overrides_reached_past_it_is_refused(source: str) -> None:
+    """Read off anything but the instance or `super()`, `submit_order` can be the engine's
+    own, which records no intent, sizes nothing and, in a book, is past the book's check."""
+    (problem,) = scan(source)
+
+    assert re.match(r"line \d+: '\w+' is read off '.+', where it can be the engine's own", problem)
+    assert "call self." in problem
+
+
+def test_a_method_the_harness_overrides_is_read_off_the_instance_or_super() -> None:
+    source = (
+        f"{SLEEVE_HEAD}    def on_bar(this, bar):\n"
+        "        this.submit_order(bar)\n"
+        "        super().submit_order(bar)\n"
+        "        (lambda: this.cancel_order(bar))()\n"
+    )
+
+    assert scan(source) == []
+
+
+def test_every_name_the_engine_gives_the_bus_is_refused_to_every_strategy() -> None:
+    """Read off the engine rather than off the set, so a name it adds is refused the day it
+    is added: on the bus a strategy hands the execution engine a command or a fill past its
+    own methods and a book's check, whatever its hypothesis declares. Measured on
+    nautilus_trader 1.231.0: `msgbus` and `_msgbus`, on `Strategy` and `Actor` alike."""
+    from nautilus_trader.common.actor import Actor
+
+    routes = {name for cls in (Strategy, Actor) for name in dir(cls) if "msgbus" in name}
+
+    assert routes >= {"msgbus", "_msgbus"}
+    for name in sorted(routes):
+        for sized in (False, True):
+            for depth in (False, True):
+                (problem,) = scan(f"x = self.{name}", sized=sized, depth=depth)
+                assert f"attribute '.{name}' is denied, because it is the engine's message bus" in (
+                    problem
+                )
+
+
+def test_an_event_applied_by_hand_is_refused_on_any_receiver() -> None:
+    """`Order.apply` and `Position.apply` take an event as if the engine had applied it, and
+    which receiver is an order the scan cannot tell."""
+    from nautilus_trader.model.orders import Order
+    from nautilus_trader.model.position import Position
+
+    assert callable(Order.apply) and callable(Position.apply)
+    for source in ("order.apply(event)", "self.rest.apply(update)", "held[0].apply(fill)"):
+        (problem,) = scan(source)
+        assert "attribute '.apply' is denied, because it applies an event" in problem
+
+
+ROUTE_HEAD = (
+    "from nautilus_trader.core.uuid import UUID4\n"
+    "from nautilus_trader.model.events import OrderFilled, OrderUpdated\n"
+    "from nautilus_trader.model.objects import Price, Quantity\n"
+    "from nautilus_trader.trading.strategy import Strategy as Engine\n"
+    "from kanso.nautilus.strategy import KansoStrategy\n"
+    "class Strategy(KansoStrategy):\n"
+    "    def on_bar(self, bar):\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "refused"),
+    [
+        (
+            '        self.msgbus.send(endpoint="ExecEngine.execute", msg=submit)\n',
+            "'.msgbus' is denied",
+        ),
+        (
+            '        self.msgbus.send(endpoint="RiskEngine.execute", msg=submit)\n',
+            "'.msgbus' is denied",
+        ),
+        (
+            '        self._msgbus.send(endpoint="RiskEngine.execute", msg=modify)\n',
+            "'._msgbus' is denied",
+        ),
+        (
+            '        self.msgbus.send(endpoint="ExecEngine.execute", msg=in_another_name)\n',
+            "'.msgbus' is denied",
+        ),
+        (
+            '        for held in self.msgbus.subscriptions("events.order.*"):\n'
+            "            self.msgbus.unsubscribe(topic=held.topic, handler=held.handler)\n",
+            "'.msgbus' is denied",
+        ),
+        (
+            '        self.msgbus.send(endpoint="ExecEngine.process", msg=OrderFilled(*fill))\n',
+            "'.msgbus' is denied",
+        ),
+        (
+            "        rest = self.submit_exit(bar.bar_type.instrument_id)\n"
+            "        rest.apply(OrderUpdated(*update))\n",
+            "'.apply' is denied",
+        ),
+    ],
+    ids=[
+        "a submit to the execution engine",
+        "a submit to the risk engine",
+        "a modify on the bus",
+        "a submit in another strategy's name",
+        "the book's handler unsubscribed",
+        "a fill of the strategy's own making",
+        "an event applied to kanso's own exit",
+    ],
+)
+@pytest.mark.parametrize("sized", [False, True])
+def test_every_route_past_the_strategy_s_own_methods_is_refused_sized_or_not(
+    body: str, refused: str, sized: bool
+) -> None:
+    """Each sent an order, a modify or a fill to the venue in a book at no latency and at
+    20 ms, where the book did not refuse it, and alone (`docs/backlog.md` rows 209 and 210);
+    the scan refuses each by the name it is spelt with, whatever the hypothesis declares."""
+    for depth in (False, True):
+        problems = scan(ROUTE_HEAD + body, sized=sized, depth=depth)
+        assert any(refused in problem for problem in problems), problems
+
+
+ROW_211 = "docs/backlog.md row 211: a route the scan does not follow yet"
+"""Why each case below is an expected failure: a route the scan does not see yet. Each is strict,
+so the day the scan refuses one it passes, the suite fails, and the marker comes off."""
+
+
+@pytest.mark.xfail(strict=True, reason=ROW_211)
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from typing import operator",
+        "from dataclasses import inspect",
+        "from nautilus_trader.model.data import pickle",
+        "from kanso.nautilus.strategy import actions",
+        "from nautilus_trader.model.book import itemgetter",
+        "from nautilus_trader.trading.config import resolve_path",
+        "import typing\ncall = typing.operator.methodcaller('_submitted', order)",
+        "import nautilus_trader.model\nsubmit = nautilus_trader.execution.messages.SubmitOrder",
+        "import nautilus_trader.model\nbindings = nautilus_trader.core.rust",
+        "import nautilus_trader.model\ncore = nautilus_trader.core",
+        "from nautilus_trader import model\nthaw = model.data.pickle.loads",
+        "import numpy as np\nopened = np.lib._datasource._open('strategy.py')",
+        "import typing\nheld = typing\nreached = held.operator",
+        "import nautilus_trader.model\nroot = nautilus_trader\nreached = root.execution",
+    ],
+    ids=[
+        "a module an allowed leaf holds",
+        "the inspect module through dataclasses",
+        "pickle through the engine's model",
+        "a kanso module through the strategy base",
+        "a function an engine leaf takes from the standard library",
+        "the engine's importer through its trading config",
+        "a module read off an allowed one",
+        "the package an engine leaf's import binds",
+        "the Rust bindings through the package root",
+        "a package root read off the import",
+        "pickle through a leaf imported from its package",
+        "the builtin open through numpy",
+        "an allowed module read under another name",
+        "the engine's package root read under another name",
+    ],
+)
+def test_what_an_allowed_import_hands_out_is_refused_when_it_is_out_of_reach(source: str) -> None:
+    """The allow-list matches a path, and an allowed leaf can hold what is not allowed — a
+    module, or a class or a function defined in one — while `import a.b` binds the package
+    `a`, whose other submodules are not allowed. Each of these passes the scan today
+    (`docs/backlog.md` row 211); resolving them without importing anything is a follow-up."""
+    assert scan(source) != []
+
+
+@pytest.mark.xfail(strict=True, reason=ROW_211)
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import numpy as np\nopened = np.lib.npyio.DataSource(None).open('strategy.py')",
+        "import numpy as np\nmapped = np.lib.format.open_memmap('window.npy')",
+        "import numpy as np\nlibrary = np.ctypeslib.load_library('libc', '/usr/lib')",
+    ],
+    ids=["a path or a URL opened", "a file mapped", "a shared library loaded"],
+)
+def test_numpy_s_other_file_functions_are_refused(source: str) -> None:
+    """numpy is allowed whole, and `DENIED_NUMPY_FILE` names only some of what in it reaches a
+    file; these pass the scan today (`docs/backlog.md` row 211)."""
+    assert scan(source) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from nautilus_trader.model.enums import OrderSide",
+        "from kanso.nautilus.strategy import Decision, Hedge",
+        "from nautilus_trader.core.datetime import millis_to_nanos",
+        "import nautilus_trader.model.data\nkind = nautilus_trader.model.data.Bar",
+        "import kanso.nautilus.strategy\nbase = kanso.nautilus.strategy.KansoStrategy",
+        "import numpy as np\ndrawn = np.random.default_rng(1).normal()",
+        "import numpy\nreal = numpy.float64(1.0).real",
+        "from nautilus_trader.model import data\ndef on_data(data):\n    return data",
+        "import math\nroot = math.sqrt(2.0) * math.pi",
+    ],
+    ids=[
+        "an enum the engine's model takes from its Rust bindings",
+        "what the strategy base takes from kanso's hooks",
+        "a function the engine compiled",
+        "a dotted read through the package root to a leaf",
+        "a dotted read to kanso's strategy base",
+        "a dotted read through numpy",
+        "data read off what a module holds",
+        "a module's name bound again as a parameter",
+        "an ordinary dotted read",
+    ],
+)
+def test_what_an_allowed_leaf_hands_out_of_its_own_package_passes(source: str) -> None:
+    """The engine's and kanso's allowed leaves hand out what they define elsewhere in their
+    own package by design — the engine's enums come from its Rust bindings, `Decision` from
+    kanso's hooks — and a name the file binds again is the file's own: whatever closes row
+    211 must still pass each of these."""
+    assert scan(source) == []
+
+
+@pytest.mark.parametrize(
+    "source", ["import numpy.f2py.__main__", "from numpy.f2py import __main__"]
+)
+def test_the_scan_runs_no_module_a_strategy_names(
+    source: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`numpy.f2py.__main__` is allowed, as all of numpy is, and importing it runs f2py's
+    command line on the process's own arguments and raises `SystemExit`. A scan that imported
+    what a strategy names to judge it ran that in the process gating the card: the card
+    command's arguments were read as f2py's, the command exited with no card recorded, and a
+    lane would have died. The scan reads the source alone, so it returns, prints nothing and
+    leaves the module unimported; the import is the card's own, in its child process."""
+    monkeypatch.setattr(sys, "argv", ["kanso", "research", "card", "demo_mr", "--desc", "x"])
+    imported = "numpy.f2py.__main__" in sys.modules
+    body = "\nfrom kanso.nautilus.strategy import KansoStrategy\nclass Strategy(KansoStrategy):\n"
+    try:
+        problems = scan(source + body + "    pass\n")
+    except BaseException as error:  # SystemExit is what the import raised
+        pytest.fail(f"the scan raised {type(error).__name__}: {error!r}")
+
+    assert isinstance(problems, list)
+    assert capsys.readouterr() == ("", "")
+    assert ("numpy.f2py.__main__" in sys.modules) is imported

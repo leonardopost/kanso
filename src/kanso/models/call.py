@@ -101,12 +101,20 @@ class CallInputs:
     only facts that do not change between the calls of one subject; `dynamic` becomes the
     user turn. `check` runs after the schema and returns one complaint per problem, empty
     when the answer is usable.
+
+    `answers` is how many answers of the task's own shape `answer_schema` asks for in one
+    call — a turn of several proposals (`kanso.models.tasks.propose_schema`). A route's
+    output cap is what one answer may spend, thinking included, so the call is sent with the
+    cap times `answers`: a cap that fits one diff does not fit eight, and an answer cut off
+    by its cap is not JSON and climbs the ladder as a wrong one, never as a short one.
     """
 
     subject: str
     stable: Mapping[str, object] = field(default_factory=dict)
     dynamic: Mapping[str, object] = field(default_factory=dict)
     check: Callable[[Mapping[str, object]], Sequence[str]] | None = None
+    answer_schema: Mapping[str, object] | None = None
+    answers: int = 1
 
 
 class Client(Protocol):

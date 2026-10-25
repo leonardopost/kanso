@@ -9,10 +9,23 @@ what must have elapsed since the version joined the stage. Both readings come fr
 clock, so a stage replaying at speed zero is measured in market time like every other.
 
 **Did it do what composition said it would?** Composition measured the version over the
-sleeve's certification window and recorded a 90% interval for the objective. The realised
-paper objective must fall inside that interval — inside, not merely above it. A result above
-the band is not a better strategy; it is the paper stage failing to reproduce the model that
-was certified, and promoting on it would promote an unexplained difference.
+sleeve's certification window, at the capital the stage holds it at, and recorded the
+objective's value, its error and the periods it was read over. The realised paper objective
+must fall inside the band those strike for the paper window this gate is judging — a
+prediction band for a window of that many periods, whose nominal coverage is nine in ten at
+any length that strikes one (`kanso.criteria.band`); the evidence states the band, its
+coverage, the periods it was struck for and what each fold held. A window too thin to strike
+one fails until it is not: a Sharpe's window any of whose scoring folds holds fewer than four
+periods — a Sharpe of two or three has no variance to band — and a window whose every fold
+scores the constant zero, a per-trade edge's that closed no trade, which realises zero
+whatever the version is. The paper window keeps growing until the band is struck, so a
+Sharpe's paper window is in effect at least four periods a fold, whatever the plan chose.
+Inside, not
+merely above it: a result above the band is not a better strategy; it is the paper stage
+failing to reproduce the model that was certified, and promoting on it would promote an
+unexplained difference. An expectation that records no error — composed before kanso
+recorded one — strikes no band, and the gate skips, naming it, until a deploy of the stage
+strikes the expectation again.
 
 **Did it stay inside the risk the hypothesis declared?** Of the sleeve's card-stage
 constraints only the drawdown limit and the maintenance floor are evaluated — the floor on
@@ -32,6 +45,7 @@ from __future__ import annotations
 
 from typing import ClassVar, Final
 
+from kanso.criteria.band import prediction
 from kanso.criteria.context import Gate, GateContext, number, skipped, verdict
 from kanso.criteria.gates import maintenance_margin
 from kanso.criteria.objectives import REGISTRY, Objective
@@ -47,6 +61,10 @@ NO_WINDOW: Final = "no paper window was chosen, so no duration was required"
 NO_STAGE: Final = "no stage record was supplied, so there is no clock to measure against"
 NO_EXPECTATION: Final = "the version carries no expectation, so there is no band to fall in"
 NO_OBJECTIVE: Final = "the hypothesis carries no objective to measure"
+NO_DISPERSION: Final = (
+    "the version's expectation records no error or period count, so no band can be struck "
+    "for the paper window; the stage's next deploy measures it again"
+)
 
 TRADES_UNREACHABLE: Final = (
     "a research-window trade count cannot be met in a paper window, and requiring it would "
@@ -66,16 +84,17 @@ class _PaperForward:
             return skipped(self.id, NO_WINDOW)
         if not isinstance(ctx.session, StageRecord):
             return skipped(self.id, NO_STAGE)
-        band = _band(ctx)
-        if band is None:
+        if ctx.expectation is None:
             return skipped(self.id, NO_EXPECTATION)
         objective = _objective(ctx)
         if objective is None:
             return skipped(self.id, NO_OBJECTIVE)
+        band = prediction(objective, ctx.expectation, ctx.run, ctx.research_folds)
+        if band is None:
+            return skipped(self.id, NO_DISPERSION)
         horizon = parse_duration(ctx.hyp.horizon, "horizon").total_seconds()
         required = max(duration, multiple * horizon)
         elapsed = ctx.session.elapsed_s
-        low, high = band
         realised = objective.compute(ctx.run, ctx.research_folds, ctx.host_run, ctx.benchmark_run)[
             0
         ]
@@ -84,14 +103,19 @@ class _PaperForward:
         constraints, within_risk = _constraints(ctx, observed, limit)
         return verdict(
             self.id,
-            elapsed >= required and low <= realised <= high and within_risk,
+            elapsed >= required and band.holds(realised) and within_risk,
             {
                 "elapsed_s": elapsed,
                 "required_s": required,
                 "horizon_mult": multiple,
                 "objective": objective.id,
                 "realised": realised,
-                "ci90": [low, high],
+                "expected": band.expected,
+                "band": [band.low, band.high] if band.struck else None,
+                "coverage": band.coverage,
+                "n_periods": band.periods,
+                "fold_periods": list(band.folds),
+                "fold_minimum": band.minimum,
                 "max_drawdown_pct": observed,
                 "limit_pct": limit,
                 "constraints": constraints,
@@ -124,14 +148,6 @@ def _duration(value: ParamValue | None) -> float | None:
     if not isinstance(value, str):
         return None
     return parse_duration(value, "min_duration").total_seconds()
-
-
-def _band(ctx: GateContext) -> tuple[float, float] | None:
-    """The version's 90% interval for the objective, or `None` when it has none."""
-    values = (ctx.expectation or {}).get("ci90")
-    if not isinstance(values, list | tuple) or len(values) != 2:
-        return None
-    return float(values[0]), float(values[1])
 
 
 def _objective(ctx: GateContext) -> Objective | None:

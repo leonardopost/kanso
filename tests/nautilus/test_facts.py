@@ -8,6 +8,8 @@ upgrade that closes one of those gaps, or opens a new one, fails here first.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import nautilus_trader
 import pytest
 
@@ -85,6 +87,12 @@ BINDINGS = {
     "filter_files names its files whose interval meets a span, ends included or open",
     "write_data writes a file in row groups of 5,000 rows, each footer stating its rows "
     "and its least and greatest ts_init",
+    "ParquetDataCatalog is one instance per path in a process, and a copy of it is an "
+    "instance of its own",
+    "a catalog query not handed its files lists them through the catalog's own "
+    "get_file_list_from_data_cls, once a query",
+    "a catalog query handed a file that has gone raises FileNotFoundError naming it, and "
+    "a query of bars whose listed directory holds no file raises RuntimeError",
     "an order's events grow only at its end, and its strategy is handed each one as the "
     "order's last when the order takes it",
     "a level-two venue refuses to run a name it holds data and no book data for, and "
@@ -123,6 +131,23 @@ BINDINGS = {
     "kanso's print_through venue fills a resting limit only from a later print strictly "
     "through its price, by that print's size or whole, never from a quote, and fills a "
     "taker at the last quote's touch, an IOC limit no further than the quote shows",
+    "under the NETTING OMS the cache keeps one position per (instrument, strategy), "
+    "named {instrument}-{strategy}, and the portfolio's net position is every "
+    "strategy's sum",
+    "under the NETTING OMS the simulated venue holds a reduce-only close to the first "
+    "open position in the instrument sorted by id, whichever strategy's it is",
+    "a topic's handlers at one priority are called in the order they subscribed, higher "
+    "priorities first, whatever order their strategies were added in",
+    "two market orders sent into one name at one instant on a level-one venue are each "
+    "filled from the whole touch, neither sharing what the other took",
+    "an order's OrderInitialized, every order's of a list, and a modify's "
+    "OrderPendingUpdate are published on the bus before the engine routes the command, "
+    "so a subscriber that raises sends nothing, at no latency and at 20 ms",
+    "every change to a strategy's orders and positions in the cache is handed to it as "
+    "an event before any handler of its runs again, but the pending cancel "
+    "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
+    "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
+    "which a NETTING flip or reopen appends to and nothing else changes",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -237,3 +262,114 @@ def test_a_client_whose_quota_holds_no_request_fails_the_quota_claim(
 
     assert not holds
     assert "['RuntimeError']" in evidence
+
+
+def test_a_netting_position_is_one_strategy_s_and_the_net_position_the_account_s() -> None:
+    """What `KansoStrategy`'s own-position reader rests on, read in the first strategy's
+    handler before its sale and again at the end of the run."""
+    before, after = facts._probe_two_strategies_in_one_name()
+
+    assert before == (
+        {"AAPL.XNAS-Probe-A": 10.0, "AAPL.XNAS-Probe-B": 5.0},
+        (10.0, 5.0),
+        15.0,
+    ), "two positions, each named for its strategy, under the account's sum"
+    assert after == ({"AAPL.XNAS-Probe-B": 5.0}, (0.0, 5.0), 5.0), (
+        "A's sale closed A's position alone"
+    )
+
+
+def test_a_reduce_only_close_is_held_to_the_first_position_in_the_name_by_id() -> None:
+    """What the node's flatten order rests on: the later-sorted strategy's close beside a
+    mate is cut to the mate's quantity, on either side, and closes sent in id order each
+    close their own."""
+    a, b = "AAPL.XNAS-Probe-A", "AAPL.XNAS-Probe-B"
+
+    assert facts._probe_a_reduce_only_close_beside_a_mate() == (
+        {a: 10.0, b: 490.0},
+        {},
+        {a: -5.0, b: 95.0},
+        {},
+    )
+
+
+def test_handlers_at_one_priority_are_called_in_the_order_they_subscribed() -> None:
+    """What the book's allotment refuses to rest on: the strategy added first, subscribing
+    to prints late, hears a print after the one added second, and a bus calls a higher
+    priority first and then one priority's handlers in subscription order."""
+    heard, called = facts._probe_subscription_order()
+
+    assert heard == ["B", "A"], "subscription order, not the order the strategies were added"
+    assert called == ["first", "second", "third"]
+
+
+def test_two_takers_on_one_touch_are_each_filled_from_all_of_it() -> None:
+    """What the book's shared touch budget is for: the venue fills each market order from
+    the whole touch, so two buys of 80 under an ask of 100 both fill at the ask."""
+    assert facts._probe_two_takers_on_one_touch() == [("A", 80.0, 10.01), ("B", 80.0, 10.01)]
+
+
+@pytest.mark.parametrize("latency_ns", [0, 20_000_000])
+def test_an_order_and_a_modify_are_refused_on_the_bus_before_they_are_routed(
+    latency_ns: int,
+) -> None:
+    """What a book refuses an order a member sent past kanso by: a subscriber to every
+    strategy's order events that raises stops the engine's own `submit_order`, called on its
+    class past the probe's override, which never sees it, `submit_order_list` at its first
+    order, `modify_order`,
+    and an order in the name of a strategy the engine does not run, before any is routed; the
+    rest of 10 at 10.50 the probe placed first is the only order the cache ever holds, and no
+    later quote fills it."""
+    refused, held, overridden = facts._probe_refused_on_the_bus(latency_ns)
+
+    assert refused == [
+        ("OrderInitialized", False),
+        ("OrderInitialized", False),
+        ("OrderPendingUpdate", True),
+        ("OrderInitialized", False),
+    ]
+    ((quantity, price, _, filled),) = held
+    assert (quantity, price, filled) == (10.0, 10.5, 0.0)
+    assert overridden == 1, "the rest, sent by the probe's own submit_order; none of the rest"
+
+
+@pytest.mark.parametrize("latency_ns", [0, 20_000_000])
+def test_every_change_reaches_its_strategy_before_its_next_handler(latency_ns: int) -> None:
+    """What a sleeve's kept position reads rest on (`KansoStrategy._forget_kept`) and what the
+    runner's reading of each position snapshot once rests on (`backtest._fills_since`): over
+    fills, a modify, two cancels, a flip, a close and a reopen, every quote handler finds the
+    strategy's orders and positions as its last handler left them, and each snapshot list is
+    the one read before, grown at its end."""
+    found = facts._probe_changes_reach_their_strategy(latency_ns)
+
+    assert found.unannounced == ()
+    assert found.cancelled_moved == ()
+    assert set(found.handed) >= facts._HANDED_KINDS
+    assert (found.compared, found.lists, found.snapshots) == (19, (), 2)
+    assert found.distinct > 5, "the holdings moved between handlers"
+
+
+def test_a_change_no_event_handed_or_a_list_read_anew_fails_its_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Either finding of the probe fails the claim that rests on it, and names what it found."""
+    clean = facts._probe_changes_reach_their_strategy(0)
+    monkeypatch.setattr(
+        facts,
+        "_probe_changes_reach_their_strategy",
+        lambda latency_ns: replace(clean, unannounced=("quote 3: before then after",)),
+    )
+    holds, evidence = facts._check_every_change_reaches_its_strategy_before_its_next_handler()
+    assert not holds
+    assert "quote 3: before then after" in evidence
+    assert facts._check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end()[0]
+
+    monkeypatch.setattr(
+        facts,
+        "_probe_changes_reach_their_strategy",
+        lambda latency_ns: replace(clean, lists=("P-1: 1 -> 1",)),
+    )
+    holds, evidence = facts._check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end()
+    assert not holds
+    assert "P-1: 1 -> 1" in evidence
+    assert facts._check_every_change_reaches_its_strategy_before_its_next_handler()[0]

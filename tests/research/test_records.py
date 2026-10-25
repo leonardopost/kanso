@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import json
+import zlib
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given
 
+from kanso.criteria import objectives
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
-from kanso.schemas import RunRecord
+from kanso.schemas import Card, Costs, ObjectiveRef, RunRecord, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.schemas import strategies as gen
 
-from .conftest import DOCUMENT, FLAT, RAISING, REVERTING, classify
+from .conftest import DOCUMENT, FLAT, RAISING, REVERTING, classify, measured_as_scored
 from .test_scheduler import open_run
 
 UNDER = "0123456789ab"
@@ -98,6 +103,83 @@ def test_a_card_comes_back_as_it_was_written(
     assert read.venue_model.venue == "XNAS"
     assert read.aligned is True
     assert read.crash_tail is None
+    assert read.digest is not None and read.digest == written.digest
+    assert read.digest.trades_per_session is not None
+    assert read.digest.trades_per_session * read.digest.sessions == pytest.approx(read.n_trades)
+    assert read.measured_sha is not None and read.measured_sha == written.measured_sha
+    assert len(measured_as_scored(store, read).run.trades) == read.n_trades
+
+
+@given(gen.measurements())
+def test_a_measurement_survives_the_bytes_its_blob_holds(measured: records.Measurement) -> None:
+    """Canonical JSON compressed, and back: the same measurement, and the same bytes again.
+
+    The text is pinned as canonical — sorted keys, no whitespace — and not merely stable,
+    so a kanso that builds the payload in another key order stores the same measurement as
+    the same bytes, and identical measurements still share one blob."""
+    data = records.encode_measurement(measured)
+    text = zlib.decompress(data)
+    read = records.read_measurement(json.loads(text))
+
+    assert text == json.dumps(json.loads(text), sort_keys=True, separators=(",", ":")).encode()
+    assert read == measured
+    assert records.encode_measurement(read) == data
+
+
+def test_a_measurement_is_stored_once_and_a_card_without_one_reads_as_none(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    loop.begin(ws, store, registered)
+    baseline = records.cards_of(store, registered)[0]
+    measured = measured_as_scored(store, baseline)
+    blobs = store.connection.execute("SELECT COUNT(*) FROM blobs").fetchone()[0]
+
+    assert records.record_measurement(store, measured) == baseline.measured_sha
+    assert store.connection.execute("SELECT COUNT(*) FROM blobs").fetchone()[0] == blobs
+    assert records.measurement_of(store, baseline.model_copy(update={"measured_sha": None})) is None
+
+
+def test_a_measurement_restricted_to_a_span_restricts_what_it_is_differenced_against(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A prefix of the window is a reading the loop never took: the objective's own
+    arithmetic on the span, the host and the benchmark cut to it with the run, and the whole
+    window is the card's own number."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    run = loop.begin(ws, store, hyp_id)
+    (ws.root / run.dir / "strategy.py").write_bytes(FLAT)
+    loop.card(ws, store, hyp_id, "trade nothing")
+    traded, flat = (measured_as_scored(store, card) for card in records.cards_of(store, hyp_id))
+    opens, closes = traded.run.bounds
+    middle = opens + (closes - opens) // 2
+    half = traded.between(opens, middle)
+
+    assert traded.between(opens, closes) == traded
+    assert half.run.window[0] == traded.run.window[0]
+    assert half.run.window[1] < traded.run.window[1]
+    assert half.run.period_ends_ns == traded.run.period_ends_ns[: len(half.run.period_ends_ns)]
+    assert half.run == traded.run.between(opens, middle)
+    # The reading on the span is the objective's own arithmetic on the cut run, and it is a
+    # reading of the span: the traded book's first half is not its whole window.
+    spanned = objectives()[traded.objective.id].compute(half.run, traded.folds)
+    assert half.compute() == spanned != traded.compute()
+
+    # Differenced against a host and a benchmark, both are cut with the run, so fold `i` of
+    # the span pairs with fold `i` of the same span: the flat book less what the traded one
+    # earned over that span, fold by fold, which is the span's own reading negated.
+    relative = replace(
+        flat,
+        objective=ObjectiveRef(id="marginal_wf_sharpe", params=flat.objective.params),
+        host=traded.run,
+        benchmark=traded.run,
+    )
+    beside = relative.between(opens, middle)
+    assert beside.host == beside.benchmark == half.run
+    expected = objectives()["marginal_wf_sharpe"].compute(
+        flat.run.between(opens, middle), flat.folds, half.run, half.run
+    )
+    assert beside.compute() == expected
+    assert expected[0] == -spanned[0] != 0.0
 
 
 def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateStore) -> None:
@@ -119,8 +201,153 @@ def test_only_a_card_that_ran_and_traded_is_a_trial(ws: Workspace, store: StateS
         ("crash", 0),
     ]
     assert cards[-3].n_trades > 0
+    # The digest is the same split: what ran digests its trades, what traded nothing has
+    # sessions and no edge, and a crash digests nothing.
+    kept, idle, crashed = (card.digest for card in cards[-3:])
+    assert kept is not None and kept.net_bps_per_trade is not None
+    assert idle is not None and idle.net_bps_per_trade is None and idle.trades_per_session == 0
+    assert crashed is None
+    # And so is the measurement: what ran keeps what it was scored from, a book that traded
+    # nothing included, and a crash keeps nothing.
+    for ran in cards[-3:-1]:
+        measured_as_scored(store, ran)
+    assert cards[-1].measured_sha is None
     assert records.n_trials(store, hyp_id) == len(cards)
-    assert records.trial_metrics(store, hyp_id) == [cards[-3].metric]
+    assert records.trial_metrics(store, hyp_id, "wf_sharpe_net") == [cards[-3].metric]
+    assert records.candidates(store, hyp_id) == 1
+
+
+def pinned_run(store: StateStore, hyp_id: str, n: int, pin: bytes) -> RunRecord:
+    """A closed run of `hyp_id` whose pinned hypothesis file is `pin`."""
+    blob = store.put_blob(pin)
+    made = records.insert(
+        store,
+        RunRecord(
+            run_id=f"run-{n}",
+            hyp_id=hyp_id,
+            tag=f"20240101-{n}",
+            lane="op",
+            dir=f"runs/op/{hyp_id}",
+            base_sha=blob,
+            hypothesis_sha=blob,
+            program_sha=blob,
+            snapshot_id="snap",
+            criteria_version=f"0.{n}.0",
+            card_budget_s=60.0,
+            baseline_wall_s=1.0,
+            baseline_peak_mem_gb=1.0,
+            started_at=records.now(),
+        ),
+    )
+    return records.close(store, made)
+
+
+def scored(store: StateStore, run: RunRecord, metric: float, n_trades: int = 5) -> None:
+    """One card of `run`, at `metric`, that traded `n_trades` times."""
+    records.record_card(
+        store,
+        run,
+        Card.model_validate(
+            {
+                "run_id": run.run_id,
+                "lane": "op",
+                "strategy_sha": store.put_blob(f"{run.run_id}-{metric}".encode()),
+                "metric": metric,
+                "metric_se": 0.1,
+                "n_trials": 1,
+                "n_trades": n_trades,
+                "wall_s": 1.0,
+                "peak_mem_gb": 0.1,
+                "status": "discard",
+                "desc": "a card",
+                "venue_model": resolve_venue_model(
+                    "XNAS",
+                    hypothesis_costs=Costs.model_validate(DOCUMENT["costs"]),
+                    max_leverage=1.0,
+                    quotes_available=False,
+                ),
+                "created_at": records.now(),
+            }
+        ),
+    )
+
+
+def test_a_hypothesis_s_trials_count_the_cards_of_the_hypotheses_it_derives_from(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A draft chosen by a parent's research is priced by the parent's search as well as
+    its own: `family` walks `derived_from` transitively, a parent the store does not know
+    counts nothing, and a hypothesis that names none is a family of one."""
+    child = classify(ws, store, {**DOCUMENT, "id": "demo_child", "derived_from": [registered]})
+    grandchild = classify(
+        ws, store, {**DOCUMENT, "id": "demo_grandchild", "derived_from": ["demo_child"]}
+    )
+    parent_run = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    child_run = pinned_run(store, child, 2, b"objective: {id: net_edge_bps}\n")
+    for metric in (40.0, 55.0, 30.0):
+        scored(store, parent_run, metric)
+    scored(store, child_run, 60.0)
+    scored(store, child_run, 0.0, n_trades=0)
+
+    assert records.family(store, registered) == (registered,)
+    assert records.family(store, child) == (child, registered)
+    assert records.family(store, grandchild) == (grandchild, child, registered)
+    assert records.n_trials(store, registered) == 3
+    assert records.n_trials(store, child) == 5, "the parent's three and its own two"
+    assert records.n_trials(store, grandchild) == 5, "no cards of its own yet"
+    assert sorted(records.trial_metrics(store, child, "net_edge_bps")) == [30.0, 40.0, 55.0, 60.0]
+    assert records.candidates(store, grandchild) == 4
+    assert records.family(store, "nobody_here") == ("nobody_here",)
+
+
+def test_a_family_is_walked_once_whatever_the_files_name(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """Two files that name each other — a parent re-registered to derive from its own child —
+    are one family of two, each counted once; a parent the store does not know, a pinned file
+    that names none and a file whose `derived_from` is not a list all count nothing."""
+    child = classify(ws, store, {**DOCUMENT, "id": "demo_child", "derived_from": [registered]})
+    classify(ws, store, {**DOCUMENT, "derived_from": [child]})
+
+    assert records.family(store, child) == (child, registered)
+    assert records.family(store, registered) == (registered, child)
+    # a diamond: two parents naming one grandparent, which is reached twice and counted once
+    left = classify(ws, store, {**DOCUMENT, "id": "demo_left", "derived_from": [child]})
+    right = classify(ws, store, {**DOCUMENT, "id": "demo_right", "derived_from": [child]})
+    both = classify(ws, store, {**DOCUMENT, "id": "demo_both", "derived_from": [left, right]})
+    assert records.family(store, both) == (both, left, right, child, registered)
+    # a registered file naming a parent the store does not know: written past validation
+    store.connection.execute(
+        "UPDATE hypotheses SET hypothesis_sha = ? WHERE hyp_id = ?",
+        (store.put_blob(b"derived_from: [demo_unregistered]\n"), child),
+    )
+    assert records.family(store, child) == (child,)
+    assert records._derived_from(store, None) == ()
+    assert records._derived_from(store, "0" * 64) == ()
+    assert records._derived_from(store, store.put_blob(b"id: x\n")) == ()
+    assert records._derived_from(store, store.put_blob(b"derived_from: demo_x\n")) == ()
+
+
+def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
+    store: StateStore, registered: str
+) -> None:
+    """Re-pinned from a per-trade edge to a contribution and on to a newer file under the
+    same contribution: the edge's cards are a search in other units and are not trials of
+    the contribution, while the re-pin under the same objective continues its search. A pin
+    that names no objective scores nothing anyone deflates."""
+    edge = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    first = pinned_run(store, registered, 2, b"objective: {id: wf_contribution_bps}\n")
+    again = pinned_run(store, registered, 3, b"id: x\nobjective: {id: wf_contribution_bps}\n")
+    bare = pinned_run(store, registered, 4, b"id: x\n")
+    for run, metric in ((edge, 40.0), (first, 1.5), (edge, 55.0), (again, 2.5), (bare, 9.0)):
+        scored(store, run, metric)
+    scored(store, again, 7.0, n_trades=0)
+
+    assert records.trial_metrics(store, registered, "wf_contribution_bps") == [1.5, 2.5]
+    assert records.trial_metrics(store, registered, "net_edge_bps") == [40.0, 55.0]
+    assert records.trial_metrics(store, registered, "wf_sharpe_net") == []
+    assert records.n_trials(store, registered) == 6, "every card is still counted"
+    assert records.candidates(store, registered) == 5, "a count has no units to keep apart"
 
 
 def a_run(held: tuple[Held, ...] = (), trades: tuple[Trade, ...] = (), days: int = 3) -> CardRun:

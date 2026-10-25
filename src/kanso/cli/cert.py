@@ -20,6 +20,14 @@ realises against the interval measured over the certification window, so a plan 
 window is a small fraction of that window asks for evidence too noisy to sit inside its own
 band. The plan is the planner's and the windows are the operator's; the command says what
 the pair costs and pins the plan either way.
+
+`plan`, `run` and `show` each state the certification's power on a `power` line: the edge
+the certification window resolves at eighty percent, and how likely `embargoed_window` is
+to pass if the truth is the research estimate and if it is zero, from the research window's
+own dispersion (`kanso.certify.power`). `plan` states it for the best card as it stands,
+from the error that card recorded, and says so when there is nothing to state it from; a
+certificate records the one its run measured, from the research window run again. The two
+agree for a card this kanso measured, and can differ for one an earlier kanso did.
 """
 
 from __future__ import annotations
@@ -29,7 +37,7 @@ from typing import Annotated, Any, cast
 import typer
 
 from kanso.certify.certificate import certificate_file, source_file
-from kanso.certify.plan import paper_window_note, plan_file
+from kanso.certify.plan import paper_window_note, plan_file, power_of
 from kanso.certify.plan import plan as make_plan
 from kanso.certify.run import certify
 from kanso.certify.run import show as newest
@@ -38,7 +46,7 @@ from kanso.cli.render import Report, emit, field, indent, verdict
 from kanso.hyp import Registration
 from kanso.hyp import show as registration_of
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import Certificate, PlannedGate
+from kanso.schemas import Certificate, PlannedGate, Power
 from kanso.schemas.certification import PLAN_STAGES
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -50,6 +58,13 @@ IdArgument = Annotated[str, typer.Argument(metavar="ID", help="The hypothesis id
 
 MARK, GATE = 6, 22
 """Widths of the stage-or-verdict column and the gate-id column of the gate lists."""
+
+NO_BEST = (
+    "nothing to state what the windows resolve from: no best card yet, or the best card's "
+    "error is zero"
+)
+"""What `plan` says on its power line before research has kept anything, or when what it
+kept carries no dispersion to work from."""
 
 NEXT: dict[str, str] = {
     "certified": "kanso cert show {id}",
@@ -98,12 +113,14 @@ def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
     with store(ws) as opened:
         pinned = make_plan(ws, opened, hyp_id, replan=replan, lane=DEFAULT_LANE)
         note = paper_window_note(ws, opened, pinned)
+        stated = power_of(opened, pinned)
     warnings = [] if note is None else [note]
     path = plan_file(ws, hyp_id)
     data: dict[str, Any] = {
         **pinned.model_dump(mode="json", by_alias=True),
         "path": str(path),
         "warnings": warnings,
+        "power": None if stated is None else stated.model_dump(mode="json"),
     }
     counts = " · ".join(f"{stage} {len(pinned.stage_gates(stage))}" for stage in PLAN_STAGES)
     lines = [
@@ -113,6 +130,7 @@ def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
     lines += [indent(_planned(gate)) for gate in pinned.gates]
     lines.append(field("excluded", str(len(pinned.excluded))))
     lines += [indent(f"{'':<{MARK}}{item.id:<{GATE}}{item.reason}") for item in pinned.excluded]
+    lines.append(field("power", NO_BEST if stated is None else _power(stated)))
     if note is not None:
         lines.append(field("warning", note))
     lines += [field("pinned", path), field("next", f"kanso cert run {hyp_id}")]
@@ -135,6 +153,8 @@ def _run(ws: Workspace, hyp_id: str, sha: str | None) -> Report:
         field("verdict", f"{hyp_id} · {made.sha7} · {made.verdict}"),
         *_gate_lines(made),
         field("objective", _objective(made)),
+        *_power_line(made),
+        *_net_line(made),
         field("pins", _pins(made)),
         field("written", path),
         field("source", source),
@@ -161,6 +181,8 @@ def _show(ws: Workspace, hyp_id: str) -> Report:
         field("verdict", f"{hyp_id} · {found.sha7} · {found.verdict}"),
         *_gate_lines(found),
         field("objective", _objective(found)),
+        *_power_line(found),
+        *_net_line(found),
         field("pins", _pins(found)),
         field("written", path),
     )
@@ -194,6 +216,45 @@ def _gate_lines(made: Certificate) -> list[str]:
 def _objective(made: Certificate) -> str:
     """The objective as certification measured it, on the certification window."""
     return f"{made.objective.id} {made.objective.value:.6f} ± {made.objective.se:.6f}"
+
+
+def _power_line(made: Certificate) -> list[str]:
+    """The power a certificate states, when it states one."""
+    return [] if made.power is None else [field("power", _power(made.power))]
+
+
+def _net_line(made: Certificate) -> list[str]:
+    """The certification window's net per trade, when the certificate records one."""
+    net = made.net_per_trade
+    if net is None:
+        return []
+    if net.net_se_session is None:
+        error = "no session error"
+    else:
+        error = f"± {net.net_se_session:.4g} by session"
+        if net.net_t is not None:
+            error += f" (t {net.net_t:.3g})"
+    return [
+        field(
+            "per trade",
+            f"net {net.net_per_trade_bp:.4g} bp {error} · {net.trades} trade(s) on "
+            f"{net.sessions_with_trades} session(s)",
+        )
+    ]
+
+
+def _power(stated: Power) -> str:
+    """What the certification window resolves, and the window gate's chances either side."""
+    line = (
+        f"resolves {stated.resolves:.4g} at 80% · se {stated.standard_error:.4g} on the "
+        f"certification window from research's {stated.research:.4g} ± {stated.research_se:.4g}"
+    )
+    if stated.pass_at_research is None or stated.pass_at_zero is None:
+        return f"{line} · embargoed_window sets no min_fraction, so no pass probability"
+    return (
+        f"{line} · embargoed_window passes {stated.pass_at_research:.2f} at the research "
+        f"estimate, {stated.pass_at_zero:.2f} at zero"
+    )
 
 
 def _pins(made: Certificate) -> str:

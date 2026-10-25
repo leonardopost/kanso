@@ -199,6 +199,13 @@ fetches through it needs `KANSO_MASSIVE_API_KEY`, as any request-path load does.
 | `massive_corporate_actions` | splits and dividends, as `CorporateAction` | REST |
 | `massive_financials` | periodic statements, as the `financial_statement` type (usable in a hypothesis's `data_requirements`) | REST |
 
+A quote's `bid_size` and `ask_size` are counts of **shares**, kept as served. The vendor's
+reference material describes them as round lots; measured on 2026-10-20 — 843 rows of
+`/v3/quotes/SPY` over two seconds of 2024-06-12 reading 100, 200, 300 … 2,500, and the same
+instant in the `us_stocks_sip/quotes_v1` flat file carrying the same 400 and 200 — they are
+shares on both transports, and the loader multiplies nothing. The displayed size a taker
+fills against under `print_through`, and a book's touch budget, read that unit.
+
 `massive_trades` and `massive_quotes` declare `chunk_days` 1: a liquid name's day is millions of
 ticks — 3.4 million TQQQ quotes and 1.4 million NVDA prints on 2026-09-14 — so every load,
 backfill and screen fetch writes one dataset a day as the pages stream in, and a walk that

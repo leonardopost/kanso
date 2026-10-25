@@ -36,6 +36,7 @@ def answer() -> dict[str, Any]:
                 "title": "Demo: hourly breakout on a synthetic OU series",
                 "thesis": "A close through the session's range continues for an hour.",
                 "mechanism": "momentum",
+                "derived_from": [HYP_ID],
             },
             sort_keys=False,
         ),

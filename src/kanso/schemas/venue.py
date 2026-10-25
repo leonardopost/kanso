@@ -7,7 +7,11 @@ per-venue entry in the portfolio overrides any field; a hypothesis's own `costs`
 the cost model for that hypothesis alone. Where nothing is declared the shipped defaults
 apply: a margin account whose leverage is the hypothesis's `max_leverage`, USD, zero
 commission and one basis point of slippage, with the spread taken from quotes when quotes
-are available, and a resting limit order filled when the market reaches its price. A
+are available, and a resting limit order filled when the market reaches its price. The
+spread, quoted or fixed, is charged on a fill the venue struck at a close or a last print —
+a name fed bars or prints alone; a fill in a name the venue books from quotes or a level-two
+book is struck at the touch, whose price carries the spread, and is charged none
+(`kanso.nautilus.backtest.touched_names`). A
 currency code is any code the engine could register — a fiat code or a crypto code such as
 USDT — and whether it does register it is checked where an account is funded, not here.
 

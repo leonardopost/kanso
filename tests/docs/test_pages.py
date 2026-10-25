@@ -540,6 +540,34 @@ def test_the_concepts_page_states_both_sides_of_the_paper_gate() -> None:
     assert "above the band as much a fail as below it" in promotion
 
 
+def test_the_pages_state_the_band_a_paper_window_is_judged_by_and_its_coverage() -> None:
+    """The band is a prediction band for the paper window, and what its evidence records is
+    what the gate records; the bootstrap's three statistics are the ones it names."""
+    from kanso.criteria.band import COVERAGE, SHARPE_FOLD
+    from kanso.criteria.gates import CONTRIBUTION_BAND, EDGE_BAND, SHARPE_BAND
+    from kanso.criteria.gates.paper_forward import gate
+    from tests.monitor.builders import gate_context, stage_record
+
+    promotion = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "expected ± 1.645 × √(se² + se² × N × Σ w(m_k) / K²)" in promotion
+    assert SHARPE_FOLD == 4 and "fewer than four periods strikes no band" in promotion
+    assert "Its coverage is nominal" in promotion
+    assert "whatever the window's length" not in promotion
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    evidence = gate.evaluate(
+        gate_context(params={"min_duration": "5d", "horizon_mult": 5.0}, record=stage_record())
+    ).evidence
+    for key in ("expected", "band", "coverage", "n_periods", "fold_periods", "fold_minimum"):
+        assert key in evidence and f"`{key}`" in monitoring, key
+    assert evidence["coverage"] == COVERAGE == 0.9 and "nominally nine times" in monitoring
+    assert "`floor_of: ci90`" in monitoring
+    certification = prose(
+        section(page("concepts.md"), "Certification, the plan and the certificate")
+    )
+    for name in (CONTRIBUTION_BAND, EDGE_BAND, SHARPE_BAND):
+        assert f"(`{name}`" in certification, name
+
+
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
     """The engine's top-of-book venue ignored a quote or a print stamped before its book's
     last update while the sleeve was handed it; the page says the venue now applies it, and
@@ -814,7 +842,7 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
         "An unperturbed objective at or below zero therefore fails the gate before any "
         "parameter is moved" in concepts
     )
-    assert "The plateau is judged after every other cert gate" in concepts
+    assert "The plateau and the latency stress are judged after every other cert gate" in concepts
     assert "A window gate that judged nothing spares nothing." in concepts
     assert "`bootstrap` judges both of the numbers it records" in concepts
     assert "a band that lies at or below zero says the population of trades carries no edge" in (
@@ -1054,3 +1082,14 @@ def test_no_page_says_nothing_kanso_loads_reaches_the_level_one_fill() -> None:
         text = prose(path.read_text(encoding="utf-8"))
         for claim in claims:
             assert claim not in text, f"{path}: {claim}"
+
+
+def test_the_concepts_page_says_a_window_reads_through_a_file_replaced_while_it_streams() -> None:
+    """A window lists the catalog once, so a replace landing while it streamed removed a file
+    the window had listed, and its parent raised FileNotFoundError where a read listing the
+    catalog itself read what took the file's place. The page states what a window does."""
+    card = prose(page("concepts.md"))
+    assert "each window lists the catalog's files once, rather than once a query" in card
+    assert "is found gone by the read that wants it, which lists that type's files again" in card
+    assert "is refused (exit 2), naming the series" in card
+    assert "is read by a later read only once one of that type has listed afresh" in card

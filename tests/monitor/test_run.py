@@ -18,6 +18,7 @@ from .builders import (
     CAPITAL,
     PLAN,
     STRATEGY_ID,
+    WIDE,
     deploy,
     flat_run,
     hypothesis,
@@ -37,8 +38,6 @@ LOSS_GATE: list[dict[str, Any]] = [
     {"id": "daily_loss_kill", "stage": "live", "params": {}, "rationale": "the day's limit"},
 ]
 BOTH_LIVE_GATES: list[dict[str, Any]] = [*PLAN["gates"], LOSS_GATE[2]]
-
-WIDE = (-1e9, 1e9)
 
 
 class Recorder:
@@ -136,7 +135,7 @@ def test_a_version_whose_every_paper_gate_skipped_is_not_promoted(
 
 def test_a_failing_live_gate_demotes_and_escalates(ws: Workspace, store: StateStore) -> None:
     demote = Recorder()
-    deploy(ws, store, stage="live", state="live", ci90=(1.0, 2.0), live=((STRATEGY_ID, 1),))
+    deploy(ws, store, stage="live", state="live", value=1.5, live=((STRATEGY_ID, 1),))
 
     outcomes = monitor.run_once(ws, store, demote=demote)
 
@@ -156,7 +155,7 @@ def test_the_daily_loss_halts_the_stage_and_does_not_demote(
     losing = run_over(tuple([100.0] * 19 + [-5_000.0]))
     pin_hypothesis(store, hypothesis())
     write_plan(ws, plan(gates=LOSS_GATE))
-    write_strategy(ws, store, version(state="live", ci90=WIDE))
+    write_strategy(ws, store, version(state="live", se=WIDE))
     write_book(store, "live", run=losing)
     write_yaml(portfolio(live=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
 
@@ -177,7 +176,7 @@ def test_a_daily_loss_beside_another_failure_halts_and_demotes(
     losing = run_over(tuple([100.0] * 19 + [-5_000.0]))
     pin_hypothesis(store, hypothesis())
     write_plan(ws, plan(gates=BOTH_LIVE_GATES))
-    write_strategy(ws, store, version(state="live", ci90=(1.0, 2.0)))
+    write_strategy(ws, store, version(state="live", value=1.5))
     write_book(store, "live", run=losing)
     write_yaml(portfolio(live=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
 
@@ -196,7 +195,7 @@ def test_a_halted_stage_still_demotes_rather_than_deadlocking(
     demote = Recorder()
     pin_hypothesis(store, hypothesis())
     write_plan(ws, plan())
-    write_strategy(ws, store, version(state="live", ci90=(1.0, 2.0)))
+    write_strategy(ws, store, version(state="live", value=1.5))
     write_book(store, "live", run=flat_run())
     write_yaml(portfolio(live=((STRATEGY_ID, 1),), kill_live=True), ws.path("portfolio.yaml"))
 
@@ -211,7 +210,7 @@ def test_a_stage_already_halted_is_not_halted_again(ws: Workspace, store: StateS
     losing = run_over(tuple([100.0] * 19 + [-5_000.0]))
     pin_hypothesis(store, hypothesis())
     write_plan(ws, plan(gates=LOSS_GATE))
-    write_strategy(ws, store, version(state="live", ci90=WIDE))
+    write_strategy(ws, store, version(state="live", se=WIDE))
     write_book(store, "live", run=losing)
     write_yaml(portfolio(live=((STRATEGY_ID, 1),), kill_live=True), ws.path("portfolio.yaml"))
 
@@ -258,7 +257,7 @@ def test_a_gross_breach_halts_the_stage_and_escalates(ws: Workspace, store: Stat
     deploy(
         ws,
         store,
-        ci90=(1.0, 2.0),
+        value=1.5,
         positions=(position(qty=20_000.0),),
     )
 
@@ -294,7 +293,7 @@ def test_gross_and_net_are_summed_over_every_version_on_the_stage(
     deploy(
         ws,
         store,
-        ci90=(1.0, 2.0),
+        value=1.5,
         positions=(position(instrument="AAA.XNAS", qty=6_000.0),),
         paper=((STRATEGY_ID, 1), ("other", 1)),
     )
@@ -320,7 +319,7 @@ def test_an_already_halted_stage_is_not_escalated_again(ws: Workspace, store: St
     deploy(
         ws,
         store,
-        ci90=(1.0, 2.0),
+        value=1.5,
         positions=(position(qty=20_000.0),),
         kill_paper=True,
     )
@@ -454,7 +453,7 @@ def test_demotion_is_the_portfolios_act_made_in_a_child(
         "demote_in_child",
         lambda _ws, _store, strategy, number: calls.append((strategy, number)),
     )
-    deploy(ws, store, stage="live", state="live", ci90=(1.0, 2.0), live=((STRATEGY_ID, 1),))
+    deploy(ws, store, stage="live", state="live", value=1.5, live=((STRATEGY_ID, 1),))
 
     monitor.run_once(ws, store)
 
@@ -465,7 +464,7 @@ def test_a_demotion_that_cannot_be_carried_out_does_not_end_the_pass(
     ws: Workspace, store: StateStore
 ) -> None:
     """The real demotion redeploys, and a workspace with no generated impl cannot."""
-    deploy(ws, store, stage="live", state="live", ci90=(1.0, 2.0), live=((STRATEGY_ID, 1),))
+    deploy(ws, store, stage="live", state="live", value=1.5, live=((STRATEGY_ID, 1),))
 
     outcomes = monitor.run_once(ws, store)
 
@@ -553,7 +552,7 @@ def test_capital_of_zero_leaves_no_room_for_a_position(ws: Workspace, store: Sta
         store,
         stage="live",
         state="live",
-        ci90=(1.0, 2.0),
+        value=1.5,
         positions=(position(qty=1.0, price=1.0),),
         live=((STRATEGY_ID, 1),),
         live_capital=0.0,
@@ -592,7 +591,7 @@ def held_deployment(ws: Workspace, store: StateStore, hold: Any) -> Any:
     varied = run_over(tuple(float(100 + (day % 3) * 50) for day in range(20)))
     pin_hypothesis(store, hypothesis(**HOLD_OBJECTIVE))
     write_plan(ws, plan())
-    write_strategy(ws, store, version(ci90=WIDE, objective_id="wf_sharpe_vs_hold"))
+    write_strategy(ws, store, version(se=WIDE, objective_id="wf_sharpe_vs_hold"))
     write_book(store, "paper", run=varied, benchmark=hold)
     write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
     return varied

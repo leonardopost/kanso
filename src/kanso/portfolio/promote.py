@@ -8,12 +8,24 @@ nobody chose — and it records the approval **before** it moves anything. The o
 record, so an approval written after the move would leave a window in which the file says
 one thing and the record says another.
 
+Everything that can refuse the promotion is asked before the approval is recorded: the live
+stage's switch and capital, its venues, and the version's expectation struck again at the
+share the live stage will fund it with — the band `live_drift` judges it by is in that
+share's units. A book that falls through its maintenance floor at that share refuses the
+promotion there, with nothing recorded and nothing moved, rather than inside the live
+deploy with the approval written and the version on neither stage. The expectation is
+written with the move, so the live deploy that follows does not measure it again.
+
 A demotion is the mirror, and it must never deadlock. The monitor demotes a version when a
 live gate fails, and one of those gates — the daily loss — halts the stage instead. A
 demotion that insisted on restarting every stage would then be trying to start a node the
 kill switch exists to keep stopped. So the move is made first and only the stages whose
 switch is off are redeployed; a halted stage is named in the escalation together with the
-command that resumes it, and it stays halted until the operator says otherwise.
+command that resumes it, and it stays halted until the operator says otherwise. The live
+stage is redeployed before the paper one: a version returning to paper is funded with the
+paper share and has its expectation measured again there — one run over its certification
+window — and the stage holding the money is not made to wait for it. A measurement that
+refuses blocks that version on paper (`deploy_blocked`), never the live redeploy.
 
 A demoted version returns to the paper stage — unless a newer version of the same strategy
 is already there, in which case it retires. A stage holds one version of a strategy, and the
@@ -29,14 +41,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from kanso import strategy as strategies
-from kanso.errors import ApprovalError, PreconditionError
+from kanso.errors import ApprovalError, KansoError, PreconditionError
 from kanso.inbox import escalate
 from kanso.nautilus import node
 from kanso.portfolio import files, records
 from kanso.portfolio.capital import assign
-from kanso.portfolio.deploy import BLOCKED, LIVE, PAPER, RETIRED, Deployment, deploy, restated
+from kanso.portfolio.deploy import (
+    BLOCKED,
+    LIVE,
+    PAPER,
+    RETIRED,
+    Deployment,
+    budgets,
+    deploy,
+    record_expected,
+    restated,
+    restrike,
+)
 from kanso.replay.target import resolve as resolve_target
-from kanso.schemas import StrategyFile, StrategyVersion
+from kanso.schemas import Expectation, StrategyFile, StrategyVersion
 from kanso.schemas.portfolio import STAGES
 from kanso.schemas.strategy import PAPER_STATES
 from kanso.strategy import files as strategy_files
@@ -139,7 +162,8 @@ def promote(
             remedy="clear stages.live.kill_switch in portfolio.yaml, then promote again",
         )
     subject = records.subject_of(strategy_id, chosen.version)
-    if assign(live, portfolio.limits, strategy_id) <= 0:
+    share = assign(live, portfolio.limits, strategy_id)
+    if share <= 0:
         escalate(ws, store, BLOCKED, subject, f"stages.live has no capital left to fund {subject}")
         raise PreconditionError(
             f"stages.live has no capital left to fund {subject}",
@@ -147,8 +171,9 @@ def promote(
         )
 
     _check_venues(ws, store, file, chosen)
+    expected = _struck_for_live(ws, store, strategy_id, chosen, share)
     approval = records.approve(store, strategy_id, chosen.version, named)
-    replaced = _move_to_live(ws, store, file, chosen)
+    replaced = _move_to_live(ws, store, file, chosen, expected)
     store.event(
         records.PROMOTED,
         subject,
@@ -194,7 +219,7 @@ def demote(
         strategy_id=strategy_id,
         version=chosen.version,
         state=state,
-        deployments=_redeploy(ws, store, tuple(n for n in STAGES if n not in halted)),
+        deployments=_redeploy(ws, store, tuple(n for n in (LIVE, PAPER) if n not in halted)),
         halted=halted,
     )
 
@@ -311,16 +336,44 @@ def _check_venues(
     )
 
 
+def _struck_for_live(
+    ws: Workspace, store: StateStore, strategy_id: str, chosen: StrategyVersion, share: float
+) -> Expectation | None:
+    """The version's expectation struck at the live share, refusing the promotion when the
+    measurement refuses; `None` when it was struck there already, or when the share is below
+    the version's budgets, which the live deploy blocks before it would measure anything."""
+    if share < budgets(ws, strategy_id, chosen.version):
+        return None
+    subject = records.subject_of(strategy_id, chosen.version)
+    try:
+        return restrike(ws, store, strategy_id, chosen, share)
+    except KansoError as refused:
+        raise PreconditionError(
+            f"{subject} measured again at the {share:g} the live stage would fund it with is "
+            f"refused, so it was not promoted: {refused.message}",
+            remedy=f"raise stages.live.capital or limits.per_strategy_max_pct so the live "
+            f"share holds its book, then promote again; or `kanso strat retire {subject}`",
+        ) from refused
+
+
 def _move_to_live(
-    ws: Workspace, store: StateStore, file: StrategyFile, chosen: StrategyVersion
+    ws: Workspace,
+    store: StateStore,
+    file: StrategyFile,
+    chosen: StrategyVersion,
+    expected: Expectation | None,
 ) -> int | None:
-    """Retire whatever was live, put this version there, and take it off the paper stage."""
+    """Retire whatever was live, put this version there carrying the expectation struck for
+    it, and take it off the paper stage."""
     previous = file.deployed(LIVE)
     updates: dict[int, str] = {chosen.version: LIVE}
     if previous is not None:
         updates[previous.version] = RETIRED
         records.set_stage(store, file.id, previous.version, state=RETIRED, stage=None)
-    strategy_files.write(ws, restated(file, updates))
+    written = restated(file, updates, None if expected is None else {chosen.version: expected})
+    strategy_files.write(ws, written)
+    if expected is not None:
+        record_expected(store, written, chosen.version, LIVE)
     records.clear_stage(store, file.id, LIVE)
     records.set_stage(store, file.id, chosen.version, state=LIVE, stage=None)
     _off_stage(ws, PAPER, file.id)

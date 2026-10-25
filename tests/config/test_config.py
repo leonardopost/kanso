@@ -50,6 +50,7 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.research.folds == 4
     assert config.research.max_lines_per_keep == 40
     assert config.research.baseline_budget_s == 1800
+    assert config.research.cards_per_turn == 1
     assert config.certify.n_fail == 3
     assert config.data.reference == "none"
     assert config.data.adjusted is False

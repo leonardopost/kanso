@@ -474,6 +474,27 @@ def test_a_version_measures_on_a_stage_as_it_does_alone_whatever_its_stage_mate_
         )
 
 
+def test_two_versions_in_one_name_each_trade_as_they_do_alone_and_end_flat(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Two copies of the reverting sleeve on one paper stage share one account and one
+    name. Each reads, sizes and exits its own position, never the account's, so each
+    realises the fills it realises alone and ends the window flat — reading the account's
+    net position, each exit sold the mate's shares too, and both ended the window short."""
+    deployable(ws, store, "first", sleeve=REVERTING, doc=document(id="first"))
+    made = deploy(ws, store, "paper")
+    alone = fills_of(made, "first")
+    assert made.results[0].positions == () and len(alone) >= 14
+    store.connection.execute("DELETE FROM sessions")
+    deployable(ws, store, "second", sleeve=REVERTING, doc=document(id="second"))
+
+    beside = deploy(ws, store, "paper")
+
+    assert fills_of(beside, "first") == alone
+    assert fills_of(beside, "second") == alone
+    assert [one.positions for one in beside.results] == [(), ()]
+
+
 # --- a benchmark ------------------------------------------------------------------
 
 

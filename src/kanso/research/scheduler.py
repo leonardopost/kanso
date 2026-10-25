@@ -379,7 +379,11 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     it. Nor is a best at or below zero: every objective in the library measures an edge whose
     zero is none, so research showed no edge and no certificate can show one, and the plan's
     model call and the certification window's backtests would buy a verdict already known.
-    The `stalled` event records what the best scored, so the reason is on the record. The
+    The `stalled` event records what the best scored, so the reason is on the record. Nor is
+    a best whose search cannot be priced in its objective's units — fewer than two cards
+    scored under it behind a family that has run more (`kanso.certify.run.unpriced`) —
+    which certification would refuse, and the lane with it; the run goes on drawing
+    the cards that make it priceable. The
     verdict says where the hypothesis stands and ends nothing: a pass certifies it and a fail
     returns it to research, and either way it is requeued at −1, because the queue is left
     only when an operator retires something.
@@ -410,7 +414,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     from kanso.certify.certificate import judged
     from kanso.certify.child import certify_in_child
     from kanso.certify.plan import read_plan
-    from kanso.certify.run import pinned_sha
+    from kanso.certify.run import pinned_sha, unpriced
     from kanso.env.envelope import engine_version
 
     if _status(store, hyp_id) in DEAD:
@@ -424,6 +428,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         open_id = active_run(store, hyp_id)
         stalled = next((r for r in records.runs_of(store, hyp_id) if r.run_id == open_id), None)
         pin = pinned_sha(store, hyp_id, best) if stalled is None else stalled.hypothesis_sha
+        objective = records.objective_of(store, pin)
         certifiable = not judged(
             ws,
             store,
@@ -432,6 +437,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
             hypothesis_sha=pin,
             plan_version=None if pinned is None else pinned.plan_version,
             nautilus_version=engine_version(),
+        ) and (
+            objective is None
+            or unpriced(store, hyp_id, objective, records.n_trials(store, hyp_id)) is None
         )
     verdict: str | None = None
     cost: dict[str, object] = {}

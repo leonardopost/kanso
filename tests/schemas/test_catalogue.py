@@ -90,6 +90,30 @@ def test_an_objective_is_not_staged_and_is_not_required() -> None:
         CriteriaItem.model_validate({**OBJECTIVE, "stage": "cert"})
     with pytest.raises(ValidationError, match="required"):
         CriteriaItem.model_validate({**OBJECTIVE, "required": True})
+    with pytest.raises(ValidationError, match="only a gate corrects for a search"):
+        CriteriaItem.model_validate({**OBJECTIVE, "deflates": ["net_edge_bps"]})
+    assert CriteriaItem.model_validate({**GATE, "deflates": ["net_edge_bps"]}).deflates == [
+        "net_edge_bps"
+    ]
+
+
+def test_only_a_card_gate_guards_an_objective_and_only_a_gate_names_params_together() -> None:
+    card = {**GATE, "id": "edge_per_trade", "stage": "card", "required": False}
+    guarded = CriteriaItem.model_validate(
+        {**card, "required_for": ["wf_contribution_bps"], "together": True}
+    )
+    assert guarded.required_for == ["wf_contribution_bps"]
+    assert guarded.together
+    with pytest.raises(ValidationError, match="only a card gate guards an objective"):
+        CriteriaItem.model_validate(
+            {**GATE, "required_for": ["wf_contribution_bps"], "together": True}
+        )
+    with pytest.raises(ValidationError, match="declares its parameters together"):
+        CriteriaItem.model_validate({**card, "required_for": ["wf_contribution_bps"]})
+    with pytest.raises(ValidationError, match="only a gate guards an objective"):
+        CriteriaItem.model_validate({**OBJECTIVE, "required_for": ["wf_contribution_bps"]})
+    with pytest.raises(ValidationError, match="only a gate's parameters are named together"):
+        CriteriaItem.model_validate({**OBJECTIVE, "together": True})
 
 
 def test_an_objective_declares_applicability_and_priority() -> None:

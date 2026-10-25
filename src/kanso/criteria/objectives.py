@@ -1,33 +1,57 @@
 """The objectives: the one scalar a run optimises, and which hypotheses each applies to.
 
 Every objective is fold-wise by construction. A statistic is computed on each of the
-research window's contiguous folds and the folds are then averaged, so the number a card
-reports carries its own standard error and the keep rule has a noise floor to clear. A
-relative objective is the same statistic differenced fold by fold against the host's run,
-because the standard error of the differences is what a marginal improvement has to beat
-— the difference of two separately averaged metrics would throw that pairing away. A
+research window's contiguous folds and the folds are then averaged, so a fold that holds no
+period scores zero and every fold weighs the same however much it holds. A relative
+objective is the same statistic differenced fold by fold against the host's run, and a
 benchmark objective is the same pairing against a benchmark the hypothesis declares — a
 hold of its first leg, produced by the runner over the same window, data, costs and book —
 so a strategy that only rode the market it trades scores nothing.
 
-Which objective a hypothesis gets is the one deterministic domain rule in the system: the
-`applies` predicate over the hypothesis's own attributes, with `min` inclusive and `max`
-exclusive, and the lowest priority winning among those that apply. The shipped set is
-total over mechanism, objective mode and horizon either side of a day, so classification
-always has an objective to write and never has to invent one; a hypothesis that declares
-a benchmark trades the absolute Sharpe for the Sharpe over that benchmark, and the
-`benchmark` clause keeps the two disjoint. At or above a day the
-statistic is a Sharpe of returns, below it the mean edge per trade, since a sub-daily
-holding period produces too few return periods for a Sharpe to mean anything and enough
-trades for a per-trade edge to.
+**The standard error is the error of that mean, read off the series it is a mean of.** It
+used to be the spread of the fold values themselves — four numbers, three degrees of
+freedom — which scattered from half to one and a half times the true error card to card
+and never read the trade count at all. Folds are disjoint spans, so the mean of `K` fold
+values has the variance `Σ Var(v_k) / K²`, and each fold value's variance is read off the
+window's own per-period or per-trade series: the variance of a mean over the fold's count
+of periods for the contribution, Mertens' variance of a Sharpe for a Sharpe, and for the
+per-trade edge the variance of its linearisation period by period — the edge is a ratio of
+what the trades earned to how many there were, and its error is read off how far each
+period's trades moved it, so the trades of one session that one regime moves together are
+priced as one session's worth and not as so many independent draws. Each is widened — never
+narrowed — for serial correlation across periods (`quantities.long_run_factor`). A fold
+whose value is the constant zero by construction contributes nothing. That one number
+is what a card's `metric_se`, the keep floor, the redundancy floor, a certificate's `±`,
+every deflation gate and the power a certification is stated at read; none of them
+computes an error of its own.
 
-Two objectives are chosen by name and never by default. The contribution — the mean net
-return per return period in basis points of the capital — applies at every horizon at a
-priority below every default, so the grid's winner is unchanged wherever it is not named,
-and a hypothesis whose target is a return on capital states `objective.id:
-wf_contribution_bps` (or its marginal form) in its own file. It is the one objective that
-counts a period in cash as a zero: a Sharpe cannot say how much of the capital was put to
-work, and a per-trade edge rewards trading less.
+A relative or benchmark objective's error is the paired one wherever the two runs share
+their periods, because the host's own variation is in both and is not what a marginal
+improvement has to beat: a contribution's per-period differences, a difference of Sharpes
+by Memmel's correction of Jobson–Korkie, a difference of per-trade edges by differencing the
+two runs' linearisations period by period (trades of two runs pair nowhere else). Runs
+whose periods differ are taken as independent and their variances summed, which can only
+overstate the error of two runs that share trades.
+
+Which objectives can score a hypothesis is the `applies` predicate over its own attributes,
+with `min` inclusive and `max` exclusive: the set an objective is named from, by the
+classifying model or by the operator, and never a choice within it — `priority` orders the
+list and selects nothing. The shipped set admits at least one objective in each mode at
+every mechanism and horizon either side of a day, so classification always has one to name
+and never has to invent one; a hypothesis that declares a benchmark is offered the Sharpe
+over that benchmark in place of the absolute Sharpe, and the `benchmark` clause keeps the two
+apart. At or above a day the statistic of the horizon is a Sharpe of returns, below it the
+mean edge per trade, since a sub-daily holding period produces too few return periods for a
+Sharpe to mean anything and enough trades for a per-trade edge to.
+
+The contribution — the mean net return per return period in basis points of the capital —
+and its marginal form apply at every horizon. It is the unit a return target is stated in,
+and the one objective that counts a period in cash as a zero: a Sharpe cannot say how much
+of the capital was put to work, and a per-trade edge rewards trading less — two trades a day
+at ten basis points replace forty at 1.2 under it, five basis points a day of a quarter of
+the capital kept over twelve. The contribution has the opposite flaw once every trade loses,
+moving toward zero as losing trades are dropped, so `edge_per_trade` is declared
+`required_for` both forms and every hypothesis scored on one carries it.
 
 A resolution that names an unaggregated grain rather than a bar size is treated as the
 finest grain there is — zero length — so a predicate written in durations orders it below
@@ -36,12 +60,27 @@ every bar size.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
+from math import fsum, sqrt
 from types import MappingProxyType
 from typing import ClassVar, Final, Protocol
 
-from kanso.criteria.quantities import contribution_bps, edge_bps, mean, sharpe, standard_error
-from kanso.criteria.run import CardRun
+from kanso.criteria.quantities import (
+    contribution_bps,
+    contribution_series,
+    correlation,
+    edge_bps,
+    long_run_factor,
+    mean,
+    moments,
+    sharpe,
+    sharpe_difference_variance,
+    sharpe_variance,
+    stdev,
+    variances_of_means,
+)
+from kanso.criteria.run import BPS, CardRun
 from kanso.errors import PreconditionError
 from kanso.schemas import (
     Applies,
@@ -92,7 +131,8 @@ class Objective(Protocol):
         host: CardRun | None = None,
         benchmark: CardRun | None = None,
     ) -> tuple[float, float]:
-        """The metric and its standard error: the mean of the folds and their spread."""
+        """The metric and its standard error: the mean of the folds, and the error of that
+        mean read off the window's per-period or per-trade series."""
         ...
 
 
@@ -100,6 +140,12 @@ STATISTICS: Final[Mapping[str, Callable[[CardRun], float]]] = MappingProxyType(
     {"sharpe": sharpe, "edge_bps": edge_bps, "contribution_bps": contribution_bps}
 )
 """The per-fold quantities an objective is built from, named so a class can select one."""
+
+Folds = tuple[CardRun, ...]
+
+Variances = Callable[[CardRun, Folds, CardRun | None, Folds], list[float]]
+"""Each fold value's sampling variance, from the run and its folds and — for a relative or
+benchmark objective — the run it is differenced against and that run's folds."""
 
 
 class _FoldObjective:
@@ -116,12 +162,8 @@ class _FoldObjective:
         host: CardRun | None = None,
         benchmark: CardRun | None = None,
     ) -> tuple[float, ...]:
-        measure = STATISTICS[self.statistic]
-        own = tuple(measure(fold) for fold in run.folds(folds))
-        if self.mode == ABSOLUTE:
-            return own
-        against = tuple(measure(fold) for fold in _against(self, host, benchmark).folds(folds))
-        return tuple(a - b for a, b in zip(own, against, strict=True))
+        against = None if self.mode == ABSOLUTE else _against(self, host, benchmark)
+        return self._values(run.folds(folds), () if against is None else against.folds(folds))
 
     def compute(
         self,
@@ -130,8 +172,162 @@ class _FoldObjective:
         host: CardRun | None = None,
         benchmark: CardRun | None = None,
     ) -> tuple[float, float]:
-        values = self.fold_values(run, folds, host, benchmark)
-        return mean(values), standard_error(values)
+        against = None if self.mode == ABSOLUTE else _against(self, host, benchmark)
+        own = run.folds(folds)
+        other = () if against is None else against.folds(folds)
+        each = VARIANCES[self.statistic](run, own, against, other)
+        return mean(self._values(own, other)), sqrt(fsum(each)) / folds
+
+    def _values(self, own: Folds, other: Folds) -> tuple[float, ...]:
+        measure = STATISTICS[self.statistic]
+        values = tuple(measure(fold) for fold in own)
+        if not other:
+            return values
+        return tuple(a - measure(b) for a, b in zip(values, other, strict=True))
+
+
+def _paired(run: CardRun, against: CardRun) -> bool:
+    """Whether two runs struck their returns at the same instants, and so pair period by
+    period."""
+    return run.period_ends_ns == against.period_ends_ns
+
+
+def _summed(left: Sequence[float], right: Sequence[float]) -> list[float]:
+    """Two independent estimates' variances, fold by fold: the variance of a difference of
+    two runs that share nothing, and an overstatement of it for two that share trades."""
+    return [a + b for a, b in zip(left, right, strict=True)]
+
+
+def _of_means(folds: Folds, series: Callable[[CardRun], tuple[float, ...]]) -> list[float]:
+    """The variance of each fold's mean of `series`, its dispersion read off all of them."""
+    each = [series(fold) for fold in folds]
+    return variances_of_means([v for part in each for v in part], [len(part) for part in each])
+
+
+def _contribution_variances(
+    run: CardRun, own: Folds, against: CardRun | None, other: Folds
+) -> list[float]:
+    """A contribution is a mean of per-period returns on the capital: the variance of each
+    fold's mean, of the paired per-period differences for a marginal one."""
+    if against is None:
+        return _of_means(own, contribution_series)
+    if not _paired(run, against):
+        return _summed(_of_means(own, contribution_series), _of_means(other, contribution_series))
+    differences = [
+        tuple(a - b for a, b in zip(contribution_series(o), contribution_series(h), strict=True))
+        for o, h in zip(own, other, strict=True)
+    ]
+    return variances_of_means(
+        [v for part in differences for v in part], [len(part) for part in differences]
+    )
+
+
+def _edge_variances(run: CardRun, own: Folds, against: CardRun | None, other: Folds) -> list[float]:
+    """A per-trade edge's variance, read period by period: each fold's edge linearised over
+    its periods, or the period-by-period difference of two runs' for a marginal one.
+
+    Not the variance of a mean of the trades taken one by one. That reads forty clips a
+    session as forty draws, and simulated in October 2026 on sixty sessions of twenty and of
+    forty trades it reported 0.62 to 0.84 of the spread the edge actually had once a fiftieth
+    to a tenth of each trade's variance was a session effect the session's trades shared —
+    a scalper's ordinary case — so the keep floor, a certificate's `±` and the deflation were
+    each that much too narrow. Read period by period, the same runs reported 0.97 to 1.15;
+    on trades that share nothing it is the per-trade error again, on fewer degrees of
+    freedom.
+    """
+    if against is None:
+        return _linearised(own, edge_bps(run))
+    if not _paired(run, against):
+        return _summed(_linearised(own, edge_bps(run)), _linearised(other, edge_bps(against)))
+    ratios = edge_bps(run), edge_bps(against)
+    differences: list[float] = []
+    counts: list[int] = []
+    for mine, theirs in zip(own, other, strict=True):
+        found = (_influence(mine, ratios[0]), _influence(theirs, ratios[1]))
+        width = next((len(part) for part in found if part is not None), 0)
+        if not width:
+            counts.append(0)
+            continue
+        a, b = (part if part is not None else [0.0] * width for part in found)
+        differences.extend(x - y for x, y in zip(a, b, strict=True))
+        counts.append(width)
+    return variances_of_means(differences, counts)
+
+
+def _linearised(folds: Folds, ratio: float) -> list[float]:
+    """The variance of each fold's per-trade edge, read off its periods' influences on it."""
+    each = [_influence(fold, ratio) for fold in folds]
+    return variances_of_means(
+        [u for part in each if part is not None for u in part],
+        [0 if part is None else len(part) for part in each],
+    )
+
+
+def _influence(fold: CardRun, ratio: float) -> list[float] | None:
+    """Each period's first-order contribution to this fold's per-trade edge, or `None` for a
+    fold that closed no trade, whose edge is the constant zero and varies by nothing.
+
+    A fold's edge is a ratio — what its trades earned over how many there were — and to first
+    order it moves by the mean over its periods of `u_p = (E_p − R·M_p) / M̄`, `E_p` the edges
+    of the trades closing in period `p`, `M_p` their count, `M̄` the fold's trades per period
+    and `R` the run's edge over the window. Its variance is therefore read off the `u_p` as any
+    mean's is, over the fold's periods, and trades of one period that move together move one
+    `u_p`; two runs over the same periods differ by the mean of `u_p − u'_p`, which is how a
+    per-trade edge is paired when no trade of one run is a trade of the other. Taking `R`
+    over the window rather than the fold leaves a fold's own departure from it in the
+    influences, which can only widen the error. A trade belongs to the first period ending at
+    or after its close; one that closed after the fold's last period end, which a fold's
+    calendar edge can leave it, to the last; and a fold that holds no period end at all holds
+    its trades in one period.
+    """
+    ends = fold.period_ends_ns
+    periods = max(len(ends), 1)
+    totals = [0.0] * periods
+    counts = [0] * periods
+    for trade in fold.trades:
+        if trade.notional > 0:
+            at = min(bisect_left(ends, trade.closed_ns), periods - 1)
+            totals[at] += trade.pnl_net / trade.notional * BPS
+            counts[at] += 1
+    traded = sum(counts)
+    if not traded:
+        return None
+    per_period = traded / periods
+    return [(e - ratio * m) / per_period for e, m in zip(totals, counts, strict=True)]
+
+
+def _sharpe_variances(
+    run: CardRun, own: Folds, against: CardRun | None, other: Folds
+) -> list[float]:
+    """Each fold's Sharpe's variance by Mertens, or a paired difference's by Memmel.
+
+    A fold where either run's Sharpe is the constant zero — a flat strategy, a hold that
+    never moved — has nothing to pair, and its difference varies as the other Sharpe does.
+    """
+    mine = long_run_factor(run.returns), moments(run.returns)
+    if against is None:
+        return [sharpe_variance(f.returns, f.window, *mine) for f in own]
+    theirs = long_run_factor(against.returns), moments(against.returns)
+    paired = _paired(run, against)
+    rho = correlation(run.returns, against.returns) if paired else None
+    factor = max(mine[0], theirs[0])
+    return [
+        sharpe_difference_variance(o.returns, h.returns, o.window, factor, rho)
+        if rho is not None and stdev(o.returns) > 0 and stdev(h.returns) > 0
+        else sharpe_variance(o.returns, o.window, *mine)
+        + sharpe_variance(h.returns, h.window, *theirs)
+        for o, h in zip(own, other, strict=True)
+    ]
+
+
+VARIANCES: Final[Mapping[str, Variances]] = MappingProxyType(
+    {
+        "sharpe": _sharpe_variances,
+        "edge_bps": _edge_variances,
+        "contribution_bps": _contribution_variances,
+    }
+)
+"""Each statistic's fold-value variances, named as `STATISTICS` names the statistic."""
 
 
 def _against(objective: Objective, host: CardRun | None, benchmark: CardRun | None) -> CardRun:
@@ -323,7 +519,8 @@ def measures_a_hold_over(items: Sequence[CriteriaItem], hyp: Hypothesis) -> bool
 
 
 def applicable(items: Sequence[CriteriaItem], hyp: Hypothesis, mode: str) -> list[tuple[int, str]]:
-    """Every applicable objective as `(priority, id)`, best first; the lowest wins."""
+    """Every applicable objective as `(priority, id)`, in the order they are listed; the
+    priority orders the set and selects nothing in it."""
     return sorted(
         (item.priority, item.id)
         for item in items

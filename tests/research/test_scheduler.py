@@ -23,7 +23,7 @@ from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
-from tests.certify.test_run import a_card, write_plan
+from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, write_plan
 
 from .conftest import (
     ATTACHED_HOST,
@@ -358,7 +358,7 @@ def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
     it to take, and no command anywhere could give it back.
     """
     hyp_id = classify(ws, store, DOCUMENT, FLAT)
-    write_plan(ws)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])  # five trials behind it by the last
     policy = tuned(ws, n_fail=3)  # read by the child that certifies, so it is on disk
 
     for attempt in range(1, 6):
@@ -420,6 +420,23 @@ def test_a_stall_on_a_best_that_proved_no_edge_is_not_certified(
     assert ids(store) == [hyp_id], "back to research, as any stall"
     (stalled,) = store.events(kind=scheduler.STALLED)
     assert stalled.detail["best_metric"] == metric, "the event says what the best scored"
+
+
+def test_a_stall_on_a_best_whose_search_cannot_be_priced_is_not_certified(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Certification would refuse it, and the lane with it: the run goes on drawing cards."""
+    from tests.certify.test_run import searched_then_switched
+
+    hyp_id = DOCUMENT["id"]
+    searched_then_switched(ws, store, after=1)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert stall.certifiable is False
+    assert stall.best_sha is not None
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+    assert ids(store) == [hyp_id]
 
 
 def test_a_stall_with_no_keep_only_requeues(ws: Workspace, store: StateStore) -> None:

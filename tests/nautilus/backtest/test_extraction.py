@@ -162,6 +162,10 @@ def _quoting_hypothesis() -> Hypothesis:
 def test_a_quoted_spread_is_read_from_the_quotes_that_were_published(
     tmp_path: Path, request_for
 ) -> None:
+    """A name fed bars beside its quotes fills at the bar's close — the bar walks the book as
+    prints and the venue settles after it — so its price carries no spread and the quoted
+    half-spread is charged, read from the last quote before the fill. A name fed quotes alone
+    is the other case (`test_spread.py`): struck at the touch and charged none."""
     hyp = _quoting_hypothesis()
     store = catalog(
         tmp_path / "catalog",
@@ -172,7 +176,10 @@ def test_a_quoted_spread_is_read_from_the_quotes_that_were_published(
     card = run(request_for(hypothesis_=hyp, quotes_available=True), store).run
 
     assert card.fills
+    assert not any(fill.touched for fill in card.fills)
+    closes = {round(float(bar.close), 2) for bar in bars(RESEARCH)}
     for fill in card.fills:
+        assert round(fill.px, 2) in closes
         # Two cents wide around the mid, so one side of it is a cent a share.
         assert fill.cost == pytest.approx(fill.qty * 0.01, rel=0.01)
 

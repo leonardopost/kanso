@@ -15,10 +15,12 @@ from kanso.nautilus.backtest import (
     child_env,
     run,
     run_subprocess,
+    run_subprocesses,
 )
 from tests.processes import ends, running
 
 from .conftest import (
+    CERTIFICATION,
     RAISING_SLEEVE,
     REFUSING_SLEEVE,
     SLOW_SLEEVE,
@@ -238,6 +240,221 @@ def test_a_card_that_outgrows_its_memory_is_killed(
     assert result.reason == "memory"
 
 
+def test_several_children_read_one_window_and_a_memory_kill_spares_the_rest(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One read feeds every slot. A child killed for its own memory does not take the others."""
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    alone = run_subprocess(request_for(), store, lane)
+    together = run_subprocesses(
+        [
+            request_for(),
+            request_for(source=SLOW_SLEEVE, mem_cap_gb=1e-6),
+            request_for(),
+        ],
+        store,
+        lane,
+    )
+
+    assert [item.crashed for item in together] == [False, True, False]
+    assert together[1].reason == "memory"
+    assert together[0].run.trades == alone.run.trades == together[2].run.trades
+    assert not (lane / ".card").exists()
+
+
+def test_a_fanned_window_is_held_a_chunk_at_a_time_however_many_chunks_it_has(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The feed is lockstep — a chunk is read once every running child has been written the
+    last — so the parent drops a chunk once every running child has taken it and holds the
+    newest alone, as the one-card path does. Measured before this: the fan kept every chunk's
+    pickle for the whole turn, about 88 bytes a quote and 78 a print, so the lane holding a
+    twenty-name, sixty-session tick window held about 44 GB of it."""
+    alone = run_subprocess(request_for(), store, lane)
+    held = _held_chunks(monkeypatch)
+    together = run_subprocesses([request_for(), request_for(), request_for()], store, lane)
+
+    assert [item.crashed for item in together] == [False, False, False]
+    assert all(item.run.trades == alone.run.trades for item in together)
+    assert held["chunks"] >= 30, "a window of many chunks"
+    assert held["most"] <= 2, f"the parent held {held['most']} chunks at once"
+    assert held["most_bytes"] <= 2 * held["largest"]
+    assert held["alive"] == [], "nothing of the window outlives the turn"
+
+
+def test_a_fanned_tick_window_is_held_a_chunk_at_a_time_and_each_card_is_the_whole_one(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two names' book changes and prints cut seven points a chunk and fanned to two
+    children: each child's card is the card the whole window run in this process gives, and
+    the parent never holds more than the newest chunk."""
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import INSTRUMENT, POSTER, QUIET, tick_hypothesis
+
+    held_store = _tick_store(tmp_path / "ticks", two=True)
+    universe = (INSTRUMENT, f"{QUIET}.XNAS")
+    request = request_for(source=POSTER, hypothesis_=tick_hypothesis(20.0, universe))
+    whole = run(request, held_store)
+    assert whole.run.fills, "the window trades, so the comparison compares something"
+    monkeypatch.setattr(runner, "CHUNK_POINTS", 7)
+    held = _held_chunks(monkeypatch)
+
+    together = run_subprocesses([request, request], held_store, lane)
+
+    assert [item.crashed for item in together] == [False, False], together[0].traceback_tail
+    assert all(item.run == whole.run for item in together)
+    assert all(item.intents == whole.intents for item in together)
+    assert held["chunks"] >= 10, "a window of many chunks"
+    assert held["most"] <= 2, f"the parent held {held['most']} chunks at once"
+    assert held["alive"] == []
+
+
+def _held_chunks(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Count, from here on, the chunk pickles the card path makes and how many of them, and
+    how many of their bytes, are alive at once: each is made a `bytes` whose finaliser says
+    when the last reference to it went, which CPython's reference counting makes exact."""
+    from kanso.nautilus import backtest as runner
+
+    held: dict[str, Any] = {"chunks": 0, "largest": 0, "most": 0, "most_bytes": 0, "alive": []}
+    alive: list[int] = held["alive"]
+
+    class Chunk(bytes):
+        def __del__(self) -> None:
+            alive.remove(len(self))
+
+    pickled = runner._pickled
+
+    def counted(record: object) -> bytes:
+        data = pickled(record)
+        if not (isinstance(record, dict) and "groups" in record):
+            return data
+        held["chunks"] += 1
+        held["largest"] = max(held["largest"], len(data))
+        alive.append(len(data))
+        held["most"] = max(held["most"], len(alive))
+        held["most_bytes"] = max(held["most_bytes"], sum(alive))
+        return Chunk(data)
+
+    monkeypatch.setattr(runner, "_pickled", counted)
+    return held
+
+
+def test_an_empty_batch_runs_nothing() -> None:
+    assert run_subprocesses([], Path("."), Path(".")) == []
+
+
+def test_a_batch_refuses_a_window_that_is_not_research(
+    lane: Path, request_for, store: Path
+) -> None:
+    from kanso.errors import PreconditionError
+
+    with pytest.raises(PreconditionError, match="research data only"):
+        run_subprocesses([request_for(CERTIFICATION)], store, lane)
+
+
+def test_a_batch_whose_window_holds_nothing_kills_the_children_it_started(
+    tmp_path: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    from .conftest import bars, catalog, instrument
+
+    prefix = (date(2023, 12, 1), date(2023, 12, 31))
+    held = catalog(tmp_path / "december", bars(prefix), [instrument()])
+    started = _children(monkeypatch)
+    with pytest.raises(PreconditionError, match="holds nothing"):
+        run_subprocesses([request_for(prefix=prefix), request_for(prefix=prefix)], held, lane)
+
+    assert len(started) == 2
+    assert all(child.returncode is not None and _gone(child.pid) for child in started)
+    assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_a_batch_interrupted_kills_every_child(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    poll = runner._poll_slot
+
+    def stop(slot: object, request: object) -> None:
+        runner.interrupt()
+        poll(slot, request)
+
+    monkeypatch.setattr(runner, "_poll_slot", stop)
+    try:
+        with pytest.raises(PreconditionError, match="interrupted"):
+            run_subprocesses([request_for(), request_for()], store, lane)
+    finally:
+        runner.resume()
+
+
+def test_a_pipe_that_is_not_ready_is_written_on_the_next_pass(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import select
+
+    from kanso.nautilus import backtest as runner
+
+    real = select.poll
+
+    class Once:
+        def __init__(self) -> None:
+            self._poll = real()
+            self._held = False
+
+        def register(self, fd: int, event: int) -> None:
+            self._poll.register(fd, event)
+
+        def poll(self, timeout: float) -> list[tuple[int, int]]:
+            if not self._held:
+                self._held = True
+                return []
+            return self._poll.poll(timeout)
+
+    monkeypatch.setattr(runner.select, "poll", Once)
+    results = run_subprocesses([request_for()], store, lane)
+    assert results[0].crashed is False
+
+
+def test_a_closed_pipe_ends_that_slot_s_write(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    write = os.write
+
+    def closed(fd: int, data: object) -> int:
+        raise BrokenPipeError
+
+    monkeypatch.setattr(os, "write", closed)
+    try:
+        results = run_subprocesses([request_for()], store, lane)
+    finally:
+        monkeypatch.setattr(os, "write", write)
+
+    assert results[0].crashed is True
+
+
+def test_a_batch_kills_one_child_for_its_clock_and_finishes_the_other(
+    store: Path, lane: Path, request_for
+) -> None:
+    together = run_subprocesses(
+        [request_for(), request_for(source=SLOW_SLEEVE, budget_s=0.05)],
+        store,
+        lane,
+    )
+
+    assert together[0].crashed is False
+    assert together[1].crashed is True
+    assert together[1].reason == "budget"
+
+
 def test_the_peak_of_the_reaped_child_is_reported(store: Path, lane: Path, request_for) -> None:
     result = run_subprocess(request_for(), store, lane)
 
@@ -372,6 +589,43 @@ def test_a_card_no_longer_wanted_is_killed_at_the_watcher_s_next_ask(
     assert failure.value.remedy == "queue it again"
     assert runner._WANTED == [], "the check is the block's, and leaves with it"
     assert not (lane / runner.CARD_ROOM).exists()
+
+
+def test_a_card_whose_work_ended_as_it_exited_is_refused_before_its_room_is_read(
+    store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run a card was for is ended after the watcher's last ask, as the child exits, and
+    the end removes the lane directory with the card's room in it: the check's refusal is
+    raised, never a `FileNotFoundError` from reading the room.
+
+    Observed 2026-10-15 on 0.16.0, before the check was asked once the child had exited: a
+    lane whose run `research end` ended mid-card died reading the card's `stderr.txt`.
+    """
+    import shutil
+
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest as runner
+
+    watch = runner._watch
+    ended: list[bool] = []
+
+    def ongoing() -> None:
+        if ended:
+            raise PreconditionError("the run was ended", remedy="queue it again")
+
+    def ended_as_it_exits(child: Any, *bounds: Any, **fed: Any) -> Any:
+        outcome = watch(child, *bounds, **fed)
+        ended.append(True)
+        shutil.rmtree(lane)  # what `research end` does to the lane directory
+        return outcome
+
+    monkeypatch.setattr(runner, "_watch", ended_as_it_exits)
+    with runner.wanted(ongoing), pytest.raises(PreconditionError, match="ended") as failure:
+        run_subprocess(request_for(), store, lane)
+
+    assert ended == [True], "the child ran to its own exit"
+    assert failure.value.remedy == "queue it again"
+    assert not lane.exists()
 
 
 def test_a_card_nobody_wants_reads_no_window_and_starts_no_card(

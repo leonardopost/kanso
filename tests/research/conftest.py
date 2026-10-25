@@ -28,6 +28,7 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.objects import Price, Quantity
 
+from kanso.criteria import criteria_version
 from kanso.criteria.run import midnight_ns
 from kanso.data import catalog, snapshot
 from kanso.data.instruments import resolve_universe
@@ -37,7 +38,9 @@ from kanso.hyp import add as register
 from kanso.hyp import set_status
 from kanso.models import Answer, Call
 from kanso.models import router as router_module
-from kanso.schemas import Detected, Envelope, ModelSpec, Plan
+from kanso.research import records
+from kanso.research.records import Measurement
+from kanso.schemas import Card, Detected, Envelope, Hypothesis, ModelSpec, Plan, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace, find, init
 
@@ -214,7 +217,7 @@ ENVELOPE = Envelope(
         cores_perf=4,
         cores_eff=4,
         cores_total=8,
-        mem_gb=32.0,
+        mem_gb=96.0,
         disk_free_gb=100.0,
         on_ac_power=True,
         python="3.12.0",
@@ -226,12 +229,18 @@ ENVELOPE = Envelope(
         reserved_cores=2,
         reserved_mem_gb=8.0,
         cores_per_lane=2,
-        mem_per_lane_gb=8.0,
+        mem_per_lane_gb=32.0,
         lanes=2,
     ),
     detected_at="2024-01-01T00:00:00+00:00",
 )
-"""A fixed envelope: the lane memory share is a setting, not a property of the host."""
+"""A fixed envelope: the lane memory share is a setting, not a property of the host.
+
+The share has to fund every width the suite runs at three times the run's measured
+baseline peak (`loop.mem_cap` refuses a width it cannot), and that peak is the host's: a
+demo baseline peaked at about 0.2 GB on macOS and at 0.96-0.99 GB on CI's Linux runners
+under coverage (2026-10-24), where an 8 GB share refused three cards a turn. 32 GB funds
+eight cards up to a 1.33 GB peak."""
 
 
 def document(**changes: Any) -> dict[str, Any]:
@@ -446,6 +455,27 @@ def classify(ws: Workspace, store: StateStore, doc: dict[str, Any], strategy: by
 def registered(ws: Workspace, store: StateStore) -> str:
     """The demo hypothesis, classified, with a flat baseline strategy."""
     return classify(ws, store, DOCUMENT)
+
+
+def measured_as_scored(store: StateStore, card: Card) -> Measurement:
+    """The card's stored measurement, asserted to score exactly what the card recorded.
+
+    Equality, not closeness: the measurement is the arguments the loop scored the card with,
+    so the objective on them is the same arithmetic on the same floats. An objective's
+    `compute` reads no parameter, so equality cannot catch a wrong keep rule beside the id:
+    the stored objective is compared whole with the one the card's run pinned, and the
+    criteria version with the kanso that just scored it.
+    """
+    found = records.measurement_of(store, card)
+    assert found is not None, f"card {card.sha7} ({card.status}) kept no measurement"
+    assert found.compute() == (card.metric, card.metric_se)
+    (pin,) = store.connection.execute(
+        "SELECT hypothesis_sha FROM runs WHERE run_id = ?", (card.run_id,)
+    ).fetchone()
+    pinned = parse_yaml(Hypothesis, store.get_blob(pin).decode("utf-8"), "hypothesis.yaml")
+    assert pinned.objective is not None and found.objective == pinned.objective
+    assert found.criteria_version == criteria_version()
+    return found
 
 
 @pytest.fixture

@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from kanso.research import records
 from kanso.state import SCHEMA_VERSION, TABLES, StateStore, migrations, usable
 
 from .conftest import PREVIOUS_RELEASE, PREVIOUS_RELEASE_VERSION
@@ -75,3 +76,16 @@ def test_every_later_migration_applies_over_the_previous_release_and_keeps_its_r
 
     after = counts(previous_release_db)
     assert after == {**before, "events": before["events"] + 1}
+    # A card written before cards kept a digest, or what it was measured from, reads back as
+    # one that recorded neither.
+    conn = sqlite3.connect(previous_release_db)
+    try:
+        assert {row[0] for row in conn.execute("SELECT digest FROM cards")} == {None}
+        assert {row[0] for row in conn.execute("SELECT measured_sha FROM cards")} == {None}
+    finally:
+        conn.close()
+    with StateStore(previous_release_db) as store:
+        hyp_ids = [row[0] for row in store.connection.execute("SELECT DISTINCT hyp_id FROM cards")]
+        cards = [card for hyp_id in hyp_ids for card in records.cards_of(store, hyp_id)]
+        assert cards and {card.measured_sha for card in cards} == {None}
+        assert {records.measurement_of(store, card) for card in cards} == {None}

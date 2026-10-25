@@ -76,6 +76,12 @@ class GateContext:
       cards and both are counted by the `n_trials` a certificate records. A card refused
       as redundant is a trial: it ran, it traded, and the keep rule was asked before its
       signature was, so the selection ranked its number and declined it;
+    * `trials` is how many candidates the search behind `run` has drawn, `run` among them:
+      on a card, the hypothesis's cards that ran to a result and traded under any
+      objective, and this one; at certification, every such card. A deflation takes its
+      expected maximum over this many draws and their spread from `trial_metrics`, since
+      a count has no units to keep apart and a spread does. It is 1 — no search — wherever
+      no caller counts one;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented
@@ -86,10 +92,15 @@ class GateContext:
       of number — oldest first, so a participation limit has something to be a share of;
     * `tunable` are the subject's own numeric parameters at the values it ran with, and
       `rerun` runs it again over `window` with some of them replaced — the pair a
-      perturbation gate needs, and the one thing here that costs a backtest to use.
+      perturbation gate needs, and the one thing here that costs a backtest to use;
+    * `rerun_costs` runs it again over `window` under a venue model whose cost keys are
+      replaced — `latency_ms`, the one a latency stress moves — with the strategy as it
+      was: what a gate that asks how the result survives a slower route needs, since a
+      latency changes which fills a run has and cannot be re-applied to recorded ones.
 
-    A gate never runs anything itself: `rerun` is supplied by whoever ran the subject in
-    the first place, so a perturbed run is measured exactly as the unperturbed one was.
+    A gate never runs anything itself: `rerun` and `rerun_costs` are supplied by whoever
+    ran the subject in the first place, so a perturbed run is measured exactly as the
+    unperturbed one was.
     """
 
     hyp: Hypothesis
@@ -110,6 +121,7 @@ class GateContext:
     benchmark_run: CardRun | None = None
     benchmark_research_run: CardRun | None = None
     trial_metrics: Sequence[float] = ()
+    trials: int = 1
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     datasets: Sequence[DatasetFacts] = ()
@@ -118,6 +130,7 @@ class GateContext:
     )
     tunable: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
     rerun: Callable[[Mapping[str, float]], CardRun] | None = None
+    rerun_costs: Callable[[Mapping[str, float]], CardRun] | None = None
 
 
 class Gate(Protocol):
