@@ -1329,8 +1329,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         key = instrument_id.value
         if ts_init < self._fed_from_ns or self._out_of_scope(key, ts_init):
             return
-        if self._cfg.depth is not None:
-            self._show_depth(ts_init)
+        self._show_book(ts_init)  # as before: under `depth` no quote is loaded
         self._turn(ts_init)
         self._delivered_ns = ts_init
         self._last_quote[key] = tick
@@ -1572,23 +1571,33 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _flush_one(self) -> None:
         """Dispatch the point the oldest buffered handler holds, with the id and the name its
-        handler read; a quote or a print is told by its exact type first, which no bar is."""
+        handler read: a bar, a quote or a print, each by its kind as an `isinstance` tells it
+        (a quote's and a print's exact type asked first, which no bar is), or anything else.
+        A quote or a print held by `handle_data`, which reads no id, has its id read here."""
         event, instrument_id, key = self._pending.popleft()
         self._flushing = True
         try:
             kind = type(event)
             if kind is QuoteTick:
-                self._dispatch_quote(event, instrument_id, key)
+                quote = True
             elif kind is TradeTick:
-                self._dispatch_trade(event, instrument_id, key)
+                quote = False
             elif isinstance(event, Bar):
                 self._dispatch_bar(event)
+                return
             elif isinstance(event, QuoteTick):
-                self._dispatch_quote(event, instrument_id, key)
+                quote = True
             elif isinstance(event, TradeTick):
-                self._dispatch_trade(event, instrument_id, key)
+                quote = False
             else:
                 self._dispatch_data(event)
+                return
+            if instrument_id is None:
+                instrument_id = event.instrument_id  # type: ignore[attr-defined]
+            if quote:
+                self._dispatch_quote(event, instrument_id, key)
+            else:
+                self._dispatch_trade(event, instrument_id, key)
         finally:
             self._flushing = False
 
@@ -1624,26 +1633,24 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._overlay_due = (instrument_id, None, None)
 
     def _dispatch_quote(
-        self, tick: QuoteTick, instrument_id: InstrumentId | None = None, key: str | None = None
+        self, tick: QuoteTick, instrument_id: InstrumentId, key: str | None
     ) -> None:
         """Hand a quote to the author, then ask for the exits owed and the exit rules, with the
-        id and the name its handler read, or read here when it is handed none. The cancels held
-        behind a modify are sent and the owed exits asked for only when there are any, which
-        is what `_send_behind_modify` and `_pay_owed` ask first."""
+        id its handler read and its name, or `None` for the name to be read when it is asked
+        for. The cancels held behind a modify are sent and the owed exits asked for only when
+        there are any, which is what `_send_behind_modify` and `_pay_owed` ask first."""
         self._data_time = int(tick.ts_event)
         if self._behind_modify:
             self._send_behind_modify()
         super().handle_quote_tick(tick, False)
         if self._owed:
             self._pay_owed()
-        if instrument_id is None:
-            instrument_id = tick.instrument_id
         self._consult_exit(instrument_id, key)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
     def _dispatch_trade(
-        self, tick: TradeTick, instrument_id: InstrumentId | None = None, key: str | None = None
+        self, tick: TradeTick, instrument_id: InstrumentId, key: str | None
     ) -> None:
         """As `_dispatch_quote`, for a print."""
         self._data_time = int(tick.ts_event)
@@ -1652,8 +1659,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         super().handle_trade_tick(tick, False)
         if self._owed:
             self._pay_owed()
-        if instrument_id is None:
-            instrument_id = tick.instrument_id
         self._consult_exit(instrument_id, key)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)

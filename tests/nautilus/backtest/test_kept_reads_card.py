@@ -38,6 +38,7 @@ from .conftest import (
     SYMBOL,
     VENUE,
     _venue,
+    bars,
     hypothesis,
     instrument,
     venue_model,
@@ -631,3 +632,64 @@ def test_a_venue_handed_each_point_with_its_id_fills_as_one_handed_the_point(
     finally:
         actions._POINTED = was  # type: ignore[misc]
     assert_the_same(pointed, alone)
+
+
+def test_a_held_point_is_dispatched_by_its_kind_with_the_id_its_handler_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quote or a print goes to its dispatch with the id and the name its handler held it
+    with, one of a subclass's as well, and one held with no id has its own read; a bar and
+    anything else go where they went."""
+
+    class Quote(QuoteTick):  # type: ignore[misc]
+        pass
+
+    class Print(TradeTick):  # type: ignore[misc]
+        pass
+
+    sleeve = KansoStrategy(KansoStrategy.config_cls(universe=NAMES))  # type: ignore[call-arg]
+    went: list[tuple[str, object, object, object]] = []
+    for kind in ("quote", "trade", "bar", "data"):
+        monkeypatch.setattr(
+            sleeve,
+            f"_dispatch_{kind}",
+            lambda point, *read, kind=kind: went.append((kind, point, *read, *(None,) * 2)[:4]),
+        )
+    held = _id(SYMBOL)
+    quote = QuoteTick(
+        held, Price(1.0, 2), Price(1.01, 2), Quantity.from_int(1), Quantity.from_int(1), 1, 1
+    )
+    subquote = Quote(
+        held, Price(1.0, 2), Price(1.01, 2), Quantity.from_int(1), Quantity.from_int(1), 2, 2
+    )
+    trade = TradeTick(
+        held, Price(1.0, 2), Quantity.from_int(1), AggressorSide.BUYER, TradeId("a"), 3, 3
+    )
+    subtrade = Print(
+        held, Price(1.0, 2), Quantity.from_int(1), AggressorSide.BUYER, TradeId("b"), 4, 4
+    )
+    bar = bars(RESEARCH)[0]
+    other = object()
+    sleeve._pending.extend(
+        [
+            (quote, held, NAMES[0]),
+            (subquote, None, None),
+            (trade, held, NAMES[0]),
+            (subtrade, held, None),
+            (bar, None, None),
+            (other, None, None),
+        ]
+    )
+    while sleeve._pending:
+        sleeve._flush_one()
+    assert [(kind, point) for kind, point, *_ in went] == [
+        ("quote", quote),
+        ("quote", subquote),
+        ("trade", trade),
+        ("trade", subtrade),
+        ("bar", bar),
+        ("data", other),
+    ]
+    assert [read for *_, read, _ in went[:4]] == [held, subquote.instrument_id, held, held]
+    assert [named for *_, named in went[:4]] == [NAMES[0], None, NAMES[0], None]
+    assert not sleeve._flushing

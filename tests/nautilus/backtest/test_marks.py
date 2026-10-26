@@ -81,6 +81,8 @@ def _point(kind: str, name: str, ts: int, cents: int, width: int) -> object:
         bar_type = BarType(instrument_id, spec, AggregationSource.EXTERNAL)
         mid = Price((cents + width // 2) / 100, 2)
         return Bar(bar_type, mid, high, low, mid, Quantity.from_int(1_000), ts, ts)
+    if kind == "bare":  # a marker already taken out of its wrapper
+        return KansoCrossSection(n=1, ts_event=ts, ts_init=ts)
     return CustomData(MARKER_TYPE, KansoCrossSection(n=1, ts_event=ts, ts_init=ts))
 
 
@@ -105,7 +107,7 @@ def _state(marks: Marks) -> object:
 
 points = st.lists(
     st.tuples(
-        st.sampled_from(("quote", "trade", "bar", "marker")),
+        st.sampled_from(("quote", "trade", "bar", "marker", "bare")),
         st.sampled_from((INSTRUMENT, OTHER)),
         st.integers(min_value=OPENS, max_value=CLOSES - 1),
         st.integers(min_value=100, max_value=10_000),
