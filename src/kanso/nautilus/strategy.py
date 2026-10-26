@@ -711,6 +711,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         super().__init__(resolved)
         self._cfg: KansoConfig = resolved
         self._kept_universe: tuple[InstrumentId, ...] | None = None
+        self._kept_names: dict[InstrumentId, str] = {}
+        """The name each id of the kept `universe` formats to (`held`)."""
+        self._kept_open: list[Any] | None = None
+        """This sleeve's open positions as the cache lists them, kept (`_kept_positions`)."""
+        self._kept_settled = False
+        """Whether every order the balance reads has been folded in since anything it folds
+        last changed (`_settle`)."""
         self._data_time = 0
         self._intents: list[OrderIntent] = []
         self._last_bar: dict[str, Bar] = {}
@@ -796,6 +803,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         held = self._kept_universe
         if held is None:
             held = self._kept_universe = tuple(_id_of(value) for value in self._cfg.universe)
+            self._kept_names = {instrument_id: _name_of(instrument_id) for instrument_id in held}
         return held
 
     @property
@@ -943,10 +951,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         leave.
 
         A read is kept until anything it reads changes (`_forget_kept`), so a sleeve may ask
-        it of every name on every point.
+        it of every name on every point. One of the sleeve's own `universe` ids finds its
+        name in a table built with the ids, and a kept read is answered here: measured on
+        2026-10-26, a tick sleeve asked this about fourteen times a point.
         """
-        key = _name_of(instrument_id) if type(instrument_id) is InstrumentId else str(instrument_id)
-        return self._own_intended(key)
+        if type(instrument_id) is InstrumentId:
+            key = self._kept_names.get(instrument_id)
+            if key is None:
+                key = _name_of(instrument_id)
+        else:
+            key = str(instrument_id)
+        kept = self._kept_intended.get(key)
+        if kept is None or self._recheck_kept:
+            return self._own_intended(key)
+        return kept
 
     @property
     def balance(self) -> float:
@@ -991,11 +1009,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
-        self._settle()
-        worth = sum(
-            (self._worth(position) for position in self.cache.positions_open(strategy_id=self.id)),
-            0.0,
-        )
+        self._kept_settle()
+        worth = sum((self._worth(position) for position in self._kept_positions()), 0.0)
         return self._cash + worth
 
     # --- the book policy: the runner's period ends, mirrored -------------------
@@ -2123,12 +2138,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return read
 
     def _forget_kept(self) -> None:
-        """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`).
+        """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`), the
+        open positions the balance marks (`_kept_positions`), and that the balance has folded
+        in every order (`_kept_settle`).
 
         A tick sleeve asks them of every name on every point — every tk_* seed walks its
-        universe asking `held` once its day is done — and measured on 2026-10-22 under a
-        profiler they were 40% to 52% of such a card. What they read changes only with one
-        of these, and each forgets the reads first:
+        universe asking `held` once its day is done, and reads its balance — and measured on
+        2026-10-22 under a profiler the position reads were 40% to 52% of such a card. What
+        they read changes only with one of these, and each forgets the reads first:
 
         * **an event of this sleeve's orders or positions**, as the engine hands it to
           `handle_event`: every submission, acceptance, refusal, denial, modify, cancel,
@@ -2164,6 +2181,50 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         self._kept_filled.clear()
         self._kept_intended.clear()
+        self._kept_open = None
+        self._kept_settled = False
+
+    def _kept_positions(self) -> list[Any]:
+        """This sleeve's open positions, `cache.positions_open(strategy_id=self.id)`: the
+        cache's list, in the cache's order by position id, kept until anything it lists could
+        change (`_forget_kept`). The positions are the cache's own objects, so what each holds
+        is read afresh from it wherever it is read."""
+        kept = self._kept_open
+        if kept is not None and not self._recheck_kept:
+            return kept
+        read: list[Any] = self.cache.positions_open(strategy_id=self.id)
+        if kept is not None and (
+            len(kept) != len(read)
+            or any(was is not now for was, now in zip(kept, read, strict=True))
+        ):
+            raise AssertionError(
+                f"_kept_positions kept {kept!r} where the cache lists {read!r} now: something "
+                "it reads changed and did not forget the reads kept (KansoStrategy._forget_kept)"
+            )
+        self._kept_open = read
+        return read
+
+    def _kept_settle(self) -> None:
+        """Fold every fill not booked yet into cash (`_settle`), unless nothing it folds has
+        changed since a pass that folded in everything.
+
+        Such a pass leaves every order it reads with all its events read and lets every closed
+        one go, and what it reads moves only with what forgets the kept reads
+        (`_forget_kept`): an event of an order, an order kept, a split. A pass with nothing
+        moved books nothing, closes nothing and lets nothing go, so it is not made. With
+        `_recheck_kept` set it is made anyway, and one that moves the cash or lets an order
+        go raises."""
+        if not self._kept_settled:
+            self._settle()
+        elif self._recheck_kept:
+            cash, held = self._cash, len(self._ledger)
+            self._settle()
+            if self._cash != cash or len(self._ledger) != held:
+                raise AssertionError(
+                    f"_kept_settle skipped a pass that moved the cash from {cash!r} to "
+                    f"{self._cash!r} or let an order go: something it reads changed and did "
+                    "not forget the reads kept (KansoStrategy._forget_kept)"
+                )
 
     def _holdings(self) -> dict[str, float]:
         """The sleeve's own intended position in every name it holds or has an order in."""
@@ -3065,15 +3126,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _price_now(self, key: str) -> float | None:
         """The last price seen for a name, quoted in the share count the venue holds now."""
         price = self._last_price.get(key)
-        if price is None:
-            return None
+        if price is None or key not in self._restated:
+            return price  # no split applied to the name: the factor is one, the price itself
         return price / self._restating(key, self._price_ns.get(key, 0))
 
     def _print_now(self, key: str) -> float | None:
-        """The last print of a name, quoted in the share count the venue holds now."""
+        """The last print of a name, quoted in the share count the venue holds now.
+
+        A name no split has been applied to is divided by no ratio, and a float divided by
+        one is that float, so its price is handed back as it is."""
         price = self._last_print.get(key)
-        if price is None:
-            return None
+        if price is None or key not in self._restated:
+            return price
         return price / self._restating(key, self._print_ns.get(key, 0))
 
     def _reserve(self, key: str) -> float:
@@ -3174,6 +3238,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 self._cancels.pop(order.client_order_id, None)
         for client_order_id in closed:
             del self._ledger[client_order_id]
+        if key is None and until_ns is None:
+            self._kept_settled = True
         return later
 
     @staticmethod
@@ -3592,6 +3658,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         side = OrderSide.SELL if net > 0 else OrderSide.BUY
         if self._market_order_in_flight(instrument_id, side):
             return
+        if not any_attached() and _kept_plain(type(self)):
+            # Nothing is attached to any host in this process, so `before_exit` finds no exit
+            # rule (`modifiers_for` answers nothing, and changes nothing) and answers False
+            # whatever context it is handed. Building that context reads the sleeve's
+            # positions, clips, prices and balance, and of those reads only the balance's
+            # settling changes anything (`_settle`), so that is done here, where the context
+            # would have done it, and nothing else is: measured on 2026-10-26, a tick sleeve
+            # holding a position spent 11% of its card building contexts nothing read.
+            self._kept_settle()
+            return
         ctx = self._context(instrument_id, side, abs(net), None, "MARKET")
         self._exiting = True
         try:
@@ -3688,6 +3764,59 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _any_market_in_flight(self) -> bool:
         return bool(self._open_markets())
+
+
+_CONTEXT_READS: Final = frozenset(
+    {
+        "_book",
+        "_clips",
+        "_clips_filled",
+        "_clips_intended",
+        "_context",
+        "_decisions",
+        "_instrument_id",
+        "_is_clip",
+        "_multiplier_of",
+        "_open_markets",
+        "_own_filled",
+        "_own_intended",
+        "_own_position",
+        "_print_now",
+        "_restating",
+        "_worth",
+        "balance",
+        "before_exit",
+        "capital",
+        "held",
+        "host_names",
+        "sized",
+        "universe",
+    }
+)
+"""What an exit consult reads through to build its context and ask `before_exit`
+(`KansoStrategy._consult_exit`)."""
+
+
+_PLAIN: dict[type, bool] = {}
+"""`_kept_plain`'s answer for each class it has been asked about."""
+
+
+def _kept_plain(cls: type) -> bool:
+    """Whether a sleeve class reads an exit consult's context and asks `before_exit` through
+    `KansoStrategy`'s own methods, binding none of `_CONTEXT_READS` itself: only then is a
+    context nothing is attached to read nothing but the balance's settling. A researched
+    `strategy.py` binds none (`kanso.criteria.integrity`); one that did would be read as before.
+    """
+    plain = _PLAIN.get(cls)
+    if plain is None:
+        plain = _PLAIN[cls] = False
+        for klass in cls.__mro__:
+            if klass is KansoStrategy:
+                plain = _PLAIN[cls] = True
+                break
+            if not _CONTEXT_READS.isdisjoint(vars(klass)):
+                break
+    return plain
 
 
 class KansoModifier(Actor):  # type: ignore[misc]
