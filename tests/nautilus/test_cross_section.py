@@ -206,3 +206,101 @@ def test_every_run_of_one_instant_and_grain_is_followed_by_a_marker_a_point(
             assert is_marker(stream[at]) and stream[at].ts_init == cohort[0].ts_init
             at += 1
     assert at == len(stream)
+
+
+def _ordered_020(groups: list[tuple[object, ...]], coincident: bool) -> tuple[object, ...]:
+    """`ordered` as kanso 0.20.0 wrote it: each group scanned point by point for a change of
+    a book, the stream sorted on `int(ts_init)`, every point asked `is_marker` and `_kind`."""
+    from itertools import chain
+
+    from nautilus_trader.model.data import OrderBookDelta, OrderBookDeltas
+
+    from kanso.nautilus.cross_section import _kind, _marker, batched
+
+    def batched_020(group: tuple[object, ...]) -> tuple[object, ...]:
+        if not any(isinstance(point, OrderBookDelta) for point in group):
+            return tuple(group)
+        return batched(group)
+
+    points = tuple(
+        sorted(
+            chain.from_iterable(batched_020(group) for group in groups),
+            key=lambda point: int(point.ts_init),  # type: ignore[attr-defined]
+        )
+    )
+    plain = tuple(point for point in points if not is_marker(point))
+    if not plain:
+        return ()
+    cohorts: list[tuple[object, ...]] = []
+    run: list[object] = []
+    held: tuple[int, str] | None = None
+    for point in plain:
+        at = (int(point.ts_init), _kind(point))  # type: ignore[attr-defined]
+        if at != held:
+            if run:
+                cohorts.append(tuple(run))
+            run, held = [], at
+        run.append(point)
+    if run:
+        cohorts.append(tuple(run))
+    if not coincident and all(len(cohort) == 1 for cohort in cohorts):
+        return plain
+    out: list[object] = []
+    for cohort in cohorts:
+        out.extend(cohort)
+        if isinstance(cohort[0], (OrderBookDelta, OrderBookDeltas)):
+            continue
+        out.extend(_marker(int(cohort[0].ts_init)) for _ in cohort)  # type: ignore[attr-defined]
+    return tuple(out)
+
+
+def _drawn(kind: str, name: object, index: int) -> object:
+    from nautilus_trader.model.enums import BookAction, OrderSide
+
+    from kanso.data.loaders.points import make_delta
+    from kanso.nautilus.cross_section import _marker
+
+    at = int(quote(DEMO, index).ts_init)
+    if kind == "delta":
+        return make_delta(name, BookAction.ADD, OrderSide.BUY, 999, 1, 0, 2, 0, at, at)  # type: ignore[arg-type]
+    if kind == "marker":
+        return _marker(at)
+    return _made(kind, name, index)
+
+
+def _seen(stream: tuple[object, ...]) -> list[object]:
+    """A stream as a list of the points it hands on and the markers it makes."""
+    from nautilus_trader.model.data import OrderBookDeltas
+
+    return [
+        ("marker", int(point.ts_init), point.data.n)  # type: ignore[attr-defined]
+        if is_marker(point)
+        else ("batch", int(point.ts_init), str(point.instrument_id), len(point.deltas))  # type: ignore[attr-defined]
+        if isinstance(point, OrderBookDeltas)
+        else id(point)
+        for point in stream
+    ]
+
+
+@settings(max_examples=150, deadline=None)
+@given(
+    drawn=st.lists(
+        st.lists(
+            st.tuples(
+                st.sampled_from(("bar", "second", "quote", "trade", "delta", "marker")),
+                st.sampled_from((DEMO, HEDGE)),
+                st.integers(min_value=0, max_value=3),
+            ),
+            max_size=12,
+        ),
+        max_size=5,
+    ),
+    coincident=st.booleans(),
+)
+def test_a_stream_is_ordered_and_marked_as_0_20_did_it(
+    drawn: list[list[tuple[str, object, int]]], coincident: bool
+) -> None:
+    """Groups of any points in any order — book changes, markers already made, several types
+    to a group — are batched, sorted and marked into the stream 0.20.0 made of them."""
+    groups = [tuple(_drawn(*each) for each in group) for group in drawn]
+    assert _seen(ordered(groups, coincident=coincident)) == _seen(_ordered_020(groups, coincident))

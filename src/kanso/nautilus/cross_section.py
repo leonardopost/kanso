@@ -216,8 +216,8 @@ def batched(group: Sequence[object]) -> tuple[object, ...]:
     one `OrderBookDeltas`, in the order the run held them; every other point passes as it
     is. The flags are left as loaded: nothing downstream buffers on `F_LAST`.
     """
-    if not any(isinstance(point, OrderBookDelta) for point in group):
-        return tuple(group)
+    if not any(issubclass(kind, OrderBookDelta) for kind in set(map(type, group))):
+        return tuple(group)  # no point is a change of a book: asked of each type the group holds
     out: list[object] = []
     run: list[OrderBookDelta] = []
     for point in group:
@@ -251,11 +251,18 @@ def ordered(groups: Sequence[Sequence[object]], *, coincident: bool = False) -> 
         tuple(
             sorted(
                 chain.from_iterable(batched(group) for group in groups),
-                key=lambda point: int(point.ts_init),  # type: ignore[attr-defined]
+                key=_instant,
             )
         ),
         coincident=coincident,
     )
+
+
+def _instant(point: object) -> int:
+    """A point's `ts_init`, the key a stream is sorted by: an `int` already on every point an
+    engine type or a custom type carries, which needs no conversion."""
+    ts: object = point.ts_init  # type: ignore[attr-defined]
+    return ts if type(ts) is int else int(ts)  # type: ignore[call-overload]
 
 
 def with_cross_section(points: Sequence[object], *, coincident: bool = False) -> tuple[object, ...]:
@@ -268,7 +275,7 @@ def with_cross_section(points: Sequence[object], *, coincident: bool = False) ->
     that never comes. A book cohort gets none, because its handler is never held. An
     unmarked stream is returned unchanged, object identity included.
     """
-    plain = tuple(point for point in points if not is_marker(point))
+    plain = tuple(point for point in points if type(point) in _PLAIN or not is_marker(point))
     if not plain:
         return ()
     cohorts = tuple(_cohorts(plain))
@@ -316,7 +323,11 @@ def _cohorts(points: Sequence[object]) -> list[tuple[object, ...]]:
     run: list[object] = []
     held: tuple[int, str] | None = None
     for point in points:
-        at = (int(point.ts_init), _kind(point))  # type: ignore[attr-defined]
+        kind = type(point)
+        at = (
+            int(point.ts_init),  # type: ignore[attr-defined]
+            QUOTE if kind is QuoteTick else TRADE if kind is TradeTick else _kind(point),
+        )
         if at != held:
             if run:
                 found.append(tuple(run))
