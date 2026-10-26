@@ -193,7 +193,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
-from kanso.criteria.run import day_of
+from kanso.criteria.run import NS_PER_DAY, day_of
 from kanso.errors import ValidationError
 from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
@@ -734,7 +734,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._delivered_ns = 0
         self._fed_from_ns = 0
         self._flushing = False
-        self._pending: deque[object] = deque()
+        self._pending: deque[tuple[object, InstrumentId | None, str | None]] = deque()
+        """The points held for a flush marker, each with the id and the name its handler read
+        (`None` for a point that is neither a quote nor a print)."""
         self._overlay_due: tuple[InstrumentId, Bar | None, float | None] | None = None
         self._entry_answers: tuple[tuple[object, Decision], ...] | None = None
         self._clip_orders: dict[str, list[object]] = {}
@@ -748,6 +750,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._behind_modify: dict[object, Any] = {}
         self._awaiting: set[object] = set()
         self._charges = _charges(resolved)
+        self._kept_quotes = self._charges.get("spread") == "quotes"
+        """Whether the spread is the quoted one, which a quote of a name settles that name for."""
+        self._kept_day: tuple[int, date] | None = None
+        """The last UTC day a scoped point fell on, and its index from the epoch
+        (`_out_of_scope`)."""
         self._cash = resolved.capital
         self._ledger: dict[object, _Tracked] = {}
         self._print_ns: dict[str, int] = {}
@@ -1030,7 +1037,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instant is still to come.
         """
         if ts_ns > self._instant_ns:
-            self._struck(ts_ns)
+            if self._open_fills:
+                self._struck(ts_ns)
+            else:  # nothing to let go: what `_struck` does then
+                self._instant_ns = ts_ns
         if self._settling and ts_ns > self._settling[0][0]:
             self._refund()
         if self._filled:
@@ -1262,7 +1272,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         scope = self._cfg.session_scope
         if scope is None or key in scope[2]:
             return False
-        return day_of(int(ts_init)) not in self._scope_days.get(key, ())
+        ts = int(ts_init)
+        held = self._kept_day
+        if held is None or held[0] != ts // NS_PER_DAY:  # a day's points ask the day once
+            held = self._kept_day = (ts // NS_PER_DAY, day_of(ts))
+        return held[1] not in self._scope_days.get(key, ())
 
     def _note_scope(self, data: object) -> None:
         """Record a scope point: the session it stamps is admitted for its instrument."""
@@ -1296,7 +1310,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._last_bar[key] = bar
             self._observe_price(key, float(bar.close), int(bar.ts_event))
         if self._held():
-            self._pending.append(bar)
+            self._pending.append((bar, None, None))
             return
         self._dispatch_bar(bar)
         self._consult_due()
@@ -1305,43 +1319,64 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_quote_tick(tick, historical)
             return
-        key = tick.instrument_id.value
-        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
+        # The point's id, its name and its instants are read once and handed on: a tick feed
+        # sends a quote and its flush marker on every point, and `InstrumentId.value` formats
+        # the name afresh on every read. What each step does is what the helper it stands
+        # for does (`_undelivered`, `_show_book`, `_printed`, `_observe_price`, `_quoted`,
+        # `_held`), in the same order.
+        ts_init = int(tick.ts_init)
+        instrument_id = tick.instrument_id
+        key = instrument_id.value
+        if ts_init < self._fed_from_ns or self._out_of_scope(key, ts_init):
             return
-        self._show_book(int(tick.ts_init))
-        self._turn(int(tick.ts_init))
-        self._delivered_ns = int(tick.ts_init)
+        if self._cfg.depth is not None:
+            self._show_depth(ts_init)
+        self._turn(ts_init)
+        self._delivered_ns = ts_init
         self._last_quote[key] = tick
         bid, ask = float(tick.bid_price), float(tick.ask_price)
         mid = (bid + ask) / 2.0
-        self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
-        self._observe_price(key, mid, int(tick.ts_event))
-        self._quoted(key, int(tick.ts_init), (bid, ask))
-        if self._charges.get("spread") == "quotes":
+        ts_event = int(tick.ts_event)
+        self._last_print[key] = mid
+        self._print_ns[key] = ts_event
+        mark = self._mark_at.get(key)
+        if mark is None or ts_init > mark[0] or (ts_init == mark[0] and mid > mark[1]):
+            self._mark_at[key] = (ts_init, mid)
+        self._last_price[key] = mid
+        self._price_ns[key] = ts_event
+        if self._open_fills:
+            self._quoted(key, ts_init, (bid, ask))
+        if self._kept_quotes:
             self._settle(key)
-        if self._held():
-            self._pending.append(tick)
+        if self._hold_until_cross_section and not self._flushing:
+            self._pending.append((tick, instrument_id, key))
             return
-        self._dispatch_quote(tick)
+        self._dispatch_quote(tick, instrument_id, key)
         self._consult_due()
 
     def handle_trade_tick(self, tick: TradeTick, historical: bool = False) -> None:
         if historical:
             super().handle_trade_tick(tick, historical)
             return
-        key = tick.instrument_id.value
-        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
+        ts_init = int(tick.ts_init)  # read once and handed on, as `handle_quote_tick` does
+        instrument_id = tick.instrument_id
+        key = instrument_id.value
+        if ts_init < self._fed_from_ns or self._out_of_scope(key, ts_init):
             return
-        self._show_book(int(tick.ts_init))
-        self._turn(int(tick.ts_init))
-        self._delivered_ns = int(tick.ts_init)
+        if self._cfg.depth is not None:
+            self._show_depth(ts_init)
+        self._turn(ts_init)
+        self._delivered_ns = ts_init
         self._last_trade[key] = tick
-        self._printed(key, float(tick.price), int(tick.ts_event), int(tick.ts_init))
-        self._observe_price(key, float(tick.price), int(tick.ts_event))
-        if self._held():
-            self._pending.append(tick)
+        price = float(tick.price)
+        ts_event = int(tick.ts_event)
+        self._printed(key, price, ts_event, ts_init)
+        self._last_price[key] = price
+        self._price_ns[key] = ts_event
+        if self._hold_until_cross_section and not self._flushing:
+            self._pending.append((tick, instrument_id, key))
             return
-        self._dispatch_trade(tick)
+        self._dispatch_trade(tick, instrument_id, key)
         self._consult_due()
 
     def handle_order_book_deltas(self, deltas: object, historical: bool = False) -> None:
@@ -1493,18 +1528,21 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
             ledger = self._book_ledger
-            if ledger is not None:
-                ledger.running.append(self)
+            if ledger is None:  # a sleeve run alone: what the book's branch does without one
+                if self._pending:
+                    self._flush_one()
+                if not self._pending:
+                    self._consult_due()
+                return
+            ledger.running.append(self)
             try:
                 if self._pending:
                     self._flush_one()
                 if not self._pending:
                     self._consult_due()
-                if ledger is not None:
-                    ledger.marked(self, data)
+                ledger.marked(self, data)
             finally:
-                if ledger is not None:
-                    ledger.running.pop()
+                ledger.running.pop()
             return
         ts_init = getattr(data, "ts_init", None)
         if isinstance(ts_init, int):
@@ -1517,7 +1555,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._fund(data)
         self._note_scope(data)
         if self._held():
-            self._pending.append(data)
+            self._pending.append((data, None, None))
             return
         self._dispatch_data(data)
         self._consult_due()
@@ -1533,15 +1571,22 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return self._hold_until_cross_section and not self._flushing
 
     def _flush_one(self) -> None:
-        event = self._pending.popleft()
+        """Dispatch the point the oldest buffered handler holds, with the id and the name its
+        handler read; a quote or a print is told by its exact type first, which no bar is."""
+        event, instrument_id, key = self._pending.popleft()
         self._flushing = True
         try:
-            if isinstance(event, Bar):
+            kind = type(event)
+            if kind is QuoteTick:
+                self._dispatch_quote(event, instrument_id, key)
+            elif kind is TradeTick:
+                self._dispatch_trade(event, instrument_id, key)
+            elif isinstance(event, Bar):
                 self._dispatch_bar(event)
             elif isinstance(event, QuoteTick):
-                self._dispatch_quote(event)
+                self._dispatch_quote(event, instrument_id, key)
             elif isinstance(event, TradeTick):
-                self._dispatch_trade(event)
+                self._dispatch_trade(event, instrument_id, key)
             else:
                 self._dispatch_data(event)
         finally:
@@ -1561,7 +1606,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         due = self._overlay_due
         self._overlay_due = None
-        if due is not None:
+        if due is not None and any_attached():  # `_consult_overlay` asks this first
             instrument_id, last_bar, price = due
             self._consult_overlay(instrument_id, last_bar=last_bar, price=price)
 
@@ -1578,23 +1623,38 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
-    def _dispatch_quote(self, tick: QuoteTick) -> None:
+    def _dispatch_quote(
+        self, tick: QuoteTick, instrument_id: InstrumentId | None = None, key: str | None = None
+    ) -> None:
+        """Hand a quote to the author, then ask for the exits owed and the exit rules, with the
+        id and the name its handler read, or read here when it is handed none. The cancels held
+        behind a modify are sent and the owed exits asked for only when there are any, which
+        is what `_send_behind_modify` and `_pay_owed` ask first."""
         self._data_time = int(tick.ts_event)
-        self._send_behind_modify()
+        if self._behind_modify:
+            self._send_behind_modify()
         super().handle_quote_tick(tick, False)
-        self._pay_owed()
-        instrument_id = tick.instrument_id
-        self._consult_exit(instrument_id)
+        if self._owed:
+            self._pay_owed()
+        if instrument_id is None:
+            instrument_id = tick.instrument_id
+        self._consult_exit(instrument_id, key)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
-    def _dispatch_trade(self, tick: TradeTick) -> None:
+    def _dispatch_trade(
+        self, tick: TradeTick, instrument_id: InstrumentId | None = None, key: str | None = None
+    ) -> None:
+        """As `_dispatch_quote`, for a print."""
         self._data_time = int(tick.ts_event)
-        self._send_behind_modify()
+        if self._behind_modify:
+            self._send_behind_modify()
         super().handle_trade_tick(tick, False)
-        self._pay_owed()
-        instrument_id = tick.instrument_id
-        self._consult_exit(instrument_id)
+        if self._owed:
+            self._pay_owed()
+        if instrument_id is None:
+            instrument_id = tick.instrument_id
+        self._consult_exit(instrument_id, key)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
@@ -3637,7 +3697,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             for order in self._open_markets()
         )
 
-    def _consult_exit(self, instrument_id: InstrumentId) -> None:
+    def _consult_exit(self, instrument_id: InstrumentId, key: str | None = None) -> None:
         """Ask the attached exit rules whether to close the position, and close it if one does.
 
         A rule that closes sends the whole position at market through `submit_exit`, which
@@ -3650,9 +3710,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         # The warming guard is unreachable on a flat start — no position exists in the
         # prefix — and stands for a run that carries or restores a book across the open.
-        if self._exiting or not self.is_running or self._warming():
-            return
-        net = self._own_filled(instrument_id.value)  # what is open, not what is in flight
+        if self._exiting or not self.is_running or self._delivered_ns < self._trading_from_ns:
+            return  # the last test is `_warming`
+        if key is None:
+            key = instrument_id.value
+        net = self._kept_filled.get(key)  # what is open, not what is in flight
+        if net is None or self._recheck_kept:
+            net = self._own_filled(key)  # the kept read, as `_own_filled` answers it
         if net == 0.0:
             return
         side = OrderSide.SELL if net > 0 else OrderSide.BUY

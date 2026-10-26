@@ -25,6 +25,7 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
+from kanso.nautilus import hooks
 from kanso.nautilus.backtest import RunRequest, RunResult, execute
 from kanso.nautilus.strategy import KansoStrategy, _kept_plain
 from kanso.schemas import Hypothesis
@@ -169,6 +170,137 @@ class Strategy(Strategy):
 '''
 """The reads as kanso 0.20.0 made them, appended to the sleeve's source so the file's
 `Strategy` is the same sleeve reading afresh."""
+
+DISPATCHED = b'''
+
+
+from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+from nautilus_trader.trading.strategy import Strategy as _Engine
+
+from kanso.criteria.run import day_of
+from kanso.nautilus.cross_section import KansoCrossSection
+
+
+class Strategy(Strategy):
+    """The same sleeve, every point handled as kanso 0.20.0 handled it: each helper asked in
+    turn, the id and the name read again wherever they are used, the point held alone."""
+
+    def _out_of_scope(self, key, ts_init):
+        scope = self._cfg.session_scope
+        if scope is None or key in scope[2]:
+            return False
+        return day_of(int(ts_init)) not in self._scope_days.get(key, ())
+
+    def _turn(self, ts_ns):
+        if ts_ns > self._instant_ns:
+            self._struck(ts_ns)
+        if self._settling and ts_ns > self._settling[0][0]:
+            self._refund()
+        if self._filled:
+            self._filled = [filled for filled in self._filled if filled[0] >= ts_ns]
+        if self._policy is None or ts_ns < self._anchor_ns or ts_ns < self._trading_from_ns:
+            return
+        index = (ts_ns - self._anchor_ns) // self._period_ns
+        if self._period_index is not None and index != self._period_index:
+            self._close_period(self._policy, self._period_last_ns)
+        self._period_index = index
+        self._period_last_ns = ts_ns
+
+    def handle_quote_tick(self, tick, historical=False):
+        if historical:
+            _Engine.handle_quote_tick(self, tick, historical)
+            return
+        key = tick.instrument_id.value
+        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
+            return
+        self._show_book(int(tick.ts_init))
+        self._turn(int(tick.ts_init))
+        self._delivered_ns = int(tick.ts_init)
+        self._last_quote[key] = tick
+        bid, ask = float(tick.bid_price), float(tick.ask_price)
+        mid = (bid + ask) / 2.0
+        self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
+        self._observe_price(key, mid, int(tick.ts_event))
+        self._quoted(key, int(tick.ts_init), (bid, ask))
+        if self._charges.get("spread") == "quotes":
+            self._settle(key)
+        if self._held():
+            self._pending.append(tick)
+            return
+        self._old_quote(tick)
+        self._old_due()
+
+    def handle_trade_tick(self, tick, historical=False):
+        if historical:
+            _Engine.handle_trade_tick(self, tick, historical)
+            return
+        key = tick.instrument_id.value
+        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
+            return
+        self._show_book(int(tick.ts_init))
+        self._turn(int(tick.ts_init))
+        self._delivered_ns = int(tick.ts_init)
+        self._last_trade[key] = tick
+        self._printed(key, float(tick.price), int(tick.ts_event), int(tick.ts_init))
+        self._observe_price(key, float(tick.price), int(tick.ts_event))
+        if self._held():
+            self._pending.append(tick)
+            return
+        self._old_trade(tick)
+        self._old_due()
+
+    def handle_data(self, data):
+        if isinstance(data, KansoCrossSection):
+            if self._pending:
+                event = self._pending.popleft()
+                self._flushing = True
+                try:
+                    if isinstance(event, Bar):
+                        self._dispatch_bar(event)
+                    elif isinstance(event, QuoteTick):
+                        self._old_quote(event)
+                    elif isinstance(event, TradeTick):
+                        self._old_trade(event)
+                    else:
+                        self._dispatch_data(event)
+                finally:
+                    self._flushing = False
+            if not self._pending:
+                self._old_due()
+            return
+        _Engine.handle_data(self, data)
+
+    def _old_due(self):
+        if self._hold_until_cross_section and (self._pending or self._flushing):
+            return
+        due = self._overlay_due
+        self._overlay_due = None
+        if due is not None:
+            instrument_id, last_bar, price = due
+            self._consult_overlay(instrument_id, last_bar=last_bar, price=price)
+
+    def _old_quote(self, tick):
+        self._data_time = int(tick.ts_event)
+        self._send_behind_modify()
+        _Engine.handle_quote_tick(self, tick, False)
+        self._pay_owed()
+        instrument_id = tick.instrument_id
+        self._consult_exit(instrument_id)
+        if not self._cfg.extra_resolutions:
+            self._overlay_due = (instrument_id, None, None)
+
+    def _old_trade(self, tick):
+        self._data_time = int(tick.ts_event)
+        self._send_behind_modify()
+        _Engine.handle_trade_tick(self, tick, False)
+        self._pay_owed()
+        instrument_id = tick.instrument_id
+        self._consult_exit(instrument_id)
+        if not self._cfg.extra_resolutions:
+            self._overlay_due = (instrument_id, None, None)
+'''
+"""Every point handled as kanso 0.20.0 handled it, appended after `AFRESH`. The tapes here hold
+quotes, prints and their flush markers and nothing else."""
 
 NEUTRAL_EXIT = b"""
 from kanso.nautilus.strategy import Decision, KansoModifier, KansoModifierConfig
@@ -322,8 +454,9 @@ def test_a_tick_card_reads_what_reading_afresh_read(
 ) -> None:
     """Over random tapes of two names, under a quoted and a fixed spread, the touch and the
     print rule, with and without a latency: the sleeve that keeps its reads and the one that
-    reads afresh read the same balances and holdings on every point and make the same card —
-    with the kept reads answered as kept, as in a card, and read again beside them."""
+    reads afresh and handles every point as 0.20.0 did read the same balances and holdings on
+    every point and make the same card — with the kept reads answered as kept, as in a card,
+    and read again beside them."""
     hyp = tick_hypothesis(*costs)
     groups = tape(script)
     root = tmp_path_factory.mktemp("kept")
@@ -333,7 +466,7 @@ def test_a_tick_card_reads_what_reading_afresh_read(
         kept = card(hyp, groups, SLEEVE, root / "kept.txt", ruled=False)
     finally:
         KansoStrategy._recheck_kept = was
-    afresh = card(hyp, groups, SLEEVE + AFRESH, root / "afresh.txt", ruled=False)
+    afresh = card(hyp, groups, SLEEVE + AFRESH + DISPATCHED, root / "afresh.txt", ruled=False)
     assert_the_same(kept, afresh)
 
 
@@ -352,6 +485,7 @@ def test_an_exit_consult_nothing_is_attached_to_asks_no_exit_rule_and_books_the_
     """With nothing attached an exit consult builds no context and asks nothing: the card is
     the card a consult that built its context and asked an exit rule that never exits made,
     every balance included, which settles at the consult as the context's balance did."""
+    monkeypatch.setattr(hooks, "_REGISTRY", {})  # nothing a test before this one left attached
     asked: list[object] = []
     before_exit = KansoStrategy.before_exit
 
