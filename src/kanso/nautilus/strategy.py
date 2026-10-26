@@ -3463,13 +3463,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         A price printed before a split the venue has since applied is restated by the
         split's ratio (`_restating`), so a pair's other leg does not read the split as a
         loss in the handlers between the split and the held leg's next print. A position
-        the sleeve has seen no price for is marked at its own split-aware cost.
+        the sleeve has seen no price for is marked at its own split-aware cost. A position in
+        one of the sleeve's own names finds the name in the table `held` reads.
         """
-        price = self._print_now(position.instrument_id.value)
+        instrument_id = position.instrument_id
+        key = self._kept_names.get(instrument_id)
+        if key is None:
+            key = instrument_id.value
+        price = self._print_now(key)
         if price is None:
-            applied = tuple(self._restated.get(position.instrument_id.value, ()))
+            applied = tuple(self._restated.get(key, ()))
             price = splits.ledger(splits.moves_of(position, applied)).basis
-        return float(position.signed_qty) * price * self._multiplier_of(position.instrument_id)
+        return float(position.signed_qty) * price * self._multiplier_of(instrument_id)
 
     def _multiplier_of(self, instrument_id: InstrumentId | str) -> float:
         """The contract multiplier a quantity at a price is scaled by to be a notional, read

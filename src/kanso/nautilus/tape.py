@@ -279,23 +279,33 @@ class PrintThrough(FillModel):  # type: ignore[misc]
             self._quote[instrument_id] = point
             self._print[instrument_id] = None
         elif isinstance(point, TradeTick):
-            self._print[point.instrument_id] = _Print(
-                point.price,
-                point.aggressor_side,
-                {each.key: each.price for each in resting},
-                _shares(point, resting),
-            )
-            self.traded(point)
+            instrument_id = point.instrument_id
+            self._in_hand(point, instrument_id, resting)
+            self.traded(point, instrument_id)
         elif isinstance(point, Bar):
             self._print[point.bar_type.instrument_id] = None
 
-    def traded(self, point: TradeTick) -> None:
+    def _in_hand(self, point: TradeTick, instrument_id: Any, resting: Sequence[Rested]) -> None:
+        """Hold a print as the one in hand on its instrument, its size shared across the orders
+        resting before it that it reaches."""
+        self._print[instrument_id] = _Print(
+            point.price,
+            point.aggressor_side,
+            {each.key: each.price for each in resting},
+            _shares(point, resting),
+        )
+
+    def traded(self, point: TradeTick, instrument_id: Any = None) -> None:
         """End the last quote of a print's instrument if the print trades strictly outside it:
         the market has left that quote, so no taker is filled on it from here on, one landing
-        on this print included."""
-        quote = self._quote.get(point.instrument_id)
+        on this print included. Asked again for the same print it ends nothing more: the
+        quote is gone, or the print is still not outside it. `instrument_id` is the print's
+        own, when the caller has read it already."""
+        if instrument_id is None:
+            instrument_id = point.instrument_id
+        quote = self._quote.get(instrument_id)
         if quote is not None and _outside(point.price, quote):
-            del self._quote[point.instrument_id]
+            del self._quote[instrument_id]
 
     def restate(self, instrument: Any, ratio: float, ts_event: int, ts_init: int) -> None:
         """Restate the last quote of an instrument a split applied to in the new count: its
@@ -488,6 +498,38 @@ class Tape(SimulationModule):  # type: ignore[misc]
             model.traded(data)
             self.exchange.process(int(data.ts_init))
         observe(self.exchange, data)
+
+    def point(self, data: QuoteTick | TradeTick, instrument_id: Any) -> None:
+        """`pre_process` for a quote or a print whose id the venue's modules read once, with
+        what `observe` and `PrintThrough.seen` would do done here: a quote becomes the last
+        quote and ends the print in hand; a print ends a quote it trades outside, the
+        commands due by it land, and it is held with the limits resting before it. `seen`
+        asks a print's `traded` once more after holding it, which ends nothing more, and
+        nothing between the two asks moves the model's quotes: landing commands asks the
+        model for fills, which reads them, and only a split restates one
+        (`kanso.nautilus.actions`), applied before this part is handed the point."""
+        exchange = self.exchange
+        model = exchange.fill_model
+        if not isinstance(model, PrintThrough):
+            return
+        model.exchange = exchange
+        if type(data) is QuoteTick:
+            model._quote[instrument_id] = data
+            model._print[instrument_id] = None
+            return
+        model.traded(data, instrument_id)
+        exchange.process(int(data.ts_init))
+        engine = exchange.get_matching_engine(instrument_id)
+        resting = (
+            []
+            if engine is None
+            else [
+                _rested(order)
+                for order in engine.get_open_orders()
+                if order.has_price and (not order.has_trigger_price or order.is_triggered)
+            ]
+        )
+        model._in_hand(data, instrument_id, resting)
 
     def process(self, ts_now: int) -> None:
         """Nothing: the module acts on points."""

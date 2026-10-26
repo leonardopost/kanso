@@ -95,6 +95,10 @@ class Availability(SimulationModule):  # type: ignore[misc]
         if isinstance(data, QuoteTick | TradeTick):
             admit(self.exchange.get_matching_engine(data.instrument_id), int(data.ts_event))
 
+    def point(self, data: QuoteTick | TradeTick, instrument_id: Any) -> None:
+        """`pre_process` for a quote or a print whose id the venue's modules read once."""
+        admit(self.exchange.get_matching_engine(instrument_id), int(data.ts_event))
+
     def process(self, ts_now: int) -> None:
         """Nothing: the module acts on points, and an instant with no point applied none."""
 

@@ -25,7 +25,7 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
-from kanso.nautilus import hooks
+from kanso.nautilus import actions, hooks
 from kanso.nautilus.backtest import RunRequest, RunResult, execute
 from kanso.nautilus.strategy import KansoStrategy, _kept_plain
 from kanso.schemas import Hypothesis
@@ -115,6 +115,7 @@ AFRESH = b'''
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId
 
+from kanso.nautilus import splits
 from kanso.nautilus.strategy import _name_of
 
 
@@ -138,6 +139,13 @@ class Strategy(Strategy):
             0.0,
         )
         return self._cash + worth
+
+    def _worth(self, position):
+        price = self._print_now(position.instrument_id.value)
+        if price is None:
+            applied = tuple(self._restated.get(position.instrument_id.value, ()))
+            price = splits.ledger(splits.moves_of(position, applied)).basis
+        return float(position.signed_qty) * price * self._multiplier_of(position.instrument_id)
 
     def _price_now(self, key):
         price = self._last_price.get(key)
@@ -598,3 +606,28 @@ def test_held_names_an_id_by_the_table_kept_with_the_universe_or_afresh(
     assert sleeve.held(InstrumentId.from_str(NAMES[1])) == -2.0
     assert sleeve.held(InstrumentId.from_str("ELSE.XNAS")) == 1.5
     assert sleeve.held(NAMES[0]) == 5.0
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    script=steps,
+    costs=st.sampled_from((("fixed_bps", "touch", 0.0), ("quotes", "print_through", 20.0))),
+)
+def test_a_venue_handed_each_point_with_its_id_fills_as_one_handed_the_point(
+    tmp_path_factory: pytest.TempPathFactory, script: list[Step], costs: tuple[str, str, float]
+) -> None:
+    """kanso's venue parts take a quote or a print beside the id their module read once
+    (`KansoModules`); handed the point alone, each reading its id itself, they make the same
+    card — under the print rule, whose fill model is told every point and lands what is due
+    by a print before it, and under the touch."""
+    hyp = tick_hypothesis(*costs)
+    groups = tape(script)
+    root = tmp_path_factory.mktemp("pointed")
+    pointed = card(hyp, groups, SLEEVE, root / "pointed.txt", ruled=False)
+    was = actions._POINTED
+    actions._POINTED = ()  # type: ignore[misc]
+    try:
+        alone = card(hyp, groups, SLEEVE, root / "alone.txt", ruled=False)
+    finally:
+        actions._POINTED = was  # type: ignore[misc]
+    assert_the_same(pointed, alone)
