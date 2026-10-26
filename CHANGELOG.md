@@ -3,7 +3,7 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
-## Unreleased
+## v0.20.0 — 2026-10-26
 
 **Every quoted card moves under this version.** End each run of a hypothesis that requires `quote`, `trade` or `book` and begin it again (`kanso research end ID`, then `kanso research begin ID`), so its `best` is struck under the arithmetic its cards will be judged by; and re-certify every version on paper that was certified on such a hypothesis (`kanso cert plan ID --replan`, then `kanso cert run ID`), since its expectation was struck under the old charges and its paper window is not. A tick version re-certified on the new default fill rule may then be refused at `deploy` or `promote --live` beside a version on bars on the same venue: see the `print_through` line below.
 
