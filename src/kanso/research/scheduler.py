@@ -486,13 +486,14 @@ def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str
     neither there is nowhere else to start, and the run starts from the best as before.
 
     The pins here are all four a run carries — `hypothesis.yaml`, `program.md`, the
-    snapshot and the criteria — where the books and cards the driver reads back are
-    selected by three. A number does not depend on `program.md`, so what a strategy earned
-    under another program is still what it earned; where a run starts does, since a keep
-    is a file a proposer wrote to one program's rules. Measured in a live workspace on
-    2026-10-12: a hypothesis kept under a temporary program and then under its own restored
-    one, and a reseed selecting by three started the next run from a keep the restored
-    program forbids.
+    snapshot and the criteria — where the books, and the recent cards and coverage a
+    proposer is shown, are selected by three, its earlier cards by the file with the
+    snapshot or the criteria moved. A number does not depend on `program.md`, so what a
+    strategy earned under another program is still what it earned; where a run starts does,
+    since a keep is a file a proposer wrote to one program's rules. Measured in a live
+    workspace on 2026-10-12: a hypothesis kept under a temporary program and then under its
+    own restored one, and a reseed selecting by three started the next run from a keep the
+    restored program forbids.
     """
     if best is None:
         return None
