@@ -9,7 +9,9 @@ same bytes, no number among them, and nothing that judges a card any the wiser.
 The earlier kanso is the installed one with its criteria version patched for the life of a
 run. A run's pins are written once, when it begins, so that is all an upgrade after it
 amounts to: its cards, its signatures and its events are stored under the version it began
-under, as a run begun under 0.19.0 leaves them for 0.20.0 to find.
+under, as a run begun under 0.19.0 leaves them for 0.20.0 to find. One test upgrades a run
+between its cards instead, as an operator does, so that the kanso that scored a card and the
+pin it is shown under differ.
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ LATER: list[dict[str, Any]] = [
 """The earlier discard's very bytes, then a card that holds its book under the run's own pins."""
 
 SHOWN: Final = frozenset({"sha7", "status", "tags", "desc", "criteria_version", "snapshot"})
-"""Everything an earlier card is shown by: what it tried, and the pins it was made under."""
+"""Everything an earlier card is shown by: what it tried, and the pins of the run it was made in."""
 
 CARD_FLOOR_S: Final = 600.0
 """The card budget's floor in this module: ten minutes, as `tests/cli/test_demo.py` lifts it.
@@ -129,7 +131,7 @@ def test_cards_under_an_earlier_kanso_are_shown_by_what_they_tried_and_nowhere_e
 ) -> None:
     """Every release moves the criteria version. The cards before it reach the next run's
     proposer in the cached half, the newest of the recent window's size and a count of all
-    of them by tag, with the pins each was made under and no number; the moving half, the
+    of them by tag, with the pins of the run each was made in and no number; the moving half, the
     coverage and the redundancy rule are the run's own."""
     earlier = run_under(ws, store, prepared_hyp, EARLIER, criteria=OLD)
     later_ws = tuned(ws, context_cards=3)
@@ -170,7 +172,7 @@ def test_cards_under_an_earlier_kanso_are_shown_by_what_they_tried_and_nowhere_e
     # No number: their ideas count, their numbers do not, and the prompt says why.
     assert all(set(entry) == SHOWN for entry in facts["earlier_cards"])
     assert tried[1].metric != 0 and json.dumps(tried[1].metric) not in calls[0].system
-    assert "their numbers are not comparable with this run's" in calls[0].system
+    assert "so their numbers are not this run's comparison" in calls[0].system
 
     # Nowhere else: the moving half, the coverage and the books are the run's own.
     for call in calls:
@@ -214,6 +216,42 @@ def test_cards_under_an_earlier_snapshot_are_earlier_cards_too(
     assert "earlier:" not in call.user
 
 
+def test_an_earlier_card_is_shown_under_its_runs_pin_not_the_kanso_that_scored_it(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A run is carded by whichever kanso is installed when its next card runs, so a run
+    upgraded between its cards has later cards scored by the newer kanso under the older
+    pin. Such a card is an earlier card of the next run begun under the newer kanso, shown
+    under its run's pin, and the instruction says the label is that pin — not that this very
+    kanso's card was scored by another."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(research_loop, "criteria_version", lambda: OLD)
+        scripted(ws, propose=[proposal("revert", desc="earlier: before the upgrade")])
+        driver.run(ws, store, prepared_hyp, cards=1)
+    scripted(ws, propose=[proposal("weak", desc="earlier: after the upgrade")])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    earlier = records.require_active(store, prepared_hyp)
+    research_loop.end(ws, store, prepared_hyp)
+    scripted(ws, propose=[proposal("weak", desc="later: react to every step")])
+
+    driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert earlier.criteria_version == OLD
+    assert records.require_active(store, prepared_hyp).criteria_version == criteria_version()
+    *_, before, after = cards_of_run(store, prepared_hyp, earlier)
+    assert after.desc == "earlier: after the upgrade"
+    scored = [records.measurement_of(store, card) for card in (before, after)]
+    assert [measured.criteria_version if measured else None for measured in scored] == [
+        OLD,
+        criteria_version(),
+    ], "the card after the upgrade was scored by the kanso the next run is pinned to"
+    (call,) = recorded.of("propose")[2:]
+    shown = {entry["desc"]: entry for entry in stable_facts(call, prepared_hyp)["earlier_cards"]}
+    assert shown[after.desc]["criteria_version"] == OLD == shown[before.desc]["criteria_version"]
+    assert "the pins of the run it was made in" in call.system
+    assert "not always the kanso that scored the card" in call.system
+
+
 def test_the_earlier_window_is_one_question_under_other_pins_and_is_bounded(
     ws: Workspace, store: StateStore, prepared_hyp: str
 ) -> None:
@@ -251,6 +289,19 @@ def test_the_earlier_window_is_one_question_under_other_pins_and_is_bounded(
     assert [str(row["strategy_sha"])[:7] for row in driver._recent(store, run, 10)] == [
         card.sha7 for card in cards
     ], "and the run's own window is untouched by it"
+
+    def window(context_cards: int, cards_per_turn: int) -> list[object]:
+        """The earlier cards the system turn carries under these two settings."""
+        settings = tuned(ws, context_cards=context_cards, cards_per_turn=cards_per_turn)
+        found = driver._stable(settings, store, upgraded)["earlier_cards"]
+        assert isinstance(found, list)
+        return sha7s(found)
+
+    # The recent window's size, `context_cards` times `cards_per_turn`: each factor alone,
+    # or the two added, would give another count out of the four cards.
+    assert window(1, 3) == [card.sha7 for card in cards[-3:]]
+    assert window(2, 1) == [card.sha7 for card in cards[-2:]]
+    assert window(2, 2) == [card.sha7 for card in cards]
 
 
 @dataclass(frozen=True)

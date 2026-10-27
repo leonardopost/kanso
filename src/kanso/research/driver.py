@@ -69,9 +69,13 @@ cards behind it, all discards, and each new run's proposer was shown none of the
 free to propose all 23 again. So the stable half also carries the *earlier* cards: those of
 the same hypothesis file under another snapshot or another criteria version, the newest as
 many as the recent window holds, each by what it tried — its sha7, its status, its tags,
-its description, and the criteria version and snapshot it was made under — and a count of
-all of them by tag. No number: each was struck by another arithmetic or on other data, so
-none is a number this run can beat. Their ideas count and their numbers do not, and they
+its description, and the criteria version and snapshot that were the pins of the run it
+was made in — and a count of all of them by tag. A pin names the kanso a run began under,
+which is not always the one that scored the card: a run is carded by whichever kanso is
+installed when its next card runs, so a run upgraded between cards has later cards scored
+by the newer kanso under the older pin. No number: a number is one comparison only with
+numbers struck under the same pins, and each of these was struck under others, so none is
+a number this run can beat. Their ideas count and their numbers do not, and they
 reach nothing that judges. They are fixed for the life of the run — a hypothesis has one
 active run, and every card it adds is under that run's own pins — which is why they sit in
 the half a provider caches rather than beside the recent cards. Nothing else reaches the
@@ -1072,13 +1076,16 @@ def _earlier(store: StateStore, active: RunRecord, limit: int) -> list[dict[str,
     what it tried and never by what it scored.
 
     The sha7, the status, the proposer's tags, the description, and the criteria version and
-    the snapshot it was made under — the snapshot by its first twelve characters, as a
-    certification names one. Withheld are the metric, its error, the trade count, the digest
-    and every gate's evidence: each was computed by another kanso's arithmetic or on another
-    snapshot's data, so none is comparable with what this run measures, and a proposer shown
-    one would chase a number no card here can be judged against. A status stays, because it
-    is the verdict of that card's own run on that card and says whether the idea held up
-    there; the instruction says it is no score to beat.
+    the snapshot that were the pins of the run it was made in — the snapshot by its first
+    twelve characters, as a certification names one. Those are the pins that select the
+    card, and not the kanso that scored it, which the card's measurement records: a run
+    upgraded between cards has its later cards scored by the newer kanso under the older pin,
+    and the instruction says so. Withheld are the metric, its error, the trade count, the
+    digest and every gate's evidence: each was struck under that run's pins, a number is one
+    comparison only with numbers struck under the same pins, and a proposer shown one would
+    chase a number no card here is judged against. A status stays, because it is the verdict
+    of that card's own run on that card and says whether the idea held up there; the
+    instruction says it is no score to beat.
 
     Read from `cards` alone, so nothing measured on the certification window reaches the
     proposer through it, and bounded in SQL as `_recent` is, because a hypothesis is
@@ -1107,7 +1114,7 @@ def _earlier_coverage(store: StateStore, active: RunRecord) -> dict[str, int]:
     """How many of every card under earlier pins carry each tag.
 
     `coverage`'s count without its best, its status or its newest: a corner that many earlier
-    cards walked was walked, while a best struck by another arithmetic is no best here.
+    cards walked was walked, while a best struck under other pins is no best here.
     Counted in SQL over the tags, so it is bounded by the vocabulary rather than by the
     hypothesis, as the coverage is.
     """
