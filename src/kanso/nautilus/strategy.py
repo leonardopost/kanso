@@ -1320,10 +1320,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             super().handle_quote_tick(tick, historical)
             return
         # The point's id, its name and its instants are read once and handed on: a tick feed
-        # sends a quote and its flush marker on every point, and `InstrumentId.value` formats
-        # the name afresh on every read. What each step does is what the helper it stands
-        # for does (`_undelivered`, `_show_book`, `_printed`, `_observe_price`, `_quoted`,
-        # `_held`), in the same order.
+        # sends a quote and its flush marker on every point, and in nautilus_trader 1.231.0
+        # `InstrumentId.value` formats the name afresh on every read. What each step does is
+        # what the helper it stands for does (`_undelivered`, `_show_book`, `_printed`,
+        # `_observe_price`, `_quoted`, `_held`), in the same order.
         ts_init = int(tick.ts_init)
         instrument_id = tick.instrument_id
         key = instrument_id.value
@@ -2251,9 +2251,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _kept_positions(self) -> list[Any]:
         """This sleeve's open positions, `cache.positions_open(strategy_id=self.id)`: the
-        cache's list, in the cache's order by position id, kept until anything it lists could
-        change (`_forget_kept`). The positions are the cache's own objects, so what each holds
-        is read afresh from it wherever it is read."""
+        cache's list, kept until anything it lists could change (`_forget_kept`). In
+        nautilus_trader 1.231.0 that list is built afresh on each call, sorted by position id,
+        and holds the cache's own position objects, so what each holds is read afresh from it
+        wherever it is read."""
         kept = self._kept_open
         if kept is not None and not self._recheck_kept:
             return kept
@@ -2274,9 +2275,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         changed since a pass that folded in everything.
 
         Such a pass leaves every order it reads with all its events read and lets every closed
-        one go, and what it reads moves only with what forgets the kept reads
-        (`_forget_kept`): an event of an order, an order kept, a split. A pass with nothing
-        moved books nothing, closes nothing and lets nothing go, so it is not made. With
+        one go. What it books moves only with what forgets the kept reads (`_forget_kept`): an
+        event of an order, an order kept, a split. Two writers in nautilus_trader 1.231.0 add
+        an event to an order with no event reaching the sleeve: `cancel_all_orders` applies an
+        unpublished `OrderPendingCancel`, and the order emulator applies `OrderUpdated`.
+        Neither fills or closes an order, so a pass skipped after one books nothing, and the
+        next pass that is made reads the order on from the last event it read, the same fills
+        in the same order. A pass with nothing moved books nothing, closes nothing and lets
+        nothing go, so it is not made. With
         `_recheck_kept` set it is made anyway, and one that moves the cash or lets an order
         go raises."""
         if not self._kept_settled:

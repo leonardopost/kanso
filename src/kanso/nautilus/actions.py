@@ -419,9 +419,10 @@ class KansoModules(SimulationModule):  # type: ignore[misc]
     def pre_process(self, data: Any) -> None:
         """Hand the point to every part, in order, before the venue matches it.
 
-        A quote or a print is handed with its id, read once for every part: the point makes
-        a new id each time it is asked for one, which formats the name again to hash it, and
-        the parts key the venue's engines, their books and their quotes by it. Measured on
+        A quote or a print is handed with its id, read once for every part: in
+        nautilus_trader 1.231.0 the point makes a new id each time it is asked for one
+        (`InstrumentId.from_mem_c`), which formats the name again to hash it, and the parts
+        key the venue's engines, their books and their quotes by it. Measured on
         2026-10-26, kanso's three parts were 10% of a tick card."""
         kind = type(data)
         if kind is QuoteTick or kind is TradeTick:
