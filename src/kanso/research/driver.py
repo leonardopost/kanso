@@ -49,18 +49,34 @@ crashes as any other card does. Before this a kill was owed two repairs like any
 and the proposer was shown the word `memory` or `budget` as the end of its traceback.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
-hypothesis, the objective's definition — is byte-identical on every call of a run, so a
-provider cache hits; the moving half is the current file, the last `context_cards` times
-`cards_per_turn` cards of the hypothesis under the run's pins — so a proposer asked for
-eight diffs a turn remembers as many turns as one asked for one, where twenty cards were
-two and a half turns of eight — across runs, so a run that begins after a stall
-is not shown a blank slate and made to re-walk the last run's discards — the previous
-diff, the tail of a crash if the last card crashed with the repair it owes, and the
-coverage table: every card
-under the pins, read back by the tags its proposer gave it, as a count, the best score
-and its status, and the newest card per tag. The recent cards say what was tried last;
-the coverage says what has been tried at all, in a size that does not grow with the
-hypothesis. Nothing else, however much of it exists.
+hypothesis, the objective's definition, and what the hypothesis tried under earlier pins —
+is byte-identical on every call of a run, so a provider cache hits; the moving half is the
+current file, the last `context_cards` times `cards_per_turn` cards of the hypothesis under
+the run's pins — so a proposer asked for eight diffs a turn remembers as many turns as one
+asked for one, where twenty cards were two and a half turns of eight — across runs, so a
+run that begins after a stall is not shown a blank slate and made to re-walk the last run's
+discards — the previous diff, the tail of a crash if the last card crashed with the repair
+it owes, and the coverage table: every card under the pins, read back by the tags its
+proposer gave it, as a count, the best score and its status, and the newest card per tag.
+The recent cards say what was tried last; the coverage says what has been tried at all, in
+a size that does not grow with the hypothesis.
+
+Both stop at the pins, because the pins are what make two numbers one comparison — and the
+criteria version is the package version and a digest of the criteria library, so every
+release moves it, a performance patch as much as a new objective. Measured in a live
+workspace on 2026-10-26: six lanes moved from 0.19.0 to 0.20.0, each hypothesis with 23
+cards behind it, all discards, and each new run's proposer was shown none of them and was
+free to propose all 23 again. So the stable half also carries the *earlier* cards: those of
+the same hypothesis file under another snapshot or another criteria version, the newest as
+many as the recent window holds, each by what it tried — its sha7, its status, its tags,
+its description, and the criteria version and snapshot it was made under — and a count of
+all of them by tag. No number: each was struck by another arithmetic or on other data, so
+none is a number this run can beat. Their ideas count and their numbers do not, and they
+reach nothing that judges. They are fixed for the life of the run — a hypothesis has one
+active run, and every card it adds is under that run's own pins — which is why they sit in
+the half a provider caches rather than beside the recent cards. Nothing else reaches the
+proposer, however much of it exists: no card asked under another hypothesis file, no number
+an earlier card was scored with, and no number measured on the certification window.
 
 **The search has a phase, and the phase is a rule, not a mood.** Misses since the last
 keep drive it: for the first `[research] local_cards` the proposer is asked for local
@@ -504,7 +520,7 @@ def _propose(
 
     inputs = CallInputs(
         subject=active.hyp_id,
-        stable=_stable(store, active),
+        stable=_stable(ws, store, active),
         dynamic=_dynamic(ws, store, active, source, previous, misses),
         check=judge,
     )
@@ -584,7 +600,7 @@ def _propose_batch(
 
     inputs = CallInputs(
         subject=active.hyp_id,
-        stable=_stable(store, active),
+        stable=_stable(ws, store, active),
         dynamic=_dynamic(ws, store, active, source, previous, misses),
         check=judge,
         answer_schema=propose_schema(width),
@@ -648,14 +664,35 @@ def _batched_repair(
     }
 
 
-def _stable(store: StateStore, active: RunRecord) -> dict[str, object]:
-    """The facts that do not move for the life of a run, from the blobs it pinned."""
+def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, object]:
+    """The facts that do not move for the life of a run: the blobs it pinned, and what the
+    hypothesis tried under earlier pins.
+
+    The earlier cards are as fixed as the blobs. They are cards of runs other than this
+    one, a hypothesis has at most one active run, and every card it records is under that
+    run's pins (`_PINNED`), which are written once when it begins — a run is carded by
+    whichever kanso is installed when its next card runs, but its pins stay those it
+    began under. So no card can join or leave `_EARLIER` while this run is open, and
+    placing them here costs the cache nothing; in the user turn they would be the same
+    bytes resent on every call. The window is the recent window's, read from the
+    workspace like the recent cards' is, so an operator who edits `context_cards` or
+    `cards_per_turn` mid-run moves this half once. A hypothesis with no earlier cards is
+    sent neither key, and its system turn is the bytes it was before they existed.
+    """
     hyp = _pinned(store, active)
-    return {
+    settings = ws.config.research
+    facts: dict[str, object] = {
         PROGRAM_FILE: store.get_blob(active.program_sha).decode("utf-8", errors="replace"),
         HYPOTHESIS_FILE: store.get_blob(active.hypothesis_sha).decode("utf-8", errors="replace"),
         "objective": _objective(hyp),
     }
+    earlier = _earlier(store, active, settings.context_cards * settings.cards_per_turn)
+    if earlier:
+        facts["earlier_cards"] = earlier
+    tried = _earlier_coverage(store, active)
+    if tried:
+        facts["earlier_coverage"] = tried
+    return facts
 
 
 def _dynamic(
@@ -1017,6 +1054,69 @@ def _recent(store: StateStore, active: RunRecord, limit: int) -> list[sqlite3.Ro
         (*_pins(active), limit),
     ).fetchall()
     return list(reversed(rows))
+
+
+_EARLIER: Final = (
+    " JOIN runs ON runs.run_id = cards.run_id"
+    " WHERE cards.hyp_id = ? AND runs.hypothesis_sha = ?"
+    " AND NOT (runs.snapshot_id = ? AND runs.criteria_version = ?)"
+)
+"""The cards of a hypothesis that asked this run's question under other pins: the same
+hypothesis file, and another snapshot, another criteria version or both. Disjoint from
+`_PINNED` by construction, so no card is shown twice. A card under another hypothesis file
+asked another question and is in neither."""
+
+
+def _earlier(store: StateStore, active: RunRecord, limit: int) -> list[dict[str, object]]:
+    """The last `limit` cards of the hypothesis under earlier pins, oldest first, each by
+    what it tried and never by what it scored.
+
+    The sha7, the status, the proposer's tags, the description, and the criteria version and
+    the snapshot it was made under — the snapshot by its first twelve characters, as a
+    certification names one. Withheld are the metric, its error, the trade count, the digest
+    and every gate's evidence: each was computed by another kanso's arithmetic or on another
+    snapshot's data, so none is comparable with what this run measures, and a proposer shown
+    one would chase a number no card here can be judged against. A status stays, because it
+    is the verdict of that card's own run on that card and says whether the idea held up
+    there; the instruction says it is no score to beat.
+
+    Read from `cards` alone, so nothing measured on the certification window reaches the
+    proposer through it, and bounded in SQL as `_recent` is, because a hypothesis is
+    unbounded however many releases it has outlived.
+    """
+    rows = store.connection.execute(
+        "SELECT cards.strategy_sha, cards.status, cards.tags, cards.description,"
+        " runs.criteria_version, runs.snapshot_id FROM cards"
+        f"{_EARLIER} ORDER BY cards.card_id DESC LIMIT ?",
+        (*_pins(active), limit),
+    ).fetchall()
+    return [
+        {
+            "sha7": str(row["strategy_sha"])[:7],
+            "status": str(row["status"]),
+            "tags": json.loads(str(row["tags"])),
+            "desc": str(row["description"]),
+            "criteria_version": str(row["criteria_version"]),
+            "snapshot": str(row["snapshot_id"])[:12],
+        }
+        for row in reversed(rows)
+    ]
+
+
+def _earlier_coverage(store: StateStore, active: RunRecord) -> dict[str, int]:
+    """How many of every card under earlier pins carry each tag.
+
+    `coverage`'s count without its best, its status or its newest: a corner that many earlier
+    cards walked was walked, while a best struck by another arithmetic is no best here.
+    Counted in SQL over the tags, so it is bounded by the vocabulary rather than by the
+    hypothesis, as the coverage is.
+    """
+    rows = store.connection.execute(
+        "SELECT tag.value AS tag, COUNT(*) AS n FROM cards, json_each(cards.tags) AS tag"
+        f"{_EARLIER} GROUP BY tag.value ORDER BY tag.value",
+        _pins(active),
+    ).fetchall()
+    return {str(row["tag"]): int(row["n"]) for row in rows}
 
 
 def coverage(store: StateStore, active: RunRecord) -> dict[str, dict[str, object]]:

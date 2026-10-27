@@ -521,15 +521,17 @@ def test_a_width_the_lane_cannot_fund_is_refused_before_a_model_is_asked(
 
 
 def _fact_keys() -> set[str]:
-    """Every key `_dynamic` can put in the user turn, read out of its own source.
+    """Every key `_stable` and `_dynamic` can put in the prompt, read out of their source.
 
     A list written by hand would go stale the first time a fact was added, which is the
     defect this test exists for: the `redundant` array reached the proposer as an
     undeclared key for a day, and 2,822 proposals were refused by a rule the instruction
-    never stated.
+    never stated. The system turn's facts are scanned as well as the user turn's, since the
+    earlier cards travel there.
 
-    The scan reads literal string keys assigned in `_dynamic` and nowhere else, so a fact
-    added through `facts.update(...)` or in a helper would not be seen; and the check it
+    The scan reads literal string keys assigned in those two functions and nowhere else, so
+    a fact added through `facts.update(...)` or in a helper would not be seen, nor would a
+    key named by a constant such as `PROGRAM_FILE`; and the check it
     feeds asks only that the key word appears in backticks somewhere in the instruction,
     which a word used for something else would satisfy. It catches a new undeclared key,
     which is the defect; it is not a proof that every fact is explained.
@@ -537,7 +539,7 @@ def _fact_keys() -> set[str]:
     tree = ast.parse(Path(driver.__file__).read_text(encoding="utf-8"))
     found: set[str] = set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.FunctionDef) and node.name == "_dynamic"):
+        if not (isinstance(node, ast.FunctionDef) and node.name in ("_stable", "_dynamic")):
             continue
         for inner in ast.walk(node):
             if isinstance(inner, ast.AnnAssign) and isinstance(inner.value, ast.Dict):
@@ -561,7 +563,15 @@ def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
     """A fact the instruction does not name is a rule the proposer was never told."""
     said = INSTRUCTIONS["propose"]
     keys = _fact_keys()
-    assert {"recent_cards", "coverage", "phase", "redundant"} <= keys, "the scan found them"
+    assert {
+        "recent_cards",
+        "coverage",
+        "phase",
+        "redundant",
+        "objective",
+        "earlier_cards",
+        "earlier_coverage",
+    } <= keys, "the scan found them"
     assert [key for key in sorted(keys) if f"`{key}`" not in said] == []
     assert f"`{STRATEGY_FILE}`" in said, "the file itself, which is not a constant key"
 

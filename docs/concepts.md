@@ -677,6 +677,37 @@ cards say what was tried last; the coverage says what has been tried at all, in 
 bounded by the vocabulary rather than by the hypothesis. A card made by hand carries no
 tags, and reaches the table under none.
 
+Both stop at the run's pins, because the pins are what make two numbers one comparison: a
+card under another criteria version was scored by another arithmetic, and one under another
+snapshot on other data. But the criteria version is the package version and a digest of the
+criteria library, so every release moves it — a performance patch as much as a new
+objective — and the next run of a hypothesis would be shown nothing of what its runs under
+the release before had tried. Measured in a live workspace on 2026-10-26: six lanes moved
+from 0.19.0 to 0.20.0, each hypothesis with 23 cards behind it, all discards, and each new
+run's proposer was shown none of them and was free to propose all 23 again. So a proposal is
+also shown the **earlier cards**: `earlier_cards`, the newest `context_cards` times
+`cards_per_turn` cards of the hypothesis made under the same `hypothesis.yaml` and another
+snapshot, another criteria version or both, oldest first, each as its sha7, its status, the
+tags its proposer gave it, its description, and the criteria version and snapshot it was
+made under; and `earlier_coverage`, how many of all of them carry each tag. No number is
+shown for any of them — not the metric, its error, the trade count, the digest or a gate's
+evidence — because each was computed by another arithmetic or on other data, and the
+instruction says that is why: their ideas count, their numbers do not. A status is shown,
+as the verdict of that card's own run on it, and the instruction says it is no score to
+beat. A card under another `hypothesis.yaml` asked another question and is not shown, and
+a hypothesis with no earlier card is sent neither key. Nothing that judges reads them: not
+the keep rule or the best, not the coverage table, not the redundancy rule's books, not
+`n_trials`, which counted them already, not the alignment judge, the scheduler, `explore`
+or certification. Bytes that reproduce one are not refused as already carded, since what
+they score under this run's pins is not known. They are read from the research window's
+`cards`, as the coverage is, so nothing measured on the certification window reaches the
+proposer through them. And they are fixed for the life of a run — a hypothesis has one active
+run, and every card it records is under that run's pins, written once when it began — so
+they travel in the stable half of the prompt, the system turn a provider caches by its exact
+bytes, and not beside the recent cards in the user turn, where they would be the same bytes
+resent on every call. An edit to `context_cards` or `cards_per_turn` during a run moves
+that half once.
+
 A card that ran and did not keep is then compared by what it **held**: its signature,
 which is, for each session of the research window, the instruments and sides it held and
 whether each was still open at the session's end. Both of a run's own records of a
@@ -825,8 +856,9 @@ ridge the climb cannot leave, so the scheduler **re-seeds**: the next run starts
 highest-scoring other keep under the stalled run's pins that is still aligned — a keep a
 drift check marked is not ground to start from — else from that run's own base,
 and from the best as before when there is neither. The pins are all four the stalled run
-carries: `hypothesis.yaml`, `program.md`, the snapshot and the criteria. The books and the
-cards a proposer is shown are selected by three, because a number does not depend on
+carries: `hypothesis.yaml`, `program.md`, the snapshot and the criteria. The books, and the
+recent cards and coverage a proposer is shown, are selected by three — its earlier cards by
+the file, with the snapshot or the criteria moved — because a number does not depend on
 `program.md`; where a run starts does, since a keep is a file written to one program's
 rules. Measured in a live workspace on 2026-10-12: a hypothesis kept under a temporary
 program and then under its own restored one, and a reseed selecting by three started the
