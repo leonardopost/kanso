@@ -84,7 +84,7 @@ from typing import Any, Final
 
 from nautilus_trader.backtest.config import SimulationModuleConfig
 from nautilus_trader.backtest.modules import SimulationModule
-from nautilus_trader.model.data import QuoteTick
+from nautilus_trader.model.data import QuoteTick, TradeTick
 from nautilus_trader.model.identifiers import InstrumentId
 
 from kanso.nautilus import availability, splits, tape
@@ -144,18 +144,27 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         self._due: list[tuple[int, str, Split]] = []
         self._applied: set[tuple[str, date]] = set()
         self._known = -1
-        self._quoted: dict[InstrumentId, tuple[Any, Any]] = {}
+        self._quoted: dict[InstrumentId, QuoteTick] = {}
 
     # --- what the exchange calls ---------------------------------------------
 
     def pre_process(self, data: Any) -> None:
         """Apply everything this point's reference time has reached, before it is matched,
-        then keep a quote's bid and ask prices, whatever their sizes: the matching engine
-        keeps them too once it applies the quote, which `Availability` sees that it does, and a
+        then keep a quote, whose bid and ask prices, whatever their sizes, the matching engine
+        keeps too once it applies the quote, which `Availability` sees that it does: a
         restatement prices an empty side from them."""
         self.apply_through(int(data.ts_event), int(data.ts_init))
         if isinstance(data, QuoteTick):
-            self._quoted[data.instrument_id] = (data.bid_price, data.ask_price)
+            self._quoted[data.instrument_id] = data
+
+    def point(self, data: QuoteTick | TradeTick, instrument_id: InstrumentId) -> None:
+        """`pre_process` for a quote or a print whose id `KansoModules` read once for every
+        part. Nothing is applied when nothing can be: the venue's instruments are the ones
+        the schedules were read for and no action is due (`apply_through` reads that first)."""
+        if self._due or len(self.exchange.instruments) != self._known:
+            self.apply_through(int(data.ts_event), int(data.ts_init))
+        if type(data) is QuoteTick:
+            self._quoted[instrument_id] = data
 
     def process(self, ts_now: int) -> None:
         """Nothing: a corporate action is applied by the point that carries the market past
@@ -284,7 +293,10 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         # Only a quote empties a side, and every quote is kept, so a book with an empty side
         # has a quote to price it from; a book with no quote kept holds both sides, set by a
         # print or a bar, or nothing at all.
-        quoted_bid, quoted_ask = self._quoted.get(instrument_id, (bid, ask))
+        quoted = self._quoted.get(instrument_id)
+        quoted_bid, quoted_ask = (
+            (bid, ask) if quoted is None else (quoted.bid_price, quoted.ask_price)
+        )
         if quoted_bid is None:
             return
         instrument = self.exchange.instruments[instrument_id]
@@ -305,7 +317,7 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
         )
         availability.admit(engine, ts_event)
         engine.process_quote_tick(restated)
-        self._quoted[instrument_id] = (bid_price, ask_price)
+        self._quoted[instrument_id] = restated
 
     def _cancel(self, instrument_id: InstrumentId) -> None:
         """Cancel every order resting on this instrument's book, at once and nothing else.
@@ -386,6 +398,11 @@ class KansoModules(SimulationModule):  # type: ignore[misc]
         super().__init__(SimulationModuleConfig(component_id=f"{MODULES}-{venue}"))
         self.parts: tuple[SimulationModule, ...] = tuple(loaded)
         """The modules this one stands for, in the order each point is handed to them."""
+        self._pointed = tuple(
+            (part, part.point if type(part) in _POINTED else None) for part in self.parts
+        )
+        """Each part with the method it takes a quote or a print by beside its id, or `None`
+        for a part handed the point alone (`pre_process`)."""
 
     def register_base(self, portfolio: Any, msgbus: Any, cache: Any, clock: Any) -> None:
         """Register this module and every part as the exchange registers a module."""
@@ -400,7 +417,22 @@ class KansoModules(SimulationModule):  # type: ignore[misc]
             part.register_venue(exchange)
 
     def pre_process(self, data: Any) -> None:
-        """Hand the point to every part, in order, before the venue matches it."""
+        """Hand the point to every part, in order, before the venue matches it.
+
+        A quote or a print is handed with its id, read once for every part: in
+        nautilus_trader 1.231.0 the point makes a new id each time it is asked for one
+        (`InstrumentId.from_mem_c`), which formats the name again to hash it, and the parts
+        key the venue's engines, their books and their quotes by it. Measured on
+        2026-10-26, kanso's three parts were 10% of a tick card."""
+        kind = type(data)
+        if kind is QuoteTick or kind is TradeTick:
+            instrument_id = data.instrument_id
+            for part, point in self._pointed:
+                if point is None:
+                    part.pre_process(data)
+                else:
+                    point(data, instrument_id)
+            return
         for part in self.parts:
             part.pre_process(data)
 
@@ -416,3 +448,7 @@ class KansoModules(SimulationModule):  # type: ignore[misc]
         """Reset every part."""
         for part in self.parts:
             part.reset()
+
+
+_POINTED: Final = (CorporateActions, Availability, Tape)
+"""The parts that take a quote or a print beside the id `KansoModules` read once (`point`)."""

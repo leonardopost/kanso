@@ -81,6 +81,8 @@ def _point(kind: str, name: str, ts: int, cents: int, width: int) -> object:
         bar_type = BarType(instrument_id, spec, AggregationSource.EXTERNAL)
         mid = Price((cents + width // 2) / 100, 2)
         return Bar(bar_type, mid, high, low, mid, Quantity.from_int(1_000), ts, ts)
+    if kind == "bare":  # a marker already taken out of its wrapper
+        return KansoCrossSection(n=1, ts_event=ts, ts_init=ts)
     return CustomData(MARKER_TYPE, KansoCrossSection(n=1, ts_event=ts, ts_init=ts))
 
 
@@ -105,7 +107,7 @@ def _state(marks: Marks) -> object:
 
 points = st.lists(
     st.tuples(
-        st.sampled_from(("quote", "trade", "bar", "marker")),
+        st.sampled_from(("quote", "trade", "bar", "marker", "bare")),
         st.sampled_from((INSTRUMENT, OTHER)),
         st.integers(min_value=OPENS, max_value=CLOSES - 1),
         st.integers(min_value=100, max_value=10_000),
@@ -182,3 +184,85 @@ def test_a_market_point_outside_the_span_is_refused(kind: str) -> None:
 
     with pytest.raises(PreconditionError, match="lies outside the requested window"):
         marks.take([_point(kind, INSTRUMENT, CLOSES, 1_000, 2)])
+
+
+class _Folded020(Marks):
+    """`Marks` with its fold as kanso 0.20.0 wrote it: the period looked up for every point,
+    the range and the period's end taken with `min` and `max`, the mark and the credit asked
+    of `_Fold.mark` and `_credit`."""
+
+    def fold(
+        self, ts: int, key: str, price: float | None, low: float | None, high: float | None
+    ) -> None:
+        if ts < self.measured:
+            target = self.prefix
+        else:
+            index = (ts - self.measured) // self.period_ns
+            target = self._folds.get(index)  # type: ignore[assignment]
+            if target is None:
+                target = self._folds[index] = type(self.prefix)()
+            target.end = max(target.end, ts)
+            if low is not None and high is not None:
+                target.lows[key] = min(target.lows.get(key, low), low)
+                target.highs[key] = max(target.highs.get(key, high), high)
+        if price is not None:
+            target.mark(key, ts, price)
+            self._credit(key, ts, price)
+
+
+INSTANTS = st.sampled_from(
+    (
+        OPENS + 5,  # the prefix
+        *(
+            midnight_ns(WINDOW[0]) + day * NS_PER_DAY + offset
+            for day in range(3)
+            for offset in (7, 7, 9)
+        ),
+    )
+)
+"""A few instants, so points share periods and instants: the prefix, and each of the window's
+days twice over, one instant of it twice."""
+
+steps = st.lists(
+    st.one_of(
+        st.tuples(
+            st.just("fold"),
+            INSTANTS,
+            st.sampled_from((INSTRUMENT, OTHER)),
+            st.sampled_from((None, -0.0, 0.0, 10.0)),
+            st.sampled_from((-0.0, 0.0, -0.0, 0.0, 9.0, None)),
+            st.sampled_from((-0.0, 0.0, -0.0, 0.0, 12.0, None)),
+        ),
+        st.tuples(
+            st.just("settle"),
+            INSTANTS,
+            st.sampled_from((INSTRUMENT, OTHER)),
+            st.sampled_from((-0.0001, 0.0002)),
+        ),
+    ),
+    min_size=10,
+    max_size=60,
+)
+
+
+@settings(max_examples=200, deadline=None)
+@given(drawn=steps)
+def test_a_fold_keeps_what_the_0_20_fold_kept(drawn: list) -> None:
+    """Points of either name in any order, across the prefix and every period, prices and
+    ranges at zero of either sign or absent, settlements between them: every period's end,
+    marks and ranges, the prefix's marks, every print credited and every settlement struck
+    are what 0.20.0's fold made, and in the same order."""
+    request = _request(quoted=False)
+    model = VenueModel.model_validate(dict(request.venue_model))
+    marks, reference = Marks(request, model), _Folded020(request, model)
+    for step in drawn:
+        for held in (marks, reference):
+            if step[0] == "fold":
+                held.fold(*step[1:])
+            else:
+                held.settle(*step[1:])
+    assert repr(_state(marks)) == repr(_state(reference))
+    assert repr(marks.settlements()) == repr(reference.settlements())
+    assert [list(fold.lows) for fold in marks.periods()] == [
+        list(fold.lows) for fold in reference.periods()
+    ]

@@ -193,7 +193,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.trading.strategy import Strategy
 
-from kanso.criteria.run import day_of
+from kanso.criteria.run import NS_PER_DAY, day_of
 from kanso.errors import ValidationError
 from kanso.nautilus import actions, splits
 from kanso.nautilus.costs import (
@@ -711,6 +711,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         super().__init__(resolved)
         self._cfg: KansoConfig = resolved
         self._kept_universe: tuple[InstrumentId, ...] | None = None
+        self._kept_names: dict[InstrumentId, str] = {}
+        """The name each id of the kept `universe` formats to (`held`)."""
+        self._kept_open: list[Any] | None = None
+        """This sleeve's open positions as the cache lists them, kept (`_kept_positions`)."""
+        self._kept_settled = False
+        """Whether every order the balance reads has been folded in since anything it folds
+        last changed (`_settle`)."""
         self._data_time = 0
         self._intents: list[OrderIntent] = []
         self._last_bar: dict[str, Bar] = {}
@@ -727,7 +734,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._delivered_ns = 0
         self._fed_from_ns = 0
         self._flushing = False
-        self._pending: deque[object] = deque()
+        self._pending: deque[tuple[object, InstrumentId | None, str | None]] = deque()
+        """The points held for a flush marker, each with the id and the name its handler read
+        (`None` for a point that is neither a quote nor a print)."""
         self._overlay_due: tuple[InstrumentId, Bar | None, float | None] | None = None
         self._entry_answers: tuple[tuple[object, Decision], ...] | None = None
         self._clip_orders: dict[str, list[object]] = {}
@@ -741,6 +750,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._behind_modify: dict[object, Any] = {}
         self._awaiting: set[object] = set()
         self._charges = _charges(resolved)
+        self._kept_quotes = self._charges.get("spread") == "quotes"
+        """Whether the spread is the quoted one, which a quote of a name settles that name for."""
+        self._kept_day: tuple[int, date] | None = None
+        """The last UTC day a scoped point fell on, and its index from the epoch
+        (`_out_of_scope`)."""
         self._cash = resolved.capital
         self._ledger: dict[object, _Tracked] = {}
         self._print_ns: dict[str, int] = {}
@@ -796,6 +810,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         held = self._kept_universe
         if held is None:
             held = self._kept_universe = tuple(_id_of(value) for value in self._cfg.universe)
+            self._kept_names = {instrument_id: _name_of(instrument_id) for instrument_id in held}
         return held
 
     @property
@@ -943,10 +958,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         leave.
 
         A read is kept until anything it reads changes (`_forget_kept`), so a sleeve may ask
-        it of every name on every point.
+        it of every name on every point. One of the sleeve's own `universe` ids finds its
+        name in a table built with the ids, and a kept read is answered here: measured on
+        2026-10-26, a tick sleeve asked this about fourteen times a point.
         """
-        key = _name_of(instrument_id) if type(instrument_id) is InstrumentId else str(instrument_id)
-        return self._own_intended(key)
+        if type(instrument_id) is InstrumentId:
+            key = self._kept_names.get(instrument_id)
+            if key is None:
+                key = _name_of(instrument_id)
+        else:
+            key = str(instrument_id)
+        kept = self._kept_intended.get(key)
+        if kept is None or self._recheck_kept:
+            return self._own_intended(key)
+        return kept
 
     @property
     def balance(self) -> float:
@@ -991,11 +1016,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
-        self._settle()
-        worth = sum(
-            (self._worth(position) for position in self.cache.positions_open(strategy_id=self.id)),
-            0.0,
-        )
+        self._kept_settle()
+        worth = sum((self._worth(position) for position in self._kept_positions()), 0.0)
         return self._cash + worth
 
     # --- the book policy: the runner's period ends, mirrored -------------------
@@ -1015,7 +1037,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instant is still to come.
         """
         if ts_ns > self._instant_ns:
-            self._struck(ts_ns)
+            if self._open_fills:
+                self._struck(ts_ns)
+            else:  # nothing to let go: what `_struck` does then
+                self._instant_ns = ts_ns
         if self._settling and ts_ns > self._settling[0][0]:
             self._refund()
         if self._filled:
@@ -1247,7 +1272,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         scope = self._cfg.session_scope
         if scope is None or key in scope[2]:
             return False
-        return day_of(int(ts_init)) not in self._scope_days.get(key, ())
+        ts = int(ts_init)
+        held = self._kept_day
+        if held is None or held[0] != ts // NS_PER_DAY:  # a day's points ask the day once
+            held = self._kept_day = (ts // NS_PER_DAY, day_of(ts))
+        return held[1] not in self._scope_days.get(key, ())
 
     def _note_scope(self, data: object) -> None:
         """Record a scope point: the session it stamps is admitted for its instrument."""
@@ -1281,7 +1310,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._last_bar[key] = bar
             self._observe_price(key, float(bar.close), int(bar.ts_event))
         if self._held():
-            self._pending.append(bar)
+            self._pending.append((bar, None, None))
             return
         self._dispatch_bar(bar)
         self._consult_due()
@@ -1290,43 +1319,63 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if historical:
             super().handle_quote_tick(tick, historical)
             return
-        key = tick.instrument_id.value
-        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
+        # The point's id, its name and its instants are read once and handed on: a tick feed
+        # sends a quote and its flush marker on every point, and in nautilus_trader 1.231.0
+        # `InstrumentId.value` formats the name afresh on every read. What each step does is
+        # what the helper it stands for does (`_undelivered`, `_show_book`, `_printed`,
+        # `_observe_price`, `_quoted`, `_held`), in the same order.
+        ts_init = int(tick.ts_init)
+        instrument_id = tick.instrument_id
+        key = instrument_id.value
+        if ts_init < self._fed_from_ns or self._out_of_scope(key, ts_init):
             return
-        self._show_book(int(tick.ts_init))
-        self._turn(int(tick.ts_init))
-        self._delivered_ns = int(tick.ts_init)
+        self._show_book(ts_init)  # as before: under `depth` no quote is loaded
+        self._turn(ts_init)
+        self._delivered_ns = ts_init
         self._last_quote[key] = tick
         bid, ask = float(tick.bid_price), float(tick.ask_price)
         mid = (bid + ask) / 2.0
-        self._printed(key, mid, int(tick.ts_event), int(tick.ts_init))
-        self._observe_price(key, mid, int(tick.ts_event))
-        self._quoted(key, int(tick.ts_init), (bid, ask))
-        if self._charges.get("spread") == "quotes":
+        ts_event = int(tick.ts_event)
+        self._last_print[key] = mid
+        self._print_ns[key] = ts_event
+        mark = self._mark_at.get(key)
+        if mark is None or ts_init > mark[0] or (ts_init == mark[0] and mid > mark[1]):
+            self._mark_at[key] = (ts_init, mid)
+        self._last_price[key] = mid
+        self._price_ns[key] = ts_event
+        if self._open_fills:
+            self._quoted(key, ts_init, (bid, ask))
+        if self._kept_quotes:
             self._settle(key)
-        if self._held():
-            self._pending.append(tick)
+        if self._hold_until_cross_section and not self._flushing:
+            self._pending.append((tick, instrument_id, key))
             return
-        self._dispatch_quote(tick)
+        self._dispatch_quote(tick, instrument_id, key)
         self._consult_due()
 
     def handle_trade_tick(self, tick: TradeTick, historical: bool = False) -> None:
         if historical:
             super().handle_trade_tick(tick, historical)
             return
-        key = tick.instrument_id.value
-        if self._undelivered(tick.ts_init) or self._out_of_scope(key, tick.ts_init):
+        ts_init = int(tick.ts_init)  # read once and handed on, as `handle_quote_tick` does
+        instrument_id = tick.instrument_id
+        key = instrument_id.value
+        if ts_init < self._fed_from_ns or self._out_of_scope(key, ts_init):
             return
-        self._show_book(int(tick.ts_init))
-        self._turn(int(tick.ts_init))
-        self._delivered_ns = int(tick.ts_init)
+        if self._cfg.depth is not None:
+            self._show_depth(ts_init)
+        self._turn(ts_init)
+        self._delivered_ns = ts_init
         self._last_trade[key] = tick
-        self._printed(key, float(tick.price), int(tick.ts_event), int(tick.ts_init))
-        self._observe_price(key, float(tick.price), int(tick.ts_event))
-        if self._held():
-            self._pending.append(tick)
+        price = float(tick.price)
+        ts_event = int(tick.ts_event)
+        self._printed(key, price, ts_event, ts_init)
+        self._last_price[key] = price
+        self._price_ns[key] = ts_event
+        if self._hold_until_cross_section and not self._flushing:
+            self._pending.append((tick, instrument_id, key))
             return
-        self._dispatch_trade(tick)
+        self._dispatch_trade(tick, instrument_id, key)
         self._consult_due()
 
     def handle_order_book_deltas(self, deltas: object, historical: bool = False) -> None:
@@ -1478,18 +1527,21 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def handle_data(self, data: object) -> None:
         if isinstance(data, KansoCrossSection):
             ledger = self._book_ledger
-            if ledger is not None:
-                ledger.running.append(self)
+            if ledger is None:  # a sleeve run alone: what the book's branch does without one
+                if self._pending:
+                    self._flush_one()
+                if not self._pending:
+                    self._consult_due()
+                return
+            ledger.running.append(self)
             try:
                 if self._pending:
                     self._flush_one()
                 if not self._pending:
                     self._consult_due()
-                if ledger is not None:
-                    ledger.marked(self, data)
+                ledger.marked(self, data)
             finally:
-                if ledger is not None:
-                    ledger.running.pop()
+                ledger.running.pop()
             return
         ts_init = getattr(data, "ts_init", None)
         if isinstance(ts_init, int):
@@ -1502,7 +1554,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._fund(data)
         self._note_scope(data)
         if self._held():
-            self._pending.append(data)
+            self._pending.append((data, None, None))
             return
         self._dispatch_data(data)
         self._consult_due()
@@ -1518,17 +1570,34 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return self._hold_until_cross_section and not self._flushing
 
     def _flush_one(self) -> None:
-        event = self._pending.popleft()
+        """Dispatch the point the oldest buffered handler holds, with the id and the name its
+        handler read: a bar, a quote or a print, each by its kind as an `isinstance` tells it
+        (a quote's and a print's exact type asked first, which no bar is), or anything else.
+        A quote or a print held by `handle_data`, which reads no id, has its id read here."""
+        event, instrument_id, key = self._pending.popleft()
         self._flushing = True
         try:
-            if isinstance(event, Bar):
+            kind = type(event)
+            if kind is QuoteTick:
+                quote = True
+            elif kind is TradeTick:
+                quote = False
+            elif isinstance(event, Bar):
                 self._dispatch_bar(event)
+                return
             elif isinstance(event, QuoteTick):
-                self._dispatch_quote(event)
+                quote = True
             elif isinstance(event, TradeTick):
-                self._dispatch_trade(event)
+                quote = False
             else:
                 self._dispatch_data(event)
+                return
+            if instrument_id is None:
+                instrument_id = event.instrument_id  # type: ignore[attr-defined]
+            if quote:
+                self._dispatch_quote(event, instrument_id, key)
+            else:
+                self._dispatch_trade(event, instrument_id, key)
         finally:
             self._flushing = False
 
@@ -1546,7 +1615,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         due = self._overlay_due
         self._overlay_due = None
-        if due is not None:
+        if due is not None and any_attached():  # `_consult_overlay` asks this first
             instrument_id, last_bar, price = due
             self._consult_overlay(instrument_id, last_bar=last_bar, price=price)
 
@@ -1563,23 +1632,34 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
-    def _dispatch_quote(self, tick: QuoteTick) -> None:
+    def _dispatch_quote(
+        self, tick: QuoteTick, instrument_id: InstrumentId, key: str | None
+    ) -> None:
+        """Hand a quote to the author, then ask for the exits owed and the exit rules, with the
+        id its handler read and its name, or `None` for the name to be read when it is asked
+        for. The cancels held behind a modify are sent and the owed exits asked for only when
+        there are any, which is what `_send_behind_modify` and `_pay_owed` ask first."""
         self._data_time = int(tick.ts_event)
-        self._send_behind_modify()
+        if self._behind_modify:
+            self._send_behind_modify()
         super().handle_quote_tick(tick, False)
-        self._pay_owed()
-        instrument_id = tick.instrument_id
-        self._consult_exit(instrument_id)
+        if self._owed:
+            self._pay_owed()
+        self._consult_exit(instrument_id, key)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
-    def _dispatch_trade(self, tick: TradeTick) -> None:
+    def _dispatch_trade(
+        self, tick: TradeTick, instrument_id: InstrumentId, key: str | None
+    ) -> None:
+        """As `_dispatch_quote`, for a print."""
         self._data_time = int(tick.ts_event)
-        self._send_behind_modify()
+        if self._behind_modify:
+            self._send_behind_modify()
         super().handle_trade_tick(tick, False)
-        self._pay_owed()
-        instrument_id = tick.instrument_id
-        self._consult_exit(instrument_id)
+        if self._owed:
+            self._pay_owed()
+        self._consult_exit(instrument_id, key)
         if not self._cfg.extra_resolutions:
             self._overlay_due = (instrument_id, None, None)
 
@@ -2123,12 +2203,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return read
 
     def _forget_kept(self) -> None:
-        """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`).
+        """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`), the
+        open positions the balance marks (`_kept_positions`), and that the balance has folded
+        in every order (`_kept_settle`).
 
         A tick sleeve asks them of every name on every point — every tk_* seed walks its
-        universe asking `held` once its day is done — and measured on 2026-10-22 under a
-        profiler they were 40% to 52% of such a card. What they read changes only with one
-        of these, and each forgets the reads first:
+        universe asking `held` once its day is done, and reads its balance — and measured on
+        2026-10-22 under a profiler the position reads were 40% to 52% of such a card. What
+        they read changes only with one of these, and each forgets the reads first:
 
         * **an event of this sleeve's orders or positions**, as the engine hands it to
           `handle_event`: every submission, acceptance, refusal, denial, modify, cancel,
@@ -2164,6 +2246,56 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         self._kept_filled.clear()
         self._kept_intended.clear()
+        self._kept_open = None
+        self._kept_settled = False
+
+    def _kept_positions(self) -> list[Any]:
+        """This sleeve's open positions, `cache.positions_open(strategy_id=self.id)`: the
+        cache's list, kept until anything it lists could change (`_forget_kept`). In
+        nautilus_trader 1.231.0 that list is built afresh on each call, sorted by position id,
+        and holds the cache's own position objects, so what each holds is read afresh from it
+        wherever it is read."""
+        kept = self._kept_open
+        if kept is not None and not self._recheck_kept:
+            return kept
+        read: list[Any] = self.cache.positions_open(strategy_id=self.id)
+        if kept is not None and (
+            len(kept) != len(read)
+            or any(was is not now for was, now in zip(kept, read, strict=True))
+        ):
+            raise AssertionError(
+                f"_kept_positions kept {kept!r} where the cache lists {read!r} now: something "
+                "it reads changed and did not forget the reads kept (KansoStrategy._forget_kept)"
+            )
+        self._kept_open = read
+        return read
+
+    def _kept_settle(self) -> None:
+        """Fold every fill not booked yet into cash (`_settle`), unless nothing it folds has
+        changed since a pass that folded in everything.
+
+        Such a pass leaves every order it reads with all its events read and lets every closed
+        one go. What it books moves only with what forgets the kept reads (`_forget_kept`): an
+        event of an order, an order kept, a split. Two writers in nautilus_trader 1.231.0 add
+        an event to an order with no event reaching the sleeve: `cancel_all_orders` applies an
+        unpublished `OrderPendingCancel`, and the order emulator applies `OrderUpdated`.
+        Neither fills or closes an order, so a pass skipped after one books nothing, and the
+        next pass that is made reads the order on from the last event it read, the same fills
+        in the same order. A pass with nothing moved books nothing, closes nothing and lets
+        nothing go, so it is not made. With
+        `_recheck_kept` set it is made anyway, and one that moves the cash or lets an order
+        go raises."""
+        if not self._kept_settled:
+            self._settle()
+        elif self._recheck_kept:
+            cash, held = self._cash, len(self._ledger)
+            self._settle()
+            if self._cash != cash or len(self._ledger) != held:
+                raise AssertionError(
+                    f"_kept_settle skipped a pass that moved the cash from {cash!r} to "
+                    f"{self._cash!r} or let an order go: something it reads changed and did "
+                    "not forget the reads kept (KansoStrategy._forget_kept)"
+                )
 
     def _holdings(self) -> dict[str, float]:
         """The sleeve's own intended position in every name it holds or has an order in."""
@@ -3065,15 +3197,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _price_now(self, key: str) -> float | None:
         """The last price seen for a name, quoted in the share count the venue holds now."""
         price = self._last_price.get(key)
-        if price is None:
-            return None
+        if price is None or key not in self._restated:
+            return price  # no split applied to the name: the factor is one, the price itself
         return price / self._restating(key, self._price_ns.get(key, 0))
 
     def _print_now(self, key: str) -> float | None:
-        """The last print of a name, quoted in the share count the venue holds now."""
+        """The last print of a name, quoted in the share count the venue holds now.
+
+        A name no split has been applied to is divided by no ratio, and a float divided by
+        one is that float, so its price is handed back as it is."""
         price = self._last_print.get(key)
-        if price is None:
-            return None
+        if price is None or key not in self._restated:
+            return price
         return price / self._restating(key, self._print_ns.get(key, 0))
 
     def _reserve(self, key: str) -> float:
@@ -3174,6 +3309,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 self._cancels.pop(order.client_order_id, None)
         for client_order_id in closed:
             del self._ledger[client_order_id]
+        if key is None and until_ns is None:
+            self._kept_settled = True
         return later
 
     @staticmethod
@@ -3337,13 +3474,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         A price printed before a split the venue has since applied is restated by the
         split's ratio (`_restating`), so a pair's other leg does not read the split as a
         loss in the handlers between the split and the held leg's next print. A position
-        the sleeve has seen no price for is marked at its own split-aware cost.
+        the sleeve has seen no price for is marked at its own split-aware cost. A position in
+        one of the sleeve's own names finds the name in the table `held` reads.
         """
-        price = self._print_now(position.instrument_id.value)
+        instrument_id = position.instrument_id
+        key = self._kept_names.get(instrument_id)
+        if key is None:
+            key = instrument_id.value
+        price = self._print_now(key)
         if price is None:
-            applied = tuple(self._restated.get(position.instrument_id.value, ()))
+            applied = tuple(self._restated.get(key, ()))
             price = splits.ledger(splits.moves_of(position, applied)).basis
-        return float(position.signed_qty) * price * self._multiplier_of(position.instrument_id)
+        return float(position.signed_qty) * price * self._multiplier_of(instrument_id)
 
     def _multiplier_of(self, instrument_id: InstrumentId | str) -> float:
         """The contract multiplier a quantity at a price is scaled by to be a notional, read
@@ -3571,7 +3713,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             for order in self._open_markets()
         )
 
-    def _consult_exit(self, instrument_id: InstrumentId) -> None:
+    def _consult_exit(self, instrument_id: InstrumentId, key: str | None = None) -> None:
         """Ask the attached exit rules whether to close the position, and close it if one does.
 
         A rule that closes sends the whole position at market through `submit_exit`, which
@@ -3584,13 +3726,27 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         # The warming guard is unreachable on a flat start — no position exists in the
         # prefix — and stands for a run that carries or restores a book across the open.
-        if self._exiting or not self.is_running or self._warming():
-            return
-        net = self._own_filled(instrument_id.value)  # what is open, not what is in flight
+        if self._exiting or not self.is_running or self._delivered_ns < self._trading_from_ns:
+            return  # the last test is `_warming`
+        if key is None:
+            key = instrument_id.value
+        net = self._kept_filled.get(key)  # what is open, not what is in flight
+        if net is None or self._recheck_kept:
+            net = self._own_filled(key)  # the kept read, as `_own_filled` answers it
         if net == 0.0:
             return
         side = OrderSide.SELL if net > 0 else OrderSide.BUY
         if self._market_order_in_flight(instrument_id, side):
+            return
+        if not any_attached() and _kept_plain(type(self)):
+            # Nothing is attached to any host in this process, so `before_exit` finds no exit
+            # rule (`modifiers_for` answers nothing, and changes nothing) and answers False
+            # whatever context it is handed. Building that context reads the sleeve's
+            # positions, clips, prices and balance, and of those reads only the balance's
+            # settling changes anything (`_settle`), so that is done here, where the context
+            # would have done it, and nothing else is: measured on 2026-10-26, a tick sleeve
+            # holding a position spent 11% of its card building contexts nothing read.
+            self._kept_settle()
             return
         ctx = self._context(instrument_id, side, abs(net), None, "MARKET")
         self._exiting = True
@@ -3688,6 +3844,59 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _any_market_in_flight(self) -> bool:
         return bool(self._open_markets())
+
+
+_CONTEXT_READS: Final = frozenset(
+    {
+        "_book",
+        "_clips",
+        "_clips_filled",
+        "_clips_intended",
+        "_context",
+        "_decisions",
+        "_instrument_id",
+        "_is_clip",
+        "_multiplier_of",
+        "_open_markets",
+        "_own_filled",
+        "_own_intended",
+        "_own_position",
+        "_print_now",
+        "_restating",
+        "_worth",
+        "balance",
+        "before_exit",
+        "capital",
+        "held",
+        "host_names",
+        "sized",
+        "universe",
+    }
+)
+"""What an exit consult reads through to build its context and ask `before_exit`
+(`KansoStrategy._consult_exit`)."""
+
+
+_PLAIN: dict[type, bool] = {}
+"""`_kept_plain`'s answer for each class it has been asked about."""
+
+
+def _kept_plain(cls: type) -> bool:
+    """Whether a sleeve class reads an exit consult's context and asks `before_exit` through
+    `KansoStrategy`'s own methods, binding none of `_CONTEXT_READS` itself: only then is a
+    context nothing is attached to read nothing but the balance's settling. A researched
+    `strategy.py` binds none (`kanso.criteria.integrity`); one that did would be read as before.
+    """
+    plain = _PLAIN.get(cls)
+    if plain is None:
+        plain = _PLAIN[cls] = False
+        for klass in cls.__mro__:
+            if klass is KansoStrategy:
+                plain = _PLAIN[cls] = True
+                break
+            if not _CONTEXT_READS.isdisjoint(vars(klass)):
+                break
+    return plain
 
 
 class KansoModifier(Actor):  # type: ignore[misc]

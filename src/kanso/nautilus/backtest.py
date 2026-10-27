@@ -140,7 +140,7 @@ from types import ModuleType
 from typing import IO, Any, Final
 
 import numpy as np
-from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar, CustomData, QuoteTick, TradeTick
 
 from kanso.criteria import CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
@@ -160,7 +160,7 @@ from kanso.nautilus.costs import (
     reset,
     tick_slip,
 )
-from kanso.nautilus.cross_section import BOOK, is_marker
+from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Hypothesis, VenueModel, parse_duration
@@ -1613,6 +1613,8 @@ class Marks:
         self.levelled = BOOK in request.hyp.data_requirements
         self.prefix = _Fold()
         self._folds: dict[int, _Fold] = {}
+        self._fold_at: tuple[int, _Fold] | None = None
+        """The period the last point inside the window was folded into, and its index."""
         self._series: dict[str, tuple[array[int], array[float], array[float]]] = {}
         self._last_quote: dict[str, tuple[int, float, float]] = {}
         self._quote_of: dict[str, tuple[float, float] | None] = {}
@@ -1629,8 +1631,11 @@ class Marks:
         """
         later: list[object] = []
         for point in points:
-            if type(point) in _MARKET:
+            kind = type(point)
+            if kind in _MARKET:
                 later.append(point)
+            elif kind is CustomData and type(point.data) is KansoCrossSection:  # type: ignore[attr-defined]
+                continue  # a flush marker as the stream holds them; `is_marker` asks the rest
             elif is_marker(point):
                 continue
             elif _funding_of(point) is None:
@@ -1649,7 +1654,9 @@ class Marks:
         """
         kind = type(point)
         if kind is QuoteTick:
-            ts = self._admitted(point)
+            ts = int(point.ts_init)  # type: ignore[attr-defined]
+            if not self.opens <= ts < self.closes:
+                self._admitted(point)  # the refusal
             bid = float(point.bid_price)  # type: ignore[attr-defined]
             ask = float(point.ask_price)  # type: ignore[attr-defined]
             key = point.instrument_id.value  # type: ignore[attr-defined]
@@ -1662,7 +1669,9 @@ class Marks:
             held[2].append(ask)
             return
         if kind is TradeTick:
-            ts = self._admitted(point)
+            ts = int(point.ts_init)  # type: ignore[attr-defined]
+            if not self.opens <= ts < self.closes:
+                self._admitted(point)  # the refusal
             price = float(point.price)  # type: ignore[attr-defined]
             self.fold(ts, point.instrument_id.value, price, price, price)  # type: ignore[attr-defined]
             return
@@ -1698,21 +1707,55 @@ class Marks:
     def fold(
         self, ts: int, key: str, price: float | None, low: float | None, high: float | None
     ) -> None:
-        """Fold one mark, as `(ts_init, instrument, price, low, high)`."""
+        """Fold one mark, as `(ts_init, instrument, price, low, high)`.
+
+        The period of the last point is kept, since a stream's points run through one period
+        after another; and `min(held, low)` is `low` exactly when `low < held`, `max` the same
+        way round, so a range moves only then, as it is written here — a period's last instant
+        likewise, and the mark as `_Fold.mark` moves it."""
         if ts < self.measured:
             target = self.prefix
         else:
             index = (ts - self.measured) // self.period_ns
-            target = self._folds.get(index)  # type: ignore[assignment]
-            if target is None:
-                target = self._folds[index] = _Fold()
-            target.end = max(target.end, ts)
+            at = self._fold_at
+            if at is not None and at[0] == index:
+                target = at[1]
+            else:
+                target = self._folds.get(index)  # type: ignore[assignment]
+                if target is None:
+                    target = self._folds[index] = _Fold()
+                self._fold_at = (index, target)
+            if ts > target.end:
+                target.end = ts
             if low is not None and high is not None:
-                target.lows[key] = min(target.lows.get(key, low), low)
-                target.highs[key] = max(target.highs.get(key, high), high)
+                lows = target.lows
+                held = lows.get(key)
+                if held is None or low < held:
+                    lows[key] = low
+                highs = target.highs
+                held = highs.get(key)
+                if held is None or high > held:
+                    highs[key] = high
         if price is not None:
-            target.mark(key, ts, price)
-            self._credit(key, ts, price)
+            marks = target.marks
+            held_mark = marks.get(key)
+            if (
+                held_mark is None
+                or ts > held_mark[0]
+                or (ts == held_mark[0] and price > held_mark[1])
+            ):
+                marks[key] = (ts, price)
+            if key in self._instants:
+                self._credit(key, ts, price)
+            else:  # no settlement of the name yet: the print is carried, as `_credit` carries it
+                slot = (key, None)
+                held_credit = self._credited.get(slot)
+                if (
+                    held_credit is None
+                    or ts > held_credit[0]
+                    or (ts == held_credit[0] and price > held_credit[1])
+                ):
+                    self._credited[slot] = (ts, price)
 
     def settle(self, ts: int, key: str, rate: float) -> None:
         """Record one funding settlement: `rate` on what `key` holds at `ts`."""
