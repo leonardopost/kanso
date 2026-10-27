@@ -64,23 +64,24 @@ a size that does not grow with the hypothesis.
 Both stop at the pins, because the pins are what make two numbers one comparison — and the
 criteria version is the package version and a digest of the criteria library, so every
 release moves it, a performance patch as much as a new objective. Measured in a live
-workspace on 2026-10-26: six lanes moved from 0.19.0 to 0.20.0, each hypothesis with 23
-cards behind it, all discards, and each new run's proposer was shown none of them and was
-free to propose all 23 again. So the stable half also carries the *earlier* cards: those of
-the same hypothesis file under another snapshot or another criteria version, the newest as
-many as the recent window holds, each by what it tried — its sha7, its status, its tags,
-its description, and the criteria version and snapshot that were the pins of the run it
-was made in — and a count of all of them by tag. A pin names the kanso a run began under,
-which is not always the one that scored the card: a run is carded by whichever kanso is
-installed when its next card runs, so a run upgraded between cards has later cards scored
-by the newer kanso under the older pin. No number: a number is one comparison only with
-numbers struck under the same pins, and each of these was struck under others, so none is
-a number this run can beat. Their ideas count and their numbers do not, and they
-reach nothing that judges. They are fixed for the life of the run — a hypothesis has one
-active run, and every card it adds is under that run's own pins — which is why they sit in
-the half a provider caches rather than beside the recent cards. Nothing else reaches the
-proposer, however much of it exists: no card asked under another hypothesis file, no number
-an earlier card was scored with, and no number measured on the certification window.
+workspace on 2026-10-26: six lanes moved to 0.20.0 from runs begun under 0.18.0, with 23
+cards behind the six hypotheses, three or four each and all discards, and each new run's
+proposer was shown none of them and was free to propose every one again. So the stable half
+also carries the *earlier* cards: those of the same hypothesis file under another snapshot
+or another criteria version, the newest as many as the recent window holds, each by what it
+tried — its sha7, its status, its tags, its description, and the criteria version and
+snapshot that were the pins of the run it was made in — and a count of all of them by tag. A
+pin names the kanso a run began under, which is not always the one that scored the card: a
+run is carded by whichever kanso is installed when its next card runs, so a run upgraded
+between cards has later cards scored by the newer kanso under the older pin. No number: a
+number is one comparison only with numbers struck under the same pins, and each of these was
+struck under others, so none is a number this run can beat. Their ideas count and their
+numbers do not, and they reach nothing that judges. They are fixed for the life of the run —
+a hypothesis has one active run, and every card it adds is under that run's own pins — which
+is why they sit in the half a provider caches rather than beside the recent cards. Nothing
+else of the hypothesis's history reaches the proposer, however much of it exists: no card
+asked under another hypothesis file, no number an earlier card was scored with, and no
+number measured on the certification window.
 
 **The search has a phase, and the phase is a rule, not a mood.** Misses since the last
 keep drive it: for the first `[research] local_cards` the proposer is asked for local
@@ -681,7 +682,8 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     bytes resent on every call. The window is the recent window's, read from the
     workspace like the recent cards' is, so an operator who edits `context_cards` or
     `cards_per_turn` mid-run moves this half once. A hypothesis with no earlier cards is
-    sent neither key, and its system turn is the bytes it was before they existed.
+    sent neither key, and its stable facts are the bytes they were before earlier cards
+    existed; the instruction above them describes the two keys whether or not they are sent.
     """
     hyp = _pinned(store, active)
     settings = ws.config.research

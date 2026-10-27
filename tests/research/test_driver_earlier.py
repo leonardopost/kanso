@@ -9,7 +9,7 @@ same bytes, no number among them, and nothing that judges a card any the wiser.
 The earlier kanso is the installed one with its criteria version patched for the life of a
 run. A run's pins are written once, when it begins, so that is all an upgrade after it
 amounts to: its cards, its signatures and its events are stored under the version it began
-under, as a run begun under 0.19.0 leaves them for 0.20.0 to find. One test upgrades a run
+under, as the runs begun under 0.18.0 left them for 0.20.0 to find. One test upgrades a run
 between its cards instead, as an operator does, so that the kanso that scored a card and the
 pin it is shown under differ.
 """
@@ -42,7 +42,7 @@ from .mocked import (  # noqa: F401
     tuned,
 )
 
-OLD: Final = "0.19.0+d0c850ba1d88"
+OLD: Final = "0.18.0+d0c850ba1d88"
 """The criteria version the live lanes of 2026-10-26 had been begun under, before 0.20.0."""
 
 EARLIER: list[dict[str, Any]] = [
