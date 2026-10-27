@@ -66,6 +66,25 @@ LATER: list[dict[str, Any]] = [
 SHOWN: Final = frozenset({"sha7", "status", "tags", "desc", "criteria_version", "snapshot"})
 """Everything an earlier card is shown by: what it tried, and the pins it was made under."""
 
+CARD_FLOOR_S: Final = 600.0
+"""The card budget's floor in this module: ten minutes, as `tests/cli/test_demo.py` lifts it.
+
+These tests assert which status each card earned, and the differential asserts that two
+workspaces earned the same ones, so a card killed for its clock in one of them fails the
+test for a reason that has nothing to do with the earlier cards. Measured on a host whose
+cores six research lanes held, under `taskpolicy -b`: a later run struck a 117.5 s budget
+from a 39.2 s baseline and killed its third card at 137.0 s, in one workspace and not the
+other. The slowest card that run measured took 137.0 s and the slowest baseline 104.9 s, so
+the floor is over four times the one, and the 3x term binds only past a 200 s baseline. The
+formula and its constants are pinned in `tests/research/test_loop.py`, and the kill in
+`tests/nautilus/backtest/test_subprocess.py`."""
+
+
+@pytest.fixture(autouse=True)
+def card_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every run begun here is given at least `CARD_FLOOR_S` a card."""
+    monkeypatch.setattr(research_loop, "MIN_CARD_BUDGET_S", CARD_FLOOR_S)
+
 
 @pytest.fixture
 def prepared_hyp(ws: Workspace, store: StateStore) -> str:
