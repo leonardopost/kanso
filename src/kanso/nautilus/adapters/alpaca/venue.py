@@ -23,6 +23,14 @@ short sale at all — and one thing about the cost of a fill: its published US e
 commission is zero. Slippage and the spread are *not* declared, because the broker
 publishes neither, and they continue to come from kanso's shipped defaults.
 
+**How fast an account may send orders is declared too.** The broker publishes a rate for
+its trading API per account — 200 requests a minute on the standard plan, which is what
+`config.DEFAULT_REQUESTS_PER_MINUTE` stays under — and a sleeve trading these venues holds
+itself to it (`costs.orders_per_minute`, `kanso.nautilus.rate`), so a card is measured at a
+rate the account takes. A plan that grants more is the workspace's to state, as
+`venues.<MIC>.costs.orders_per_minute` in `portfolio.yaml`, beside `[adapters.alpaca]
+requests_per_minute` for the client's own throttle.
+
 That leaves one honest caveat, recorded here because it cannot be recorded on a card: the
 origin of a resolved cost model is kept per block rather than per field, so a card whose
 costs came through this declaration reports the whole block as the broker's, including
@@ -44,6 +52,7 @@ __all__ = [
     "COMMISSION_BPS",
     "CURRENCY",
     "EXCHANGES",
+    "ORDERS_PER_MINUTE",
     "US_EQUITY",
     "VENUES",
     "declaration",
@@ -64,6 +73,12 @@ COMMISSION_BPS: Final = 0.0
 """The broker's published US equity commission. Regulatory pass-through fees on a sale are
 not part of it and are the operator's to state where they matter."""
 
+ORDERS_PER_MINUTE: Final = 200
+"""The broker's published trading API rate per account on its standard plan, in requests a
+minute: the figure a sleeve on these venues holds its order commands to unless the
+workspace states its plan's. Published, not measured here; a higher plan's figure is the
+operator's to state."""
+
 EXCHANGES: Final[dict[str, str]] = {
     "NASDAQ": "XNAS",
     "NYSE": "XNYS",
@@ -83,11 +98,11 @@ transformation."""
 US_EQUITY: Final = VenueDeclaration(
     account="margin",
     currency=CURRENCY,
-    costs=CostsOverride(commission_bps=COMMISSION_BPS),
+    costs=CostsOverride(commission_bps=COMMISSION_BPS, orders_per_minute=ORDERS_PER_MINUTE),
 )
 """What this broker declares about every venue it serves. One declaration for all of them,
-because the account is one account: its type, its currency and its commission do not
-change with the venue an order happens to route to."""
+because the account is one account: its type, its currency, its commission and its rate do
+not change with the venue an order happens to route to."""
 
 VENUES: Final[dict[str, VenueDeclaration]] = {
     venue: US_EQUITY for venue in sorted(set(EXCHANGES.values()))

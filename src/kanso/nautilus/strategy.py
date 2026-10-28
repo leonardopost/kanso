@@ -51,6 +51,18 @@ it is; the room reads the order at its new size and price from its next read on.
 rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`); an unsized
 sleeve alone may call it (`docs/backlog.md` row 123). In a book it is refused.
 
+**It counts its orders, and holds itself to its account's rate.** Every command it sends —
+a submit per order, a modify, a cancel per order — is counted on the data clock
+(`kanso.nautilus.rate`), and a run reports the busiest 60 s beside its fills. Under a venue
+model that states `costs.orders_per_minute` each command takes a token from a bucket of that
+many, refilled at that many a minute on the data clock, before it goes; with the bucket empty
+an entry, a modify and a list are refused (`order_rate`, the same `Refusal` a sizing rule
+raises), an exit `submit_exit` sized is owed and asked for again on later points, and a cancel
+is deferred and sent before the next point's handler that finds a token for it. It is the
+same code on every path, so a card, a replay and a node hold one strategy to one rate; a stage
+node's flatten after its window lifts it (`_lift_rate`). Unstated, nothing is held back and
+nothing a run does changes.
+
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
 sleeve handles a point only after the exchange has already matched against it — measured, a
@@ -179,12 +191,14 @@ from nautilus_trader.model.enums import (
     BarAggregation,
     BookAction,
     BookType,
+    ContingencyType,
     LiquiditySide,
     OrderSide,
     OrderStatus,
     OrderType,
     PriceType,
     RecordFlag,
+    TriggerType,
     order_side_to_str,
     order_type_to_str,
 )
@@ -226,6 +240,7 @@ from kanso.nautilus.hooks import (
     modifiers_for,
     register_modifier,
 )
+from kanso.nautilus.rate import CANCEL, MODIFY, SUBMIT, Bucket, Tally
 from kanso.nautilus.sizing import (
     BOOK_ENTRY,
     BUDGET_BELOW_LOT,
@@ -235,6 +250,7 @@ from kanso.nautilus.sizing import (
     HEDGE_UNDER_SIZING,
     ONE_CLIP,
     ONE_POSITION,
+    ORDER_RATE,
     SCALE_UNDER_SIZING,
     SIZE_ARGUMENT,
     UNFUNDED_ORDER,
@@ -582,6 +598,17 @@ def _never_rests(order: Any) -> bool:
     return bool(order.order_type == OrderType.MARKET)
 
 
+def _owable(order: Any) -> bool:
+    """Whether `submit_exit` can send an exit the strategy built itself again as it was: one
+    order at market or at a limit, with no contingency and no emulation trigger — what
+    `KansoStrategy._order` builds."""
+    return bool(
+        order.order_type in (OrderType.MARKET, OrderType.LIMIT)
+        and order.contingency_type == ContingencyType.NO_CONTINGENCY
+        and order.emulation_trigger == TriggerType.NO_TRIGGER
+    )
+
+
 def _order_price(order: object) -> float | None:
     price = getattr(order, "price", None)
     return None if price is None else float(price)
@@ -750,6 +777,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._behind_modify: dict[object, Any] = {}
         self._awaiting: set[object] = set()
         self._charges = _charges(resolved)
+        self._command_tally = Tally()
+        """Every order command this sleeve sent, counted on the data clock (`_command_spend`)."""
+        rate = self._charges.get("orders_per_minute")
+        self._command_bucket: Bucket | None = None if rate is None else Bucket(int(rate))
+        """The account's rate as a token bucket, when the venue model states one."""
+        self._command_ns = 0
+        """The data clock the tally and the bucket read: `data_time`, never run backwards."""
+        self._command_deferred: dict[object, tuple[Any, Any, dict[str, object] | None, bool]] = {}
+        """The cancels the bucket had no token for, oldest first, by client order id, each
+        with what it was sent with and whether it waits behind a modify (`_defer_cancel`)."""
+        self._command_closing: tuple[float | None, float | None] | None = None
+        """What `_close` asked for, as the next `submit_order` sends it: the exit an empty
+        bucket owes rather than refuses (`_short_of_rate`)."""
         self._kept_quotes = self._charges.get("spread") == "quotes"
         """Whether the spread is the quoted one, which a quote of a name settles that name for."""
         self._kept_day: tuple[int, date] | None = None
@@ -1637,10 +1677,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> None:
         """Hand a quote to the author, then ask for the exits owed and the exit rules, with the
         id its handler read and its name, or `None` for the name to be read when it is asked
-        for. The cancels held behind a modify are sent and the owed exits asked for only when
-        there are any, which is what `_send_behind_modify` and `_pay_owed` ask first."""
+        for. The cancels held behind a modify or deferred for a token are sent and the owed
+        exits asked for only when there are any, which is what `_send_behind_modify` and
+        `_pay_owed` ask first."""
         self._data_time = int(tick.ts_event)
-        if self._behind_modify:
+        if self._behind_modify or self._command_deferred:
             self._send_behind_modify()
         super().handle_quote_tick(tick, False)
         if self._owed:
@@ -1654,7 +1695,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> None:
         """As `_dispatch_quote`, for a print."""
         self._data_time = int(tick.ts_event)
-        if self._behind_modify:
+        if self._behind_modify or self._command_deferred:
             self._send_behind_modify()
         super().handle_trade_tick(tick, False)
         if self._owed:
@@ -1815,7 +1856,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         returned. Kept after the call, an exit asked again from `on_order_submitted` did not
         count the first: a sleeve that asked so for the exit at market of its long of 1000 sold
         2000. Both paths now size it alike.
+
+        Once every check has let it through it takes a token of the venue model's
+        `orders_per_minute`, when one is stated, and is counted as a submit (`_command_spend`); with
+        the bucket empty it is not sent: an exit kanso can send again as `submit_exit` would
+        is owed and anything else is refused (`_short_of_rate`).
         """
+        closing, self._command_closing = self._command_closing, None
         if self._warming():
             return
         self._check_booked(order, "submit_order")
@@ -1825,6 +1872,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._check_funded((order,))
         ctx = self._context_for(order)
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
+            return
+        if not self._command_spend(SUBMIT):
+            self._short_of_rate(order, kind, closing)
             return
         self._intents.append(self._intent(order))
         self._track(order)
@@ -1840,7 +1890,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         params: dict[str, object] | None = None,
     ) -> None:
         """As `submit_order`, classifying and filtering the list by its first order. In a book
-        it is refused (`_check_booked`): kanso sends no list."""
+        it is refused (`_check_booked`): kanso sends no list. Under a stated `orders_per_minute`
+        it takes a token for each of its orders, and with fewer in the bucket it is refused
+        whatever its first order is, since kanso owes an exit only as `submit_exit` sends one."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
@@ -1852,6 +1904,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         ctx = self._context_for(orders[0])
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
+        if not self._command_spend(SUBMIT, len(orders)):
+            self._refuse_rate(
+                orders[0].instrument_id.value,
+                order_side_to_str(orders[0].side),
+                f"a list of {len(orders)} orders",
+                len(orders),
+            )
         for order in orders:
             self._intents.append(self._intent(order))
             self._track(order)
@@ -2044,8 +2103,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Hand the engine's own `modify_order` the modify unchanged, for a sleeve run alone: it
         is held neither to the room nor to what the book funds (`docs/backlog.md` row 123).
         In a book it is refused (`_check_booked`), since it would move an order the book or
-        `submit_exit` sized past what either left it."""
+        `submit_exit` sized past what either left it.
+
+        Under a stated `orders_per_minute` it takes a token, and with the bucket empty it is
+        refused as an entry is (`order_rate`), whichever order it moves: kanso cannot send it
+        later without sending terms the strategy may since have moved past, and cannot owe
+        it as an exit, since `submit_exit` sends an order and not a modify."""
         self._check_booked(order, "modify_order")
+        if not self._command_spend(MODIFY):
+            self._refuse_rate(order.instrument_id.value, "MODIFY", "a modify")
         super().modify_order(order, quantity, price, trigger_price, client_id, params)
 
     def _hedge_order(self, leg: Hedge) -> object | None:
@@ -2333,6 +2399,136 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         )
 
+    # --- the order rate: what the account takes, on the data clock -------------
+
+    def _command_spend(self, kind: str, count: int = 1) -> bool:
+        """Whether `count` commands of `kind` may go now, and count them if they may.
+
+        Under a stated `orders_per_minute` each takes a token from the bucket, all of them or
+        none (`kanso.nautilus.rate.Bucket`); with none stated every command may go. Read on
+        the data clock, `data_time` held so it never runs backwards, so both paths count the
+        same commands at the same instants. A command is counted where the sleeve decides to
+        send it: a cancel kanso holds back until the venue has the order, or behind a modify,
+        is counted, and pays its token, when it is asked for, where both paths ask for it
+        alike, not when it reaches the venue, where they do not.
+        """
+        if count <= 0:
+            return True
+        now = self._data_time
+        if now < self._command_ns:
+            now = self._command_ns
+        self._command_ns = now
+        bucket = self._command_bucket
+        if bucket is not None and not bucket.take(now, count):
+            return False
+        self._command_tally.add(now, kind, count)
+        return True
+
+    def _cancel_sent(self, order: Any) -> bool:
+        """Whether a cancel of this order would send nothing new: it is closed, or a cancel of
+        it is already on its way — sent, taken out by the order emulator, held back until
+        the venue has the order (`_hold_cancel`), or held behind a modify. Such a cancel takes
+        no token and is not counted; the engine sends nothing for an order closed or already
+        `PENDING_CANCEL` (`Strategy._create_cancel_order` in `trading/strategy.pyx` of
+        nautilus_trader 1.231.0)."""
+        current = self._current(order)
+        key = current.client_order_id
+        return bool(
+            current.is_closed
+            or current.is_pending_cancel
+            or key in self._unsent
+            or key in self._behind_modify
+            or self.cache.is_order_pending_cancel_local(key)
+        )
+
+    def _defer_cancel(
+        self, order: Any, client_id: Any, params: dict[str, object] | None, *, behind: bool
+    ) -> None:
+        """Keep a cancel the bucket had no token for, to be sent once it has one
+        (`_send_deferred`); one already waiting keeps its place. The order counts as working
+        meanwhile, as one whose cancel is in flight does, so an exit is sized to what it can
+        still fill and an exit at a price is owed behind it (`_close`)."""
+        self._command_deferred.setdefault(order.client_order_id, (order, client_id, params, behind))
+
+    def _send_deferred(self) -> None:
+        """Send the deferred cancels, oldest first, while the bucket holds a token.
+
+        One whose order no longer needs it — closed, or cancelled since — is dropped and pays
+        nothing. One deferred behind a modify still unanswered waits behind it again
+        (`_cancel_behind_modify`); any other is sent as `cancel_order` sends it, held back if
+        the venue does not have the order yet."""
+        deferred = self._command_deferred
+        while deferred:
+            key, (order, client_id, params, behind) = next(iter(deferred.items()))
+            current = self._current(order)
+            wanted = not self._cancel_sent(current)
+            if wanted and not self._command_spend(CANCEL):
+                return
+            del deferred[key]
+            if not wanted:
+                continue
+            if behind and _modifying(current):
+                self._behind_modify[key] = current
+            elif not self._hold_cancel(current, client_id, params):
+                self._cancelling(current)
+                super().cancel_order(current, client_id, params)
+
+    def _short_of_rate(
+        self, order: Any, kind: str, closing: tuple[float | None, float | None] | None
+    ) -> None:
+        """What an order the bucket held no token for comes to.
+
+        An exit `submit_exit` sized — an author's, an exit rule's, one owed already — is owed,
+        as it was asked for (`_owe`), and asked for again on later points until the bucket
+        takes it. So is an exit the strategy built itself that `submit_exit` can send again as
+        it was: one order at market or at a limit, with no contingency, no emulation and not
+        an overlay's clip, owed at its quantity and its limit. Anything else — an entry, or an
+        exit kanso cannot send again as it was asked — is refused (`order_rate`).
+        """
+        key = order.instrument_id.value
+        if closing is not None:
+            self._owe(key, order.side, closing[0], closing[1])
+            return
+        if kind == EXIT_ORDER and _owable(order) and not self._is_clip(order):
+            self._owe(key, order.side, float(order.quantity), _order_price(order))
+            return
+        what = "an entry" if kind == ENTRY else "an exit kanso cannot send again as it was asked"
+        self._refuse_rate(key, order_side_to_str(order.side), what)
+
+    def _owe(self, key: str, side: OrderSide, qty: float | None, price: float | None) -> None:
+        """Owe the exit the bucket held no token for, as `_close` owes one a cancel in flight
+        held back (`_pay_owed`); an exit rule's owed exit is not replaced by its host's."""
+        held = self._owed.get((key, side))
+        if held is None or not held[2] or self._exiting:
+            self._owed[(key, side)] = (qty, price, self._exiting)
+
+    def _refuse_rate(self, key: str, asked: str, what: str, count: int = 1) -> NoReturn:
+        """Refuse a command the bucket held too few tokens for, saying what it held."""
+        bucket = self._command_bucket
+        assert bucket is not None  # only a stated rate refuses anything
+        now = self._command_ns
+        self._refuse(
+            ORDER_RATE,
+            key,
+            asked,
+            why=f"{what} needed {count} of the {bucket.per_minute} order commands a minute "
+            f"costs.orders_per_minute allows, and the bucket held {bucket.holds(now)} after "
+            f"{self._command_tally.within(now)} in the 60 s before it. An entry, a modify and "
+            "a list are refused past the rate, an exit owed and a cancel deferred: send fewer — "
+            "re-post only when the price has moved enough to matter — or state the account's "
+            "own figure as costs.orders_per_minute",
+        )
+
+    def _lift_rate(self) -> None:
+        """Hold this sleeve to no rate from here on, sending every deferred cancel first.
+
+        A stage node's flatten after its window's last point is the stage's, not the
+        sleeve's, and must go out whole however busy the sleeve was (`kanso.nautilus.node`).
+        """
+        self._command_bucket = None
+        if self._command_deferred:
+            self._send_deferred()
+
     # --- cost-aware helpers: where exposure is enforced ---------------------
 
     def submit_entry(
@@ -2493,7 +2689,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         may be the last session's.
 
         Returns the order, or `None` when flat or when the orders still working already
-        close what was asked, including when what is left is owed.
+        close what was asked, including when what is left is owed. Under a stated
+        `orders_per_minute` an exit the bucket holds no token for is owed whole, as it was
+        asked for, and returns `None` too (`_short_of_rate`).
 
         Exits are neither filtered nor scaled: a construct that shrinks an exit would leave
         exposure behind that nothing in the hypothesis accounts for.
@@ -2678,7 +2876,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         whole = self._quantise(instrument, asked)
         short = 0.0 if whole is None else float(whole) - sent
         if short > 0 and (
-            price is None or any(order.client_order_id in self._cancels for order in working)
+            price is None
+            or any(
+                order.client_order_id in self._cancels
+                or order.client_order_id in self._command_deferred
+                for order in working
+            )
         ):
             owed = (None if qty is None else short, price, self._exiting)
             self._owed.setdefault((key, side), owed)
@@ -2690,6 +2893,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 )
         if quantity is None:
             return None
+        self._command_closing = (qty, price)
         return self._submitted(self._order(instrument, side, quantity, price))
 
     def _cancel_behind_modify(self, order: Any) -> None:
@@ -2705,7 +2909,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         behind the modify on both paths; under a latency it is stamped with that point's
         instant, after the modify's, and lands behind it there too.
         The order counts as working until the cancel lands (`_cancelling`, read then).
+
+        The cancel takes its token here, where the exit decided to send it, and with the
+        bucket empty it is deferred, still behind the modify (`_defer_cancel`).
         """
+        if not self._cancel_sent(order) and not self._command_spend(CANCEL):
+            self._defer_cancel(order, None, None, behind=True)
+            return
+        self._command_deferred.pop(order.client_order_id, None)
         self._behind_modify[order.client_order_id] = order
 
     def _send_behind_modify(self) -> None:
@@ -2729,7 +2940,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         at 2500 ms with the status seen here, and a modify followed by an exit at market at
         20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
         cancel goes out as it is taken, not from here.)
+
+        The cancels an empty bucket deferred are sent first, as many as it now holds tokens
+        for (`_send_deferred`): this is the one place both paths reach before every
+        handler of a point, and what a token refilled since the last point buys.
         """
+        if self._command_deferred:
+            self._send_deferred()
         if not self._behind_modify:
             return
         held, self._behind_modify = self._behind_modify, {}
@@ -2792,10 +3009,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         A cancel for an order not yet handed to the venue is held back and sent once it has
         been (`_hold_cancel`). A market order's cancel is never sent nor held (`_never_rests`),
         so on a level-two book the rest of one deeper than the book stays open.
+
+        Under a stated `orders_per_minute` a cancel that would go out takes a token, and with
+        the bucket empty it is deferred, to go out as soon as the bucket holds one; a second
+        cancel of an order whose cancel waits goes now if the bucket holds a token, and keeps
+        the first one's place if it does not (`_defer_cancel`).
         """
         self._forget(order.instrument_id.value, order.side, priced_only=True)
         if _never_rests(order):
             return
+        if not self._cancel_sent(order) and not self._command_spend(CANCEL):
+            self._defer_cancel(order, client_id, params, behind=False)
+            return
+        self._command_deferred.pop(order.client_order_id, None)
         if not self._hold_cancel(order, client_id, params):
             self._cancelling(order)
             super().cancel_order(order, client_id, params)
@@ -2818,12 +3044,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         which applies to both paths, the backtest engine and the node; the emulated case is
         measured on both by the exit and replay tests). An empty list is handed on as it is,
         for the engine to refuse. A market order in it is left alone (`_never_rests`), so on
-        a level-two book the rest of one deeper than the book stays open.
+        a level-two book the rest of one deeper than the book stays open. Under a stated
+        `orders_per_minute` each order's cancel takes a token or is deferred, as
+        `cancel_order`'s does.
         """
         batches: dict[object, list[Any]] = {}
         for order in orders:
             self._forget(order.instrument_id.value, order.side, priced_only=True)
-            if _never_rests(order) or self._hold_cancel(order, client_id, params):
+            if _never_rests(order):
+                continue
+            if not self._cancel_sent(order) and not self._command_spend(CANCEL):
+                self._defer_cancel(order, client_id, params, behind=False)
+                continue
+            self._command_deferred.pop(order.client_order_id, None)
+            if self._hold_cancel(order, client_id, params):
                 continue
             self._cancelling(order)
             if self._current(order).is_emulated:
@@ -2857,6 +3091,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         The engine's own also cancels the rest a market order deeper than a level-two book left
         open, which is counted as cancelled with the rest; on the top-of-book venue a market
         order has been answered before any cancel lands, and none is marked pending cancel.
+
+        Under a stated `orders_per_minute` the engine's own takes a token for every order it
+        cancels that kanso would send a cancel of — not a market order, and not one whose
+        cancel is already on its way — and when the bucket holds fewer, each is cancelled on
+        its own through `cancel_order` instead, so as many go as it holds tokens for and the
+        rest are deferred, the same orders on both paths — and the rest of a market order
+        deeper than a level-two book, which only the engine's own cancel of the name reaches,
+        is left for the next one the bucket can pay for.
         """
         orders = [
             order
@@ -2866,10 +3108,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             and not order.is_closed
         ]
         self._forget(instrument_id.value, order_side, priced_only=True)
-        if any(order.status == OrderStatus.INITIALIZED for order in orders):
+        wanted = [
+            order for order in orders if not _never_rests(order) and not self._cancel_sent(order)
+        ]
+        if any(
+            order.status == OrderStatus.INITIALIZED for order in orders
+        ) or not self._command_spend(CANCEL, len(wanted)):
             for order in orders:
                 self.cancel_order(order, client_id, params)
             return
+        for order in wanted:
+            self._command_deferred.pop(order.client_order_id, None)
         for order in orders:
             self._cancelling(order)
         super().cancel_all_orders(instrument_id, order_side, client_id, params)

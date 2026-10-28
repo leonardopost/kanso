@@ -445,14 +445,17 @@ numbers, and records them with the card:
 | `net_bps_per_trade`, `net_bps_per_trade_se` | the mean of `pnl_net / notional` over the closed trades, in basis points of the position opened, and its error: the per-trade objective over the whole window as one fold, the error read period by period. What `edge_per_trade` judges. Read that way an error has as many degrees of freedom as periods that closed a trade, less one, and on `p` such periods reads low by `√((p − 1)/p)` — 0.71 of the error on two, 0.94 on eight — which the gate's margin allows for and this number does not; it is zero by construction when one period closed them all, however far apart they landed, so with fewer than two the error is `null` |
 | `cost_bps_per_trade`, `gross_bps_per_trade` | the mean of `cost / notional` on the same trades, and the net plus it |
 | `net_bps_per_session`, `cost_bps_per_session`, `gross_bps_per_session` | in basis points of the capital, per session: the sum of the returns — what the book made, an open position's mark included — every fill's cost, and the net plus it |
+| `commands` | how fast the strategy sent its orders, counted as it sent them on the data clock: `submits` (one per order), `modifies`, `cancels` (one per order a cancel would reach), and `peak_60s` and `p99_60s` — of the counts of commands in the 60 s ending at each command, that one included, the largest and the 99th percentile by nearest rank. What a stated `costs.orders_per_minute` is set against; `null` on a card recorded before cards kept it |
 
 Gross is before fill costs and net after, so gross less cost is net, per trade and per
 session; funding, which is a payment on what was held and not a fill cost, stays in both. A
 number with nothing to be read off — an edge with no closed trade, a share with no fill — is
 `null`, never a zero. The proposer is shown every recent card's `n_trades` and digest beside
 its metric, rounded to four places; `research card` prints it as a `trades` line and an `edge`
-line and carries it under `--json` as `digest`; `research show --json` carries the newest card
-of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
+line, and a `commands` line where it counted them, and carries it under `--json` as `digest`;
+`research show --json` carries the newest card
+of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc` — none of
+`commands` — appended so
 that a reader taking the first nine columns by position reads what it always read, an absent
 number an empty cell. A card of a turn that ran several carries the digest one card of the
 same bytes carries; 0.18.0 and 0.19.0 recorded such cards with none. A crash, a card
@@ -1842,6 +1845,27 @@ equity the runner strikes. A fill that took liquidity can be charged a tick as w
 never past the limit its order carried and never on a maker's fill (`docs/workspace.md`), and
 each recorded fill keeps the increment and that limit, so this charge too is struck again from
 the record.
+
+**An account takes orders at a rate, and the sleeve holds itself to it.** A broker counts every
+order, modify and cancel a strategy sends and answers past its rate by refusing or by making
+it wait; the simulated venue counts nothing, so a rule that re-posts on every move of the touch
+would trade on its card at a rate no account takes and behave otherwise once it trades through
+one. So the sleeve counts what it sends, on the data clock, on every path, and under a venue
+model that states `costs.orders_per_minute` takes a token for each command from a bucket of
+that many, refilled at that many a minute of the data clock (`docs/workspace.md`). The engine's
+own risk engine throttles on its own clock — a test clock on one path, the wall on the other —
+and is left unbounded on both for that reason; the account's rate is the sleeve's, where both
+paths read the same instants. With the bucket empty a command the account need not take is
+refused and one it must take waits: **an entry, a modify and an order list are refused** as
+`order_rate`, the same refusal a sizing rule makes — the card is a `discard` carrying a
+`sizing` gate, which reaches the proposer with what was asked, when and what the bucket held —
+**an exit is owed**, asked for again as `submit_exit` sends one until a token comes back, and
+**a cancel is deferred**, sent before the handler of the first point that finds a token for it.
+A refused card measured a strategy no account can trade; an owed exit and a deferred cancel
+are what the account would have let through later, at the instant a token says it would. It
+is not a charge, so it is not struck again from a record: it decides which orders a run sends,
+as `latency_ms` decides when they land, and every card records how many it sent and how many
+in its busiest 60 s whether or not a rate is stated (Card, above).
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the

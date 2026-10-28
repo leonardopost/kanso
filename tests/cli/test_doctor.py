@@ -61,6 +61,7 @@ CHECKS = (
     "credentials",
     "adapters",
     "execution",
+    "order rate",
     "instruments",
     "lanes",
     "extensions",

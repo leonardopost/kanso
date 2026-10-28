@@ -16,7 +16,10 @@ its room; it does not rebuild one it did not build, so that one is refused the s
 for the same reason, is any order a member of a book sends past `submit_entry` and
 `submit_exit`, any modify it sends, and any order in the name of a strategy that is no member
 (`book_entry`): the book hands every entry its share of one room, and can only cut one it
-sizes.
+sizes. And so is an entry or a modify sent when the venue model's `orders_per_minute` left
+the sleeve no token for it (`order_rate`): the account would not have taken it, and a card
+that counted on it measured a strategy no account trades. An exit is owed instead and a
+cancel deferred (`kanso.nautilus.rate`), since the account must still be able to close.
 
 The quantity is `budget / ((1 + 2 x cost_rate) x (price + increment))`, floored onto the
 lot: the round trip the runner will charge and one price increment are reserved inside the
@@ -70,6 +73,12 @@ BOOK_ENTRY: Final = "book_entry"
 or `submit_exit`, which sizes it never past flat; a modify a member sent; or an order in the
 name of a strategy that is no member of the book."""
 
+ORDER_RATE: Final = "order_rate"
+"""An entry, a modify, or an order kanso cannot owe, sent when the venue model's
+`orders_per_minute` bucket held no token for it (`kanso.nautilus.rate`). It holds with or
+without a sizing rule: the account would not have taken the command, so a card that sent it
+measured a strategy no account can trade."""
+
 RULES: Final = (
     SIZE_ARGUMENT,
     ONE_POSITION,
@@ -82,6 +91,7 @@ RULES: Final = (
     BUDGET_BELOW_LOT,
     UNFUNDED_ORDER,
     BOOK_ENTRY,
+    ORDER_RATE,
 )
 
 GATE: Final = "sizing"

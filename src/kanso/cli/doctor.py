@@ -64,7 +64,15 @@ from kanso.errors import KansoError, ValidationError
 from kanso.hyp import HYPOTHESES, HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
 from kanso.nautilus import adapters as brokers
 from kanso.nautilus import facts
-from kanso.portfolio import Declared, exec_client_declarations, stage_refusals, venue_overrides
+from kanso.portfolio import (
+    Declared,
+    exec_client_declarations,
+    portfolio_file,
+    read_portfolio,
+    stage_of,
+    stage_refusals,
+    venue_overrides,
+)
 from kanso.research.daemon import active_runs
 from kanso.schemas import Hypothesis, InstrumentEntry, InstrumentsFile, parse_yaml
 from kanso.schemas.models import ModelsFile
@@ -73,6 +81,7 @@ from kanso.schemas.run import RunRecord
 from kanso.schemas.yamlio import load_yaml
 from kanso.state import StateStore, migrations
 from kanso.strategy import IMPL, STRATEGIES
+from kanso.strategy.files import read as read_strategy
 from kanso.strategy.files import strategies as composed_strategies
 from kanso.workspace import LANE_ROOT, Workspace, gitignore_entries, in_git_repo
 
@@ -126,6 +135,7 @@ def run(ws: Workspace, check_adapters: bool = False) -> list[Check]:
             ("credentials", lambda: _credentials(ws)),
             ("adapters", lambda: _adapters(ws, check_adapters)),
             ("execution", lambda: _execution(ws)),
+            ("order rate", lambda: _order_rate(ws)),
             ("instruments", lambda: _instruments(ws, unread)),
             ("lanes", lambda: _lanes(ws, unread)),
             ("extensions", lambda: _extensions(ws)),
@@ -620,6 +630,87 @@ def _execution(ws: Workspace) -> Check:
             "may be named",
         )
     return Check("execution", "ok", detail, items=tuple(items))
+
+
+ORDER_RATE_CHECKED = (
+    "each stage's broker quota ([adapters.<id>] requests_per_minute) against the sum of the "
+    "costs.orders_per_minute its versions were certified under"
+)
+"""What the `order rate` check compares, said whether or not it could compare it."""
+
+
+def _order_rate(ws: Workspace) -> Check:
+    """Whether each stage's account throttle leaves its sleeves the rate their cards ran at.
+
+    A sleeve holds its own commands to the `costs.orders_per_minute` of the venue model its
+    version was certified under, on the data clock (`kanso.nautilus.rate`), and a broker's
+    client holds every request it sends the account to a quota of its own. Where the quota
+    is below what the stage's sleeves may send between them, the client waits on a command
+    the card sent at once, so the stage trades a strategy no card measured: that warns,
+    naming the stage, the quota and the sum. The sum is knowable only when every version on
+    the stage states a rate, and is compared only for a broker whose quota kanso reads; a
+    stage short of either is listed saying so, and graded `ok`. The quota spends on more than
+    orders — a broker's feed and the reads behind a cancel share it — so passing says only
+    that the sleeves' own figures fit. Nothing is read but `portfolio.yaml`, the strategy
+    files and each broker's table.
+    """
+    if not portfolio_file(ws).is_file():
+        return Check(
+            "order rate",
+            "ok",
+            f"no portfolio.yaml, so no stage to check; checks {ORDER_RATE_CHECKED}",
+        )
+    portfolio = read_portfolio(ws)
+    items: list[str] = []
+    short: list[str] = []
+    for name in STAGES:
+        stage = stage_of(portfolio, name)
+        broker = brokers.broker_of(stage.exec)
+        quota = None if broker is None else broker.requests_per_minute(ws)
+        if broker is None or quota is None:
+            items.append(f"{name}: {stage.exec} holds its requests to no quota kanso reads")
+            continue
+        table = f"[adapters.{broker.id}] requests_per_minute {quota}"
+        if not stage.strategies:
+            items.append(f"{name}: {table} · no version deployed")
+            continue
+        rates = [_certified_rate(ws, held.id, held.version) for held in stage.strategies]
+        unstated = [
+            f"{held.id}@{held.version}"
+            for held, rate in zip(stage.strategies, rates, strict=True)
+            if rate is None
+        ]
+        if unstated:
+            items.append(
+                f"{name}: {table} · {', '.join(unstated)} state(s) no orders_per_minute, so "
+                "what the sleeves may send between them is unbounded and not compared"
+            )
+            continue
+        total = sum(rate for rate in rates if rate is not None)
+        items.append(f"{name}: {table} against {total} a minute between {len(rates)} version(s)")
+        if quota < total:
+            short.append(f"{name} ({quota} < {total})")
+    if short:
+        return Check(
+            "order rate",
+            "warn",
+            f"{', '.join(short)}: the broker's quota is below what the stage's sleeves may "
+            "send, so it would hold back commands their cards sent",
+            items=tuple(items),
+            remedy="raise requests_per_minute in the broker's [adapters.<id>] table to the "
+            "plan's ceiling, or state a smaller costs.orders_per_minute for the versions "
+            "that share the stage and certify them under it",
+        )
+    return Check("order rate", "ok", f"checks {ORDER_RATE_CHECKED}", items=tuple(items))
+
+
+def _certified_rate(ws: Workspace, strategy_id: str, version: int) -> int | None:
+    """The `orders_per_minute` a deployed version was certified under, or `None` when it
+    states none or this workspace holds no such version."""
+    file = read_strategy(ws, strategy_id)
+    if file is None or not 0 < version <= len(file.versions):
+        return None
+    return file.versions[version - 1].pins.venue_model.costs.orders_per_minute
 
 
 def _broker_table(ws: Workspace, broker: brokers.BrokerAdapter) -> tuple[str, str | None]:

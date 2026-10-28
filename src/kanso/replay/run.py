@@ -102,6 +102,7 @@ def run(
             "exec": SANDBOX.id,
             "released": stream.count,
             "intents": len(result.intents),
+            "commands": result.commands,
             "clock_ns": replayed.clock_ns,
             "started_at": started,
             "ended_at": record.now(),

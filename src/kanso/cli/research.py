@@ -231,7 +231,8 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
 
 def _digest_lines(digest: CardDigest | None) -> list[str]:
     """What a card's trades did, in two lines: how it traded, and what a trade and a session
-    earned. Nothing for a card that never ran to a result."""
+    earned; and a third, how fast it sent its orders, for a card that counted them. Nothing
+    for a card that never ran to a result."""
     if digest is None:
         return []
     traded = [
@@ -250,7 +251,18 @@ def _digest_lines(digest: CardDigest | None) -> list[str]:
         f"(gross {_number(digest.gross_bps_per_session, '+.3f')}, "
         f"cost {_number(digest.cost_bps_per_session, '.3f')})"
     )
-    return [field("trades", " · ".join(traded)), field("edge", edge)]
+    lines = [field("trades", " · ".join(traded)), field("edge", edge)]
+    sent = digest.commands
+    if sent is not None:
+        lines.append(
+            field(
+                "commands",
+                f"{sent.submits} submit(s) · {sent.modifies} modify(ies) · "
+                f"{sent.cancels} cancel(s) · peak {sent.peak_60s} in 60 s · "
+                f"p99 {sent.p99_60s}",
+            )
+        )
+    return lines
 
 
 def _number(value: float | None, spec: str) -> str:

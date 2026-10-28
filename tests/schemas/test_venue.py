@@ -126,6 +126,66 @@ def test_a_latency_is_zero_by_default_and_inherited_like_any_cost() -> None:
             CostsOverride(latency_ms=bad)
 
 
+def test_an_order_rate_is_unstated_by_default_and_inherited_like_any_cost() -> None:
+    """Unstated, no rate holds a sleeve; the broker states its published figure, the venue
+    entry the plan's, and the hypothesis its own share, in that order."""
+    assert resolve_venue_model("XNAS").costs.orders_per_minute is None
+    declared = VenueDeclaration(costs=CostsOverride(orders_per_minute=200))
+    plan = VenueOverride(costs=CostsOverride(orders_per_minute=1_000))
+
+    broker = resolve_venue_model("XNAS", declaration=declared)
+    workspace = resolve_venue_model("XNAS", declaration=declared, override=plan)
+    share = resolve_venue_model(
+        "XNAS",
+        declaration=declared,
+        override=plan,
+        hypothesis_costs=CostsOverride(orders_per_minute=166),
+    )
+
+    assert (broker.costs.orders_per_minute, broker.origins.costs) == (200, "broker")
+    assert (workspace.costs.orders_per_minute, workspace.origins.costs) == (1_000, "venue_override")
+    assert (share.costs.orders_per_minute, share.origins.costs) == (166, "hypothesis")
+    assert VenueModel.model_validate(share.model_dump()) == share
+
+
+@pytest.mark.parametrize("value", [0, -5, 166.5])
+def test_an_order_rate_that_admits_nothing_or_is_not_a_whole_count_is_refused(
+    value: float,
+) -> None:
+    with pytest.raises(ValidationError, match="orders_per_minute"):
+        CostsOverride(orders_per_minute=value)  # type: ignore[arg-type]
+
+
+def test_a_model_stating_no_rate_dumps_exactly_as_one_did_before_the_key_existed() -> None:
+    """Every card, certificate and version records its venue model, and a run digests it into
+    what a number was measured under: with no rate stated the key is not written at all, so
+    neither moves, and a model recorded without it reads back as stating none."""
+    unstated = resolve_venue_model("XNAS", max_leverage=1.0)
+    stated = resolve_venue_model(
+        "XNAS", max_leverage=1.0, hypothesis_costs=CostsOverride(orders_per_minute=200)
+    )
+
+    assert "orders_per_minute" not in unstated.model_dump()["costs"]
+    assert "orders_per_minute" not in unstated.model_dump(mode="json")["costs"]
+    assert '"orders_per_minute"' not in unstated.model_dump_json()
+    assert stated.model_dump()["costs"]["orders_per_minute"] == 200
+    assert VenueModel.model_validate(unstated.model_dump()) == unstated
+    assert list(unstated.model_dump()["costs"]) == [
+        "commission_bps",
+        "commission_per_share",
+        "slippage_bps",
+        "slippage_ticks",
+        "spread",
+        "fixed_bps",
+        "maker_bps",
+        "maker_per_share",
+        "sell_fee_bps",
+        "sell_fee_per_share",
+        "limit_fill",
+        "latency_ms",
+    ]
+
+
 def test_a_venue_model_recorded_before_the_latency_key_reads_as_no_delay() -> None:
     document = resolve_venue_model("XNAS").model_dump()
     del document["costs"]["latency_ms"]

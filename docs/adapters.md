@@ -462,6 +462,30 @@ There is no switch anywhere in the adapter that turns one into the other: the id
 account, the variables and the host together. A stage that trades real money says so by
 naming the client that declares it.
 
+### The venue model it declares
+
+For every listing venue it serves, one declaration: a `margin` account in `USD`, a
+`commission_bps` of zero — the broker's published US equity commission, which leaves out the
+regulatory fees passed through on a sale — and an `orders_per_minute` of 200, the broker's
+published trading API rate per account on its standard plan. Slippage and the spread are not
+declared, since the broker publishes neither. All of it is published, not measured here.
+
+So a workspace whose `[research] broker` is `alpaca` researches every card at 200 order
+commands a minute (`docs/workspace.md`, `costs.orders_per_minute`), unless it states its
+plan's figure: the broker publishes 1,000 a minute per account for its Elite plan, which an
+account on it states as
+
+```yaml
+venues:
+  XNAS:
+    costs: {orders_per_minute: 1000}
+```
+
+in `portfolio.yaml`, for each venue its universe lists. The client's own throttle is
+`requests_per_minute` (below), and every request it sends spends it — the feed's sweeps and the
+read behind a cancel too — so it has to be at least what the sleeves on a stage may send
+between them: `kanso doctor`'s `order rate` check warns where it is not.
+
 ### The feed is declared, never defaulted
 
 The market data host serves two tapes and they are **different series for the same day**.
@@ -486,7 +510,7 @@ check. It holds no credential.
 | key | default | what it does |
 |---|---|---|
 | `feed` | *none* | `sip` or `iex`; the tape the data client reads. Required before a data client opens |
-| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200 |
+| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200; `kanso doctor`'s `order rate` check sets it against the `orders_per_minute` the versions on a stage were certified under |
 | `timeout_s` | `30` | per-request timeout |
 | `poll_interval_s` | `15` | seconds between the live feed's sweeps; `1` to `3600`, and a value outside that is refused when the table is read |
 | the six URLs | the broker's own hosts | the paper, live and market-data REST hosts and their stream endpoints |

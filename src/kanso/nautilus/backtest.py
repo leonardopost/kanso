@@ -163,7 +163,7 @@ from kanso.nautilus.costs import (
 from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
-from kanso.schemas import Hypothesis, VenueModel, parse_duration
+from kanso.schemas import Commands, Hypothesis, VenueModel, parse_duration
 
 __all__ = [
     "ALLOWED_ENV",
@@ -197,7 +197,10 @@ __all__ = [
 ]
 
 SUBMIT_RATE: Final = "1000000/00:00:01"
-"""An order rate no replay or backtest reaches, so no throttle binds on either path."""
+"""An order rate no replay or backtest reaches, so no throttle binds on either path. The
+engine's risk engine throttles on its own clock, a test clock on one path and the wall on the
+other; the rate an account takes is held by the sleeve itself, on the data clock, where both
+paths read the same instants (`costs.orders_per_minute`, `kanso.nautilus.rate`)."""
 
 DEFAULT_PERIOD: Final = "1d"
 """The return period a request that names none is measured over."""
@@ -541,6 +544,10 @@ class RunResult:
     refused: Refusal | None = None
     """The order the sizing rule refused, when one was: the run stopped there, with no
     numbers, because the card can no longer validate and every bar after it is spend."""
+    commands: Commands | None = None
+    """How fast the strategy sent its orders (`kanso.nautilus.rate.Tally`), counted on the
+    data clock as it sent them; `None` for a run that produced no numbers — a crash, a
+    refusal."""
 
 
 def stage_of(hyp: Hypothesis, window: tuple[date, date]) -> str:
@@ -1383,6 +1390,7 @@ def execute_chunked(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
         )
+        commands = strategy._command_tally.summary()
     finally:
         engine.dispose()
     return RunResult(
@@ -1390,6 +1398,7 @@ def execute_chunked(
         wall_s=time.perf_counter() - started,
         peak_mem_gb=_own_peak_gb(),
         intents=intents,
+        commands=commands,
     )
 
 
@@ -3510,6 +3519,7 @@ def _reported(
         peak_mem_gb=peak_gb,
         intents=reported["intents"],
         refused=None if refused is None else Refusal(**refused),
+        commands=reported.get("commands"),
     )
 
 
@@ -3635,6 +3645,13 @@ def main(argv: Sequence[str]) -> int:
         )
         return 1
     result_path.write_bytes(
-        pickle.dumps({"ok": True, "run": result.run, "intents": result.intents})
+        pickle.dumps(
+            {
+                "ok": True,
+                "run": result.run,
+                "intents": result.intents,
+                "commands": result.commands,
+            }
+        )
     )
     return 0

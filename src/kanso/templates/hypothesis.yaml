@@ -37,6 +37,10 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   latency_ms: 20                 # how long the simulated venue takes to see an order, insert, update or cancel alike;
                                    # measured on the account and route the strategy will trade through. Zero unless
                                    # stated, which `kanso hyp validate` refuses at resolution tick, quote or trade
+#   orders_per_minute: 166         # the order commands a minute the account takes from this sleeve — each order sent,
+                                   # modified or cancelled — held on the data clock: past it an entry or a modify is
+                                   # refused (order_rate), an exit owed and a cancel deferred. A broker states its
+                                   # published figure and portfolio.yaml venues.<MIC> a plan's; unset, nothing holds it
 #   limit_fill: print_through      # print_through by default at tick resolution with every name asked for quote and
                                    # trade, touch otherwise, with a warning naming a name asked for one alone or for bar
                                    # beside them, when no layer states a rule.

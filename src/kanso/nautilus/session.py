@@ -49,8 +49,9 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
 * `LiveRiskEngineConfig.max_order_submit_rate` throttles submissions against the engine's
   clock. In a backtest that clock advances with the data, so the default never binds; in a
   node it is wall time, and a replay compresses years of decisions into seconds. The rate is
-  therefore lifted here, so the same strategy is throttled the same amount — none — on both
-  paths.
+  therefore lifted here, so the engine throttles the same strategy the same amount — none —
+  on both paths, and the rate an account takes is held by the sleeve itself on the data
+  clock, which both paths read alike (`costs.orders_per_minute`, `kanso.nautilus.rate`).
 """
 
 from __future__ import annotations
@@ -254,6 +255,7 @@ def run_node_chunked(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
         )
+        commands = strategy._command_tally.summary()
         stopped = halt.reason
         released = feed.released
         clock_ns = client.last_ts if client.last_ts >= opens else None
@@ -272,6 +274,7 @@ def run_node_chunked(
             wall_s=wall_s,
             peak_mem_gb=backtest._own_peak_gb(),
             intents=intents,
+            commands=commands,
         ),
         released,
         clock_ns,

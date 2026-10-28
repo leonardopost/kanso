@@ -124,6 +124,8 @@ def test_parity_runs_both_paths_and_reports_that_they_agree(
     assert parity["node"] != parity["engine"]
     assert parity["node_released"] == parity["engine_released"] > 0
     assert parity["node_stream"] == parity["engine_stream"] is not None
+    assert parity["node_commands"] == parity["engine_commands"] is not None
+    assert parity["node_commands"]["submits"] == parity["node_intents"]
 
 
 def test_parity_reads_as_the_verdict_and_the_two_sessions(

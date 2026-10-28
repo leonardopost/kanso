@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Final
 from kanso.replay import record
 from kanso.replay import run as runner
 from kanso.replay.record import Intent, Session
+from kanso.schemas import Commands
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -109,6 +110,10 @@ class Parity:
     engine_released: int = 0
     node_stream: str | None = None
     engine_stream: str | None = None
+    node_commands: Commands | None = None
+    engine_commands: Commands | None = None
+    """How fast each path's strategy sent its orders, as its session recorded it: carried to
+    be read beside the verdict and never part of it (`kanso.replay.record`)."""
 
     @property
     def identical(self) -> bool:
@@ -149,6 +154,8 @@ class Parity:
             "engine_released": self.engine_released,
             "node_stream": self.node_stream,
             "engine_stream": self.engine_stream,
+            "node_commands": _commands(self.node_commands),
+            "engine_commands": _commands(self.engine_commands),
             "max_ts_delta_ns": self.max_ts_delta_ns,
             "divergence": None if self.divergence is None else self.divergence.render(),
         }
@@ -238,4 +245,11 @@ def of_sessions(ws: Workspace, node: Session, engine: Session, *, ts_ns: int = 0
         engine_released=engine.released,
         node_stream=node.stream_sha256,
         engine_stream=engine.stream_sha256,
+        node_commands=node.commands,
+        engine_commands=engine.commands,
     ).at(ts_ns)
+
+
+def _commands(sent: Commands | None) -> dict[str, int] | None:
+    """A path's command counts as the payload carries them."""
+    return None if sent is None else sent.model_dump()

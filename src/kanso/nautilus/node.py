@@ -851,9 +851,15 @@ def _flatten(strategies: Sequence[Any]) -> None:
     the mate holds. Sent in the cache's own order, each close lands, and its fill is applied,
     before the next is matched — with no latency at once, under one in the order they were
     sent — so each finds its own position first, whatever order the strategies come in.
+
+    The flatten is the stage's, not the sleeves': each is held to no `orders_per_minute` from
+    here on and sends the cancels its bucket deferred first (`KansoStrategy._lift_rate`), so
+    the flatten goes out whole however busy a sleeve was.
     """
     owners = {strategy.id: strategy for strategy in strategies}
     names: set[Any] = set()
+    for strategy in strategies:
+        strategy._lift_rate()
     for strategy in strategies:
         for instrument_id in strategy.universe:
             strategy.cancel_all_orders(instrument_id)

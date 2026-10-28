@@ -171,6 +171,22 @@ def test_both_paths_were_released_the_same_stream_and_the_payload_says_which(
     assert node.stream_sha256 is not None
 
 
+def test_each_session_counts_its_commands_and_the_payload_carries_both_unjudged(
+    ws: Workspace, store: StateStore, carded_hyp: str
+) -> None:
+    """Each path's session records what its strategy sent, as a card's digest counts it; the
+    payload carries both beside the verdict, which reads neither."""
+    result = replay.parity(ws, store, hyp=carded_hyp)
+    payload = result.payload()
+    node, engine = replay.show(ws, result.node), replay.show(ws, result.engine)
+
+    assert node.commands is not None and node.commands == engine.commands
+    assert node.commands.submits == node.intents > 0
+    assert payload["node_commands"] == payload["engine_commands"] == node.commands.model_dump()
+    unread = replace(result, node_commands=None, engine_commands=None)
+    assert unread.identical and unread.payload()["node_commands"] is None
+
+
 def test_two_sessions_released_different_points_diverge_on_the_stream(ws: Workspace) -> None:
     """Read back from disk: the same orders over different data are not agreement."""
     from tests.replay.test_record import session
