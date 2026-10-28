@@ -12,6 +12,7 @@ from kanso.nautilus.sizing import (
     CLIP_WITHOUT_BUDGET,
     HEDGE_UNDER_SIZING,
     ONE_CLIP,
+    ORDER_RATE,
     SizingError,
     full_book_quantity,
 )
@@ -115,6 +116,45 @@ def test_a_second_clip_while_one_is_held_is_refused(backtest) -> None:
     assert refused.rule == ONE_CLIP
     assert "a clip of 999 is held in HEDGE.XNAS" in refused.why
     assert "Clip('HEDGE.XNAS', 'FLAT') in the same answer" in refused.why
+
+
+def test_a_clip_taken_off_past_the_rate_is_refused_rather_than_owed(backtest) -> None:
+    """At one a minute the host's exit on its seventh bar takes the token the overlay's `FLAT`
+    needs in the same instant. An exit `submit_exit` would send again closes the host's own
+    position, never the overlay's clip, so a clip kanso cannot send again as it was asked is
+    refused like an entry rather than owed and dropped."""
+
+    class TakesOff(Clipper):
+        script = {8: (Clip("HEDGE.XNAS", "BUY"),), 12: (Clip("HEDGE.XNAS", "FLAT"),)}
+
+    class LeavesAtSeven(Enters):
+        def after(self, bars: int) -> None:
+            if bars == 7:
+                self.submit_exit(DEMO)
+
+    rated = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "orders_per_minute": 1,
+        }
+    }
+    with pytest.raises(SizingError) as failure:
+        backtest(
+            LeavesAtSeven(sized(venue_model=rated)),
+            [clipper(TakesOff, host="LeavesAtSeven")],
+            data=two_names(),
+            instruments=(DEMO, HEDGE),
+        )
+
+    refused = failure.value.refusal
+    assert (refused.rule, refused.instrument_id, refused.asked) == (
+        ORDER_RATE,
+        "HEDGE.XNAS",
+        "SELL",
+    )
+    assert refused.why.startswith("an exit kanso cannot send again as it was asked needed 1")
 
 
 def test_the_other_side_of_a_held_clip_is_refused_until_flat(backtest) -> None:

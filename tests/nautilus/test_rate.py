@@ -121,18 +121,37 @@ def test_the_window_ending_at_a_command_holds_what_was_sent_in_the_sixty_seconds
     assert tally.within(NS_PER_MINUTE + 1) == 1
 
 
+def test_every_command_sent_at_one_instant_reads_the_instant_s_whole_count() -> None:
+    """A cancel and the order that replaces it, sent in one handler, were both sent in the
+    60 s ending at either: each reads two, whichever was counted first, and whether they were
+    counted in one call or two."""
+    tally = Tally()
+    tally.add(0, CANCEL)
+    tally.add(0, SUBMIT)
+    tally.add(NS_PER_MINUTE, SUBMIT, 2)
+
+    assert tally.summary() == Commands(submits=3, cancels=1, peak_60s=2, p99_60s=2)
+
+
 def test_the_99th_percentile_is_the_nearest_rank_over_every_command() -> None:
-    """A hundred commands each alone in its minute, then a burst of five at one instant, read
-    one, two, three, four and five: of the 105 counts the 104th smallest, the nearest rank of
-    the 99th percentile, is the burst's four."""
+    """A thousand commands each alone in its minute, then a burst of five at one instant,
+    each of which reads five: of the 1,005 counts the 995th smallest, the nearest rank of the
+    99th percentile, is one of the thousand. With a hundred alone it is the 104th of 105, one
+    of the burst's."""
+    tally = Tally()
+    for minute in range(1_000):
+        tally.add(minute * 2 * NS_PER_MINUTE, SUBMIT)
+    for _ in range(5):
+        tally.add(5_000 * NS_PER_MINUTE, CANCEL)
+    sent = tally.summary()
+    assert (sent.peak_60s, sent.p99_60s) == (5, 1)
+
     tally = Tally()
     for minute in range(100):
         tally.add(minute * 2 * NS_PER_MINUTE, SUBMIT)
-    for _ in range(5):
-        tally.add(500 * NS_PER_MINUTE, CANCEL)
-
+    tally.add(500 * NS_PER_MINUTE, CANCEL, 5)
     sent = tally.summary()
-    assert (sent.peak_60s, sent.p99_60s) == (5, 4)
+    assert (sent.peak_60s, sent.p99_60s) == (5, 5)
 
     calm = Tally()
     calm.add(0, SUBMIT)
@@ -149,17 +168,19 @@ def test_a_tally_with_nothing_sent_reads_zero_throughout() -> None:
     assert Tally().within(0) == 0
 
 
-def sleeve(per_minute: int | None) -> KansoStrategy:
-    """A sleeve under a venue model stating `per_minute`, outside any engine: what it spends
-    reads `data_time` alone."""
-    costs = {} if per_minute is None else {"orders_per_minute": per_minute}
+def sleeve(per_minute: int | None, **costs: int) -> KansoStrategy:
+    """A sleeve under a venue model stating `per_minute` and any other `costs`, outside any
+    engine: what it spends reads `data_time` alone."""
+    if per_minute is not None:
+        costs["orders_per_minute"] = per_minute
     return KansoStrategy(KansoConfig(venue_model={"costs": costs}))
 
 
 def test_the_sleeve_s_data_clock_never_runs_backwards_for_its_bucket_or_its_tally() -> None:
     """A point published late carries an earlier reference time than the one before it; the
     sleeve counts a command sent on it at the later instant, so the tally's window and the
-    bucket's refill read one clock that only moves forward."""
+    bucket's refill read one clock that only moves forward: the late command is in the 60 s
+    ending a minute and a half after the first, where at its own instant it would be out."""
     held = sleeve(1)
     held._data_time = 120 * SECOND_NS
     assert held._command_spend(SUBMIT)
@@ -167,8 +188,17 @@ def test_the_sleeve_s_data_clock_never_runs_backwards_for_its_bucket_or_its_tall
     assert not held._command_spend(CANCEL), "an earlier reference time buys no token back"
     held._data_time = 180 * SECOND_NS
     assert held._command_spend(CANCEL)
-
     assert held._command_tally.summary() == Commands(submits=1, cancels=1, peak_60s=1, p99_60s=1)
+
+    free = sleeve(None)
+    free._data_time = 120 * SECOND_NS
+    assert free._command_spend(SUBMIT)
+    free._data_time = 60 * SECOND_NS
+    assert free._command_spend(CANCEL)
+
+    assert free._command_ns == 120 * SECOND_NS
+    assert free._command_tally.within(150 * SECOND_NS) == 2
+    assert free._command_tally.summary() == Commands(submits=1, cancels=1, peak_60s=2, p99_60s=2)
 
 
 def test_a_sleeve_under_no_stated_rate_spends_freely_and_counts_what_it_sends() -> None:
@@ -177,4 +207,26 @@ def test_a_sleeve_under_no_stated_rate_spends_freely_and_counts_what_it_sends() 
     assert all(free._command_spend(SUBMIT) for _ in range(1_000))
     assert free._command_spend(CANCEL, 0), "nothing to send is nothing to count"
 
-    assert free._command_tally.summary() == Commands(submits=1_000, peak_60s=1_000, p99_60s=990)
+    assert free._command_tally.summary() == Commands(submits=1_000, peak_60s=1_000, p99_60s=1_000)
+
+
+def test_a_cancel_takes_the_requests_its_broker_s_client_sends_for_one() -> None:
+    """At four a minute, a client that sends two requests to cancel an order lets two
+    cancels through, or a cancel, a submit and a modify: a cancel is counted once, and takes
+    two tokens. Unstated, a cancel takes one."""
+    weighted = sleeve(4, requests_per_cancel=2)
+    assert weighted._command_spend(CANCEL)
+    assert weighted._command_spend(SUBMIT)
+    assert not weighted._command_spend(CANCEL), "one token left, and a cancel takes two"
+    assert weighted._command_spend(MODIFY)
+    assert weighted._command_tally.summary() == Commands(
+        submits=1, modifies=1, cancels=1, peak_60s=3, p99_60s=3
+    )
+
+    whole = sleeve(4, requests_per_cancel=2)
+    assert not whole._command_spend(CANCEL, 3), "three cancels take six, all or none"
+    assert whole._command_spend(CANCEL, 2)
+    assert whole._command_bucket is not None and whole._command_bucket.holds(0) == 0
+
+    plain = sleeve(4)
+    assert all(plain._command_spend(CANCEL) for _ in range(4))

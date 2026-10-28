@@ -126,7 +126,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
-| send an entry, a modify or an order list when the venue model's `costs.orders_per_minute` leaves the sleeve no token for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is; an exit is owed and a cancel deferred instead, never refused (`costs.orders_per_minute`) |
+| send an entry, a modify, an order list, or an exit kanso cannot send again as it was asked — a stop, an order of a list, an immediate-or-cancel, fill-or-kill, good-till-date, post-only or part-displayed limit, an emulated order, an overlay's clip — when the venue model's `costs.orders_per_minute` leaves the sleeve no token for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is; any other exit is owed and a cancel deferred instead, never refused (`costs.orders_per_minute`) |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
@@ -828,7 +828,7 @@ read and never traded — the trigger `kanso screen draft` writes as one name's 
 a follower read as another's quotes — is charged nothing either way, and a screen's hurdle
 refuses a leg it trades read so. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
-`latency_ms` and `orders_per_minute` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
+`latency_ms`, `orders_per_minute` and `requests_per_cancel` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
 from the state store; only when the store no longer holds those bytes, or this kanso cannot
 read them as a hypothesis, does the missing key read as unchanged.
@@ -1272,26 +1272,30 @@ different values cannot share one, which is one round trip: `deploy` refuses the
 before it writes the stage (exit 2), naming `venues.<MIC>.costs.latency_ms` and both
 versions.
 
-`costs.orders_per_minute` is the third key that is not a charge: how many order commands the
-account takes from the sleeve in a minute.
+`costs.orders_per_minute` is the third key that is not a charge: how many of the account's
+requests a minute the sleeve's orders may spend. `costs.requests_per_cancel` is the fourth: how
+many of them a cancel of one order spends, the requests the broker's client sends for one.
 
 ```yaml
 costs:
   orders_per_minute: 166           # unset unless stated: no rate holds the sleeve
+  requests_per_cancel: 2           # one unless stated; a broker states its client's
 ```
 
 A command is what the sleeve sends a venue: a submit of each order — every order of a list —
 a modify, and a cancel of each order, whether by `cancel_order`, `cancel_orders` or
 `cancel_all_orders`. A cancel that would send nothing — of an order closed, or whose cancel is
 already on its way — is no command, and neither is the cancel of a market order, which kanso
-never sends. Under a stated rate each command takes a token from a bucket of that many, full
-when the run starts and refilled at that many a minute **on the data clock** — `data_time`,
-held so a point published late refills nothing — and never past full: the shape of the quota
-kanso's broker clients hold themselves to, a burst of the rate and the rate after it, so a
-rolling minute can hold up to twice the figure. It is the same code on every path, so a card,
-`kanso replay` on either path and a stage node hold one strategy to one rate, and `kanso
-replay parity` compares the orders that came of it. When the bucket holds no token for a
-command:
+never sends, nor a modify the engine sends nothing for: one that changes nothing, or of an
+order closed or being cancelled. Under a stated rate each command takes its tokens from a
+bucket of that many — a submit and a modify one, a cancel `requests_per_cancel` — full when the
+run starts and refilled at that many a minute **on the data clock** — `data_time`, held so a
+point published late refills nothing — and never past full: the shape of the quota kanso's
+broker clients hold themselves to, a burst of the rate and the rate after it, so a rolling
+minute can hold up to twice the figure. It is the same code on every path, so a card, `kanso
+replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
+parity` compares the orders that came of it and the commands counted. When the bucket holds
+too few tokens for a command:
 
 - **an entry is refused** — `submit_entry`, an entry built by hand, an overlay's hedge leg or
   clip — inside the handler that sent it, as `order_rate`, and so are **a modify**, whichever
@@ -1299,40 +1303,62 @@ command:
   `discard` whose `sizing` gate carries the refusal: what was asked, when, what was held, and
   the bucket's state in `why`;
 - **an exit is owed**: one `submit_exit` sized — the strategy's, an exit rule's, an owed
-  exit's — and one the strategy built itself as one order at market or at a limit, with no
-  contingency and no emulation, are asked for again as `submit_exit` sends one, at the price
-  given, on every later point once the strategy's handler has run, until the bucket takes it
-  (above, for what an owed exit is). Any other exit the strategy built — a stop, a list, an
-  overlay's clip — cannot be sent again as it was asked and is refused like an entry;
-- **a cancel is deferred**: kept, its place in line held, and sent before the strategy's
-  handler of the first point whose bucket holds a token for it. A second cancel of an order
-  whose cancel waits goes at once if a token has come back since, and keeps the first one's
-  place if not. The order is working until the cancel is sent and lands, so an exit is sized
-  to what it can still fill and an exit at a price behind it is owed, as behind a cancel in
-  flight. One whose order filled or was cancelled meanwhile is dropped and pays nothing.
+  exit's — as it was asked, the whole position when no quantity was given; and one the
+  strategy built itself on the terms `submit_exit` sends one on — one order at market or at a
+  limit, good till cancelled, not post-only, in the instrument's own units, showing all of
+  itself, with no contingency, no emulation and no execution algorithm; reduce-only or not —
+  at its quantity and its limit. It is asked for again as `submit_exit` sends one, at the price
+  given (above, for what an owed exit is). Any other exit the strategy built — a stop, an
+  order of a list, an immediate-or-cancel, fill-or-kill, good-till-date, post-only or
+  part-displayed limit, an order sized in the quote's currency, an emulated order, an overlay's
+  clip — cannot be sent again as it was asked, and is refused like an entry: sent again as a
+  plain good-till-cancelled order, an immediate-or-cancel exit would rest and fill later and a
+  post-only one would take;
+- **a cancel is deferred**: kept, its place in line held. A second cancel of an order whose
+  cancel waits goes at once if a token has come back since, and keeps the first one's place if
+  not. The order is working until the cancel is sent and lands, so an exit is sized to what it
+  can still fill and an exit at a price behind it is owed, as behind a cancel in flight. One
+  whose order filled or was cancelled meanwhile is dropped and pays nothing.
 
-A command is counted, and pays its token, where the sleeve decides to send it — a cancel
+What waited goes first. Before the strategy's handler of each point, the deferred cancels are
+sent, oldest first, while the bucket holds tokens for them, and then the exits owed for want
+of a token are asked for, oldest first: a throttled account sends what it was asked first,
+first, so a token that came back goes to what waited for it, and an entry the handler sends
+after finds the bucket as they left it. A sleeve acts only on points, and the venue matches a
+point before any handler of it runs, on both paths, so what waited goes on the **first point
+at or after the instant its token came back, after the venue has matched that point** — not at
+that instant. Across a gap that is the next point there is, however far: a cancel deferred on
+a session's last point goes on the next session's first, after the venue has matched it, so
+the order it was meant to cancel can fill there, and an exit owed then is held overnight. A
+strategy that must not carry an order into the next session cancels it with a token to spare.
+
+A command is counted, and pays its tokens, where the sleeve decides to send it — a cancel
 kanso holds back until the venue has the order, or behind a modify, when it is asked for —
 which both paths reach at the same instants. A stage node's flatten after its window is the
 stage's, not the sleeve's: it lifts the rate and sends every deferred cancel first, so the
-flatten goes out whole. Every card counts its commands whether or not a rate is stated, and
-its digest carries the counts and the busiest 60 s (`docs/concepts.md`, Card), which is how a
-rate is chosen: from the `peak_60s` of the cards that ran without one.
+flatten goes out whole; a researched strategy may not lift it, spend it or read the bucket
+(`kanso.criteria.integrity`, rule `RATE_MARKS`). Every card counts its commands whether or
+not a rate is stated, and its digest carries the counts and the busiest 60 s (`docs/concepts.md`,
+Card), which is how a rate is chosen: from the `peak_60s` of the cards that ran without one.
 
-The figure is the sleeve's own. A broker states its published rate for the venues it serves —
-`docs/adapters.md` names each — and a workspace states its plan's as
+The figure is the sleeve's own. A broker states the figure its client holds the account's
+requests to, and what its client sends for a cancel, for the venues it serves —
+`docs/adapters.md` names each — and a workspace states its plan's figure as
 `venues.<MIC>.costs.orders_per_minute` in `portfolio.yaml`; a hypothesis states the share it
 may use. Several sleeves on one account share the account's rate, so each states a share:
 `kanso doctor`'s `order rate` check sets a broker's own throttle, `[adapters.<id>]
 requests_per_minute`, against the sum of the rates every version on a stage was certified
 under, and warns where the throttle is below it — the client would hold back what the cards
 sent at once — saying what it checks where a version states none or the broker's quota is not
-one kanso reads. Like every cost it is part of the hypothesis's scope, and a re-pin that
-states or changes it clears `best`; a broker's or `venues.<MIC>` figure moves the venue model
-every stored number is measured under, so no card struck under another rate is matched against
-one struck under this. Unset at every layer it is left out of the venue model a card,
-certificate or version records, so a workspace that states none runs, records and digests
-exactly as it did before the key existed.
+one kanso reads. The figure bounds what the sleeve's orders spend and nothing else: a broker's
+client also spends its quota on the engine's polling of orders and positions and on a feed's
+sweeps, which leave the orders less of it and which neither the bucket nor the check counts.
+Like every cost it is part of the hypothesis's scope, and a re-pin that states or changes
+either key clears `best`; a broker's or `venues.<MIC>` figure moves the venue model every stored
+number is measured under, so no card struck under another rate is matched against one struck
+under this. Unset at every layer, each key is left out of the venue model a card, certificate
+or version records, so a workspace that states neither runs, records and digests exactly as
+it did before the keys existed.
 
 **A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
 met by four sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per
@@ -2426,9 +2452,11 @@ by how often the strategy trades.
 strategy sent on that path — `submits`, `modifies`, `cancels`, and `peak_60s` and `p99_60s`,
 the busiest 60 s of the data clock — counted as a card counts them (`costs.orders_per_minute`).
 `kanso replay parity` carries each path's as `node_commands` and `engine_commands` and judges
-nothing by them: a cancel or a modify is the strategy's reading of order states the two
-engines reach by different routes, and a decision the paths took apart shows in the intents.
-A session written by an earlier kanso has none.
+them after the intents: both paths count a command where the strategy decides to send it, at
+the instants both reach alike — which is what lets one bucket hold one strategy to one rate on
+both — so two that counted differently diverge at `commands`, the counts at any tolerance and
+the busiest 60 s at zero. A session written by an earlier kanso has none, and is judged on
+its intents alone.
 
 A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
 stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a

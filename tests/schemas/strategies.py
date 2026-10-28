@@ -139,6 +139,7 @@ def costs(draw: st.DrawFn) -> Costs:
             st.sampled_from(["touch", "through", "print_through", "print_through_whole"])
         ),
         orders_per_minute=draw(st.none() | st.integers(1, 100_000)),
+        requests_per_cancel=draw(st.none() | st.integers(1, 4)),
     )
 
 

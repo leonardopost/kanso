@@ -13,6 +13,8 @@ credentials; only their prefixes matter.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import re
 import sys
 import types
@@ -182,14 +184,18 @@ def test_the_broker_declares_a_margin_account_in_dollars_charging_no_commission(
     assert declared.costs.commission_bps == 0.0
 
 
-def test_the_broker_declares_its_published_rate_and_a_plan_s_is_the_workspace_s() -> None:
-    """200 a minute is the standard plan's published figure, which every venue it serves
-    resolves to; a plan that grants more is stated in `venues.<MIC>` and wins over it."""
+def test_the_broker_declares_its_client_s_rate_and_a_plan_s_is_the_workspace_s() -> None:
+    """The client holds every request to 190 a minute, under the standard plan's published
+    200, and sends two for a cancel: every venue the broker serves resolves to both, so a
+    sleeve's orders spend no more of the client's requests than it lets through. A plan that
+    grants more is stated in `venues.<MIC>` and wins over the rate, the cancel's two kept."""
     from kanso.schemas import VenueOverride, resolve_venue_model
 
     declared = BROKER.venue_declaration("XNAS")
     assert declared is not None and declared.costs is not None
-    assert declared.costs.orders_per_minute == venues.ORDERS_PER_MINUTE == 200
+    assert declared.costs.orders_per_minute == venues.ORDERS_PER_MINUTE == 190
+    assert venues.ORDERS_PER_MINUTE == configuration.DEFAULT_REQUESTS_PER_MINUTE
+    assert declared.costs.requests_per_cancel == venues.REQUESTS_PER_CANCEL == 2
 
     model = resolve_venue_model("XNAS", broker="alpaca", declaration=declared)
     elite = resolve_venue_model(
@@ -198,7 +204,30 @@ def test_the_broker_declares_its_published_rate_and_a_plan_s_is_the_workspace_s(
         declaration=declared,
         override=VenueOverride.model_validate({"costs": {"orders_per_minute": 1_000}}),
     )
-    assert (model.costs.orders_per_minute, elite.costs.orders_per_minute) == (200, 1_000)
+    assert (model.costs.orders_per_minute, elite.costs.orders_per_minute) == (190, 1_000)
+    assert model.costs.requests_per_cancel == elite.costs.requests_per_cancel == 2
+
+
+def test_a_cancel_is_the_two_requests_the_declaration_says_it_is() -> None:
+    """What `REQUESTS_PER_CANCEL` stands for, read off the client: a cancel sends a `DELETE`
+    and then reads the order back, both through the one quota-holding `_request`, and a
+    submit and a modify send one request each."""
+    from kanso.nautilus.adapters.alpaca import execution
+
+    def requests(method: str) -> list[str]:
+        tree = ast.parse(
+            inspect.getsource(getattr(execution.AlpacaExecutionClient, method)).strip()
+        )
+        return [
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("_request", "_one", "_rows")
+        ]
+
+    assert len(requests("_cancel_order")) == venues.REQUESTS_PER_CANCEL
+    assert len(requests("_submit_order")) == len(requests("_modify_order")) == 1
 
 
 def test_the_requests_a_minute_doctor_reads_are_the_table_s_own(tmp_path: Path) -> None:

@@ -22,6 +22,16 @@ against the stream rather than an intent, and no tolerance applies to it. The di
 keeps that check honest without the stream itself: the stream is never written, and two
 streams that differ in any point have different digests.
 
+**How fast each path sent its orders is compared after what it decided.** Each session
+records the commands its strategy counted on the data clock — its submits, modifies and
+cancels, and how many it sent in its busiest 60 s (`kanso.nautilus.rate`). Both paths count
+them where the strategy decides to send them, at the data instants both reach alike, which
+is what lets one bucket hold one strategy to one account's rate on both; so under a stated
+`costs.orders_per_minute` the counts are behaviour, and two paths that counted differently
+diverge, at `commands`, with each path's counts. The counts are compared at any tolerance;
+the busiest 60 s, read off the instants a tolerance lets differ, only at zero. A session
+written before kanso counted has none, and then nothing is compared.
+
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
 
@@ -50,7 +60,16 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
-__all__ = ["FIELDS", "RELEASED", "STREAM", "Divergence", "Parity", "compare", "parity"]
+__all__ = [
+    "COMMANDS",
+    "FIELDS",
+    "RELEASED",
+    "STREAM",
+    "Divergence",
+    "Parity",
+    "compare",
+    "parity",
+]
 
 FIELDS: Final = ("ts_event", "instrument", "side", "qty", "order_type", "price")
 """The order intent, field by field, in the order they are compared."""
@@ -58,6 +77,12 @@ FIELDS: Final = ("ts_event", "instrument", "side", "qty", "order_type", "price")
 RELEASED: Final = "released"
 STREAM: Final = "stream_sha256"
 """The two fields of a session that say what its path was fed, compared before any order."""
+
+COMMANDS: Final = "commands"
+"""The field of a session that says how fast its path sent its orders, compared after them."""
+
+COUNTS: Final = ("submits", "modifies", "cancels")
+"""The command counts compared at any instant tolerance; the busiest 60 s only at zero."""
 
 MISSING: Final = "missing"
 """The field a divergence names when one path stopped submitting and the other did not."""
@@ -68,7 +93,8 @@ class Divergence:
     """The first place two sessions stopped agreeing: in what they were fed, or in an order.
 
     `index` is the order's position in submission order, and `None` for a divergence in
-    the stream, which is one record per session rather than a sequence to index.
+    the stream or in the commands counted, each one record per session rather than a
+    sequence to index.
     """
 
     index: int | None
@@ -78,6 +104,10 @@ class Divergence:
 
     def render(self) -> str:
         """One line naming where the paths parted and what each said."""
+        if self.field == COMMANDS:
+            return (
+                f"commands: {self.node!r} on the node path and {self.engine!r} on the engine path"
+            )
         where = "stream" if self.index is None else f"intent {self.index}"
         if self.field == MISSING:
             longer = "node" if self.engine is None else "engine"
@@ -112,13 +142,26 @@ class Parity:
     engine_stream: str | None = None
     node_commands: Commands | None = None
     engine_commands: Commands | None = None
-    """How fast each path's strategy sent its orders, as its session recorded it: carried to
-    be read beside the verdict and never part of it (`kanso.replay.record`)."""
+    """How fast each path's strategy sent its orders, as its session recorded it, compared
+    after the orders (`counted`)."""
 
     @property
     def identical(self) -> bool:
-        """Whether the two paths were fed the same points and submitted the same orders."""
+        """Whether the two paths were fed the same points, submitted the same orders and
+        counted the same commands."""
         return self.divergence is None
+
+    def counted(self, ts_ns: int) -> Divergence | None:
+        """Where the two paths' command counts differed at instant tolerance `ts_ns`, or
+        `None`: every count at any tolerance, the busiest 60 s too at zero, and nothing when
+        either session counted none."""
+        node, engine = self.node_commands, self.engine_commands
+        if node is None or engine is None:
+            return None
+        fields = COUNTS if ts_ns else tuple(Commands.model_fields)
+        if all(getattr(node, field) == getattr(engine, field) for field in fields):
+            return None
+        return Divergence(None, COMMANDS, _commands(node), _commands(engine))
 
     @property
     def fed(self) -> Divergence | None:
@@ -138,7 +181,12 @@ class Parity:
     def at(self, ts_ns: int) -> Parity:
         """The same two sessions judged at another instant tolerance."""
         divergence, widest = compare(self.node_orders, self.engine_orders, ts_ns=ts_ns)
-        return replace(self, ts_ns=ts_ns, max_ts_delta_ns=widest, divergence=self.fed or divergence)
+        return replace(
+            self,
+            ts_ns=ts_ns,
+            max_ts_delta_ns=widest,
+            divergence=self.fed or divergence or self.counted(ts_ns),
+        )
 
     def payload(self) -> dict[str, object]:
         """The result as one JSON object."""

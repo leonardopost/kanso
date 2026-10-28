@@ -45,7 +45,7 @@ filled at its own price. On an order that carries a limit it is capped, share by
 what the limit leaves above the fill's price for a buy or below it for a sale, so a limit
 filled at its own price pays none of it and none pays past its limit. Zero unless stated.
 
-The cost model carries three keys that are not charges. `latency_ms` is how long the venue
+The cost model carries four keys that are not charges. `latency_ms` is how long the venue
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
 simulated book acting on it, zero unless stated, measured on the account and route the
 strategy will trade through; a hypothesis at tick resolution may not resolve it to zero
@@ -57,13 +57,15 @@ that is left of it), and fills a taker on the quote rather than on a print. It d
 run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
 charges can; it lives beside them because it is the same kind of statement — how
 pessimistic the simulation is about execution — and is stated at the same three layers.
-`orders_per_minute` is how many order commands — a submit, a modify or a cancel, each one
-order — the account takes from the sleeve in a minute: the sleeve holds itself to it on the
-data clock, on every path (`kanso.nautilus.rate`), and with it unset nothing holds a sleeve
-to any rate. A broker states its published figure for its venues and a workspace its plan's;
-it is the sleeve's own figure, so sleeves sharing one account state shares of it. Unset, it
-is left out of the resolved model's serialised form altogether, so a model that states none
-dumps, digests and records exactly as one did before the key existed.
+`orders_per_minute` is how many of the account's requests a minute the sleeve's orders may
+spend: the sleeve holds itself to it on the data clock, on every path (`kanso.nautilus.rate`),
+each submit and each modify spending one and each cancel of an order `requests_per_cancel`,
+the requests the broker's client sends for one (one unless stated), and with it unset nothing
+holds a sleeve to any rate. A broker states its figure and its client's cancel for its venues
+and a workspace its plan's figure; it is the sleeve's own figure, so sleeves sharing one
+account state shares of it. Unset, each is left out of the resolved model's serialised form
+altogether, so a model that states neither dumps, digests and records exactly as one did
+before the keys existed.
 
 The resolved model records the origin of every field, so a number on a card, a certificate
 or a strategy version is always traceable to the venue that produced it.
@@ -75,7 +77,7 @@ feeding a broker that matches against current prices.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import (
     Field,
@@ -118,6 +120,10 @@ REPLAY_DATA_CLIENT = "replay"
 """The catalog replay data client; every other data client id belongs to an adapter."""
 
 
+UNWRITTEN_UNSTATED: Final = ("orders_per_minute", "requests_per_cancel")
+"""The cost keys a resolved model leaves out of what it dumps when no layer states them."""
+
+
 class CostsOverride(KansoModel):
     """Any subset of a cost model, as a hypothesis or a venue entry may state it."""
 
@@ -134,14 +140,16 @@ class CostsOverride(KansoModel):
     limit_fill: LimitFill | None = None
     latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     orders_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_cancel: int | None = Field(default=None, ge=1)
 
 
 class Costs(KansoModel):
     """A complete cost model: what the runner charges, once, to every fill, whether the
     venue fills a resting limit the market only touched (`limit_fill`), how long the venue
-    takes to see an order (`latency_ms`, zero unless stated), and how many order commands
-    the account takes from the sleeve in a minute (`orders_per_minute`, no limit unless
-    stated, and then left out of what the model dumps).
+    takes to see an order (`latency_ms`, zero unless stated), how many of the account's
+    requests a minute the sleeve's orders may spend (`orders_per_minute`, no limit unless
+    stated), and how many of them a cancel of one order spends (`requests_per_cancel`, one
+    unless stated); either, unstated, is left out of what the model dumps.
 
     `maker_bps` and `maker_per_share` are the charge on a fill the venue reports as a maker's,
     of its notional and per share, in place of all three of the others and of the per-share
@@ -166,6 +174,7 @@ class Costs(KansoModel):
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
     latency_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     orders_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_cancel: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _fixed_bps_present(self) -> Costs:
@@ -175,17 +184,19 @@ class Costs(KansoModel):
 
     @model_serializer(mode="wrap")
     def _unstated_rate_unwritten(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """The model as it dumps, without `orders_per_minute` when no layer states one.
+        """The model as it dumps, without `orders_per_minute` or `requests_per_cancel` when
+        no layer states it.
 
         Every card, certificate and strategy version records the venue model it was
         measured under, and a research run digests it into what a stored number was measured
         under (`kanso.research.loop.Setup.measured_under`). A model that states no rate dumps
-        exactly as one did before the key existed, so neither a record nor that digest moves
+        exactly as one did before the keys existed, so neither a record nor that digest moves
         for a workspace that states none.
         """
         dumped: dict[str, Any] = handler(self)
-        if self.orders_per_minute is None:
-            dumped.pop("orders_per_minute", None)
+        for key in UNWRITTEN_UNSTATED:
+            if getattr(self, key) is None:
+                dumped.pop(key, None)
         return dumped
 
 

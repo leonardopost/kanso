@@ -123,6 +123,26 @@ def test_a_quota_below_what_the_stage_s_sleeves_may_send_warns(
     assert "requests_per_minute" in check["remedy"]
 
 
+def test_one_version_at_the_broker_s_own_figure_fits_its_default_quota(
+    runner: CliRunner, workspace: Path
+) -> None:
+    """The broker declares the rate its client holds every request to, so a version certified
+    under the declaration alone fits a default workspace's quota, and the check says what it
+    counted: the requests orders spend, a cancel at its own, and not polling or a feed."""
+    from kanso.nautilus.adapters.alpaca import venue as venues
+
+    composed(workspace, "declared", venues.ORDERS_PER_MINUTE)
+    staged(workspace, "declared")
+
+    check = order_rate(runner, workspace)
+
+    assert check["status"] == "ok"
+    assert check["items"][0] == (
+        "paper: [adapters.alpaca] requests_per_minute 190 against 190 a minute between 1 version(s)"
+    )
+    assert "requests_per_cancel" in check["detail"] and "polling" in check["detail"]
+
+
 def test_a_quota_the_stage_s_sleeves_fit_inside_is_ok(runner: CliRunner, workspace: Path) -> None:
     composed(workspace, "fast_one", 200)
     composed(workspace, "fast_two", 166)

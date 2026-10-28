@@ -15,7 +15,16 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso import replay
 from kanso.nautilus import actions
 from kanso.replay import record
-from kanso.replay.parity import RELEASED, STREAM, Intent, Parity, compare, of_sessions
+from kanso.replay.parity import (
+    COMMANDS,
+    RELEASED,
+    STREAM,
+    Intent,
+    Parity,
+    compare,
+    of_sessions,
+)
+from kanso.schemas import Commands
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.replay.conftest import (
@@ -171,20 +180,57 @@ def test_both_paths_were_released_the_same_stream_and_the_payload_says_which(
     assert node.stream_sha256 is not None
 
 
-def test_each_session_counts_its_commands_and_the_payload_carries_both_unjudged(
+def test_each_session_counts_its_commands_and_parity_judges_both(
     ws: Workspace, store: StateStore, carded_hyp: str
 ) -> None:
-    """Each path's session records what its strategy sent, as a card's digest counts it; the
-    payload carries both beside the verdict, which reads neither."""
+    """Each path's session records what its strategy sent, as a card's digest counts it, and
+    the payload carries both; the two agree, and a session an earlier kanso wrote, which
+    counted none, is judged on its orders alone."""
     result = replay.parity(ws, store, hyp=carded_hyp)
     payload = result.payload()
     node, engine = replay.show(ws, result.node), replay.show(ws, result.engine)
 
+    assert result.identical
     assert node.commands is not None and node.commands == engine.commands
     assert node.commands.submits == node.intents > 0
     assert payload["node_commands"] == payload["engine_commands"] == node.commands.model_dump()
-    unread = replace(result, node_commands=None, engine_commands=None)
+    unread = replace(result, node_commands=None).at(0)
     assert unread.identical and unread.payload()["node_commands"] is None
+
+
+def counted(node: Commands, engine: Commands, ts_ns: int = 0) -> Parity:
+    """The same single order on both paths, which counted these commands."""
+    return replace(fed((1, None), (1, None)), node_commands=node, engine_commands=engine).at(ts_ns)
+
+
+def test_two_paths_that_counted_different_commands_diverge_on_them() -> None:
+    """Under a stated rate the commands a strategy sends decide what it may send next, so two
+    paths that agree on every order and counted a cancel more on one have still diverged:
+    after the orders, at `commands`, at any tolerance."""
+    one = Commands(submits=1, cancels=1, peak_60s=2, p99_60s=2)
+    two = Commands(submits=1, cancels=2, peak_60s=3, p99_60s=3)
+
+    for ts_ns in (0, 10**9):
+        result = counted(one, two, ts_ns)
+        assert not result.identical
+        assert result.divergence is not None
+        assert (result.divergence.index, result.divergence.field) == (None, COMMANDS)
+    assert result.divergence.render() == (
+        f"commands: {one.model_dump()!r} on the node path and {two.model_dump()!r} on the "
+        "engine path"
+    )
+    assert result.payload()["divergence"] == result.divergence.render()
+
+
+def test_the_busiest_minute_is_judged_at_no_tolerance_and_the_counts_at_any() -> None:
+    """The busiest 60 s is read off the instants each path sent at, which a tolerance lets
+    differ; the counts are not."""
+    one = Commands(submits=2, peak_60s=2, p99_60s=2)
+    apart = Commands(submits=2, peak_60s=1, p99_60s=1)
+
+    assert not counted(one, apart).identical
+    assert counted(one, apart, 1).identical
+    assert counted(one, one).identical
 
 
 def test_two_sessions_released_different_points_diverge_on_the_stream(ws: Workspace) -> None:

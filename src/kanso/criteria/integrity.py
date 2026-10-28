@@ -517,6 +517,26 @@ SEND_MARKS: Final = frozenset({"_sending", "_book_ledger"})
 """What a book lets kanso's own order through by: the mark on the order kanso is sending, and
 the book's ledger; denied beside the base's private sends (`sends`)."""
 
+RATE_MARKS: Final = frozenset(
+    {
+        "_command_bucket",
+        "_command_spend",
+        "_command_tally",
+        "_lift_rate",
+        "_pay_rated",
+        "_send_deferred",
+    }
+)
+"""What holds a strategy to its account's order rate (`costs.orders_per_minute`): the bucket
+and the tally, what spends them, and what lifts the bucket and sends what it held back, which
+only a stage's flatten does; denied, read off a strategy, beside the sends."""
+
+WHY_RATE: Final = (
+    "it is the harness's hold on the account's order rate, costs.orders_per_minute, which a "
+    "strategy can neither lift, spend nor rewrite; send fewer commands — re-post only when "
+    "the price has moved enough to matter — and give a name of your own another spelling"
+)
+
 ENGINE_SENDS: Final = frozenset({"submit_order", "submit_order_list", "modify_order"})
 """The engine's methods that hand it an order or move one; a private method of kanso's that
 calls one on the instance or on `super()` is a send (`sends`)."""
@@ -855,9 +875,10 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
     """Every read of the harness's own sends, and of a method it overrides, off a receiver
     that can reach past the harness base.
 
-    A send (`sends`, `SEND_MARKS`) is refused when read off anything but the instance of a
-    method of a class that is not held to the base that owns it, where the name is that
-    class's own; a binding of one is the clash rule's (`_clashes`). An overridden method
+    A send (`sends`, `SEND_MARKS`), and what holds a strategy to its order rate
+    (`RATE_MARKS`), is refused when read off anything but the instance of a method of a class
+    that is not held to the base that owns it, where the name is that class's own; a binding
+    of one is the clash rule's (`_clashes`). An overridden method
     (`overridden`) is refused when read off anything but `self`, the instance a method
     receives, or `super()` with no arguments.
     """
@@ -865,6 +886,7 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
     for node, base in _harness_classes(tree):
         holding.setdefault(id(node), set()).add(base)
     sent = {base: sends(base) | SEND_MARKS for base in _bases()}
+    rated = _bases()[0]
     names = frozenset().union(*(overridden(base) for base in _bases()))
     found: list[str] = []
 
@@ -904,6 +926,10 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
                         f"{WHY_SEND}"
                     )
                     break
+            if node.attr in RATE_MARKS and not (mine and rated not in owners):
+                found.append(
+                    f"line {node.lineno}: attribute '.{node.attr}' is denied, because {WHY_RATE}"
+                )
         for child in ast.iter_child_nodes(node):
             visit(child, scope, held)
 

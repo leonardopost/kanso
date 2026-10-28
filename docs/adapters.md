@@ -466,14 +466,19 @@ naming the client that declares it.
 
 For every listing venue it serves, one declaration: a `margin` account in `USD`, a
 `commission_bps` of zero — the broker's published US equity commission, which leaves out the
-regulatory fees passed through on a sale — and an `orders_per_minute` of 200, the broker's
-published trading API rate per account on its standard plan. Slippage and the spread are not
-declared, since the broker publishes neither. All of it is published, not measured here.
+regulatory fees passed through on a sale — an `orders_per_minute` of 190 and a
+`requests_per_cancel` of 2. Slippage and the spread are not declared, since the broker
+publishes neither. The commission is published, not measured here.
 
-So a workspace whose `[research] broker` is `alpaca` researches every card at 200 order
-commands a minute (`docs/workspace.md`, `costs.orders_per_minute`), unless it states its
-plan's figure: the broker publishes 1,000 a minute per account for its Elite plan, which an
-account on it states as
+The rate is what this adapter's client sends at. The broker publishes 200 trading API requests
+a minute per account on its standard plan and 1,000 on its Elite plan, and the client holds
+every request it sends to `requests_per_minute` (below), 190 by default, under the 200. A
+submit is one request and a modify one, and a cancel two: the `DELETE`, and then a read of the
+order, since no order stream reports what the cancel came to. So a workspace whose
+`[research] broker` is `alpaca` researches every card with its orders spending at most 190 of
+those requests a minute, a cancel two of them (`docs/workspace.md`, `costs.orders_per_minute`),
+which is what the client lets through, unless it states its plan's figure. An account on the
+Elite plan states, beside a `requests_per_minute` raised to match,
 
 ```yaml
 venues:
@@ -481,10 +486,12 @@ venues:
     costs: {orders_per_minute: 1000}
 ```
 
-in `portfolio.yaml`, for each venue its universe lists. The client's own throttle is
-`requests_per_minute` (below), and every request it sends spends it — the feed's sweeps and the
-read behind a cancel too — so it has to be at least what the sleeves on a stage may send
-between them: `kanso doctor`'s `order rate` check warns where it is not.
+in `portfolio.yaml`, for each venue its universe lists; the cancel's two are inherited. What the
+figure does not hold is what the client spends on no order: the engine's polling of orders and
+positions (`open_check_interval_secs`, `position_check_interval_secs`) and the feed's sweeps
+share the one quota and leave the orders less of it. `kanso doctor`'s `order rate` check warns
+where `requests_per_minute` is below what the sleeves on a stage may spend between them, and
+says that it counts neither.
 
 ### The feed is declared, never defaulted
 
@@ -510,7 +517,7 @@ check. It holds no credential.
 | key | default | what it does |
 |---|---|---|
 | `feed` | *none* | `sip` or `iex`; the tape the data client reads. Required before a data client opens |
-| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200; `kanso doctor`'s `order rate` check sets it against the `orders_per_minute` the versions on a stage were certified under |
+| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200, and the `orders_per_minute` the broker declares; `kanso doctor`'s `order rate` check sets it against the `orders_per_minute` the versions on a stage were certified under |
 | `timeout_s` | `30` | per-request timeout |
 | `poll_interval_s` | `15` | seconds between the live feed's sweeps; `1` to `3600`, and a value outside that is refused when the table is read |
 | the six URLs | the broker's own hosts | the paper, live and market-data REST hosts and their stream endpoints |

@@ -126,11 +126,12 @@ class Commands(KansoModel):
     the busiest 60 s of the data clock.
 
     Counted by `kanso.nautilus.rate.Tally` as the sleeve sends them, on both code paths: a
-    submit per order, a modify per modify, a cancel per order cancelled, each at the
-    data-clock instant the sleeve sent it. `peak_60s` is the most commands sent in the 60 s
-    ending at any one of them, that one included, and `p99_60s` the 99th percentile of that
-    count over every command, by nearest rank — so 99 in 100 of the sleeve's commands were
-    sent in a minute holding no more than it. Both are zero for a sleeve that sent nothing.
+    submit per order, a modify per modify the engine sends, a cancel per order cancelled, each
+    at the data-clock instant the sleeve sent it. `peak_60s` is the most commands sent in the
+    60 s ending at any one of them, that one and every other sent at the same instant
+    included, and `p99_60s` the 99th percentile of that count over every command, by nearest
+    rank — so 99 in 100 of the sleeve's commands were sent in a minute holding no more than
+    it. Both are zero for a sleeve that sent nothing.
     """
 
     submits: int = Field(default=0, ge=0)

@@ -24,12 +24,19 @@ commission is zero. Slippage and the spread are *not* declared, because the brok
 publishes neither, and they continue to come from kanso's shipped defaults.
 
 **How fast an account may send orders is declared too.** The broker publishes a rate for
-its trading API per account — 200 requests a minute on the standard plan, which is what
-`config.DEFAULT_REQUESTS_PER_MINUTE` stays under — and a sleeve trading these venues holds
-itself to it (`costs.orders_per_minute`, `kanso.nautilus.rate`), so a card is measured at a
-rate the account takes. A plan that grants more is the workspace's to state, as
-`venues.<MIC>.costs.orders_per_minute` in `portfolio.yaml`, beside `[adapters.alpaca]
-requests_per_minute` for the client's own throttle.
+its trading API per account — 200 requests a minute on the standard plan — and kanso's own
+client holds every request it sends to `config.DEFAULT_REQUESTS_PER_MINUTE`, 190, under it.
+That 190 is declared as `orders_per_minute`, and with it the two requests the client sends
+for a cancel — the `DELETE`, and the read of the order behind it, since no order stream
+reports the outcome (`execution.py`) — as `requests_per_cancel`. A sleeve trading these
+venues holds its orders to them (`kanso.nautilus.rate`): its submits, modifies and cancels
+spend no more of the client's requests a minute than the client lets through, so the client
+never waits on an order the card sent at once. What the figure does not hold is what the
+client spends on no order: the engine's polling of orders and positions
+(`open_check_interval_secs`, `position_check_interval_secs`) and the data client's sweeps,
+which share the one quota and leave the orders less of it. A plan that grants more is the
+workspace's to state, as `venues.<MIC>.costs.orders_per_minute` in `portfolio.yaml`, beside
+`[adapters.alpaca] requests_per_minute` for the client's own throttle.
 
 That leaves one honest caveat, recorded here because it cannot be recorded on a card: the
 origin of a resolved cost model is kept per block rather than per field, so a card whose
@@ -45,6 +52,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from kanso.nautilus.adapters.alpaca.config import DEFAULT_REQUESTS_PER_MINUTE
 from kanso.schemas import CostsOverride, VenueDeclaration
 
 __all__ = [
@@ -53,6 +61,7 @@ __all__ = [
     "CURRENCY",
     "EXCHANGES",
     "ORDERS_PER_MINUTE",
+    "REQUESTS_PER_CANCEL",
     "US_EQUITY",
     "VENUES",
     "declaration",
@@ -73,11 +82,16 @@ COMMISSION_BPS: Final = 0.0
 """The broker's published US equity commission. Regulatory pass-through fees on a sale are
 not part of it and are the operator's to state where they matter."""
 
-ORDERS_PER_MINUTE: Final = 200
-"""The broker's published trading API rate per account on its standard plan, in requests a
-minute: the figure a sleeve on these venues holds its order commands to unless the
-workspace states its plan's. Published, not measured here; a higher plan's figure is the
-operator's to state."""
+ORDERS_PER_MINUTE: Final = DEFAULT_REQUESTS_PER_MINUTE
+"""The requests a minute a sleeve on these venues may spend on its orders unless the
+workspace states its plan's: the client's own default throttle, under the broker's published
+200 a minute per account on its standard plan. Published, not measured here; a higher plan's
+figure is the operator's to state."""
+
+REQUESTS_PER_CANCEL: Final = 2
+"""The requests this adapter's client sends to cancel one order: the `DELETE`, then a `GET`
+of the order to report what the broker says it is (`execution.AlpacaExecutionClient
+._cancel_order`). A submit is one `POST` and a modify one `PATCH`."""
 
 EXCHANGES: Final[dict[str, str]] = {
     "NASDAQ": "XNAS",
@@ -98,7 +112,11 @@ transformation."""
 US_EQUITY: Final = VenueDeclaration(
     account="margin",
     currency=CURRENCY,
-    costs=CostsOverride(commission_bps=COMMISSION_BPS, orders_per_minute=ORDERS_PER_MINUTE),
+    costs=CostsOverride(
+        commission_bps=COMMISSION_BPS,
+        orders_per_minute=ORDERS_PER_MINUTE,
+        requests_per_cancel=REQUESTS_PER_CANCEL,
+    ),
 )
 """What this broker declares about every venue it serves. One declaration for all of them,
 because the account is one account: its type, its currency, its commission and its rate do

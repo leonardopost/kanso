@@ -634,7 +634,9 @@ def _execution(ws: Workspace) -> Check:
 
 ORDER_RATE_CHECKED = (
     "each stage's broker quota ([adapters.<id>] requests_per_minute) against the sum of the "
-    "costs.orders_per_minute its versions were certified under"
+    "costs.orders_per_minute its versions were certified under: the requests their orders may "
+    "spend, a cancel at its requests_per_cancel, and not what the client spends on polling or "
+    "a feed"
 )
 """What the `order rate` check compares, said whether or not it could compare it."""
 
@@ -642,17 +644,18 @@ ORDER_RATE_CHECKED = (
 def _order_rate(ws: Workspace) -> Check:
     """Whether each stage's account throttle leaves its sleeves the rate their cards ran at.
 
-    A sleeve holds its own commands to the `costs.orders_per_minute` of the venue model its
-    version was certified under, on the data clock (`kanso.nautilus.rate`), and a broker's
-    client holds every request it sends the account to a quota of its own. Where the quota
-    is below what the stage's sleeves may send between them, the client waits on a command
-    the card sent at once, so the stage trades a strategy no card measured: that warns,
+    A sleeve holds the requests its orders spend — a submit and a modify one each, a cancel
+    the venue model's `requests_per_cancel` — to the `costs.orders_per_minute` of the venue
+    model its version was certified under, on the data clock (`kanso.nautilus.rate`), and a
+    broker's client holds every request it sends the account to a quota of its own. Where the
+    quota is below what the stage's sleeves may spend between them, the client waits on an
+    order the card sent at once, so the stage trades a strategy no card measured: that warns,
     naming the stage, the quota and the sum. The sum is knowable only when every version on
     the stage states a rate, and is compared only for a broker whose quota kanso reads; a
     stage short of either is listed saying so, and graded `ok`. The quota spends on more than
-    orders — a broker's feed and the reads behind a cancel share it — so passing says only
-    that the sleeves' own figures fit. Nothing is read but `portfolio.yaml`, the strategy
-    files and each broker's table.
+    orders — the engine's polling of orders and positions and a broker's feed share it — so
+    passing says only that the sleeves' own figures fit. Nothing is read but
+    `portfolio.yaml`, the strategy files and each broker's table.
     """
     if not portfolio_file(ws).is_file():
         return Check(

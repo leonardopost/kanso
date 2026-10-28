@@ -66,7 +66,7 @@ def test_a_card_that_sends_past_its_rate_is_discarded_with_the_refusal_as_its_si
     assert sizing["pass"] is False
     assert sizing["evidence"]["rule"] == "order_rate"
     assert sizing["evidence"]["asked"] == "BUY"
-    assert "2 order commands a minute" in sizing["evidence"]["why"]
+    assert "needed 1 of the 2 tokens a minute" in sizing["evidence"]["why"]
 
 
 def test_a_card_within_its_rate_reports_what_it_sent_beside_its_trades(

@@ -10,20 +10,26 @@ commands at the same instants.
 **The tally** (`Tally`) counts every command the sleeve sends, by kind — a submit per order,
 a modify per modify, a cancel per order cancelled — at the data-clock instant it is sent, and
 reads off them how busy the busiest minute was: for each command, how many the sleeve sent in
-the 60 s ending at it, that one included; the largest of those counts and their 99th
-percentile over every command, by nearest rank. It is a reading of the run and changes
-nothing the run does, so every card carries it whether or not a rate is stated
-(`kanso.schemas.Commands`).
+the 60 s ending at it, that one included, every command sent at that same instant included
+too; the largest of those counts and their 99th percentile over every command, by nearest
+rank. So a cancel and the order that replaces it, sent in one handler, each read the pair. It
+is a reading of the run and changes nothing the run does, so every card carries it whether
+or not a rate is stated (`kanso.schemas.Commands`).
 
 **The bucket** (`Bucket`) is what a stated `costs.orders_per_minute` builds: a token bucket of
 that many tokens, full at the start, refilled at that many a minute on the data clock and
-never past full, from which every command takes one as the sleeve sends it. It is the shape
-of the quota kanso's own broker clients throttle themselves with — in nautilus_trader 1.231.0
+never past full, from which every command takes its tokens as the sleeve sends it — a submit
+and a modify one, a cancel the venue model's `requests_per_cancel`, so that a broker whose
+client spends two requests on a cancel declares two. It is the shape of the quota kanso's own
+broker clients throttle themselves with — in nautilus_trader 1.231.0
 `nautilus_pyo3.Quota.rate_per_minute(max_burst)` names the burst it admits and the per-minute
-rate as one number (`core/nautilus_pyo3.pyi`) — so a sleeve whose bucket never empties is one
-that quota never waits on. What the sleeve does with a command the bucket has no token for
-is the strategy base's (`kanso.nautilus.strategy.KansoStrategy`): an entry or a modify is
-refused, an exit is owed, a cancel is deferred.
+rate as one number (`core/nautilus_pyo3.pyi`) — so a sleeve whose bucket never empties sends
+its orders no faster than that quota lets their requests through. It holds the sleeve's
+order commands and nothing else: a broker's client also spends its quota on requests no
+order makes — its polling of orders and positions, a feed's sweeps — which leave the orders
+less (`docs/adapters.md` names what each broker spends). What the sleeve does with a command
+the bucket has no token for is the strategy base's (`kanso.nautilus.strategy.KansoStrategy`):
+an entry or a modify is refused, an exit is owed, a cancel is deferred.
 
 The data clock is `data_time`, held so it never runs backwards: a point published late with
 an earlier reference time refills nothing and moves no window. Every count is an integer and
@@ -34,6 +40,7 @@ give the same answers on every host and both paths.
 from __future__ import annotations
 
 from collections import deque
+from itertools import repeat
 from typing import Final
 
 from kanso.schemas import Commands
@@ -98,26 +105,36 @@ class Tally:
 
     It holds the instants of the last minute's commands and how often each count was seen,
     never the commands themselves, so a sleeve that sends millions holds as much as its
-    busiest minute sent.
+    busiest minute sent. The commands of one instant are counted once the instant is over,
+    each with that instant's whole count.
     """
 
     def __init__(self) -> None:
         self._counts = dict.fromkeys(KINDS, 0)
         self._recent: deque[int] = deque()
         self._seen: dict[int, int] = {}
+        self._at: int | None = None
+        self._pending = 0
 
     def add(self, ts_ns: int, kind: str, count: int = 1) -> None:
         """Count `count` commands of `kind` sent at `ts_ns`, which never precedes the last."""
         self._counts[kind] += count
         recent = self._recent
-        edge = ts_ns - NS_PER_MINUTE
-        while recent and recent[0] <= edge:
-            recent.popleft()
-        seen = self._seen
-        for _ in range(count):
-            recent.append(ts_ns)
-            held = len(recent)
-            seen[held] = seen.get(held, 0) + 1
+        if ts_ns != self._at:
+            if self._pending:
+                self._count_into(self._seen)
+                self._pending = 0
+            self._at = ts_ns
+            edge = ts_ns - NS_PER_MINUTE
+            while recent and recent[0] <= edge:
+                recent.popleft()
+        recent.extend(repeat(ts_ns, count))
+        self._pending += count
+
+    def _count_into(self, seen: dict[int, int]) -> None:
+        """Count the open instant's commands into `seen`, each at the instant's whole count."""
+        held = len(self._recent)
+        seen[held] = seen.get(held, 0) + self._pending
 
     def within(self, now_ns: int) -> int:
         """How many commands were sent in the 60 s ending at `now_ns`."""
@@ -126,12 +143,15 @@ class Tally:
 
     def summary(self) -> Commands:
         """The counts, the busiest 60 s and its 99th percentile over every command."""
-        total = sum(self._seen.values())
+        seen = dict(self._seen)
+        if self._pending:
+            self._count_into(seen)
+        total = sum(seen.values())
         rank = (PERCENTILE * total + 99) // 100  # the nearest rank, ceil(0.99 x total)
         p99 = 0
         reached = 0
-        for held in sorted(self._seen):
-            reached += self._seen[held]
+        for held in sorted(seen):
+            reached += seen[held]
             if reached >= rank:
                 p99 = held
                 break
@@ -139,6 +159,6 @@ class Tally:
             submits=self._counts[SUBMIT],
             modifies=self._counts[MODIFY],
             cancels=self._counts[CANCEL],
-            peak_60s=max(self._seen, default=0),
+            peak_60s=max(seen, default=0),
             p99_60s=p99,
         )
