@@ -477,8 +477,11 @@ submit is one request and a modify one, and a cancel two: the `DELETE`, and then
 order, since no order stream reports what the cancel came to. So a workspace whose
 `[research] broker` is `alpaca` researches every card with its orders spending at most 190 of
 those requests a minute, a cancel two of them (`docs/workspace.md`, `costs.orders_per_minute`),
-which is what the client lets through, unless it states its plan's figure. An account on the
-Elite plan states, beside a `requests_per_minute` raised to match,
+which is what the client lets through, unless it states its plan's figure. Past it a card
+drops the entries and modifies it has no request left for and counts them on its `commands`,
+running on; it owes its exits and defers its cancels; and it is refused only for an exit kanso
+cannot send again as it was asked. An account on the Elite plan states, beside a
+`requests_per_minute` raised to match,
 
 ```yaml
 venues:

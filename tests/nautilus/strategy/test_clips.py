@@ -157,6 +157,36 @@ def test_a_clip_taken_off_past_the_rate_is_refused_rather_than_owed(backtest) ->
     assert refused.why.startswith("an exit kanso cannot send again as it was asked needed 1")
 
 
+def test_a_clip_entered_past_the_rate_is_dropped_and_holds_nothing(backtest) -> None:
+    """At one a minute the host's entry on its third bar takes the token the clip its overlay
+    asks for in the same instant needs: the clip is dropped unsent and counted as refused, and
+    holds nothing, so the same clip asked for two bars on, once a token has come back, goes."""
+
+    class Twice(Clipper):
+        script = {5: (Clip("HEDGE.XNAS", "BUY"),), 8: (Clip("HEDGE.XNAS", "BUY"),)}
+
+    rated = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "orders_per_minute": 1,
+        }
+    }
+    run = backtest(
+        Enters(sized(venue_model=rated)),
+        [clipper(Twice)],
+        data=two_names(),
+        instruments=(DEMO, HEDGE),
+    )
+
+    assert [row for row in intents(run) if row[0] == "HEDGE.XNAS"] == [
+        ("HEDGE.XNAS", "BUY", HEDGE_CLIP)
+    ]
+    assert positions(run)["HEDGE.XNAS"] == HEDGE_CLIP
+    assert run.strategy._command_tally.summary().refused_submits == 1
+
+
 def test_the_other_side_of_a_held_clip_is_refused_until_flat(backtest) -> None:
     class Reverses(Clipper):
         script = {8: (Clip("HEDGE.XNAS", "BUY"),), 12: (Clip("HEDGE.XNAS", "SELL"),)}

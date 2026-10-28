@@ -132,6 +132,13 @@ class Commands(KansoModel):
     included, and `p99_60s` the 99th percentile of that count over every command, by nearest
     rank — so 99 in 100 of the sleeve's commands were sent in a minute holding no more than
     it. Both are zero for a sleeve that sent nothing.
+
+    `refused_submits` and `refused_modifies` are what a stated `costs.orders_per_minute` left
+    no token for and the sleeve dropped unsent, the run going on past them: a submit per
+    order of an entry — every order of an entry's list — and a modify, the order it would
+    have moved staying as it was. They were never sent, so they are in none of the counts
+    above and in no minute. Both are zero under no stated rate, and for a session or a card
+    recorded before they were kept.
     """
 
     submits: int = Field(default=0, ge=0)
@@ -139,10 +146,12 @@ class Commands(KansoModel):
     cancels: int = Field(default=0, ge=0)
     peak_60s: int = Field(default=0, ge=0)
     p99_60s: int = Field(default=0, ge=0)
+    refused_submits: int = Field(default=0, ge=0)
+    refused_modifies: int = Field(default=0, ge=0)
 
     @property
     def sent(self) -> int:
-        """Every command counted, of every kind."""
+        """Every command sent, of every kind; the refused ones were not."""
         return self.submits + self.modifies + self.cancels
 
     @model_validator(mode="after")
@@ -180,8 +189,8 @@ class CardDigest(KansoModel):
     zero whatever they did — is `None`, never zero.
 
     `commands` is how fast the card's strategy sent its orders (`Commands`), read off the run
-    beside its fills; `None` for a card recorded before cards kept it. It is not among the
-    `results.tsv` columns.
+    beside its fills, with what a stated order rate dropped unsent; `None` for a card recorded
+    before cards kept it. It is not among the `results.tsv` columns.
     """
 
     sessions: int = Field(ge=0)

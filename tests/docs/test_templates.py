@@ -137,3 +137,18 @@ def test_the_program_says_the_print_rule_holds_where_nothing_states_it() -> None
     assert "in `hypothesis.yaml` the venue fills by the tape" not in bullet
     assert "asks every name for `quote` and `trade` and none for `bar`" in bullet
     assert "a `hypothesis.yaml` that names no `limit_fill` is no sign the rule is off" in bullet
+
+
+def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_refused() -> None:
+    """The loop's strategy reads `program.md` and nothing else of the rate: it is told that an
+    entry or a modify past it is dropped and counted while the card runs on, and which digest
+    fields count them, and that only an exit kanso cannot send again refuses the card."""
+    bullet = re.sub(
+        r"\s+", " ", line_with(template("program.md"), "- Under `costs.orders_per_minute`")
+    )
+
+    assert "is dropped unsent and counted" in bullet
+    assert "the card runs on" in bullet
+    assert "`refused_submits` and `refused_modifies`" in bullet
+    assert "refuses the card (`order_rate`" in bullet
+    assert "an entry, a modify or an order list refuses the card" not in bullet

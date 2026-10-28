@@ -13,8 +13,9 @@ reads off them how busy the busiest minute was: for each command, how many the s
 the 60 s ending at it, that one included, every command sent at that same instant included
 too; the largest of those counts and their 99th percentile over every command, by nearest
 rank. So a cancel and the order that replaces it, sent in one handler, each read the pair. It
-is a reading of the run and changes nothing the run does, so every card carries it whether
-or not a rate is stated (`kanso.schemas.Commands`).
+counts apart, by kind, the submits and modifies the bucket held no token for, which were never
+sent and so are in no minute's count. It is a reading of the run and changes nothing the run
+does, so every card carries it whether or not a rate is stated (`kanso.schemas.Commands`).
 
 **The bucket** (`Bucket`) is what a stated `costs.orders_per_minute` builds: a token bucket of
 that many tokens, full at the start, refilled at that many a minute on the data clock and
@@ -29,7 +30,8 @@ order commands and nothing else: a broker's client also spends its quota on requ
 order makes — its polling of orders and positions, a feed's sweeps — which leave the orders
 less (`docs/adapters.md` names what each broker spends). What the sleeve does with a command
 the bucket has no token for is the strategy base's (`kanso.nautilus.strategy.KansoStrategy`):
-an entry or a modify is refused, an exit is owed, a cancel is deferred.
+an entry or a modify is dropped and counted (`Tally.refuse`), and the run goes on; an exit is
+owed, or refused when kanso cannot send it again as it was asked; a cancel is deferred.
 
 The data clock is `data_time`, held so it never runs backwards: a point published late with
 an earlier reference time refills nothing and moves no window. Every count is an integer and
@@ -45,7 +47,16 @@ from typing import Final
 
 from kanso.schemas import Commands
 
-__all__ = ["CANCEL", "KINDS", "MODIFY", "NS_PER_MINUTE", "SUBMIT", "Bucket", "Tally"]
+__all__ = [
+    "CANCEL",
+    "KINDS",
+    "MODIFY",
+    "NS_PER_MINUTE",
+    "REFUSABLE",
+    "SUBMIT",
+    "Bucket",
+    "Tally",
+]
 
 NS_PER_MINUTE: Final = 60_000_000_000
 """A minute on the data clock: the window a rate is struck over and the span a bucket refills
@@ -56,6 +67,11 @@ MODIFY: Final = "modify"
 CANCEL: Final = "cancel"
 KINDS: Final = (SUBMIT, MODIFY, CANCEL)
 """The three commands a sleeve sends a venue."""
+
+REFUSABLE: Final = (SUBMIT, MODIFY)
+"""The commands a sleeve drops when the bucket holds no token for them: an entry's submit — every
+order of an entry's list — and a modify. A cancel waits for a token instead, and is never
+dropped."""
 
 PERCENTILE: Final = 99
 """The percentile of the per-command 60 s counts a tally reports beside their peak."""
@@ -106,11 +122,13 @@ class Tally:
     It holds the instants of the last minute's commands and how often each count was seen,
     never the commands themselves, so a sleeve that sends millions holds as much as its
     busiest minute sent. The commands of one instant are counted once the instant is over,
-    each with that instant's whole count.
+    each with that instant's whole count. The commands refused for want of a token are counted
+    apart (`refuse`), and in no minute: they were never sent.
     """
 
     def __init__(self) -> None:
         self._counts = dict.fromkeys(KINDS, 0)
+        self._refused = dict.fromkeys(REFUSABLE, 0)
         self._recent: deque[int] = deque()
         self._seen: dict[int, int] = {}
         self._at: int | None = None
@@ -131,6 +149,11 @@ class Tally:
         recent.extend(repeat(ts_ns, count))
         self._pending += count
 
+    def refuse(self, kind: str, count: int = 1) -> None:
+        """Count `count` commands of `kind`, a submit or a modify, the bucket held no token
+        for: dropped unsent, so counted in no minute."""
+        self._refused[kind] += count
+
     def _count_into(self, seen: dict[int, int]) -> None:
         """Count the open instant's commands into `seen`, each at the instant's whole count."""
         held = len(self._recent)
@@ -142,7 +165,8 @@ class Tally:
         return sum(1 for ts_ns in self._recent if ts_ns > edge)
 
     def summary(self) -> Commands:
-        """The counts, the busiest 60 s and its 99th percentile over every command."""
+        """The counts, the busiest 60 s and its 99th percentile over every command sent, and
+        what was refused for want of a token."""
         seen = dict(self._seen)
         if self._pending:
             self._count_into(seen)
@@ -161,4 +185,6 @@ class Tally:
             cancels=self._counts[CANCEL],
             peak_60s=max(seen, default=0),
             p99_60s=p99,
+            refused_submits=self._refused[SUBMIT],
+            refused_modifies=self._refused[MODIFY],
         )

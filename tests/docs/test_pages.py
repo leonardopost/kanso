@@ -1093,3 +1093,18 @@ def test_the_concepts_page_says_a_window_reads_through_a_file_replaced_while_it_
     assert "is found gone by the read that wants it, which lists that type's files again" in card
     assert "is refused (exit 2), naming the series" in card
     assert "is read by a later read only once one of that type has listed afresh" in card
+
+
+def test_the_pages_say_an_entry_past_the_rate_is_dropped_and_counted_and_the_card_runs_on() -> None:
+    """Past `costs.orders_per_minute` an entry and a modify are dropped and counted, and the
+    card runs on; once the pages said the card was refused, and a proposer told so stops
+    sending what the rate would have let through. Each page names the fields that carry the
+    count and still names the one refusal the rate makes."""
+    for name in ("concepts.md", "workspace.md", "cli.md"):
+        said = prose(page(name))
+        assert "dropped unsent and counted" in said, name
+        assert "`order_rate`" in said and "exit kanso cannot send again as it was asked" in said
+        assert "an entry, a modify and an order list are refused" not in said, name
+        assert "an entry is refused" not in said, name
+    for name in ("concepts.md", "workspace.md"):
+        assert "`refused_submits`" in page(name) and "`refused_modifies`" in page(name), name

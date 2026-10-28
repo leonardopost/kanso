@@ -271,6 +271,8 @@ def test_a_card_made_by_hand_carries_no_tags_and_a_tag_is_from_the_vocabulary() 
         ({"submits": 3, "peak_60s": 4, "p99_60s": 4}, "peak_60s"),
         ({"submits": 3, "peak_60s": 3}, "p99_60s"),
         ({"submits": -1}, "submits"),
+        ({"refused_submits": -1}, "refused_submits"),
+        ({"refused_modifies": -1}, "refused_modifies"),
     ],
 )
 def test_a_command_count_reads_its_peak_and_percentile_off_what_was_sent(
@@ -289,7 +291,25 @@ def test_a_digest_carries_its_command_counts_beside_its_trades_and_no_column_for
     assert digest.commands == sent and sent.sent == 6
     assert digest.cells() == CardDigest.model_validate(DIGEST).cells()
     assert CardDigest.model_validate(DIGEST).commands is None, "a card recorded before it"
-    assert Commands() == Commands(submits=0, modifies=0, cancels=0, peak_60s=0, p99_60s=0)
+    assert Commands() == Commands(
+        submits=0,
+        modifies=0,
+        cancels=0,
+        peak_60s=0,
+        p99_60s=0,
+        refused_submits=0,
+        refused_modifies=0,
+    )
+
+
+def test_what_a_rate_refused_was_never_sent_and_bounds_no_minute() -> None:
+    """A sleeve whose every command the rate dropped sent nothing: its peak and percentile are
+    zero, and what it was refused is counted apart, by kind. A session or a card written
+    before the refused counts were kept reads them as zero."""
+    dropped = Commands(refused_submits=4, refused_modifies=2)
+
+    assert dropped.sent == 0 and (dropped.peak_60s, dropped.p99_60s) == (0, 0)
+    assert Commands.model_validate({"submits": 1, "peak_60s": 1, "p99_60s": 1}).refused_submits == 0
 
 
 def test_a_skipped_gate_passes() -> None:

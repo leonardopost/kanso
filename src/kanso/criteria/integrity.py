@@ -522,14 +522,16 @@ RATE_MARKS: Final = frozenset(
         "_command_bucket",
         "_command_spend",
         "_command_tally",
+        "_drop_rate",
         "_lift_rate",
         "_pay_rated",
         "_send_deferred",
     }
 )
 """What holds a strategy to its account's order rate (`costs.orders_per_minute`): the bucket
-and the tally, what spends them, and what lifts the bucket and sends what it held back, which
-only a stage's flatten does; denied, read off a strategy, beside the sends."""
+and the tally, what spends them and counts what they refused, and what lifts the bucket and
+sends what it held back, which only a stage's flatten does; denied, read off a strategy,
+beside the sends."""
 
 WHY_RATE: Final = (
     "it is the harness's hold on the account's order rate, costs.orders_per_minute, which a "

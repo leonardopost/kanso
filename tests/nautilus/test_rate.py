@@ -163,6 +163,21 @@ def test_the_99th_percentile_is_the_nearest_rank_over_every_command() -> None:
     )
 
 
+def test_a_tally_counts_what_the_bucket_refused_apart_and_in_no_minute() -> None:
+    """A submit or a modify the bucket held no token for was never sent: it is counted by kind
+    beside what was, and moves neither the busiest 60 s nor its percentile."""
+    tally = Tally()
+    tally.add(0, SUBMIT)
+    tally.refuse(SUBMIT, 3)
+    tally.refuse(MODIFY)
+    tally.add(SECOND_NS, CANCEL)
+
+    assert tally.summary() == Commands(
+        submits=1, cancels=1, peak_60s=2, p99_60s=2, refused_submits=3, refused_modifies=1
+    )
+    assert tally.within(SECOND_NS) == 2
+
+
 def test_a_tally_with_nothing_sent_reads_zero_throughout() -> None:
     assert Tally().summary() == Commands()
     assert Tally().within(0) == 0

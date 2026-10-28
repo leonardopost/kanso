@@ -2,12 +2,13 @@
 
 A sleeve under a venue model that states `costs.orders_per_minute` takes a token for every
 command it sends from a bucket of that many, refilled at that many a minute of the data
-clock — a cancel as many as `requests_per_cancel` says. With the bucket empty an entry, a
-modify, a list and an exit kanso cannot send again as it was asked are refused, any other
-exit is owed and a cancel deferred, and what waited goes first once a token comes back. Each
-scenario here runs on the research path (`backtest.execute`) and on the live one
-(`session.run_node`) and asserts both the behaviour and that the two agree on every intent,
-fill and count; and with the key unset nothing a run does moves.
+clock — a cancel as many as `requests_per_cancel` says. With the bucket empty an entry, an
+entry's list and a modify are dropped unsent and counted as refused, and the run goes on; any
+other exit is owed and a cancel deferred, and what waited goes first once a token comes back;
+an exit kanso cannot send again as it was asked is refused. Each scenario here runs on the
+research path (`backtest.execute`) and on the live one (`session.run_node`) and asserts both
+the behaviour and that the two agree on every intent, fill and count, the refused ones
+included; and with the key unset nothing a run does moves.
 
 The quotes are a second apart, so a rate of `n` a minute refills a token every `60 / n`
 quotes, and every instant asserted below is arithmetic on that: the bucket keeps its level
@@ -422,52 +423,112 @@ def test_a_cancel_behind_a_modify_past_the_rate_lands_behind_it_on_both_paths(
     assert held.commands == Commands(submits=3, modifies=1, cancels=1, peak_60s=3, p99_60s=3)
 
 
-def test_an_entry_past_the_rate_is_refused_on_both_paths() -> None:
-    twice = sleeve(
-        """        elif self.seen == 3:
-            self.submit_entry(name, "BUY", qty=100)
+AGAIN_UNTIL_SENT = sleeve(
+    """        elif self.seen >= 3 and not self.again:
+            self.again = self.submit_entry(name, "BUY", qty=100) is not None
+""",
+    extra="""    again = False
+""",
+)
+"""Asks for a second entry on every quote from its third until one is sent."""
+
+
+def test_an_entry_past_the_rate_is_dropped_and_counted_and_the_run_goes_on() -> None:
+    """At two a minute the entry and the resting exit leave a thirtieth of a token on the
+    second quote, and it refills a thirtieth a second. The second entry, asked for on every
+    quote from the third, is dropped unsent on each of the twenty-eight before the
+    thirty-first and goes on that one; `submit_entry` answers `None` for each it dropped, the
+    run goes on past them on both paths, and the card counts them as refused."""
+    unrated = both(rated(AGAIN_UNTIL_SENT, None), [tuple(steady(40))])
+    held = both(rated(AGAIN_UNTIL_SENT, 2), [tuple(steady(40))])
+
+    assert stamps(unrated)[-1] == (at(3), "BUY", "MARKET")
+    assert stamps(held) == [
+        (at(1), "BUY", "MARKET"),
+        (at(2), "SELL", "LIMIT"),
+        (at(31), "BUY", "MARKET"),
+    ]
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("BUY", 100.0)]
+    assert held.commands == Commands(submits=3, peak_60s=3, p99_60s=3, refused_submits=28)
+    assert unrated.commands is not None and unrated.commands.refused_submits == 0
+
+
+MOVING = sleeve(
+    """        elif self.seen == 3:
+            self.modify_order(self.resting, price=Price(10.05, 2))
 """
-    )
-
-    refusal = refused(rated(twice, 2), [tuple(steady(10))])
-
-    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "BUY", at(3))
-    assert refusal.held == {f"{SYMBOL}.{VENUE}": 100.0}
-    assert "the bucket held 0 after 2 command(s) in the 60 s before it" in refusal.why
+)
+"""Moves its resting exit from 20.00 to 10.05 on its third quote; the bid reaches 10.05 on
+the fifth."""
 
 
-def test_a_modify_past_the_rate_is_refused_whichever_order_it_moves() -> None:
-    moving = sleeve(
-        """        elif self.seen == 3:
-            self.modify_order(self.resting, price=Price(19.0, 2))
-"""
-    )
+def test_a_modify_past_the_rate_is_dropped_and_the_order_stays_as_it_was() -> None:
+    """At two a minute the entry and the resting exit empty the bucket, so the modify on the
+    third quote is dropped unsent and counted, whichever order it moves: the exit stays at
+    20.00, working, and does not fill when the bid reaches 10.05, where the modified one did."""
+    unrated = both(rated(MOVING, None), [tuple(steady(10, rise_at=5))])
+    held = both(rated(MOVING, 2), [tuple(steady(10, rise_at=5))])
 
-    refusal = refused(rated(moving, 2), [tuple(steady(10))])
+    assert [(fill.side, fill.px) for fill in unrated.run.fills] == [
+        ("BUY", 10.01),
+        ("SELL", 10.05),
+    ]
+    assert [(fill.side, fill.px) for fill in held.run.fills] == [("BUY", 10.01)]
+    assert held.commands == Commands(submits=2, peak_60s=2, p99_60s=2, refused_modifies=1)
 
-    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "MODIFY", at(3))
+
+BRACKET = """self.submit_order_list(
+                self.order_factory.bracket(
+                    name,
+                    OrderSide.{side},
+                    Quantity.from_int(100),
+                    sl_trigger_price=Price({stop}, 2),
+                    tp_price=Price({target}, 2),
+                )
+            )"""
+"""A bracket of 100 on `side`: its first order at market, its stop and its target."""
 
 
-def test_a_list_takes_a_token_for_each_of_its_orders_and_is_refused_short_of_them() -> None:
+@pytest.mark.parametrize(("per_minute", "sent"), [(2, 0), (3, 3)])
+def test_an_entry_s_list_takes_a_token_for_each_of_its_orders_or_is_dropped_whole(
+    per_minute: int, sent: int
+) -> None:
+    """A bracket of three is three submits: at three a minute it goes whole, and at two it
+    finds the bucket a token short, is dropped whole and counted as three refused, and the
+    run goes on with nothing held."""
     bracketed = HEAD.replace(
         b"""        if self.seen == 1:
             self.submit_entry(name, "BUY", qty=100)""",
-        b"""        if self.seen == 1:
-            self.submit_order_list(
-                self.order_factory.bracket(
-                    name,
-                    OrderSide.BUY,
-                    Quantity.from_int(100),
-                    sl_trigger_price=Price(9.0, 2),
-                    tp_price=Price(11.0, 2),
-                )
-            )""",
+        (
+            "        if self.seen == 1:\n            "
+            + BRACKET.format(side="BUY", stop=9.0, target=11.0)
+        ).encode(),
     ).replace(b"SECOND", b"self.resting = self.submit_exit(name, price=20.0)")
 
-    refusal = refused(rated(bracketed, 2), [tuple(steady(5))])
+    held = both(rated(bracketed, per_minute), [tuple(steady(5))])
 
-    assert (refusal.rule, refusal.ts_event) == (ORDER_RATE, at(1))
-    assert refusal.why.startswith("a list of 3 orders needed 3 of the 2 tokens a minute")
+    assert len(held.intents) == sent
+    assert held.commands is not None
+    assert (held.commands.submits, held.commands.refused_submits) == (sent, 3 - sent)
+
+
+def test_a_list_that_closes_a_position_past_the_rate_is_refused() -> None:
+    """An order of a list is an exit kanso cannot send again as it was asked, so a list whose
+    first order closes the position is refused past the rate, as each of its orders would be,
+    rather than dropped with the position left open."""
+    closing = sleeve(
+        "",
+        second="pass\n        elif self.seen == 3:\n            "
+        + BRACKET.format(side="SELL", stop=11.0, target=9.0),
+    )
+
+    refusal = refused(rated(closing, 1), [tuple(steady(5))])
+
+    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "SELL", at(3))
+    assert refusal.why.startswith(
+        "a list of 3 orders closing a position needed 3 of the 1 tokens a minute"
+    )
+    assert "an exit kanso cannot send again as it was asked is refused" in refusal.why
 
 
 def chase_groups() -> list[tuple[object, ...]]:
@@ -598,7 +659,8 @@ def test_a_modify_the_engine_sends_nothing_for_takes_no_token_and_is_not_counted
     modify: str,
 ) -> None:
     """At two a minute the entry and the resting exit empty the bucket, and a modify that
-    would go then is refused; one the engine drops, logging why, is no command at all."""
+    would go then is dropped and counted as refused; one the engine drops, logging why, is no
+    command at all, refused or sent."""
     unrated = both(rated(NO_OP_MODIFY[modify], None), [tuple(steady(10, rise_at=4))])
     held = both(rated(NO_OP_MODIFY[modify], 2), [tuple(steady(10, rise_at=4))])
 
@@ -624,14 +686,14 @@ def test_an_exit_the_rate_owed_takes_the_token_before_the_handler_can() -> None:
     exit, owed behind it, finds the bucket empty again and is owed for want of a token. On the
     sixty-first a token comes back: the exit, asked for thirty seconds before, takes it before
     the handler runs, as an account working its requests in turn would send it, and the entry
-    the handler sends finds the bucket empty and is refused."""
+    the handler sends finds the bucket empty and is dropped."""
     unrated = both(rated(OWED_BEFORE_AN_ENTRY, None), [tuple(steady(70))])
-    refusal = refused(rated(OWED_BEFORE_AN_ENTRY, 2), [tuple(steady(70))])
+    held = both(rated(OWED_BEFORE_AN_ENTRY, 2), [tuple(steady(70))])
 
     assert stamps(unrated)[2:] == [(at(3), "SELL", "MARKET"), (at(61), "BUY", "LIMIT")]
-    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "BUY", at(61))
-    assert refusal.held == {f"{SYMBOL}.{VENUE}": 0.0}, "the exit went first, and filled"
-    assert "the bucket held 0 after 3 command(s) in the 60 s before it" in refusal.why
+    assert stamps(held)[2:] == [(at(61), "SELL", "MARKET")], "the exit went first"
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert held.commands == Commands(submits=3, cancels=1, peak_60s=3, p99_60s=3, refused_submits=1)
 
 
 GROWN = sleeve(

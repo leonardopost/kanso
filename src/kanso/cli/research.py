@@ -231,8 +231,9 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
 
 def _digest_lines(digest: CardDigest | None) -> list[str]:
     """What a card's trades did, in two lines: how it traded, and what a trade and a session
-    earned; and a third, how fast it sent its orders, for a card that counted them. Nothing
-    for a card that never ran to a result."""
+    earned; and a third, how fast it sent its orders, for a card that counted them, ending
+    with what a stated order rate dropped unsent when it dropped any. Nothing for a card that
+    never ran to a result."""
     if digest is None:
         return []
     traded = [
@@ -254,14 +255,17 @@ def _digest_lines(digest: CardDigest | None) -> list[str]:
     lines = [field("trades", " · ".join(traded)), field("edge", edge)]
     sent = digest.commands
     if sent is not None:
-        lines.append(
-            field(
-                "commands",
-                f"{sent.submits} submit(s) · {sent.modifies} modify(ies) · "
-                f"{sent.cancels} cancel(s) · peak {sent.peak_60s} in 60 s · "
-                f"p99 {sent.p99_60s}",
-            )
+        counted = (
+            f"{sent.submits} submit(s) · {sent.modifies} modify(ies) · "
+            f"{sent.cancels} cancel(s) · peak {sent.peak_60s} in 60 s · "
+            f"p99 {sent.p99_60s}"
         )
+        if sent.refused_submits or sent.refused_modifies:
+            counted += (
+                f" · refused past the rate {sent.refused_submits} submit(s), "
+                f"{sent.refused_modifies} modify(ies)"
+            )
+        lines.append(field("commands", counted))
     return lines
 
 

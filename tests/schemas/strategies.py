@@ -313,7 +313,8 @@ def gate_results(draw: st.DrawFn) -> GateResult:
 @st.composite
 def commands(draw: st.DrawFn) -> Commands:
     """How fast a sleeve sent its orders: a peak no larger than what was sent, a 99th
-    percentile no larger than the peak, and both zero exactly when nothing was sent."""
+    percentile no larger than the peak, and both zero exactly when nothing was sent; and what
+    a rate refused, which bounds none of them, since it was never sent."""
     submits, modifies, cancels = (draw(st.integers(0, 10**6)) for _ in range(3))
     sent = submits + modifies + cancels
     peak = draw(st.integers(1, sent)) if sent else 0
@@ -323,6 +324,8 @@ def commands(draw: st.DrawFn) -> Commands:
         cancels=cancels,
         peak_60s=peak,
         p99_60s=draw(st.integers(1, peak)) if sent else 0,
+        refused_submits=draw(st.integers(0, 10**6)),
+        refused_modifies=draw(st.integers(0, 10**6)),
     )
 
 

@@ -24,13 +24,14 @@ streams that differ in any point have different digests.
 
 **How fast each path sent its orders is compared after what it decided.** Each session
 records the commands its strategy counted on the data clock — its submits, modifies and
-cancels, and how many it sent in its busiest 60 s (`kanso.nautilus.rate`). Both paths count
-them where the strategy decides to send them, at the data instants both reach alike, which
-is what lets one bucket hold one strategy to one account's rate on both; so under a stated
-`costs.orders_per_minute` the counts are behaviour, and two paths that counted differently
-diverge, at `commands`, with each path's counts. The counts are compared at any tolerance;
-the busiest 60 s, read off the instants a tolerance lets differ, only at zero. A session
-written before kanso counted has none, and then nothing is compared.
+cancels, how many it sent in its busiest 60 s, and the submits and modifies a stated rate
+dropped unsent (`kanso.nautilus.rate`). Both paths count them where the strategy decides to
+send them, at the data instants both reach alike, which is what lets one bucket hold one
+strategy to one account's rate on both; so under a stated `costs.orders_per_minute` the
+counts are behaviour, and two paths that counted or dropped differently diverge, at
+`commands`, with each path's counts. The counts are compared at any tolerance; the busiest
+60 s, read off the instants a tolerance lets differ, only at zero. A session written before
+kanso counted has none, and then nothing is compared.
 
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
@@ -81,8 +82,9 @@ STREAM: Final = "stream_sha256"
 COMMANDS: Final = "commands"
 """The field of a session that says how fast its path sent its orders, compared after them."""
 
-COUNTS: Final = ("submits", "modifies", "cancels")
-"""The command counts compared at any instant tolerance; the busiest 60 s only at zero."""
+COUNTS: Final = ("submits", "modifies", "cancels", "refused_submits", "refused_modifies")
+"""The command counts compared at any instant tolerance, the sent and the refused alike; the
+busiest 60 s only at zero."""
 
 MISSING: Final = "missing"
 """The field a divergence names when one path stopped submitting and the other did not."""

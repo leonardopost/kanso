@@ -16,10 +16,12 @@ its room; it does not rebuild one it did not build, so that one is refused the s
 for the same reason, is any order a member of a book sends past `submit_entry` and
 `submit_exit`, any modify it sends, and any order in the name of a strategy that is no member
 (`book_entry`): the book hands every entry its share of one room, and can only cut one it
-sizes. And so is an entry, a modify, a list or an exit kanso cannot send again as it was
-asked, sent when the venue model's `orders_per_minute` left the sleeve too few tokens for it
-(`order_rate`): the account would not have taken it, and a card that counted on it measured
-a strategy no account trades. Any other exit is owed instead and a cancel deferred
+sizes. And so is an exit kanso cannot send again as it was asked — a stop, a list that
+closes, an immediate-or-cancel or post-only limit, a clip — sent when the venue model's
+`orders_per_minute` left the sleeve too few tokens for it (`order_rate`): the account would
+not have taken it, dropping it would leave open what the strategy asked to close, and owing
+it would send another order. Past the rate an entry and a modify are not refused but dropped
+and counted, the run going on; any other exit is owed and a cancel deferred
 (`kanso.nautilus.rate`), since the account must still be able to close.
 
 The quantity is `budget / ((1 + 2 x cost_rate) x (price + increment))`, floored onto the
@@ -75,10 +77,11 @@ or `submit_exit`, which sizes it never past flat; a modify a member sent; or an 
 name of a strategy that is no member of the book."""
 
 ORDER_RATE: Final = "order_rate"
-"""An entry, a modify, or an order kanso cannot owe, sent when the venue model's
-`orders_per_minute` bucket held no token for it (`kanso.nautilus.rate`). It holds with or
-without a sizing rule: the account would not have taken the command, so a card that sent it
-measured a strategy no account can trade."""
+"""An exit kanso cannot owe, sent when the venue model's `orders_per_minute` bucket held no
+token for it (`kanso.nautilus.rate`). It holds with or without a sizing rule: the account would
+not have taken the order, and neither dropping it nor sending another in its place measures
+the strategy that sent it. An entry or a modify past the rate is dropped and counted instead
+(`kanso.schemas.Commands`)."""
 
 RULES: Final = (
     SIZE_ARGUMENT,

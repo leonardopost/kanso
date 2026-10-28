@@ -222,6 +222,22 @@ def test_two_paths_that_counted_different_commands_diverge_on_them() -> None:
     assert result.payload()["divergence"] == result.divergence.render()
 
 
+def test_two_paths_that_dropped_different_commands_for_the_rate_diverge_at_any_tolerance() -> None:
+    """An entry or a modify a rate dropped is behaviour as much as one it sent: two paths that
+    sent the same orders and dropped a different number diverge, at `commands`, however wide
+    the tolerance."""
+    one = Commands(submits=1, peak_60s=1, p99_60s=1, refused_submits=2)
+    for other in (
+        one.model_copy(update={"refused_submits": 3}),
+        one.model_copy(update={"refused_modifies": 1}),
+    ):
+        for ts_ns in (0, 10**9):
+            result = counted(one, other, ts_ns)
+            assert result.divergence is not None
+            assert result.divergence.field == COMMANDS
+    assert counted(one, one, 10**9).identical
+
+
 def test_the_busiest_minute_is_judged_at_no_tolerance_and_the_counts_at_any() -> None:
     """The busiest 60 s is read off the instants each path sent at, which a tolerance lets
     differ; the counts are not."""

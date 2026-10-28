@@ -126,7 +126,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
-| send an entry, a modify, an order list, or an exit kanso cannot send again as it was asked — a stop, an order of a list, an immediate-or-cancel, fill-or-kill, good-till-date, post-only or part-displayed limit, an emulated order, an overlay's clip — when the venue model's `costs.orders_per_minute` leaves the sleeve no token for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is; any other exit is owed and a cancel deferred instead, never refused (`costs.orders_per_minute`) |
+| send an exit kanso cannot send again as it was asked — a stop, an order of a list or a list that closes, an immediate-or-cancel, fill-or-kill, good-till-date, post-only or part-displayed limit, an emulated order, an overlay's clip — when the venue model's `costs.orders_per_minute` leaves the sleeve no token for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is. An entry, an entry's list and a modify past the rate are not refused: each is dropped unsent and counted on the card's `commands`, and the card runs on; any other exit is owed and a cancel deferred (`costs.orders_per_minute`) |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
@@ -1297,23 +1297,31 @@ replay` on either path and a stage node hold one strategy to one rate, and `kans
 parity` compares the orders that came of it and the commands counted. When the bucket holds
 too few tokens for a command:
 
-- **an entry is refused** — `submit_entry`, an entry built by hand, an overlay's hedge leg or
-  clip — inside the handler that sent it, as `order_rate`, and so are **a modify**, whichever
-  order it moves, and **an order list** short of a token for each of its orders. The card is a
-  `discard` whose `sizing` gate carries the refusal: what was asked, when, what was held, and
-  the bucket's state in `why`;
+- **an entry is dropped and counted** — `submit_entry`, an entry built by hand, an overlay's
+  hedge leg or clip — inside the handler that sent it: it is not sent, `submit_entry` answers
+  `None` for it as for an entry a filter refused, its hedges are not placed, and a clip
+  dropped so holds nothing. So is **an entry's list** — one whose first order is an entry —
+  short of a token for each of its orders, dropped whole, and **a modify**, whichever order it
+  moves: the order stays as it was, at its own price and quantity, working as before. Each is
+  counted on the card's `commands` as `refused_submits` — one per order — or
+  `refused_modifies`, and the card **runs on** past it, measured on the entries the rate let
+  through; a stage node, running the same code, drops the same commands and does not halt;
 - **an exit is owed**: one `submit_exit` sized — the strategy's, an exit rule's, an owed
   exit's — as it was asked, the whole position when no quantity was given; and one the
   strategy built itself on the terms `submit_exit` sends one on — one order at market or at a
   limit, good till cancelled, not post-only, in the instrument's own units, showing all of
   itself, with no contingency, no emulation and no execution algorithm; reduce-only or not —
   at its quantity and its limit. It is asked for again as `submit_exit` sends one, at the price
-  given (above, for what an owed exit is). Any other exit the strategy built — a stop, an
-  order of a list, an immediate-or-cancel, fill-or-kill, good-till-date, post-only or
-  part-displayed limit, an order sized in the quote's currency, an emulated order, an overlay's
-  clip — cannot be sent again as it was asked, and is refused like an entry: sent again as a
-  plain good-till-cancelled order, an immediate-or-cancel exit would rest and fill later and a
-  post-only one would take;
+  given (above, for what an owed exit is);
+- **an exit kanso cannot send again as it was asked is refused** — any other exit the strategy
+  built: a stop, an order of a list or a list whose first order closes, an immediate-or-cancel,
+  fill-or-kill, good-till-date, post-only or part-displayed limit, an order sized in the
+  quote's currency, an emulated order, an overlay's clip — inside the handler that sent it, as
+  `order_rate`. Sent again as a plain good-till-cancelled order, an immediate-or-cancel exit
+  would rest and fill later and a post-only one would take; dropped, it would leave open what
+  the strategy asked to close. The card is a `discard` whose `sizing` gate carries the
+  refusal: what was asked, when, what was held, and the bucket's state in `why`. A strategy
+  that closes with `submit_exit` is owed instead, and is never refused for the rate;
 - **a cancel is deferred**: kept, its place in line held. A second cancel of an order whose
   cancel waits goes at once if a token has come back since, and keeps the first one's place if
   not. The order is working until the cancel is sent and lands, so an exit is sized to what it
@@ -1338,8 +1346,9 @@ which both paths reach at the same instants. A stage node's flatten after its wi
 stage's, not the sleeve's: it lifts the rate and sends every deferred cancel first, so the
 flatten goes out whole; a researched strategy may not lift it, spend it or read the bucket
 (`kanso.criteria.integrity`, rule `RATE_MARKS`). Every card counts its commands whether or
-not a rate is stated, and its digest carries the counts and the busiest 60 s (`docs/concepts.md`,
-Card), which is how a rate is chosen: from the `peak_60s` of the cards that ran without one.
+not a rate is stated, and its digest carries the counts, the busiest 60 s and what the rate
+dropped (`docs/concepts.md`, Card), which is how a rate is chosen: from the `peak_60s` of the
+cards that ran without one, and, under one, from how many entries and modifies it dropped.
 
 The figure is the sleeve's own. A broker states the figure its client holds the account's
 requests to, and what its client sends for a cancel, for the venues it serves —
@@ -2450,13 +2459,14 @@ by how often the strategy trades.
 
 **A replay session counts its commands too.** `commands` in `session.yaml` is what the
 strategy sent on that path — `submits`, `modifies`, `cancels`, and `peak_60s` and `p99_60s`,
-the busiest 60 s of the data clock — counted as a card counts them (`costs.orders_per_minute`).
+the busiest 60 s of the data clock — and the `refused_submits` and `refused_modifies` a stated
+rate dropped unsent, counted as a card counts them (`costs.orders_per_minute`).
 `kanso replay parity` carries each path's as `node_commands` and `engine_commands` and judges
 them after the intents: both paths count a command where the strategy decides to send it, at
 the instants both reach alike — which is what lets one bucket hold one strategy to one rate on
-both — so two that counted differently diverge at `commands`, the counts at any tolerance and
-the busiest 60 s at zero. A session written by an earlier kanso has none, and is judged on
-its intents alone.
+both — so two that counted or dropped differently diverge at `commands`, the counts, the
+dropped among them, at any tolerance and the busiest 60 s at zero. A session written by an
+earlier kanso has none, and is judged on its intents alone.
 
 A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
 stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a
