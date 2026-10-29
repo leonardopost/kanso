@@ -314,6 +314,10 @@ class KansoConfig(StrategyConfig, frozen=True):
     extra_resolutions: tuple[str, ...] = ()
     """Bar grains subscribed in addition to `resolution`, so an overlay can have its own
     clock without the host's `on_bar` running on that grain."""
+    bar_resolution: str | None = None
+    """The bar size a `bar` requirement is subscribed at when `resolution` is no bar size —
+    the hypothesis's `bar_resolution`, beside a sleeve clocked on quotes, prints or a book.
+    Its bars reach `on_bar` as a bar-size sleeve's do. None subscribes them at `resolution`."""
 
     data_requirements: tuple[str, ...] = (BAR,)
     data_by_instrument: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -1205,8 +1209,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Subscribe every instrument of the universe to every data requirement.
 
         Called before `on_start`, so an author's `on_start` need not call anything. `bar`,
-        `quote`, `trade` and `book` are subscribed per instrument — the book as level-two
-        deltas, which the venue keeps a book from and the author need not handle. A
+        `quote`, `trade` and `book` are subscribed per instrument — bars at `bar_resolution`
+        where the sleeve's resolution is no bar size, the book as level-two deltas, which the
+        venue keeps a book from and the author need not handle. A
         requirement naming a registered
         custom type is subscribed once, by its class, and its points — every instrument's
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
@@ -1223,12 +1228,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         from kanso.nautilus.backtest import CLIENT_ID
 
         own = dict(self._cfg.data_by_instrument)
+        size = self._cfg.bar_resolution or self._cfg.resolution
         for instrument_id in self.universe:
             for requirement in own.get(str(instrument_id), self._cfg.data_requirements):
                 if requirement == BAR:
-                    self.subscribe_bars(_bar_type(instrument_id, self._cfg.resolution))
+                    self.subscribe_bars(_bar_type(instrument_id, size))
                     for extra in self._cfg.extra_resolutions:
-                        if extra != self._cfg.resolution:
+                        if extra != size:
                             self.subscribe_bars(_bar_type(instrument_id, extra))
                 elif requirement == QUOTE:
                     self.subscribe_quote_ticks(instrument_id)

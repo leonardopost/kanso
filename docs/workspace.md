@@ -125,6 +125,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -627,6 +628,35 @@ naming `data_by_instrument`, and a certificate earned under another refuses to c
 Listing an instrument with every required type, or reordering a list, changes nothing an
 instrument is shown and clears nothing.
 
+**`bar_resolution` is the size a tick sleeve reads its bars at, and it is scope.** A future,
+an index or a currency pair carries bars where the equity it leads carries quotes and prints.
+At `resolution` `tick`, `quote` or `trade` a sleeve has no bar size of its own, so a file that
+requires `bar` there names the size its bar instruments are read at:
+
+```yaml
+resolution: tick
+bar_resolution: 1m                 # scope: changing it clears `best`
+data_requirements: [quote, trade, bar]
+data_by_instrument:
+  SPY.ARCX: [quote, trade]         # the traded name: its tape
+  ESZ5.XCME: [bar]                 # the signals: a minute at a time
+  NDX.IDX: [bar]
+```
+
+The runner reads every `bar` instrument at that size, the sleeve subscribes them at it and its
+`on_bar` is handed them, and a snapshot must cover them at it; a card, a certificate, a replay
+and a stage node all read them so, and `kanso replay parity` holds. A bar is stamped at its
+close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches the
+sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
+same instant. The sleeve's sessions — what `warmup` counts — are still the days its quotes or
+prints were printed, not the days a signal's bars were. `kanso hyp validate` refuses (exit 3)
+a tick file that requires `bar` and states no `bar_resolution`, which before the key existed
+was admitted and stopped every card at subscribing bars of no size, a `bar_resolution` beside
+a resolution that is itself a bar size, and one with no `bar` to read; an attached construct
+states its host's, as it states its host's `warmup`, because its cards run the host underneath
+it. Adopting, changing or dropping the key re-pins the hypothesis and clears `best` with a
+`best_cleared` naming `bar_resolution`; a row pinned before it existed reads as stating none.
+
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
 at a time, the card holds a session of them beside what it has folded, and a session over
@@ -1005,7 +1035,7 @@ such name, what it is asked for and why, and each way off the warning: ask every
 `quote` and `trade` and none for `bar` under `data_by_instrument`, each keeping every other
 type it is asked for, since a type no name is asked for is refused — the `funding` a perpetual
 requires, the series a `session_scope` reads — and drop `bar` from `data_requirements` where it
-is there, which resolves to `print_through`; state `print_through`, offered only where no name
+is there, and `bar_resolution` with it, which resolves to `print_through`; state `print_through`, offered only where no name
 is asked for `bar` beside `quote` and fit only when each name short of a feed is a signal the
 strategy never trades; or state `touch`, which keeps the rule. A `screen draft` of a cell
 whose trigger and follower are read as different feeds of different names writes that shape.
@@ -1355,7 +1385,7 @@ comparable to each other; re-pinning underneath it would silently change the que
 cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
-`universe`, the `resolution`, the `data_requirements`, `data_by_instrument` (an entry that
+`universe`, the `resolution`, `bar_resolution`, the `data_requirements`, `data_by_instrument` (an entry that
 narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
 `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
 counts, since a draft has no construct and the best was earned as one — and the event log

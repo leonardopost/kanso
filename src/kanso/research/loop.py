@@ -1228,7 +1228,7 @@ def begin(
         ws,
         hyp.universe,
         hyp.data_requirements,
-        hyp.resolution,
+        hyp.bar_size,
         hyp.windows,
         prefixes,
         hyp.data_by_instrument,

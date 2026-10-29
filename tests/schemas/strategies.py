@@ -205,6 +205,11 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     )
     if depth is not None:
         required = [*required, "book"]
+    bar_resolution = (
+        None if resolution not in ("tick", "quote", "trade") else draw(st.none() | durations())
+    )
+    if bar_resolution is not None:
+        required = [*required, "bar"]
     horizon = draw(durations())
     if classified is None:
         classified = draw(st.booleans())
@@ -230,6 +235,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         universe=draw(st.lists(VENUE_CODES, min_size=1, max_size=4, unique=True)),
         horizon=horizon,
         resolution=resolution,
+        bar_resolution=bar_resolution,
         data_requirements=required,
         costs=None if override is None else CostsOverride(**override.model_dump()),
         capital=draw(st.none() | POSITIVE),

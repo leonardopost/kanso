@@ -9,9 +9,9 @@ separately, and checked here first, because three of the ways to drift are visib
 source's own syntax tree and need no model at all:
 
 * **universe** — an instrument literal naming something outside `universe`;
-* **resolution** — a bar specification whose step or aggregation differs from
-  `resolution`, whether it is spelled as a `BarSpecification` call or as a bar-type
-  string;
+* **resolution** — a bar specification whose step or aggregation differs from the size
+  the hypothesis reads its bars at — `resolution`, or `bar_resolution` beside a tick one —
+  whether it is spelled as a `BarSpecification` call or as a bar-type string;
 * **data types** — a subscription or a handler for a type outside `data_requirements`.
 
 Each is a syntactic fact, so a violation is stated rather than judged: this half never
@@ -180,15 +180,12 @@ class _Stated:
     def of(cls, hyp: Hypothesis) -> _Stated:
         names = set(hyp.universe)
         names.update(name.split(".")[0] for name in hyp.universe)
-        bar = (
-            (int(hyp.resolution[:-1]), AGGREGATION[hyp.resolution[-1]])
-            if is_duration(hyp.resolution)
-            else None
-        )
+        size = hyp.bar_size
+        bar = (int(size[:-1]), AGGREGATION[size[-1]]) if is_duration(size) else None
         return cls(
             universe=tuple(sorted(hyp.universe)),
             known=frozenset(names),
-            resolution=hyp.resolution,
+            resolution=size,
             bar=bar,
             required=frozenset(hyp.data_requirements),
         )

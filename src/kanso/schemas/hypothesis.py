@@ -11,8 +11,9 @@ Four families of rule are enforced here, all of them local to the file:
   days because the windows are dated. The embargo is what keeps the loop from optimising
   against the data that is meant to judge it, so it is arithmetic, not advice;
 * the resolution and the cost model must be answerable from the data the hypothesis asks
-  for: bar resolution needs bars, a quote-derived spread needs quotes, a fixed spread
-  needs its width;
+  for: bar resolution needs bars, bars beside a tick resolution need the bar size they are
+  read at (`bar_resolution`), a quote-derived spread needs quotes, a fixed spread needs its
+  width;
 * a classified hypothesis carries `strategy_integrity` among its constraints;
 * `depth` views a book the hypothesis holds, and nothing else feeds `on_quote_tick`.
 
@@ -34,6 +35,7 @@ from kanso.schemas.base import (
     KansoModel,
     NonEmpty,
     Params,
+    RemedyError,
     Versioned,
 )
 from kanso.schemas.duration import Duration, Resolution, is_duration, parse_duration
@@ -306,6 +308,12 @@ class Hypothesis(Versioned):
     universe: list[NonEmpty] = Field(min_length=1)
     horizon: Duration
     resolution: Resolution
+    bar_resolution: Duration | None = None
+    """The bar size a `bar` requirement is read at when `resolution` is not one: a sleeve
+    clocked on quotes, prints or a book beside instruments that carry only bars — a future,
+    an index, a pair — read at this size. Required there whenever `bar` is, and refused
+    wherever `resolution` is itself a bar size, where the bars are read at that. Scope, like
+    `data_requirements`: changing it clears `best`."""
     data_requirements: list[CatalogueId] = Field(min_length=1)
     data_by_instrument: dict[NonEmpty, list[CatalogueId]] = Field(default_factory=dict)
     session_scope: SessionScope | None = None
@@ -466,6 +474,12 @@ class Hypothesis(Versioned):
         """The types `instrument` must carry: its own list, else every required type."""
         return tuple(self.data_by_instrument.get(instrument, self.data_requirements))
 
+    @property
+    def bar_size(self) -> str:
+        """The bar size this hypothesis's bars are read at: `bar_resolution` where it states
+        one, else `resolution` — a bar size wherever `bar` is required."""
+        return self.bar_resolution or self.resolution
+
     def _check_resolution(self) -> None:
         required = self.data_requirements
         if is_duration(self.resolution):
@@ -486,6 +500,42 @@ class Hypothesis(Versioned):
             raise ValueError(
                 f"data_requirements: resolution {self.resolution!r} must also be required"
             )
+        self._check_bar_resolution()
+
+    def _check_bar_resolution(self) -> None:
+        """Bars are read at a bar size: the resolution's, or the one `bar_resolution` states.
+
+        A sleeve clocked on quotes, prints or a book has no bar size of its own, so a `bar`
+        requirement beside one names the size its bars are read at, or a run of it would
+        subscribe bars of no size and stop at its first card. A bar-size resolution is the
+        size its bars are read at, and a second would leave the file saying two things.
+        """
+        stated = self.bar_resolution
+        if is_duration(self.resolution):
+            if stated is not None:
+                raise RemedyError(
+                    f"bar_resolution: resolution {self.resolution} is a bar size, and the bars "
+                    "are read at it",
+                    remedy=f"drop bar_resolution, or set resolution to {stated}",
+                )
+            return
+        if "bar" in self.data_requirements and stated is None:
+            raise RemedyError(
+                f"bar_resolution: resolution {self.resolution!r} is no bar size and 'bar' is "
+                "required, so nothing says what size the bars are read at",
+                remedy="state bar_resolution, the size the bar instruments carry (1m, say), or "
+                "drop bar from data_requirements",
+            )
+        if stated is None:
+            return
+        if "bar" not in self.data_requirements:
+            raise RemedyError(
+                f"bar_resolution: {stated} names a bar size and 'bar' is not required",
+                remedy="add bar to data_requirements, and ask the instruments that carry bars "
+                "for it under data_by_instrument; or drop bar_resolution",
+            )
+        if parse_duration(stated, "bar_resolution") <= timedelta(0):
+            raise ValueError("bar_resolution: must be longer than zero")
 
     def _check_costs(self) -> None:
         if self.costs is None:

@@ -365,6 +365,29 @@ def test_the_manifest_config_carries_the_overlays_extra_grain_and_the_sleeves_bu
     )
 
 
+def test_a_stage_reads_a_tick_sleeve_s_bars_at_the_size_a_card_read_them(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A stage node configures a deployed sleeve from its manifest, so the bar size a tick
+    hypothesis states reaches it there, and a version without one is configured as before."""
+    from .conftest import draft_hypothesis, draft_version
+
+    ticked = draft_hypothesis(
+        ws,
+        store,
+        "demo_ticks",
+        resolution="tick",
+        bar_resolution="1m",
+        data_requirements=["bar", "trade"],
+        costs={**DOCUMENT["costs"], "latency_ms": 1},
+    )
+    plain = draft_hypothesis(ws, store, "demo_plain")
+    draft = draft_version(store, "demo_ticks", ())
+
+    assert impl._sleeve_config(ticked, 1.0, draft)["bar_resolution"] == "1m"
+    assert "bar_resolution" not in impl._sleeve_config(plain, 1.0, draft)
+
+
 def test_a_stage_shows_a_depth_sleeve_the_book_a_card_showed_it(
     ws: Workspace, store: StateStore
 ) -> None:

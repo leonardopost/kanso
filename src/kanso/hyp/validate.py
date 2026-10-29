@@ -629,8 +629,13 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             "book the venue judges a taker marketable from past that quote",
             remedy="ask each instrument that carries quotes for quote and trade alone under "
             "data_by_instrument, keeping bar for an instrument asked for bar alone; with none "
-            "left, drop bar from data_requirements and research at resolution: tick, since a "
-            "bar size requires bar; or state limit_fill: touch or through",
+            + (
+                "left, drop bar from data_requirements, and bar_resolution with it; "
+                if hyp.bar_resolution
+                else "left, drop bar from data_requirements and research at resolution: tick, "
+                "since a bar size requires bar; "
+            )
+            + "or state limit_fill: touch or through",
         )
 
 
@@ -642,16 +647,17 @@ def _barred(hyp: Hypothesis) -> list[str]:
 def _both_feeds(hyp: Hypothesis) -> str:
     """The way off `touch` the names leave open: every name asked for both feeds and none for
     `bar`, each keeping every other type it is asked for, and `bar` dropped from
-    `data_requirements` where it is there. A type no name is asked for is refused, so the
-    `funding` a perpetual requires, the series a session scope reads and any other type stay
-    asked of the names that were asked for them, and `bar`, which no name is left asking for,
-    goes. Keyed on `bar` being required, not on a name asked for it beside quote: a signal
-    asked for bars alone leaves it required as well."""
+    `data_requirements` where it is there, and `bar_resolution` with it. A type no name is
+    asked for is refused, so the `funding` a perpetual requires, the series a session scope
+    reads and any other type stay asked of the names that were asked for them, and `bar`,
+    which no name is left asking for, goes — with the bar size a tick resolution reads it at,
+    which no bar is left to be read at. Keyed on `bar` being required, not on a name asked for
+    it beside quote: a signal asked for bars alone leaves it required as well."""
     if BAR_TYPE in hyp.data_requirements:
         return (
             "ask every name, traded or not, for quote and trade and not for bar under "
             "data_by_instrument, keeping every other type it is asked for, and drop bar from "
-            "data_requirements"
+            "data_requirements, and bar_resolution with it"
         )
     return (
         "ask every name, traded or not, for quote and trade under data_by_instrument, keeping "
@@ -1075,14 +1081,16 @@ def _check_host_pairing(
     ws: Workspace, hyp: Hypothesis, construct_id: str, host: str, strategy: StrategyFile
 ) -> None:
     """What an attached construct must agree with its host on: the grain, the warmup, the
-    book policy and the sizing rule.
+    book policy, the size the host's bars are read at and the sizing rule.
 
     A filter or an exit rule is consulted on the host's grain and has no clock of its own,
     so its resolution is the host's. A card of an attached construct runs the host sleeve
     underneath it, warmed as this file says, so the warmup has to be the host's own or the
     host is measured cold — or warm — under a construct that never asked for that; the
     book policy likewise, since a construct's cards run under this file's policy and its
-    version is deployed under the sleeve's. A
+    version is deployed under the sleeve's; and `bar_resolution` too, since the host's bars
+    are read at the size this file states, and a host certified on one size would be
+    handed another, or bars of no size. A
     budgeted overlay attaches to a budgeted host and an unbudgeted one to an unbudgeted
     host, because the overlay's book is the host's budget and its own together; and that
     book has to fit the ceilings the overlay's own file declares, since an overlay card
@@ -1125,6 +1133,20 @@ def _check_host_pairing(
             f"{construct_id} is consulted on the host's grain, and only an overlay has a "
             "clock of its own",
             remedy=f"set resolution to {host_hyp.resolution}, or attach as an overlay",
+        )
+    if hyp.bar_resolution != host_hyp.bar_resolution:
+        size = host_hyp.bar_resolution
+        raise ValidationError(
+            f"bar_resolution: {label} reads its bars at {size or 'its own resolution'} and "
+            f"this file declares {hyp.bar_resolution or 'none'}; a construct runs its host "
+            "underneath it, and the host reads its bars at the size the construct's own file "
+            "states",
+            remedy=(
+                f"drop bar_resolution to match {path}"
+                if size is None
+                else f"set bar_resolution to {size} to match {path}, requiring bar at "
+                f"resolution {host_hyp.resolution}"
+            ),
         )
     if construct_id != OVERLAY:
         return

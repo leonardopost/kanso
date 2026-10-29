@@ -15,7 +15,8 @@ bare word YAML read as one: PyYAML's safe loader (6.0.3, measured) reads `on`, `
 or `n` — so the ticker `ON` arrives as `True`. The refusal names the field, says the value
 is a YAML boolean, and carries the remedy, to quote it. It is done here rather than where
 the YAML is read because a loader spec is read as a plain mapping and validated later, by
-the loader, so this is the one place every such failure passes.
+the loader, so this is the one place every such failure passes. A validator that knows what
+the reader can do about a refusal raises `RemedyError`, and the refusal carries that remedy.
 """
 
 from __future__ import annotations
@@ -75,10 +76,31 @@ def _yaml_boolean(err: ErrorDetails) -> bool:
     return err["type"] == "string_type" and isinstance(err["input"], bool)
 
 
+class RemedyError(ValueError):
+    """A validator's refusal that carries what the reader can do about it.
+
+    A validator raises `ValueError`, and pydantic keeps the exception beside the message it
+    renders; one raised as this keeps its `remedy` too, so the `ValidationError` the model
+    leaves as carries it, as any other refusal in kanso does.
+    """
+
+    def __init__(self, message: str, remedy: str) -> None:
+        super().__init__(message)
+        self.remedy = remedy
+
+
 def _refused(exc: PydanticValidationError) -> ValidationError:
-    """The refusal a failed validation leaves as, with the remedy for a YAML boolean."""
-    boolean = any(_yaml_boolean(err) for err in exc.errors())
-    return ValidationError(render_errors(exc), _YAML_BOOLEAN_REMEDY if boolean else None)
+    """The refusal a failed validation leaves as, with the first remedy one of its errors
+    carries: the one for a YAML boolean, or a validator's own (`RemedyError`)."""
+    remedies = (_remedy(err) for err in exc.errors())
+    return ValidationError(render_errors(exc), next((found for found in remedies if found), None))
+
+
+def _remedy(err: ErrorDetails) -> str | None:
+    if _yaml_boolean(err):
+        return _YAML_BOOLEAN_REMEDY
+    raised = (err.get("ctx") or {}).get("error")
+    return raised.remedy if isinstance(raised, RemedyError) else None
 
 
 _inside = ContextVar("kanso_schema_validating", default=False)
