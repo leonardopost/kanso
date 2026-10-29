@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick
@@ -27,6 +29,7 @@ from kanso.nautilus import session
 from kanso.nautilus.backtest import (
     Marks,
     _bar_sizes,
+    _module,
     checked_chunks,
     execute,
     warmup_prefix,
@@ -35,6 +38,7 @@ from kanso.nautilus.backtest import (
 )
 from kanso.nautilus.cross_section import is_marker
 from kanso.schemas import Hypothesis, VenueModel, Warmup
+from kanso.strategy import impl
 
 from .conftest import INSTRUMENT, RESEARCH, SECOND_NS, catalog, hypothesis, instrument
 
@@ -224,8 +228,7 @@ def test_the_node_path_hands_the_sleeve_the_same_bars_at_the_same_instants(reque
 UNHIDDEN = b"class Config(KansoConfig):\n    pass\n"
 """`ON_BARS`'s `Config`, which binds nothing over the field."""
 
-
-@pytest.mark.parametrize(
+HIDING = pytest.mark.parametrize(
     "config",
     [
         UNHIDDEN + b'\n\nConfig.bar_resolution = "5m"\n',
@@ -235,6 +238,10 @@ UNHIDDEN = b"class Config(KansoConfig):\n    pass\n"
     ],
     ids=["after its body", "by a decorator", "in a class type() builds", "a tuple's target"],
 )
+"""`ON_BARS`'s `Config` hiding the field behind a 5m attribute, four ways."""
+
+
+@HIDING
 def test_a_config_hiding_bar_resolution_still_has_its_bars_read_at_the_file_s_size(
     request_for, config: bytes
 ) -> None:
@@ -256,6 +263,33 @@ def test_a_config_hiding_bar_resolution_still_has_its_bars_read_at_the_file_s_si
         (BAR_CLOSES[1], INSTRUMENT, "BUY"),
     ]
     assert node.intents == card.intents
+
+
+@HIDING
+def test_a_stage_sleeve_of_a_config_hiding_bar_resolution_subscribes_at_the_file_s_size(
+    request_for, config: bytes
+) -> None:
+    """A stage builds the sleeve's config from the version's manifest as `strategy.impl._build`
+    does, and that sleeve subscribes bars at the file's 1m past the same bindings — every name's
+    bars, since a stage's config carries no `data_by_instrument` (`docs/backlog.md` row 229)."""
+    strategy_cls = _module(ON_BARS.replace(UNHIDDEN, config), "sleeve").Strategy
+    config_cls = strategy_cls.config_cls
+    venue = VenueModel.model_validate(dict(request_for(hypothesis_=tick_bars()).venue_model))
+    version = SimpleNamespace(pins=SimpleNamespace(venue_model=venue), config={})
+    manifest = impl._sleeve_config(tick_bars(), 100_000.0, version)  # type: ignore[arg-type]
+    seen: list[str] = []
+
+    class Recorded(strategy_cls):  # type: ignore[misc, valid-type]
+        def subscribe_bars(self, bar_type: BarType, *args: Any, **kwargs: Any) -> None:
+            seen.append(str(bar_type))
+
+        def subscribe_quote_ticks(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    Recorded(config_cls(**impl._typed(config_cls, manifest))).subscribe_universe()
+
+    assert manifest["bar_resolution"] == "1m"
+    assert seen == [f"{INSTRUMENT}-1-MINUTE-LAST-EXTERNAL", f"{SIGNAL}-1-MINUTE-LAST-EXTERNAL"]
 
 
 def test_a_tick_sleeve_counts_its_warmup_sessions_on_its_ticks(tmp_path: Path) -> None:
