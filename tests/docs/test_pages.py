@@ -1159,3 +1159,14 @@ def test_the_pages_say_an_overlay_s_leg_or_clip_past_the_rate_is_not_told_to_use
     assert "for an exit the strategy built itself, to close with `submit_exit`" in row
     assert "for an overlay's leg or clip, to send fewer commands" in row
     assert "when kanso did not size it, refuses the card" in prose(page("concepts.md"))
+
+
+def test_the_pages_say_a_second_exit_past_the_rate_leaves_an_exit_rule_s_owed_exit_alone() -> None:
+    """kanso owes one exit a side of a name, so a second `submit_exit` asked past the rate while
+    the first is owed replaces it rather than adding to it — but not an exit rule's, which its
+    host's ask neither replaces nor adds to, as the replay tests pin on both paths
+    (`test_an_exit_rule_s_owed_exit_is_not_replaced_by_its_host_s`)."""
+    for name in ("workspace.md", "backlog.md"):
+        said = prose(page(name))
+        assert "replaces it rather than adding to it" in said, name
+        assert "unless the first was an exit rule's, which its host's ask neither" in said, name
