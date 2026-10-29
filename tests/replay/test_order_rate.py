@@ -1752,11 +1752,11 @@ def test_the_deferred_cancels_take_the_tokens_that_come_back_before_an_owed_exit
     """At two a minute, two requests a cancel, the entry and the resting buy empty the bucket:
     the exit at market asked for on the third quote finds no token and is owed for want of one,
     and the cancel of the buy asked for on the fourth is deferred. Before each handler the
-    deferred cancels are sent first, and then the exits owed for want of a token are asked for
-    again. With the fifth quote a second after the fourth, a token is back on the thirty-first
-    and the exit takes it, the cancel needing two; with it five minutes after, the bucket is
-    full again there, the cancel, asked for after the exit, takes both, and the exit goes thirty
-    seconds later."""
+    deferred cancels the bucket holds tokens for are sent first, and then the exits owed for
+    want of a token are asked for again. With the fifth quote a second after the fourth, a
+    token is back on the thirty-first and the exit takes it, the cancel needing two; with it
+    five minutes after, the bucket is full again there, the cancel, asked for after the exit,
+    takes both, and the exit goes thirty seconds later."""
     fifth = at(4) + gap * SECOND_NS
     groups: list[tuple[object, ...]] = [(*quoted(4), *quoted(196, first=fifth))]
     held = both(rated(OWED_THEN_CANCELLED, 2, per_cancel=2), groups)

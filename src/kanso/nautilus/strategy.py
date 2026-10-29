@@ -2735,12 +2735,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._rate_owed[(key, side)] = None
 
     def _pay_rated(self) -> None:
-        """Ask again, oldest first, for the exits the rate owed for want of a token, after the
-        deferred cancels have been sent (`_send_behind_modify`) and before the strategy's handler
-        of the point: each is asked for again as `submit_exit` asks for it, and an order it
-        sends takes a token the bucket holds then, while a cancel waits as well
-        (`_command_spend`). One owed for another reason, or no longer owed, is left to
-        `_pay_owed` after the handler, as before."""
+        """Ask again, oldest first, for the exits the rate owed for want of a token, once the
+        deferred cancels the bucket holds tokens for have been sent (`_send_behind_modify`) and
+        before the strategy's handler of the point: each is asked for again as `submit_exit`
+        asks for it, and an order it sends takes a token the bucket holds then, while a cancel
+        waits as well (`_command_spend`). One owed for another reason, or no longer owed, is
+        left to `_pay_owed` after the handler, as before."""
         held, self._rate_owed = self._rate_owed, {}
         for name in held:
             if name in self._owed:
