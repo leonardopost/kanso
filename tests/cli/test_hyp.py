@@ -109,6 +109,39 @@ def test_validate_refuses_a_tick_hypothesis_with_no_latency(
     assert "state costs.latency_ms" in payload(result)["remedy"]
 
 
+TICK_BARS = {
+    "resolution": "tick",
+    "data_requirements": ["trade", "bar"],
+    "costs": {
+        "commission_bps": 0.0,
+        "slippage_bps": 0.0,
+        "spread": "fixed_bps",
+        "fixed_bps": 1.0,
+        "latency_ms": 20,
+    },
+}
+
+
+def test_validate_refuses_bars_beside_ticks_at_no_size_and_names_the_size_once_stated(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The combination that passed validation and stopped every card is refused with the
+    remedy, and the file that follows it is reported with the size its bars are read at."""
+    refused = at(runner, loaded, "hyp", "validate", write_hypothesis(loaded, **TICK_BARS), "--json")
+    path = write_hypothesis(loaded, **TICK_BARS, bar_resolution="1m")
+    stated = at(runner, loaded, "hyp", "validate", path, "--json")
+    plain = at(runner, loaded, "hyp", "validate", path)
+
+    assert refused.exit_code == Exit.VALIDATION
+    assert "bar_resolution: resolution 'tick' is no bar size" in payload(refused)["error"]
+    assert payload(refused)["remedy"].startswith("state bar_resolution")
+    assert stated.exit_code == Exit.OK
+    assert (payload(stated)["resolution"], payload(stated)["bar_resolution"]) == ("tick", "1m")
+    assert "tick, bars at 1m · trade, bar" in plain.output
+    clean = at(runner, loaded, "hyp", "validate", write_hypothesis(loaded), "--json")
+    assert payload(clean)["bar_resolution"] is None
+
+
 def test_a_data_type_a_vendor_adapter_registers_is_admissible(
     runner: CliRunner, loaded: Path
 ) -> None:
