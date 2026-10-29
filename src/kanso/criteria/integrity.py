@@ -101,6 +101,14 @@ runs, never kept as a list: everything `dir` shows of it, the engine's names ben
 included, and every attribute kanso's own classes set on `self`. What it leaves to its
 author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
 
+**kanso's own config fields are kanso's.** `bar_resolution` is set on the strategy's config
+from its hypothesis: on a card always, `None` where the file states none, and on a stage from
+the version's manifest, which carries it only where the file states one. So a `Config` that
+declares a field of that name would have a stage read bars at its own size and a card at the
+resolution. A class of the file whose instances are a `KansoConfig` — reached as the base
+classes above are — is refused for declaring one (`KANSO_FIELDS`), with the remedy to rename
+it.
+
 **The harness's sends are its own.** A sleeve hands the engine an order through the base's
 `submit_order`, `submit_order_list` and `modify_order`, which record the intent, ask the
 limits, size and refuse, and which a book reads to refuse what kanso did not send
@@ -528,6 +536,11 @@ WHY_SEND: Final = (
     "your own another spelling"
 )
 
+KANSO_FIELDS: Final = frozenset({"bar_resolution"})
+"""The fields of `KansoConfig` a version's manifest carries only where the hypothesis states
+one, so a strategy's own default would stand on a stage and not on a card, which sets the
+field from the file whatever it states."""
+
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
 
@@ -611,6 +624,7 @@ def scan(
     problems: list[str] = [
         *_sizing_problems(tree, sized=sized, construct=construct),
         *(clash.problem for clash in _clashes(tree)),
+        *_config_problems(tree),
         *_receiver_problems(tree),
     ]
     for node in ast.walk(tree):
@@ -779,6 +793,30 @@ def _bases() -> tuple[type, ...]:
     from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 
     return (KansoStrategy, KansoModifier)
+
+
+def _config_problems(tree: ast.Module) -> Iterator[str]:
+    """Every declaration of a field kanso sets (`KANSO_FIELDS`) on a class of the file whose
+    instances are a `KansoConfig`, annotated or assigned, valued or not."""
+    from kanso.nautilus.strategy import KansoConfig
+
+    for node, _ in _harness_classes(tree, (KansoConfig,)):
+        for statement in node.body:
+            targets: list[ast.expr]
+            if isinstance(statement, ast.Assign):
+                targets = statement.targets
+            elif isinstance(statement, ast.AnnAssign | ast.AugAssign):
+                targets = [statement.target]
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in KANSO_FIELDS:
+                    yield (
+                        f"line {statement.lineno}: '{target.id}' is a field kanso sets on "
+                        "KansoConfig from the hypothesis, and only where the hypothesis states "
+                        "one, so a Config that declares its own would have a stage read bars at "
+                        "its size and a card at the resolution; rename yours"
+                    )
 
 
 def _kanso_classes(base: type) -> list[type]:
@@ -995,14 +1033,17 @@ def _stores(node: ast.AST, owner: str) -> Iterator[ast.Attribute]:
     )
 
 
-def _harness_classes(tree: ast.Module) -> list[tuple[ast.ClassDef, type]]:
+def _harness_classes(
+    tree: ast.Module, roots: tuple[type, ...] | None = None
+) -> list[tuple[ast.ClassDef, type]]:
     """Every class of the file whose methods end up on a harness base's subclass, with that base.
 
     A class reaches a base by naming it among its bases — as itself, through an import
     alias or as a module's attribute — or by naming a class of the file that reaches one;
-    every class of the file in that line, a mixin included, is held to the same base.
+    every class of the file in that line, a mixin included, is held to the same base. The
+    bases are the strategy's and the modifier's (`_bases`) unless `roots` names others.
     """
-    harness = {base.__name__: base for base in _bases()}
+    harness = {base.__name__: base for base in roots or _bases()}
     aliases = {
         alias.asname: alias.name
         for node in ast.walk(tree)

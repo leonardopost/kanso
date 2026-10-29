@@ -816,6 +816,45 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
     assert "'_close' belongs to KansoStrategy" in problem
 
 
+@pytest.mark.parametrize(
+    "declared",
+    ['bar_resolution: str = "5m"', "bar_resolution: str | None", 'bar_resolution = "5m"'],
+    ids=["annotated", "annotation alone", "assigned"],
+)
+def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str) -> None:
+    """A version's manifest carries `bar_resolution` only where the hypothesis states one, so a
+    Config's own default would set a stage's bar size and not a card's: neither runs one."""
+    source = (
+        "from kanso.nautilus.strategy import KansoConfig as Base, KansoStrategy\n"
+        "class Config(Base):\n"
+        "    lookback: int = 60\n"
+        f"    {declared}\n"
+        "class Strategy(KansoStrategy):\n"
+        "    config_cls = Config\n"
+    )
+
+    assert scan(source) == [
+        "line 4: 'bar_resolution' is a field kanso sets on KansoConfig from the hypothesis, and "
+        "only where the hypothesis states one, so a Config that declares its own would have a "
+        "stage read bars at its size and a card at the resolution; rename yours"
+    ]
+
+
+def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> None:
+    source = (
+        "from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
+        "class Leg:\n"
+        "    bar_resolution = '5m'\n"
+        "class Config(KansoConfig):\n"
+        "    lookback: int = 60\n"
+        "    fixed_params: tuple[str, ...] = ('lookback',)\n"
+        "class Strategy(KansoStrategy):\n"
+        "    config_cls = Config\n"
+    )
+
+    assert scan(source) == []
+
+
 def test_a_file_that_does_not_parse_has_no_clash_to_name_and_scan_says_why() -> None:
     source = f"{SLEEVE_HEAD}    def on_start(self:\n        self._close = 3\n"
 
