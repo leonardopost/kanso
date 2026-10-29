@@ -5868,7 +5868,7 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     ),
     (
         "nautilus_pyo3.HttpClient holds a request that names a key listed in keyed_quotas to "
-        "that key's quota, beside the default one every other key it names counts against",
+        "that key's quota",
         _check_http_client_meters_keyed_quotas,
     ),
     (
