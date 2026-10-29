@@ -17,6 +17,7 @@ old one instead of contradicting it.
 from __future__ import annotations
 
 from datetime import datetime
+from math import isfinite
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -223,15 +224,16 @@ class NetPerTrade(KansoModel):
     error. `sessions_with_trades` counts the sessions a closed trade fell on, by the day it
     closed, and `trades` the closed trades. The error and `net_t` are `None` when fewer than
     two sessions closed a trade, where the influences cannot vary, and `net_t` is `None` too
-    when the error is zero.
+    when the error is zero. Every number is finite, and so is the value over the error,
+    since a book orders its members by `net_t`.
 
     It is what a book ranks a member by (`kanso.nautilus.book`): read off the certificate,
     never computed again by running the certification window.
     """
 
-    net_per_trade_bp: float
-    net_se_session: float | None = Field(default=None, ge=0)
-    net_t: float | None = None
+    net_per_trade_bp: float = Field(allow_inf_nan=False)
+    net_se_session: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    net_t: float | None = Field(default=None, allow_inf_nan=False)
     sessions_with_trades: int = Field(ge=1)
     trades: int = Field(ge=1)
 
@@ -250,6 +252,8 @@ class NetPerTrade(KansoModel):
                 raise ValueError("net_t: there is no error to divide by")
             return self
         expected = self.net_per_trade_bp / se
+        if not isfinite(expected):
+            raise ValueError(f"net_t: {self.net_per_trade_bp} over {se} is not a finite number")
         if self.net_t is None or abs(self.net_t - expected) > NET_T_TOLERANCE * max(
             1.0, abs(expected)
         ):
