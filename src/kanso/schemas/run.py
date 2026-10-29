@@ -137,8 +137,9 @@ class Commands(KansoModel):
     holding no more than it. Both are zero for a sleeve that sent nothing.
 
     `refused_submits` and `refused_modifies` are what the sleeve dropped unsent under a stated
-    `costs.orders_per_minute` because no token was available to them — the bucket empty, or a
-    waiting cancel holding the tokens, which no entry or modify takes before it — the run
+    `costs.orders_per_minute` because no token was available to them — the bucket holding
+    fewer tokens than they cost, an entry's list one for each of its orders, all or none, or a
+    cancel waiting for its tokens, which no entry or modify takes before it — the run
     going on past them: a submit per order of an entry — every order of an entry's list — and
     a modify, the order it would have moved staying as it was. They were never sent, so they
     are in none of the counts above and in no minute. Both are zero under no stated rate, and

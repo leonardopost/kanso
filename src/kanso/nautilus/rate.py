@@ -13,10 +13,11 @@ reads off them how busy the busiest minute was: for each command, how many the s
 the 60 s ending at it, that one included, every command sent at that same instant included
 too; the largest of those counts and their 99th percentile over every command, by nearest
 rank. So a cancel and the order that replaces it, sent in one handler, each read the pair. It
-counts apart, by kind, the submits and modifies no token was available to — the bucket empty,
-or a waiting cancel holding the tokens — which were never sent and so are in no minute's
-count. It is a reading of the run and changes nothing the run does, so every card carries it
-whether or not a rate is stated (`kanso.schemas.Commands`). A command is what the sleeve asks
+counts apart, by kind, the submits and modifies no token was available to — the bucket holding
+fewer tokens than they cost, an entry's list one for each of its orders, all or none, or a
+cancel waiting for its tokens — which were never sent and so are in no minute's count. It is
+a reading of the run and changes nothing the run does, so every card carries it whether or not
+a rate is stated (`kanso.schemas.Commands`). A command is what the sleeve asks
 of the venue: an order the engine's emulator holds is counted when the strategy submits it,
 and its cancel when the strategy sends it, though the emulator sends the venue nothing while
 it holds the order and sends the order itself, uncounted, when it releases it.
@@ -35,8 +36,8 @@ order makes — its polling of orders and positions, a feed's sweeps — which l
 less (`docs/adapters.md` names what each broker spends). What the sleeve does with a command
 no token is available to is the strategy base's (`kanso.nautilus.strategy.KansoStrategy`):
 an entry or a modify is dropped and counted (`Tally.refuse`), and the run goes on; an exit
-`submit_exit` sized is owed, and one the strategy built itself refused; a cancel is deferred,
-and while it waits no entry or modify takes a token, where an exit takes one the bucket holds.
+`submit_exit` sized is owed, and any other exit refused; a cancel is deferred, and while it
+waits no entry or modify takes a token, where an exit takes one the bucket holds.
 A bucket holds no more than `per_minute`, so a cancel that costs more could never go; a venue
 model stating so is refused where it is resolved (`kanso.schemas.venue`).
 
@@ -130,8 +131,9 @@ class Tally:
     never the commands themselves, so a sleeve that sends millions holds as much as its
     busiest minute sent. The commands of one instant are counted once the instant is over,
     each with that instant's whole count. The commands refused because no token was available
-    to them — the bucket empty, or a waiting cancel holding the tokens — are counted apart
-    (`refuse`), and in no minute: they were never sent.
+    to them — the bucket holding fewer tokens than they cost, an entry's list one for each of
+    its orders, all or none, or a cancel waiting for its tokens — are counted apart (`refuse`),
+    and in no minute: they were never sent.
     """
 
     def __init__(self) -> None:
@@ -159,8 +161,9 @@ class Tally:
 
     def refuse(self, kind: str, count: int = 1) -> None:
         """Count `count` commands of `kind`, a submit or a modify, no token was available to —
-        the bucket empty, or a waiting cancel holding the tokens: dropped unsent, so
-        counted in no minute."""
+        the bucket holding fewer tokens than they cost, an entry's list one for each of its
+        orders, all or none, or a cancel waiting for its tokens: dropped unsent, so counted in
+        no minute."""
         self._refused[kind] += count
 
     def _count_into(self, seen: dict[int, int]) -> None:

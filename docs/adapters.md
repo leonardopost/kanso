@@ -478,8 +478,9 @@ order, since no order stream reports what the cancel came to. So a workspace who
 `[research] broker` is `alpaca` researches every card with its orders held to those requests —
 a burst of 190 and then 190 a minute, a cancel two of them (`docs/workspace.md`,
 `costs.orders_per_minute`) — which is what the client lets through, unless it states its
-plan's figure. Past it a card drops the entries and modifies no request is available to — none
-left, or a cancel waiting for its two — and counts them on its `commands`, running on; it owes
+plan's figure. Past it a card drops the entries and modifies no request is available to —
+fewer left than they cost, an entry's list one for each of its orders, all or none, or a cancel
+waiting for its two — and counts them on its `commands`, running on; it owes
 the exits `submit_exit` sized and defers its cancels, and while a cancel waits for its two
 requests no entry or modify takes one that comes back, so a sleeve that cancels and re-posts
 its entries cancels every one it sent but the last; and it is refused only for an exit kanso

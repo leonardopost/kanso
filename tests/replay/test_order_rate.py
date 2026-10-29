@@ -8,11 +8,13 @@ goes on; an exit `submit_exit` sized is owed and a cancel deferred, and what wai
 once a token comes back, no entry or modify taking one while a cancel waits, where an exit
 takes one the bucket holds; an exit the strategy built itself is refused. The second leg of a
 flip is an entry there — `submit_entry`'s in every form, and one built by hand behind an exit at
-market — and a dropped order is nothing to cancel or to move.
+market the rate owes, for want of a token or behind a cancel it deferred — a deferred cancel
+whose order has closed waits for nothing, and a dropped order is nothing to cancel or to move.
 Each scenario here runs on the research path (`backtest.execute`) and on the live one
 (`session.run_node`) and asserts both the behaviour and that the two agree on every intent,
-fill and count, the refused ones included; and with the key unset nothing a card's run does
-moves, and the one thing the node path does differently is pinned.
+fill and count, the refused ones included. With neither key stated each path does what it did
+before the keys existed, a cancel of an order the engine was never handed included, where the
+two paths part as they did, and that is pinned on each.
 
 The quotes are a second apart, so a rate of `n` a minute refills a token every `60 / n`
 quotes, and every instant asserted below is arithmetic on that: the bucket keeps its level
@@ -398,6 +400,109 @@ def test_a_deferred_cancel_of_an_order_that_filled_meanwhile_is_dropped_for_noth
     assert held.commands == Commands(submits=2, peak_60s=2, p99_60s=2)
 
 
+SECOND_BUY = (
+    "self.other = self.order_factory.limit(name, OrderSide.BUY, Quantity.from_int(50), "
+    "Price(8.0, 2))\n            self.submit_order(self.other)"
+)
+"""A second buy resting, at 8.00, for a modify to move."""
+
+
+def filled_while_its_cancel_waits(then: str) -> bytes:
+    """Buys 100 at market, rests its exit at 10.05 and a buy of 50 at 8.00 on its second quote,
+    and cancels the exit on its third — at four a minute, two requests a cancel, a cancel that
+    waits for its tokens. The bid reaches the exit on the tenth quote, and the venue fills it
+    there while its cancel still waits; on that fill the sleeve does `then`."""
+    return sleeve(
+        """        elif self.seen == 3:
+            self.cancel_order(self.resting)
+""",
+        second=f"self.resting = self.submit_exit(name, price=10.05)\n            {SECOND_BUY}",
+        extra=f"""    refilled = False
+
+    def on_order_filled(self, event):
+        if event.order_side == OrderSide.SELL and not self.refilled:
+            self.refilled = True
+            {then}
+""",
+    )
+
+
+ON_THE_FILL = {
+    "entry": (
+        'self.submit_entry(event.instrument_id, "BUY", qty=100)',
+        (at(9), "BUY", "MARKET"),
+        Commands(submits=4, peak_60s=4, p99_60s=4),
+    ),
+    "modify": (
+        "self.modify_order(self.other, price=Price(8.5, 2))",
+        (at(2), "BUY", "LIMIT"),
+        Commands(submits=3, modifies=1, peak_60s=4, p99_60s=4),
+    ),
+}
+"""What the sleeve sends from the handler of its exit's fill, the last order it then sent —
+an intent is stamped with the last point the sleeve saw, the ninth, since the venue matches
+the tenth before any handler of it runs — and the commands counted."""
+
+
+@pytest.mark.parametrize("then", sorted(ON_THE_FILL))
+def test_a_deferred_cancel_whose_order_filled_holds_nothing_back_in_the_handler_of_the_fill(
+    then: str,
+) -> None:
+    """At four a minute the entry and the two resting orders leave the bucket more than one
+    token and less than two on the third quote, where the exit's cancel waits for two. On the
+    tenth the venue fills the exit, and the handler of that fill finds the bucket holding a
+    token and a half: the cancel still queued is of an order that has filled, so it would send
+    nothing and waits for nothing, and the entry or the modify the handler sends takes a token
+    and goes, neither dropped nor counted as refused."""
+    order, last, counted = ON_THE_FILL[then]
+    held = both(
+        rated(filled_while_its_cancel_waits(order), 4, per_cancel=2),
+        [tuple(steady(40, rise_at=10))],
+    )
+
+    assert stamps(held)[-1] == last
+    assert held.commands == counted
+
+
+CLOSED_BY_HAND_ON_THE_FILL = (
+    HEAD.replace(
+        b'self.submit_entry(name, "BUY", qty=100)', b'self.submit_entry(name, "BUY", qty=200)'
+    ).replace(b"SECOND", b"self.resting = self.submit_exit(name, qty=100, price=10.05)")
+    + b"""        elif self.seen == 3:
+            self.cancel_order(self.resting)
+
+    def on_order_filled(self, event):
+        if event.order_side == OrderSide.SELL and not getattr(self, "closed", False):
+            self.closed = True
+            self.submit_order(
+                self.order_factory.market(
+                    event.instrument_id, OrderSide.SELL, Quantity.from_int(100)
+                )
+            )
+"""
+)
+"""Buys 200, rests an exit of 100 at 10.05 and cancels it on its third quote; when the bid
+reaches it on the tenth and it fills, closes the other 100 with a sale it built itself."""
+
+
+def test_an_exit_refused_after_its_waiting_cancel_s_order_filled_names_no_cancel_waiting() -> None:
+    """At two a minute, two requests a cancel, the entry and the resting exit empty the bucket
+    and the exit's cancel waits on the third quote. The exit fills on the tenth while the cancel
+    is still queued, and the sale the sleeve builds on that fill finds a quarter of a token: it
+    is refused, and the refusal names no cancel waiting, since the one queued is of an order that
+    filled, which waits for nothing."""
+    refusal = refused(
+        rated(CLOSED_BY_HAND_ON_THE_FILL, 2, per_cancel=2), [tuple(steady(40, rise_at=10))]
+    )
+
+    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "SELL", at(9))
+    assert refusal.why.startswith(
+        "an exit the strategy built itself needed 1 of the 2 tokens a minute "
+        "costs.orders_per_minute allows, and the bucket held 0 after 2 command(s) in the 60 s "
+        "before it."
+    )
+
+
 BEHIND_A_MODIFY = sleeve(
     """        elif self.seen == 60:
             self.modify_order(self.resting, price=Price(19.0, 2))
@@ -533,6 +638,31 @@ def test_an_entry_s_list_takes_a_token_for_each_of_its_orders_or_is_dropped_whol
     assert (held.commands.submits, held.commands.refused_submits) == (sent, 3 - sent)
 
 
+BRACKET_THEN_AN_ENTRY = HEAD.replace(
+    b"""        if self.seen == 1:
+            self.submit_entry(name, "BUY", qty=100)""",
+    (
+        "        if self.seen == 1:\n            "
+        + BRACKET.format(side="BUY", stop=9.0, target=11.0)
+        + '\n            self.submit_entry(name, "BUY", qty=10)'
+    ).encode(),
+).replace(b"SECOND", b"pass")
+"""Sends a bracket of three on its first quote, and then an entry of 10 in the same handler."""
+
+
+def test_a_list_is_refused_whole_where_the_bucket_holds_some_but_fewer_than_it_costs() -> None:
+    """A command finds no token available to it when the bucket holds fewer than it costs, a
+    list one for each of its orders, all or none. At two a minute the bucket is full on the
+    first quote and holds two, and no cancel waits: the bracket of three is dropped whole and
+    its three orders counted as refused, though the bucket is not empty, and the entry of 10
+    the sleeve sends after it in the same handler takes one of the two tokens and goes."""
+    held = both(rated(BRACKET_THEN_AN_ENTRY, 2), [tuple(steady(5))])
+
+    assert stamps(held) == [(at(1), "BUY", "MARKET")]
+    assert held.intents[0][3] == 10.0
+    assert held.commands == Commands(submits=1, peak_60s=1, p99_60s=1, refused_submits=3)
+
+
 def test_a_list_that_closes_a_position_past_the_rate_is_refused() -> None:
     """kanso owes only an exit `submit_exit` sized, and an order of a list is not one, so a list
     whose first order closes the position is refused past the rate, as each of its orders would
@@ -641,6 +771,82 @@ def test_an_order_built_by_hand_reads_an_owed_exit_as_gone_only_for_what_it_take
     assert refusal.why.startswith(why)
 
 
+RESTING_AT_20 = "self.resting = self.submit_exit(name, price=20.0)"
+"""The sleeve's exit of the whole position resting at 20.00."""
+
+STOP_LIMIT_AT_5 = (
+    "self.resting = self.order_factory.stop_limit(name, OrderSide.SELL, Quantity.from_int(100), "
+    "price=Price(5.0, 2), trigger_price=Price(9.0, 2))\n            self.submit_order(self.resting)"
+)
+"""A stop-limit sale of the whole position, triggered at 9.00 and limited at 5.00: the room
+holds back what it would add at its limit, half the notional the long holds."""
+
+BEHIND_A_DEFERRED_CANCEL = {
+    "built_by_hand": (
+        RESTING_AT_20,
+        "self.submit_order(self.order_factory.market(name, OrderSide.SELL, "
+        "Quantity.from_int(100)))",
+        4,
+        1,
+    ),
+    "a_list_built_by_hand": (
+        RESTING_AT_20,
+        BRACKET.format(side="SELL", stop=11.0, target=9.0),
+        6,
+        3,
+    ),
+    "entry": (RESTING_AT_20, 'self.submit_entry(name, "SELL", qty=100)', 4, 1),
+    "room": (STOP_LIMIT_AT_5, 'self.submit_entry(name, "SELL")', 4, 1),
+}
+"""What rests on the closing side, the second leg of a flip sent behind `submit_exit` at market
+— an order or a bracket the sleeve builds itself, an entry of a quantity given, an entry of
+what the room leaves — what the flip sends unheld, and what the rate drops of the leg."""
+
+
+@pytest.mark.parametrize(
+    ("per_minute", "per_cancel", "exited_at"),
+    [(2, 1, 61), (3, 2, 41)],
+    ids=["one_a_cancel", "two_a_cancel"],
+)
+@pytest.mark.parametrize("leg", sorted(BEHIND_A_DEFERRED_CANCEL))
+def test_a_flip_s_second_leg_behind_an_exit_owed_behind_a_deferred_cancel_is_dropped_and_counted(
+    leg: str, per_minute: int, per_cancel: int, exited_at: int
+) -> None:
+    """The exit at market on the third quote must cancel the sleeve's own sale resting on the
+    closing side first, and the bucket holds too few tokens for the cancel: it waits, the order
+    it would cancel is working until it goes, and the exit is owed behind it, to go once the
+    cancel has — on the sixty-first quote at two a minute, one request a cancel, and on the
+    forty-first at three, two. The account takes that exit before anything asked after it, so
+    the second leg of the flip behind it reads it as gone, as it would read the market order the
+    rate held back: it opens the other side, and is the entry it is, dropped and counted — an
+    order or a list built by hand, an entry of a quantity given, an entry sized by the room the
+    owed exit frees — and never sent as the order that closes the position in the owed exit's
+    place, nor refused as an exit the strategy built itself. Unheld, the flip goes whole."""
+    rest, then, unheld, dropped = BEHIND_A_DEFERRED_CANCEL[leg]
+    flipping = sleeve(
+        f"""        elif self.seen == 3:
+            self.submit_exit(name)
+            {then}
+""",
+        second=rest,
+    )
+    capital = {"capital": ROOM_CAPITAL} if leg == "room" else {}
+    groups: list[tuple[object, ...]] = [tuple(steady(130))]
+    unrated = both(replace(rated(flipping, None), **capital), groups)
+    held = both(replace(rated(flipping, per_minute, per_cancel=per_cancel), **capital), groups)
+
+    rested = "STOP_LIMIT" if leg == "room" else "LIMIT"
+    assert len(unrated.intents) == unheld
+    assert stamps(held) == [
+        (at(1), "BUY", "MARKET"),
+        (at(2), "SELL", rested),
+        (at(exited_at), "SELL", "MARKET"),
+    ]
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert held.commands is not None
+    assert (held.commands.cancels, held.commands.refused_submits) == (1, dropped)
+
+
 def behind_a_cancel(then: str, *, also: str = "") -> bytes:
     """Buys 100 at market, rests a buy of 50 at 9.00 on its second quote, and any order `also`
     says, cancels the resting buy on its third — at two requests a cancel, a cancel that waits
@@ -657,12 +863,6 @@ def behind_a_cancel(then: str, *, also: str = "") -> bytes:
         second=rest + (f"\n            {also}" if also else ""),
     )
 
-
-SECOND_BUY = (
-    "self.other = self.order_factory.limit(name, OrderSide.BUY, Quantity.from_int(50), "
-    "Price(8.0, 2))\n            self.submit_order(self.other)"
-)
-"""A second buy resting, at 8.00, for a modify to move."""
 
 WHILE_A_CANCEL_WAITS = {
     "stop": (
@@ -700,8 +900,8 @@ def test_while_a_cancel_waits_an_exit_takes_a_token_the_bucket_holds_and_an_entr
     first buy waits for its two. An exit sent behind it — a stop built by hand, `submit_exit`
     at market — takes the token the bucket holds and goes: it is one order the account must
     take, and the cancel goes once the bucket holds two again. An entry or a modify takes none
-    while the cancel waits, and is dropped and counted, so a cancel that costs two is not
-    starved."""
+    while the cancel waits, and is dropped and counted, so entries and modifies do not starve a
+    cancel that costs two."""
     order, last, counted = WHILE_A_CANCEL_WAITS[then]
     held = both(
         rated(behind_a_cancel(order, also=SECOND_BUY), 4, per_cancel=2), [tuple(steady(10))]
@@ -908,7 +1108,7 @@ def test_a_sleeve_that_cancels_its_last_order_sent_or_not_sends_what_one_that_ch
     assert blind.commands.cancels == blind.commands.submits - 1
 
 
-def test_a_cancel_that_costs_two_is_not_starved_by_the_single_tokens_coming_back() -> None:
+def test_a_cancel_that_costs_two_is_not_starved_by_entries_taking_the_single_tokens_back() -> None:
     """At the 190 a minute an Alpaca account declares, two requests a cancel, the re-posting
     sleeve on quotes a quarter second apart wants three tokens a quote and gets under one. The
     cancel that waits for two keeps its place: no buy takes a single token that comes back
@@ -920,6 +1120,42 @@ def test_a_cancel_that_costs_two_is_not_starved_by_the_single_tokens_coming_back
 
     assert held.commands is not None and held.commands.refused_submits > 0
     assert held.commands.cancels == held.commands.submits - 1
+
+
+def scaling_out(every_quote: bool) -> bytes:
+    """Buys 100 at market, rests a buy of 50 at 9.00 on its second quote and cancels it on its
+    third; with `every_quote`, from the third quote on it asks `submit_exit` for 10 of the
+    position on every quote."""
+    stream = "\n        if self.seen >= 3:\n            self.submit_exit(name, qty=10)"
+    return sleeve(
+        f"""        elif self.seen == 3:
+            self.cancel_order(self.buy)
+{stream if every_quote else ""}
+""",
+        second="self.buy = self.order_factory.limit(name, OrderSide.BUY, Quantity.from_int(50), "
+        "Price(9.0, 2))\n            self.submit_order(self.buy)",
+    )
+
+
+def test_an_exit_of_part_of_a_position_asked_for_on_every_point_keeps_a_cancel_waiting() -> None:
+    """An exit takes a token the bucket holds while a cancel waits, so exits can keep one
+    waiting. At two a minute, two requests a cancel, the entry and the resting buy empty the
+    bucket, and the buy's cancel on the third quote waits for two tokens. Asked for once, the
+    cancel goes on the sixty-first, once two have come back, and the buy never fills. A
+    `submit_exit` of the whole position leaves nothing to close once it has gone; but one of 10
+    of it, asked for on every quote, is owed each time the bucket is empty and takes each token
+    that comes back, thirty seconds apart, for as long as the position lasts: the cancel never
+    has its two, and the buy it would have taken out works on and fills when the ask reaches it
+    on the two-hundredth quote."""
+    groups: list[tuple[object, ...]] = [tuple(quoted(300, {200: (8.98, 9.0), 201: (9.99, 10.01)}))]
+    once = both(rated(scaling_out(False), 2, per_cancel=2), groups)
+    scaling = both(rated(scaling_out(True), 2, per_cancel=2), groups)
+
+    assert once.commands is not None and once.commands.cancels == 1
+    assert [(fill.side, fill.qty) for fill in once.run.fills] == [("BUY", 100.0)]
+    assert stamps(scaling)[2:] == [(at(seen), "SELL", "MARKET") for seen in range(31, 300, 30)]
+    assert scaling.commands is not None and scaling.commands.cancels == 0
+    assert ("BUY", 50.0, 9.0) in [(fill.side, fill.qty, fill.px) for fill in scaling.run.fills]
 
 
 def chase_groups() -> list[tuple[object, ...]]:
@@ -1015,37 +1251,164 @@ def test_an_unstated_rate_holds_nothing_back_and_moves_no_result(latency_ms: flo
     assert absent.commands is not None and absent.commands.sent > 0
 
 
-CANCELLED_BEFORE_IT_WAS_SENT = sleeve(
-    """        elif self.seen == 3:
+UNSENT = (
+    "self.unsent = self.order_factory.limit(name, OrderSide.SELL, Quantity.from_int({qty}), "
+    "Price({price}, 2))\n            self.cancel_order(self.unsent)"
+)
+"""An exit of `qty` at `price`, built on the second quote and cancelled before it was ever
+sent."""
+
+NEVER_SENT = {
+    "sent_later": (
+        sleeve(
+            """        elif self.seen == 3:
             self.submit_order(self.unsent)
 """,
-    second="self.unsent = self.order_factory.limit(name, OrderSide.SELL, Quantity.from_int(100), "
-    "Price(10.04, 2))\n            self.cancel_order(self.unsent)",
-)
-"""Builds an exit at 10.04 on its second quote and cancels it before sending it, then sends that
-same order on its third; the bid reaches it on the fifth."""
+            second=UNSENT.format(qty=100, price=10.04),
+        ),
+        {5: (10.05, 10.07)},
+    ),
+    "an_exit_at_market_behind_it": (
+        sleeve(
+            """        elif self.seen == 3:
+            self.submit_order(self.unsent)
+            self.submit_exit(name)
+""",
+            second=UNSENT.format(qty=100, price=20.0),
+        ),
+        {4: (9.80, 9.82), 5: (10.05, 10.07)},
+    ),
+    "an_exit_at_a_price_behind_it": (
+        sleeve(
+            """        elif self.seen == 3:
+            self.submit_order(self.unsent)
+        elif self.seen == 4:
+            self.submit_exit(name, price=10.5)
+        elif self.seen == 6:
+            self.modify_order(self.unsent, quantity=Quantity.from_int(10))
+""",
+            second=UNSENT.format(qty=50, price=20.0),
+        ),
+        {20: (10.5, 10.52)},
+    ),
+}
+"""Sleeves that cancel an order before it was ever sent and send that same object on their
+third quote: alone, with an exit at market behind it in the same handler, or with an exit at
+10.50 behind it on the fourth and the order shrunk to 10 on the sixth; and the quotes each
+runs on, at 9.99/10.01 but from each key on."""
+
+
+def sent(result: RunResult) -> list[tuple[int, str, float, str, float | None]]:
+    """When each intent was sent, its side, its quantity, its order type and any price."""
+    return [(ts, side, qty, kind, price) for ts, _, side, qty, kind, price in result.intents]
+
+
+def filled(result: RunResult) -> list[tuple[str, float, float]]:
+    """Each fill's side, quantity and price."""
+    return [(fill.side, fill.qty, fill.px) for fill in result.run.fills]
+
+
+ENTERED = (at(1), "BUY", 100.0, "MARKET", None)
+"""The entry every `NEVER_SENT` sleeve sends on its first quote."""
+
+ON_MAIN = {
+    "sent_later": (
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 10.04)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 10.04)],
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 10.04)],
+        [("BUY", 100.0, 10.01)],
+    ),
+    "an_exit_at_market_behind_it": (
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 20.0), (at(4), "SELL", 100.0, "MARKET", None)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 9.8)],
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 20.0), (at(3), "SELL", 100.0, "MARKET", None)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 9.99)],
+    ),
+    "an_exit_at_a_price_behind_it": (
+        [
+            ENTERED,
+            (at(3), "SELL", 50.0, "LIMIT", 20.0),
+            (at(4), "SELL", 50.0, "LIMIT", 10.5),
+            (at(7), "SELL", 40.0, "LIMIT", 10.5),
+        ],
+        [("BUY", 100.0, 10.01), ("SELL", 50.0, 10.5), ("SELL", 40.0, 10.5)],
+        [ENTERED, (at(3), "SELL", 50.0, "LIMIT", 20.0), (at(4), "SELL", 100.0, "LIMIT", 10.5)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 10.5)],
+    ),
+}
+"""What each sleeve sent and filled with no rate stated at no latency, on the research path and
+then on the live one, as kanso did before the keys existed."""
+
+AT_TWENTY_MS = {
+    "an_exit_at_market_behind_it": (
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 20.0), (at(5), "SELL", 100.0, "MARKET", None)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 10.05)],
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 20.0), (at(4), "SELL", 100.0, "MARKET", None)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 10.05)],
+    ),
+}
+"""Where 20 ms moves any of it: the exit at market waits a quote longer on each path."""
 
 
 @pytest.mark.parametrize("latency_ms", [0.0, 20.0])
-def test_with_no_rate_a_cancel_of_an_order_never_sent_is_neither_sent_nor_held(
-    latency_ms: float,
+@pytest.mark.parametrize("built", sorted(NEVER_SENT))
+def test_with_no_rate_a_cancel_of_an_order_never_sent_is_held_and_each_path_does_as_before(
+    built: str, latency_ms: float
 ) -> None:
-    """The one thing that moves with no rate stated, on purpose. The engine was never handed
-    the order the sleeve cancels, so the cancel is no command: it is neither sent nor held, and
-    the order the sleeve sends a quote later rests and fills on both paths. kanso used to hold
-    such a cancel and send it once the same object was submitted, which the research engine
-    answered as not found and the node obeyed, cancelling the order on the node path alone: a
-    card, which runs on the engine, filled it, and a replay or a stage did not."""
-    held = both(
-        rated(CANCELLED_BEFORE_IT_WAS_SENT, None, latency_ms=latency_ms),
-        [tuple(steady(40, rise_at=5))],
-    )
+    """With neither key stated each path does what it did before the keys existed, here too:
+    a cancel of an order the engine was never handed is held back, as one of an order not yet
+    handed to the venue is, and sent once the strategy submits that same object. The research
+    engine answers it as not found, so on a card the order rests and fills, and an exit behind
+    it is cut by it, and owed what it cut; a node obeys it and cancels the order, so the exit
+    behind it goes whole at once. The two paths part there, as they did before — pinned as
+    they are, since a rate that is not stated changes nothing (`docs/backlog.md` row 233) —
+    where under a stated rate the cancel is neither sent nor held and both agree (below)."""
+    source, levels = NEVER_SENT[built]
+    groups: list[tuple[object, ...]] = [tuple(quoted(40, levels))]
+    request = rated(source, None, latency_ms=latency_ms)
+    engine = backtest.execute(request, [instrument()], groups)
+    node = session.run_node(request, [instrument()], groups).result
+    assert not node.crashed, node.traceback_tail
+    did = AT_TWENTY_MS.get(built, ON_MAIN[built]) if latency_ms else ON_MAIN[built]
 
-    assert [(fill.side, fill.qty, fill.px) for fill in held.run.fills] == [
-        ("BUY", 100.0, 10.01),
-        ("SELL", 100.0, 10.04),
-    ]
-    assert held.commands == Commands(submits=2, peak_60s=2, p99_60s=2)
+    assert (sent(engine), filled(engine), sent(node), filled(node)) == did
+
+
+UNDER_A_RATE = {
+    "sent_later": (
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 10.04)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 10.04)],
+        Commands(submits=2, peak_60s=2, p99_60s=2),
+    ),
+    "an_exit_at_market_behind_it": (
+        [ENTERED, (at(3), "SELL", 100.0, "LIMIT", 20.0), (at(3), "SELL", 100.0, "MARKET", None)],
+        [("BUY", 100.0, 10.01), ("SELL", 100.0, 9.99)],
+        Commands(submits=3, cancels=1, peak_60s=4, p99_60s=4),
+    ),
+    "an_exit_at_a_price_behind_it": (
+        [ENTERED, (at(3), "SELL", 50.0, "LIMIT", 20.0), (at(4), "SELL", 50.0, "LIMIT", 10.5)],
+        [("BUY", 100.0, 10.01), ("SELL", 50.0, 10.5)],
+        Commands(submits=3, modifies=1, peak_60s=4, p99_60s=4),
+    ),
+}
+"""What each sleeve sends, fills and counts on both paths at no latency under a rate it never
+reaches."""
+
+
+@pytest.mark.parametrize("built", sorted(NEVER_SENT))
+def test_under_a_rate_a_cancel_of_an_order_never_sent_is_neither_sent_nor_held(built: str) -> None:
+    """Under a stated rate, here one of a thousand a minute that nothing reaches, a cancel of
+    an order the engine was never handed is no command: the venue holds nothing of it, so it
+    is neither sent, held nor counted, and a strategy that cancels its last order on every
+    point, sent or not, spends no token on one the rate dropped. The order the sleeve sends a
+    quote later is its own then: it rests and fills on both paths, the exit at market behind it
+    cancels it and goes whole in the same instant, and the exit at a price behind it sells what
+    the order leaves and owes nothing, since no cancel of the order was ever sent."""
+    source, levels = NEVER_SENT[built]
+    intents, fills, counted = UNDER_A_RATE[built]
+    held = both(rated(source, 1_000), [tuple(quoted(40, levels))])
+
+    assert (sent(held), filled(held), held.commands) == (intents, fills, counted)
 
 
 @pytest.mark.parametrize("per_cancel", [None, 2], ids=["one", "two"])

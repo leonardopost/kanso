@@ -166,6 +166,42 @@ def test_the_payload_is_one_json_object(ws: Workspace, store: StateStore, carded
     assert payload["ts_ns"] == 0
 
 
+WRITTEN_BEFORE_KANSO_COUNTED = (
+    "node",
+    "engine",
+    "ts_ns",
+    "identical",
+    "compared",
+    "node_intents",
+    "engine_intents",
+    "node_released",
+    "engine_released",
+    "node_stream",
+    "engine_stream",
+    "max_ts_delta_ns",
+    "divergence",
+)
+"""A parity payload's keys, in their order, as kanso wrote them before it counted commands."""
+
+
+def test_a_payload_neither_session_counted_for_is_the_one_written_before_kanso_counted() -> None:
+    """Where no layer states the rate neither session records its commands, and the payload —
+    the evidence of a `parity_replay` gate, which a certificate holds — carries neither path's
+    counts: its keys are the ones it had before kanso counted, in their order, so the
+    certificate is written as it was then. A session that recorded them beside one that did
+    not, as an earlier kanso's did not, carries both, that one `null`."""
+    unrated = fed((1, None), (1, None))
+    sent = Commands(submits=1, peak_60s=1, p99_60s=1)
+    beside = replace(unrated, engine_commands=sent).at(0)
+
+    assert tuple(unrated.payload()) == WRITTEN_BEFORE_KANSO_COUNTED
+    assert beside.identical
+    assert (beside.payload()["node_commands"], beside.payload()["engine_commands"]) == (
+        None,
+        sent.model_dump(),
+    )
+
+
 def test_both_paths_were_released_the_same_stream_and_the_payload_says_which(
     ws: Workspace, store: StateStore, carded_hyp: str
 ) -> None:
@@ -262,7 +298,7 @@ def test_the_commands_counted_are_judged_only_under_a_stated_rate(
     if rate is None:
         assert result.identical
         assert [one.commands for one in recorded] == [None, None]
-        assert result.payload()["node_commands"] is None
+        assert "node_commands" not in result.payload()
         return
     assert result.divergence is not None and result.divergence.field == COMMANDS
     counted = [one.commands for one in recorded]

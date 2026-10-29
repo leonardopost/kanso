@@ -35,7 +35,9 @@ tolerance lets differ, only at zero. A session under no stated rate records none
 (`kanso.replay.run`), nor does one written before kanso counted, and then nothing is compared:
 with no layer stating the rate, the broker's declaration included, two paths are judged on
 their stream and their orders alone, as they were before kanso counted — so a sleeve whose two
-paths already fill apart, and so cancel apart, keeps the verdict it had.
+paths already fill apart, and so cancel apart, keeps the verdict it had — and where neither
+session recorded any the payload carries neither path's counts, so a `parity_replay` gate's
+evidence is what it was before kanso counted (`Parity.payload`).
 
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
@@ -195,7 +197,18 @@ class Parity:
         )
 
     def payload(self) -> dict[str, object]:
-        """The result as one JSON object."""
+        """The result as one JSON object. Each path's command counts are carried only when
+        either session recorded them, under a stated rate: where neither did the object is the
+        one kanso wrote before it counted, so a `parity_replay` gate's evidence, and the
+        certificate holding it, are written as they were then."""
+        counted = (
+            {}
+            if self.node_commands is None and self.engine_commands is None
+            else {
+                "node_commands": _commands(self.node_commands),
+                "engine_commands": _commands(self.engine_commands),
+            }
+        )
         return {
             "node": self.node,
             "engine": self.engine,
@@ -208,8 +221,7 @@ class Parity:
             "engine_released": self.engine_released,
             "node_stream": self.node_stream,
             "engine_stream": self.engine_stream,
-            "node_commands": _commands(self.node_commands),
-            "engine_commands": _commands(self.engine_commands),
+            **counted,
             "max_ts_delta_ns": self.max_ts_delta_ns,
             "divergence": None if self.divergence is None else self.divergence.render(),
         }

@@ -1292,11 +1292,14 @@ strategy that cancels emulated orders spends its rate on requests no account rec
 cancel that would send nothing — of an order closed, or whose cancel is already on its way —
 is no command, and neither is the cancel of a market order, which kanso never sends, nor a
 modify the engine sends nothing for: one that changes nothing, or of an order closed or being
-cancelled. Nor is a cancel or a modify of an order the engine was never handed — an entry the
+cancelled, or of one the engine was never handed, which its risk engine denies. Under a stated
+rate a cancel of an order the engine was never handed is no command either — an entry the
 rate dropped, which the strategy may still hold, one a filter refused or one sent in the
-warmup: the venue holds nothing of it, so nothing is sent and no token spent, and a strategy
-that cancels its last order on every point, whether or not it went, sends what one that
-cancels only what went does. Under a stated rate each command takes its tokens from a bucket
+warmup: the venue holds nothing of it, so nothing is sent or held and no token spent, and a
+strategy that cancels its last order on every point, whether or not it went, sends what one
+that cancels only what went does. With neither key stated such a cancel is held back and
+counted, as before the keys existed (below). Under a stated rate each command takes its tokens
+from a bucket
 of that many — a submit and a modify one, a cancel `requests_per_cancel` — full when the run
 starts and refilled at that many a minute **on the data clock** — `data_time`, held so a
 point published late refills nothing — and never past full: the shape of the quota kanso's
@@ -1308,8 +1311,9 @@ cancel spends — an `orders_per_minute` under `requests_per_cancel` — is refu
 venue model is resolved, at `hyp validate`, `hyp add` and `research begin` (exit 3), naming
 the venue, both keys and both figures: the bucket never holds more than the rate, so the
 sleeve's first cancel would wait for ever and every entry and modify behind it be dropped. A
-command finds **no token available** to it when the bucket holds fewer than it costs, or, for
-an entry or a modify, while a cancel waits for its tokens (below). Then:
+command finds **no token available** to it when the bucket holds fewer than it costs — a list
+one for each of its orders, all or none — or, for an entry or a modify, while a cancel waits
+for its tokens (below). Then:
 
 - **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
   quantity given or sized by the room, whatever it does to the position; and an order built
@@ -1323,24 +1327,30 @@ an entry or a modify, while a cancel waits for its tokens (below). Then:
   on** past it, measured on the entries the rate let through; a stage node, running the same
   code, drops the same commands and does not halt. Whether an order built by hand opens is
   read against the position the sleeve holds once its market orders in flight have filled and
-  its exits owed at market for want of a token have gone, as `held` reads it: an exit owed at
-  a price is a limit, and is no more read as filling than a limit resting, and an exit owed
-  for part of the position takes that part. So **the second leg of a flip** — `submit_exit`
-  and then `submit_entry` on the other side, in one handler, behind an exit at market or at a
-  price, whether the exit took the last token or was owed — is an entry, dropped and counted
-  rather than owed as an exit and forgotten once the exit has left the sleeve flat, and so is
-  an order or a list built by hand on the other side behind an exit at market; behind an exit
-  at a price, one built by hand closes the position that limit may never close, and is an exit
-  the strategy built itself (below). An exit owed at market frees the room an entry is sized
-  to as one sent does, so a leg sized by the room is sized, and dropped, whether its exit went
-  or was owed; behind an exit at a price, which frees no room until it fills, it is sized as it
-  would be with no rate stated, and dropped if it is sized at all. Under a sizing rule an exit
-  owed for want of a token is in flight as one sent is, so a flip or a rotation behind it is
-  dropped and counted for want of the same token, never refused as `one_position`;
+  the exits the rate owes it at market have gone — owed for want of a token, or behind a
+  cancel of its own order on the closing side that the rate deferred, which the account takes
+  before anything asked after it — as `held` reads it: an exit owed at a price is a limit, and
+  is no more read as filling than a limit resting, an exit owed for part of the position takes
+  that part, and an exit owed at market behind a cancel in flight or an order on its way, with
+  or without a rate, is read as `held` reads it, not as gone. So **the second leg of a flip** —
+  `submit_exit` and then `submit_entry` on the other side, in one handler, behind an exit at
+  market or at a price, whether the exit took the last token or was owed — is an entry, dropped
+  and counted rather than owed as an exit and forgotten once the exit has left the sleeve
+  flat, and so is an order or a list built by hand on the other side behind an exit at market
+  that went or that the rate owes; behind an exit at a price, one built by hand closes the
+  position that limit may never close, and is an exit the strategy built itself (below). An
+  exit the rate owes at market frees the room an entry is sized to as one sent does, so a leg
+  sized by the room is sized, and dropped, whether its exit went or was owed; behind an exit at
+  a price, which frees no room until it fills, it is sized as it would be with no rate stated,
+  and dropped if it is sized at all. Under a sizing rule an exit owed for want of a token is in
+  flight as one sent is, so a flip or a rotation behind it is dropped and counted for want of
+  the same token, never refused as `one_position`;
 - **an exit `submit_exit` sized is owed** — the strategy's, an exit rule's, an owed exit's —
   as it was asked: the whole position when no quantity was given, at the price given, asked
   for again as `submit_exit` sends one (above, for what an owed exit is). It is the only exit
-  kanso owes;
+  kanso owes, and one is owed a side of a name, so a second `submit_exit` asked past the rate
+  while the first is still owed replaces it rather than adding to it: asked twice for half the
+  position, the rate owes one half, and the other stays held (`docs/backlog.md` row 234);
 - **any other exit is refused** — one the strategy built itself, at market or at a limit,
   good till cancelled, for the day, immediate-or-cancel, fill-or-kill or good till a date, a
   stop, a post-only or part-displayed limit, an order sized in the quote's currency, an
@@ -1358,19 +1368,25 @@ an entry or a modify, while a cancel waits for its tokens (below). Then:
   cancel waits goes at once if a token has come back since, and keeps the first one's place if
   not. The order is working until the cancel is sent and lands, so an exit is sized to what it
   can still fill and an exit at a price behind it is owed, as behind a cancel in flight. One
-  whose order filled or was cancelled meanwhile is dropped and pays nothing.
+  whose order filled or was cancelled meanwhile, or whose cancel went another way, is dropped
+  and pays nothing, and holds nothing back from the moment its order closed: an entry or a
+  modify sent from the handler of that order's fill finds the bucket as it is, and an exit
+  refused there names no cancel waiting.
 
 What waited goes first. Before the strategy's handler of each point, the deferred cancels are
 sent, oldest first, while the bucket holds tokens for them, and then the exits owed for want
 of a token are asked for, oldest first: a throttled account sends what it was asked first,
 first, so a token that came back goes to what waited for it, and an entry the handler sends
 after finds the bucket as they left it. While a cancel waits for its tokens no entry and no
-modify takes one — an entry finds none and is dropped, a modify too — so a cancel that spends
-two requests is not starved by the single tokens coming back, each of which the handler's
-next entry would otherwise take before the cancel had two. An exit takes a token the bucket
-holds all the same, owed or not, so the rate refuses no exit it has a token for; `submit_exit`
-sends one only for what is left to close, an order whose cancel waits still counting as
-working, so its exits do not keep a cancel waiting as a stream of entries would. A sleeve acts
+modify takes one — an entry finds none and is dropped, a modify too — so the handler's entries
+do not starve a cancel that spends two requests, as they would by taking each single token
+that comes back before the cancel had two. An exit takes a token the bucket holds all the
+same, owed or not, so the rate refuses no exit it has a token for, and exits can keep a cancel
+waiting. A `submit_exit` of the whole position leaves nothing to close once it has gone, an
+order whose cancel waits still counting as working, so it holds the cancel back no further;
+but one of part of it, asked for on every point, is owed each time the bucket is empty and
+takes each token that comes back for as long as the position lasts, while the order the
+cancel would take out works on and can fill. A sleeve acts
 only on points, and the venue matches a point before any handler of it runs, on both paths,
 so what waited goes on the **first point at or after the instant its token came back, after
 the venue has matched that point** — not at that instant. Across a gap that is the next point
@@ -1406,13 +1422,16 @@ either key clears `best`; a broker's or `venues.<MIC>` figure moves the venue mo
 number is measured under, so no card struck under another rate is matched against one struck
 under this. Where no layer states either key — the broker's declaration included, and
 `alpaca`'s states both — each is left out of the venue model a card, certificate or version
-records, nothing is held back or dropped, and a card runs, records and digests as it did
-before the keys existed, its digest's `commands` aside, which every card carries. One thing
-moves with neither key stated, on purpose, and on the node path alone: a cancel of an order
-the engine was never handed is neither sent nor held, where kanso used to hold it and send it
-once the strategy submitted that same order — which the research engine answered as not
-found, the order resting and filling, and a node obeyed, cancelling the order. The order now
-rests and fills on a replay's or a stage's node as it always did on a card.
+records, nothing is held back or dropped, and each path, the research engine and the node,
+sends, fills and refuses exactly what it did before the keys existed: a card runs, records
+and digests as it did, its digest's `commands` aside, which every card carries, and a
+replay records and a `parity_replay` gate judges and writes its evidence as before. That
+holds where the two paths already part: a cancel of an order the engine was never handed is
+held back, as the cancel of any order not yet handed to the venue is, and sent once the
+strategy submits that same order, which the research engine answers as not found, the order
+resting and filling, and a node obeys, cancelling it — so a card fills what a replay's or a
+stage's node does not (`docs/backlog.md` row 233). The handling above, where such a cancel is
+neither sent nor held, is a stated rate's.
 
 **A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
 met by four sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per
@@ -2516,7 +2535,9 @@ spent decides what it may send next, so two that counted or dropped differently 
 zero. Where no layer states the rate, the broker's declaration included, a session records
 none, as one an earlier kanso wrote has none, and parity judges the two paths on their
 streams and their intents alone, as it did before kanso counted: a sleeve whose two paths
-already fill apart, and so cancel apart, keeps the verdict it had.
+already fill apart, and so cancel apart, keeps the verdict it had. Where neither session
+recorded any, `--json` carries neither field, and a `parity_replay` gate's evidence — and the
+certificate that holds it — is written as it was before kanso counted.
 
 A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
 stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a
