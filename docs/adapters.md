@@ -276,7 +276,7 @@ aggregates path serves none, both measured on 2026-10-29 with the operator's key
 ```yaml
 loader: massive_bars
 asset_class: futures
-instruments: [ESH25]               # written with two digits, the id stays one contract
+instruments: [ESH5]                # as the vendor's listing spells the contract
 venue: XCME                        # the contract's trading_venue
 resolution: 1m                     # under a day; 1m and 1h were measured served
 start: 2025-01-02
@@ -284,10 +284,17 @@ end: 2025-03-07
 price_precision: 2                 # ES trades in 0.25
 ```
 
-- **The vendor's key carries one year digit.** It lists and serves a contract as product,
-  month letter and the last digit of its year — `ESZ4`, never `ESZ24`, which it answers with
-  an empty page — so kanso asks under that spelling whatever the instrument id says, and the
-  window or the date resolved as of picks the decade.
+- **The instrument id carries the vendor's spelling.** kanso asks for a contract exactly as
+  its id spells it, on the reference and the aggregates paths alike, and reads no year out
+  of it, because the vendor spells each contract its own way. Measured on 2026-10-29: ES's
+  listing as of 2026-10-24 named its singles with one year digit, `ESZ6` to `ESH2` — March
+  2030's is `ESH0` — and CL's as of 2026-10-28 named its own with one through 2029 (`CLZ9`)
+  and two from 2030 (`CLF30`, `CLZ30`, `CLZ36`); `/futures/v1/aggs` served `ESZ4` the
+  December 2024 E-mini's minutes, answered `ESZ24` with an empty page, and served `CLZ30`
+  the December 2030 crude's under its two digits. A product's listing as of a day, such as
+  `/futures/v1/contracts?product_code=CL&type=single&date=2026-10-28`, names each contract it
+  lists by the ticker to write, and a key it names no contract by is refused at resolution,
+  pointing there.
 - **Bars are sub-day only.** A row's `window_start` is the minute's (or the hour's) start in
   nanoseconds and the bar is stamped at its close, as every bar is. The vendor's session bar
   opens the day before the session it settles and states no instant it closed at, so `1d`
@@ -296,10 +303,12 @@ price_precision: 2                 # ES trades in 0.25
 - **The quota is the futures endpoints' own.** The source throttled past a few futures
   requests a minute (HTTP 429) where the rest of the API took 90 a second, so every request
   under `/futures/` also counts against a bucket of `futures_requests_per_minute` (3 by
-  default: three at once, then one each twenty seconds). Measured on 2026-10-29, a load of two
-  sessions of one contract cost four — three to establish the plan and its floor, and one
-  page of up to 50,000 bars — over 61 s, and resolving a contract two or three more; none of
-  the 13 futures requests that run made, resolution and the survey's included, was throttled.
+  default: three at once, then one each twenty seconds), which `kanso data adapters` and
+  `kanso doctor` show beside the default, `90/s; futures 3/min`. Measured on 2026-10-29, a
+  load of two sessions of one contract cost four — three to establish the plan and its floor,
+  and one page of up to 50,000 bars — over 61 s, and resolving a contract two or three more;
+  none of the 13 futures requests that run made, resolution and the survey's included, was
+  throttled.
 - **The history floor is the contract's, inside the plan's.** A range from 1970 came back
   truncated rather than refused, from 2024-10-29 for ESZ4 and ESH5 — two years before the
   measurement, the plan's edge — and from 2025-09-10 for ESZ6, a deferred contract that traded
@@ -365,15 +374,19 @@ resolves, even though its prices cannot be read.
 
 A futures contract resolves from its own two listings, as of the date asked: a bare key the
 generic reference does not carry and that is spelled as a contract code is asked of
-`/futures/v1/contracts` under the vendor's one-digit key, then its product of
-`/futures/v1/products`. Each field was read off rows measured on 2026-10-29 before it was
-trusted:
+`/futures/v1/contracts` exactly as written, then its product of `/futures/v1/products` as of
+the day the contract's row describes. A day the listing holds no row of the contract on —
+measured, it held none of `ESH5` on the Saturdays before 2025-03-12, nor on Friday
+2025-01-10 — is answered by the contract's latest row of the week to it, and a key with no
+row in that week is refused, naming the product's listing to read its spelling off, or a day
+the contract was listed to resolve it as of. Each
+field was read off rows measured on 2026-10-29 before it was trusted:
 
 | field | from |
 |---|---|
 | venue | the contract's `trading_venue` (`XCME`) |
-| tick | the contract's `trade_tick_size` (0.25 for ES); the source states it only from 2025-03-12, so a contract asked as of an earlier day takes it from the earliest day of its life that states one — a tick is a term the contract was listed with |
-| listed and expiry | the contract's `first_trade_date` and `last_trade_date`; after its last trade a contract is not listed at all |
+| tick | the contract's `trade_tick_size` (0.25 for ES, 0.01 for CL); the source states it only from 2025-03-12 (measured on ES's rows), so a contract asked as of an earlier day takes it from the earliest day of its life that states one — a tick is a term the contract was listed with. A contract no row of which states one from the day asked to its last trade is refused, naming the `manual: true` entry in `instruments.yaml` that defines it with its tick: that is every ES contract that last traded before 2025-03-12, `ESZ4` among them, the December 2024 E-mini whose minutes the plan serves from 2024-10-29 — none of its 46 rows from then to its last trade states a tick |
+| listed and expiry | the contract's `first_trade_date` and `last_trade_date`; past its last trade a contract does not resolve, whether the listing still names it, inactive — `CLX6` eight days after — or names it no more — `ESZ5` ten months after |
 | underlying, currency | the contract's `product_code`, the product's `trade_currency_code` |
 | multiplier | the product's `unit_of_measure_qty`, only in a unit the price was measured quoted per one of: `IPNT` (ES, 50), `BBL` (CL, 1000), `TRYOZ` (GC, 100), `EUR` (6E, 125,000). ZN states 100,000 `USD` and is quoted in points of par, a point worth 1,000, so any other unit is refused by name and the contract is yours to write as a manual entry |
 
@@ -386,10 +399,11 @@ date or expiry fails *that key*, by name, rather than being filled in: a guessed
 date lets a card trade a contract before it existed, and that error is invisible in a
 result.
 
-Write a one-digit futures year as two (`ESZ26`, not `ESZ6`) if you care about stability. A
-one-digit year is resolved against the date you asked as of, and the same code read on two
-dates would otherwise name two contracts under one instrument id; kanso checks the digit
-against the contract's own expiry and refuses a disagreement rather than picking one.
+Write a futures contract as the vendor's listing spells it: kanso resolves a key as the
+listing names it on the day asked and checks no year against it. A one-digit year repeats
+every decade — as of 2026-10-24 the listing named March 2030's E-mini `ESH0` — so resolve a
+contract as of a day inside its own life, where the listing names that contract under the
+key; a key the listing names no contract by is refused rather than respelled.
 
 ### Publication, and one refusal worth knowing about
 

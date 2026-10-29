@@ -237,7 +237,7 @@ def answer(url: str, params: Mapping[str, str]) -> Response:
     if path == FUTURES_CONTRACTS:
         return _futures(params)
     if path.startswith(FUTURES_AGGS):
-        return _range("bars", path.removeprefix(FUTURES_AGGS), _window(params, path))
+        return _futures_bars(path.removeprefix(FUTURES_AGGS), params)
     if path in LISTINGS:
         return _listing(LISTINGS[path], params)
     if path.startswith("/v2/aggs/ticker/"):
@@ -266,6 +266,43 @@ def _futures(params: Mapping[str, str]) -> Response:
             }
         ]
     )
+
+
+def _futures_bars(ticker: str, params: Mapping[str, str]) -> Response:
+    """The futures aggregates: refused, truncated to the floor or empty as every range here
+    is, in the shape the source serves a futures minute. Measured on 2026-10-29
+    (`tests/data/adapters/massive/fixtures/futures/aggs_*.json`): a row opens at
+    `window_start`, in nanoseconds, and states `open`, `high`, `low`, `close` and `volume`
+    under those names. Asked with no window, the source served a contract's oldest rows the
+    plan holds, which here begin at the floor."""
+    floor = PLAN[("futures", "bars")]
+    if floor is None:
+        return refused()
+    if "window_start.gte" in params:
+        window = _window(params, "")
+    else:
+        window = (floor, floor + timedelta(days=PAGE - 1))
+    start = max(window[0], floor)
+    if start > window[1]:
+        return nothing()
+    rows = [_minute(ticker, day) for day in _sessions(start, window[1])]
+    return served(rows) if rows else nothing()
+
+
+def _minute(ticker: str, day: date) -> dict[str, Any]:
+    """One futures minute, its fields named as the recorded rows name them."""
+    return {
+        "ticker": ticker,
+        "window_start": _ns(day),
+        "session_end_date": day.isoformat(),
+        "open": 100.0,
+        "high": 100.0,
+        "low": 100.0,
+        "close": 100.0,
+        "transactions": 1,
+        "volume": 1,
+        "dollar_volume": 100.0,
+    }
 
 
 def _generic(ticker: str) -> Response:

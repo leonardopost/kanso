@@ -1,0 +1,43 @@
+{
+ "results": [
+  {
+   "ticker": "CLZ30",
+   "window_start": 1730737920000000000,
+   "session_end_date": "2024-11-04",
+   "open": 63.71,
+   "high": 63.71,
+   "low": 63.71,
+   "close": 63.71,
+   "transactions": 2,
+   "volume": 4,
+   "dollar_volume": 254.84
+  },
+  {
+   "ticker": "CLZ30",
+   "window_start": 1730739600000000000,
+   "session_end_date": "2024-11-04",
+   "open": 63.71,
+   "high": 63.71,
+   "low": 63.71,
+   "close": 63.71,
+   "transactions": 1,
+   "volume": 2,
+   "dollar_volume": 127.42
+  },
+  {
+   "ticker": "CLZ30",
+   "window_start": 1730739840000000000,
+   "session_end_date": "2024-11-04",
+   "open": 63.71,
+   "high": 63.71,
+   "low": 63.71,
+   "close": 63.71,
+   "transactions": 1,
+   "volume": 1,
+   "dollar_volume": 63.71
+  }
+ ],
+ "status": "OK",
+ "request_id": "84a243ee32f538b1262d687eb9032a03",
+ "next_url": "https://api.massive.com/futures/v1/aggs/CLZ30?cursor=YXA9MTczMTA3OTc0MDAwMDAwMDAwMCZhcz0yMDI0LTExLTA4JmxpbWl0PTMmcmVzb2x1dGlvbj0xbWluJnNvcnQ9d2luZG93X3N0YXJ0LmFzYyZ3aW5kb3dfc3RhcnQubHQ9MjAyNi0xMC0zMCZ3aW5kb3dfc3RhcnQubHRlPTIwMjYtMTAtMzA"
+}

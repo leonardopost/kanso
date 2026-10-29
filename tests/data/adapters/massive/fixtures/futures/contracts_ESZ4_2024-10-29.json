@@ -1,0 +1,17 @@
+{
+ "status": "OK",
+ "request_id": "1d723005956044ec98cdccb806065e27",
+ "results": [
+  {
+   "active": true,
+   "date": "2024-10-29",
+   "first_trade_date": "2021-06-04",
+   "last_trade_date": "2024-12-20",
+   "name": "ESZ4",
+   "product_code": "ES",
+   "ticker": "ESZ4",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  }
+ ]
+}

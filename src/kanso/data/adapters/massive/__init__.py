@@ -251,12 +251,16 @@ class MassiveAdapter:
         )
 
     def quota(self, ws: Workspace) -> str:
-        """The rate limit this workspace would enforce, reported without a credential.
+        """The rate limits this workspace would enforce, reported without a credential: the
+        one every request counts against, and the futures endpoints' own beside it.
 
         `data adapters` describes an adapter it cannot open, so the quota is read from
         the configuration rather than from a client.
         """
-        return f"{self.config(ws).requests_per_second}/s"
+        settings = self.config(ws)
+        return (
+            f"{settings.requests_per_second}/s; futures {settings.futures_requests_per_minute}/min"
+        )
 
     def object_store_keys(self, ws: Workspace) -> tuple[str, str]:
         """The bulk transport's access key id and secret, each resolved on its own.

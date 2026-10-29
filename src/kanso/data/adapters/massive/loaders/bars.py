@@ -42,13 +42,15 @@ dataset's span to the floor it measured, and the manifest records the span the p
 actually covered, so the difference between asked and served is visible rather than
 smoothed away.
 
-**A futures contract is asked for under its one-digit year, at `/futures/v1/aggs`.** The
-vendor serves futures aggregates there and nowhere else — the generic aggregates path
-serves no contract — and keys them by product, month letter and the last digit of the year:
-measured on 2026-10-29, `ESZ4` served the December 2024 E-mini's minutes from 2024-10-29 and
-`ESZ24` answered HTTP 200 with nothing, the shape an absent history takes. So a contract
-written with two or four digits, the spelling that keeps its instrument id stable, is asked
-for under its last digit, and the requested window is what picks the decade. A row there
+**A futures contract is asked for exactly as its instrument id spells it, at
+`/futures/v1/aggs`.** The vendor serves futures aggregates there and nowhere else — the
+generic aggregates path serves no contract — under its own spelling of each contract, which
+differs by product: measured on 2026-10-29, `ESZ4` served the December 2024 E-mini's minutes
+from 2024-10-29 while `ESZ24` answered HTTP 200 with nothing, the shape an absent history
+takes, and `CLZ30` served the December 2030 crude's from 2024-11-04 under two year digits. So
+no year is read out of a symbol and none is respelled: a symbol that is not the vendor's
+spelling asks for a history the vendor does not hold, and the probe says so (`entitlement`),
+where respelling it would have loaded another decade's contract under its id. A row there
 carries `window_start` in nanoseconds and `open`, `high`, `low`, `close` and `volume` in full,
 and is asked by date bounds in the parameters (`entitlement.futures_aggregates`). Only bar
 sizes under a day are asked for: the vendor's session bar opens the day before the session
@@ -124,7 +126,6 @@ __all__ = [
     "build_bar",
     "built",
     "futures_resolution",
-    "futures_year",
     "instant",
     "numbers",
     "shift",
@@ -198,12 +199,6 @@ FUTURES_SPANS: Final[dict[str, str]] = {"s": "sec", "m": "min", "h": "hour"}
 `1hour` were measured served on 2026-10-29; the vendor documents `sec` beside them and a
 minute's multiplier up to 59."""
 
-DECADE: Final = 10
-"""Years a one-digit contract year repeats over: the vendor's key carries the last digit."""
-
-PIVOT: Final = 70
-"""Where a two-digit contract year is read as the last century rather than this one."""
-
 OHLC: Final = ("o", "h", "l", "c")
 FUTURES_OHLC: Final = ("open", "high", "low", "close")
 
@@ -219,39 +214,14 @@ a class and a dataset that do not meet is refused before a request is made."""
 # --- the vendor's spellings ---------------------------------------------------
 
 
-def futures_year(digits: str, on: date) -> int:
-    """The four-digit delivery year `digits` names, read against the range being asked for.
-
-    A contract code carries one, two or four year digits and only the four-digit form is
-    unambiguous. Two digits pivot at 1970, the convention every exchange's own listings
-    use. One digit names a year in some decade, and the decade is decided by the window
-    the operator asked for rather than by today: the same code means a different contract
-    every ten years, so resolving it against the calendar would silently re-point a 2014
-    backfill at 2024 the moment the decade turned.
-    """
-    if len(digits) == 4:
-        return int(digits)
-    if len(digits) == 3:
-        raise MalformedRequestError(
-            f"massive: {digits!r} is not a contract year; a futures code carries one, two "
-            "or four year digits",
-            remedy="write the contract as ESZ4, ESZ24 or ESZ2024",
-        )
-    value = int(digits)
-    if len(digits) == 2:
-        return 2000 + value if value < PIVOT else 1900 + value
-    base = on.year - 5
-    return base + (value - base) % 10
-
-
-def vendor_ticker(symbol: str, asset_class: str, on: date) -> str:
-    """The vendor's key for a workspace symbol in `asset_class`, on the range's own year.
+def vendor_ticker(symbol: str, asset_class: str) -> str:
+    """The vendor's key for a workspace symbol in `asset_class`.
 
     Every class but futures is the symbol behind a fixed prefix, and a symbol that already
-    carries its prefix is left alone so an operator may write either. Futures are the
-    exception: their key is a root, a delivery month and the last digit of the year, which is
-    the only spelling the vendor serves; a year of one, two or four digits is accepted and
-    checked, and `on` is what decides which decade the digit names.
+    carries its prefix is left alone so an operator may write either. A futures symbol
+    carries no prefix and is the key as written, once it is shaped as a contract — a root, a
+    delivery month and a year — rather than a product: the vendor spells each contract its
+    own way, so the instrument id carries the vendor's spelling and nothing respells it.
     """
     prefix = PREFIXES.get(asset_class)
     if prefix is None:
@@ -261,15 +231,14 @@ def vendor_ticker(symbol: str, asset_class: str, on: date) -> str:
         )
     if asset_class != "futures":
         return symbol if not prefix or symbol.startswith(prefix) else f"{prefix}{symbol}"
-    found = _FUTURES.match(symbol.upper())
-    if found is None:
+    if _FUTURES.match(symbol) is None:
         raise MalformedRequestError(
             f"massive: {symbol!r} is not a futures contract; expected a root, a delivery "
             f"month from {FUTURES_MONTHS} and a year, as in ESZ4",
-            remedy="name the contract, not the product; a continuous series is not a contract",
+            remedy="name the contract as the vendor's listing spells it; a product or a "
+            "continuous series is not a contract",
         )
-    root, month, digits = found.groups()
-    return f"{root}{month}{futures_year(digits, on) % DECADE}"
+    return symbol
 
 
 def aggregate(resolution: str) -> tuple[int, str]:
@@ -612,9 +581,7 @@ class RequestLoader:
         found: list[DatasetRef] = []
         blocked: list[Probe] = []
         for symbol in parsed.instruments:
-            ticker = parsed.tickers.get(symbol) or vendor_ticker(
-                symbol, parsed.asset_class, window[1]
-            )
+            ticker = parsed.tickers.get(symbol) or vendor_ticker(symbol, parsed.asset_class)
             request = self._request(parsed, symbol, ticker, entitlements.as_of)
             endpoint = self.kind.endpoint(request)
             answer = entitlements.check(ticker, parsed.asset_class, dataset=endpoint, window=asked)

@@ -380,7 +380,8 @@ class MassiveClient:
 
     @property
     def quota(self) -> str:
-        """The rate limit, as `data adapters` and `doctor` report it."""
+        """The rate limit every request counts against. The futures endpoints' own bucket is
+        the transport's; `data adapters` and `doctor` report both, from the configuration."""
         return f"{self.requests_per_second}/s"
 
     @property

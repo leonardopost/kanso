@@ -51,7 +51,6 @@ from kanso.data.adapters.massive.loaders.bars import (
     bars_endpoint,
     build_bar,
     futures_resolution,
-    futures_year,
     instant,
     numbers,
     shift,
@@ -203,58 +202,44 @@ def spec(**overrides: Any) -> dict[str, Any]:
     ],
 )
 def test_vendor_ticker_prefixes(symbol: str, asset_class: str, expected: str) -> None:
-    assert vendor_ticker(symbol, asset_class, TODAY) == expected
+    assert vendor_ticker(symbol, asset_class) == expected
 
 
 def test_vendor_ticker_refuses_a_class_the_adapter_does_not_serve() -> None:
     with pytest.raises(MalformedRequestError) as caught:
-        vendor_ticker("BTCUSD", "crypto", TODAY)
+        vendor_ticker("BTCUSD", "crypto")
     assert "crypto" in caught.value.message
 
 
-@pytest.mark.parametrize(
-    ("symbol", "on", "expected"),
-    [
-        ("ESZ4", date(2014, 6, 1), "ESZ4"),
-        ("ESZ4", date(2026, 1, 1), "ESZ4"),
-        ("ESZ24", date(2014, 6, 1), "ESZ4"),
-        ("ESZ2024", date(1999, 1, 1), "ESZ4"),
-        ("ZNZ5", date(2025, 6, 1), "ZNZ5"),
-        ("6EM25", date(2025, 1, 1), "6EM5"),
-        ("esz4", date(2014, 6, 1), "ESZ4"),
-    ],
-)
-def test_a_futures_contract_is_asked_for_under_the_last_digit_of_its_year(
-    symbol: str, on: date, expected: str
-) -> None:
-    """The vendor keys a contract by its year's last digit and answers no other spelling:
-    `ESZ4` served the December 2024 E-mini on 2026-10-29 and `ESZ24` an empty page
-    (`fixtures/futures/`). The window asked for is what picks the decade."""
-    assert vendor_ticker(symbol, "futures", on) == expected
+@pytest.mark.parametrize("symbol", ["ESZ4", "ESH0", "CLZ9", "CLZ30", "CLZ36", "ZNZ5", "6EM5"])
+def test_a_futures_contract_is_asked_for_exactly_as_its_id_spells_it(symbol: str) -> None:
+    """The vendor spells each contract its own way — ES with one year digit, CL with two from
+    2030 (`fixtures/futures/`) — so the id carries its spelling and nothing respells it."""
+    assert vendor_ticker(symbol, "futures") == symbol
 
 
-def test_the_two_digit_spelling_the_vendor_answers_empty_is_never_asked_for() -> None:
-    """An empty page reads as an absent history, so the spelling that draws one never goes out."""
-    recorded = json.loads((FUTURES / "aggs_ESZ24_1min.json").read_text("utf-8"))
+def test_a_two_digit_contract_s_minutes_are_asked_where_the_vendor_serves_them() -> None:
+    """CLZ30, December 2030's crude, is served under two year digits, recorded: it is asked for
+    as written. CLZ36 is asked for as CLZ36, so a load of it can never be CLZ6's minutes."""
+    served = json.loads((FUTURES / "aggs_CLZ30_1min_unwindowed.json").read_text("utf-8"))
+    empty = json.loads((FUTURES / "aggs_ESZ24_1min.json").read_text("utf-8"))
 
-    assert (recorded["status"], recorded["results"]) == ("OK", [])
-    assert vendor_ticker("ESZ24", "futures", date(2024, 11, 4)) == "ESZ4"
+    def path_of(symbol: str) -> str:
+        endpoint = bars_endpoint(futures_request(symbol=symbol, ticker=symbol, venue="XNYM"))
+        return endpoint.request(vendor_ticker(symbol, "futures"), (TODAY, TODAY))[0]
 
-
-@pytest.mark.parametrize(("digits", "expected"), [("69", 2069), ("70", 1970), ("2024", 2024)])
-def test_futures_year_pivots_at_1970(digits: str, expected: int) -> None:
-    assert futures_year(digits, TODAY) == expected
-
-
-def test_a_three_digit_futures_year_is_refused() -> None:
-    with pytest.raises(MalformedRequestError):
-        futures_year("204", TODAY)
+    assert {row["ticker"] for row in served["results"]} == {"CLZ30"}
+    assert (empty["status"], empty["results"]) == ("OK", []), "ESZ24, a spelling ES has not"
+    assert path_of("CLZ30") == "/futures/v1/aggs/CLZ30"
+    assert path_of("CLZ36") == "/futures/v1/aggs/CLZ36"
 
 
-@pytest.mark.parametrize("symbol", ["ES", "ESA4", "ES4", "TOOLONGZ4"])
+@pytest.mark.parametrize("symbol", ["ES", "ESA4", "ES4", "TOOLONGZ4", "esz4"])
 def test_a_symbol_that_is_not_a_contract_is_refused(symbol: str) -> None:
+    """`esz4` among them: a contract is asked for as written, and the vendor's spelling was
+    measured upper-case, so a lower-case one is refused rather than sent or respelled."""
     with pytest.raises(MalformedRequestError):
-        vendor_ticker(symbol, "futures", TODAY)
+        vendor_ticker(symbol, "futures")
 
 
 # --- futures: the vendor's own aggregates ---------------------------------------
@@ -402,7 +387,7 @@ def test_a_futures_contract_is_discovered_and_loaded_off_the_answers_the_source_
     loader = MassiveBarsLoader(client=client, as_of=date(2026, 10, 29))
     future = {
         "asset_class": "futures",
-        "instruments": ["ESH25"],
+        "instruments": ["ESH5"],
         "venue": "XCME",
         "resolution": "1m",
         "start": date(2025, 1, 2),
@@ -412,7 +397,7 @@ def test_a_futures_contract_is_discovered_and_loaded_off_the_answers_the_source_
     (ref,) = loader.discover(future)
     points = list(loader.load(ref, ref.span))
 
-    assert ref.instrument == "ESH25.XCME"
+    assert ref.instrument == "ESH5.XCME"
     assert (ref.request_params or {})["ticker"] == "ESH5"
     assert (ref.request_params or {})["floor"] == "2024-10-29"
     assert {item.url.split("?")[0] for item in replay.asked} == {f"{API_HOST}/futures/v1/aggs/ESH5"}
@@ -421,7 +406,7 @@ def test_a_futures_contract_is_discovered_and_loaded_off_the_answers_the_source_
         datetime(2025, 1, 2, 0, 1, tzinfo=UTC),
         datetime(2025, 1, 3, 22, 0, tzinfo=UTC),
     ]
-    assert all(str(p.bar_type) == "ESH25.XCME-1-MINUTE-LAST-EXTERNAL" for p in points)
+    assert all(str(p.bar_type) == "ESH5.XCME-1-MINUTE-LAST-EXTERNAL" for p in points)
 
 
 def test_a_futures_row_with_no_window_start_is_dropped() -> None:

@@ -31,12 +31,14 @@ by asking the source the question it can answer.
 under `/futures/v1/contracts` and their products under `/futures/v1/products`, both dated
 point-in-time listings, and its generic ticker reference answers a futures key with a 404. A
 bare key the generic reference does not carry, and that is spelled as a contract code, is
-asked for there, under the vendor's own one-digit spelling, as of the day asked: its venue,
-tick and life come from the contract's row, and its currency, product and contract size from
-its product's. Each field was read off rows measured on 2026-10-29 before it was trusted
-(`_future`), and the asset class stays the convention's: the product names one, but the
-engine's class is what picks a market calendar, and none is on file for an exchange's
-futures.
+asked for there exactly as it is written, as of the day asked: the vendor spells each
+contract its own way — `ESZ4`, `ESH0` and `CLZ9` with one year digit, `CLF30` and `CLZ36`
+with two — and its listing as of that day is what names the contract, so no year is read out
+of a key and no key is respelled. Its venue, tick and life come from the contract's row, and
+its currency, product and contract size from its product's. Each field was read off rows
+measured on 2026-10-29 before it was trusted (`_future`), and the asset class stays the
+convention's: the product names one, but the engine's class is what picks a market calendar,
+and none is on file for an exchange's futures.
 
 **A universe is walked, not sampled, and never filtered on a feed.** The listing endpoint
 answers a page at a time behind a cursor and the real index universe runs to several
@@ -74,8 +76,7 @@ is a dated fact and it was public on the date it describes.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
@@ -135,6 +136,12 @@ about where the vendor keeps a contract."""
 PAGE: Final = 1_000
 """Rows asked for per page. It is a page size and never a cap on the answer, because the
 cursor is followed; a `limit` that capped an answer would make a short walk look complete."""
+
+WEEK: Final = timedelta(days=6)
+"""How far before an as-of day with no futures listing row of its own a contract's latest row
+is looked for: the six days before it and the day itself. Measured on 2026-10-29, `ESH5`'s
+listing from 2025-01-02 to 2025-03-21 held no row on the ten Saturdays before 2025-03-12 nor
+on Friday 2025-01-10, two days in a row at the longest."""
 
 VENUE_FIELDS: Final = ("primary_exchange", "exchange")
 CURRENCY_FIELDS: Final = ("currency_name", "currency")
@@ -196,10 +203,9 @@ class MassiveReference(InstrumentProvider):
         except MalformedRequestError as exc:
             return ResolveError(wanted, f"{UNKNOWN}: {exc.message}")
         row = self._row(wanted, ticker.text, ticker.asset_class)
-        vendor = None if ticker.asset_class else conventions.vendor_contract(ticker.key)
-        if isinstance(row, ResolveError) and vendor is not None:
-            row = self._future(wanted, vendor, as_of)
-            ticker = replace(ticker, text=vendor)
+        contract = None if ticker.asset_class else conventions.contract_product(ticker.key)
+        if isinstance(row, ResolveError) and contract is not None:
+            row = self._future(wanted, ticker.key, as_of)
         if isinstance(row, ResolveError):
             return row
         asset_class = ticker.asset_class or conventions.market_class(row.get("market"))
@@ -259,31 +265,56 @@ class MassiveReference(InstrumentProvider):
         2021-06-07 and `last_trade_date` 2025-12-19 (`settlement_date` the same day), and
         `product_code` ES; ES's single product as of 2025-01-02 stated `unit_of_measure` IPNT,
         `unit_of_measure_qty` 50 and `trade_currency_code` USD. The last trade date is the
-        contract's expiry: after it, `ESZ5` as of 2026-10-28 was answered with no row. A contract
-        row before 2025-03-12 states no tick (`_stated_tick`), and a product's quantity is its
-        contract size only in a unit measured to be one (`conventions.CONTRACT_UNITS`).
+        contract's expiry: `ESZ5` as of 2026-10-28 was answered with no row, nor was any day of
+        the week to it, while `CLX6`, last traded 2026-10-20, was still listed that day,
+        inactive; neither resolves past its expiry. A row before 2025-03-12 states no tick
+        (`_stated_tick`), and a product's quantity is its contract size only in a unit measured
+        to be one (`conventions.CONTRACT_UNITS`).
+
+        The key is asked for exactly as written, and the vendor's own spellings differ by
+        product — measured, ES's 2030 contracts are `ESH0` to `ESZ0`, and CL's are `CLF30` to
+        `CLZ30` beside `CLZ9` for 2029 — so a key the listing names no contract by is refused
+        with where to read the spelling it does.
         """
-        day = as_of.isoformat()
-        contract = self._listed(FUTURES_CONTRACTS, {"ticker": ticker, "date": day, "limit": "1"})
+        contract = self._contract(ticker, as_of)
         if contract is None:
+            named = conventions.contract_product(ticker)
             return ResolveError(
                 wanted,
-                f"{UNKNOWN}: the vendor's futures reference lists no {ticker} on {as_of}; a "
-                "contract is listed from its first trade date to its last",
+                f"{UNKNOWN}: the vendor's futures listing holds no row of {ticker} in the "
+                f"week to {as_of}, and kanso asks for a contract exactly as its id spells it: "
+                f"write the ticker the vendor's listing of {named} names the contract by, read "
+                f"off /futures/v1/contracts?product_code={named}&type=single&date={as_of} — "
+                "or, if the contract was not listed then, resolve it as of a day it was",
             )
+        last = _text(contract, "last_trade_date")
+        tick = _number(contract, "trade_tick_size")
+        if tick is None and last is not None and last >= as_of.isoformat():
+            tick = self._stated_tick(ticker, as_of, last)
+            if tick is None:
+                return ResolveError(
+                    wanted,
+                    f"{UNKNOWN}: no row of {ticker}'s futures listing from {as_of} to its last "
+                    f"trade on {last} states a tick (the vendor's rows state one from "
+                    "2025-03-12 on, measured on ES's); define it as a `manual: true` entry in "
+                    "instruments.yaml, `instrument_class: future`, with its tick, size and "
+                    "dates under `override`",
+                )
         code = _text(contract, "product_code")
-        product = (
-            None
+        day = _text(contract, "date") or as_of.isoformat()
+        stated = (
+            ()
             if code is None
-            else self._listed(
+            else self._listing(
                 FUTURES_PRODUCTS,
                 {"product_code": code, "type": "single", "date": day, "limit": "1"},
             )
         )
-        if product is None:
+        if not stated:
             return ResolveError(
                 wanted, f"{UNKNOWN}: the vendor's futures reference lists no product of {ticker}"
             )
+        product = stated[0]
         unit = _text(product, "unit_of_measure")
         size = _whole(_number(product, "unit_of_measure_qty"))
         if unit not in conventions.CONTRACT_UNITS or size is None:
@@ -294,13 +325,11 @@ class MassiveReference(InstrumentProvider):
                 f"{', '.join(sorted(conventions.CONTRACT_UNITS))}; define it as a manual entry "
                 "with its multiplier",
             )
-        tick = _number(contract, "trade_tick_size")
-        last = _text(contract, "last_trade_date")
         return {
             "ticker": ticker,
             "market": conventions.MARKET_OF[conventions.FUTURES],
             "exchange": _text(contract, "trading_venue"),
-            "tick_size": self._stated_tick(ticker, as_of, last) if tick is None else tick,
+            "tick_size": tick,
             "list_date": _text(contract, "first_trade_date"),
             "expiration_date": last,
             "currency": _text(product, "trade_currency_code"),
@@ -308,7 +337,28 @@ class MassiveReference(InstrumentProvider):
             "multiplier": size,
         }
 
-    def _stated_tick(self, ticker: str, as_of: date, last: str | None) -> Decimal | None:
+    def _contract(self, ticker: str, as_of: date) -> Mapping[str, Any] | None:
+        """The contract's row on `as_of`, or, where the listing holds none that day, its latest
+        row of the week to it (`WEEK`); `None` where the week holds none either.
+
+        Measured on 2026-10-29: `ESH5`, first traded 2022-12-16 and last 2025-03-21, was
+        answered with no row as of Saturday 2025-01-04, and its week to that day held six, the
+        latest 2025-01-03's. A day with no row is no sign that the contract was not listed, so
+        the latest row before it describes the contract as the source last did.
+        """
+        day = as_of.isoformat()
+        rows = self._listing(FUTURES_CONTRACTS, {"ticker": ticker, "date": day, "limit": "1"})
+        if not rows:
+            week = {
+                "ticker": ticker,
+                "date.gte": (as_of - WEEK).isoformat(),
+                "date.lte": day,
+                "limit": str(PAGE),
+            }
+            rows = self._listing(FUTURES_CONTRACTS, week)
+        return max(rows, key=lambda row: _text(row, "date") or "", default=None)
+
+    def _stated_tick(self, ticker: str, as_of: date, last: str) -> Decimal | None:
         """The contract's tick on the earliest day of its life the source states one.
 
         Measured on 2026-10-29: `ESH5`'s 58 rows from 2025-01-02 to 2025-03-11 named its life,
@@ -316,11 +366,16 @@ class MassiveReference(InstrumentProvider):
         began stating a contract's terms, stated 0.25; they came back the stated days first,
         not in date order, so every row from `as_of` to the last trade date is read. A tick is
         a term of the contract, fixed when it was listed, so the earliest day that states it
-        answers for the whole of its life.
+        answers for the whole of its life. A contract whose life ended before 2025-03-12 has
+        no such day: `ESZ4`'s 46 rows from 2024-10-29 to its last trade on 2024-12-20 stated
+        none.
         """
-        params = {"ticker": ticker, "date.gte": as_of.isoformat(), "limit": str(PAGE)}
-        if last is not None:
-            params["date.lte"] = last
+        params = {
+            "ticker": ticker,
+            "date.gte": as_of.isoformat(),
+            "date.lte": last,
+            "limit": str(PAGE),
+        }
         stated = sorted(
             (day, tick)
             for row in self._client.rows(FUTURES_CONTRACTS, params)
@@ -329,8 +384,8 @@ class MassiveReference(InstrumentProvider):
         )
         return stated[0][1] if stated else None
 
-    def _listed(self, path: str, params: Mapping[str, str]) -> Mapping[str, Any] | None:
-        """The first row a futures listing answers, or `None` when it answers none.
+    def _listing(self, path: str, params: Mapping[str, str]) -> tuple[Mapping[str, Any], ...]:
+        """The rows one page of a futures listing answers, none when it answers none.
 
         A refusal is the credential or the plan, as a refused reference lookup is, and stops
         the call; a rejected request is kanso's question gone wrong, never a key's absence.
@@ -348,7 +403,7 @@ class MassiveReference(InstrumentProvider):
                 f"massive: {path} rejected {params} (HTTP {call.status})",
                 remedy="report it: kanso asked the futures reference a question it does not take",
             )
-        return call.rows[0] if call.rows else None
+        return call.rows
 
     def _instrument(
         self,
@@ -371,7 +426,7 @@ class MassiveReference(InstrumentProvider):
         fields = _increments(rule, row, venue, ticker, as_of)
         if isinstance(fields, str):
             return ResolveError(wanted, fields)
-        extra = _contract_fields(rule, row, ticker, life, as_of, venue)
+        extra = _contract_fields(rule, row, ticker, life, venue)
         if isinstance(extra, str):
             return ResolveError(wanted, extra)
         named = extra.pop("engine_asset_class", rule.engine_asset_class)
@@ -455,7 +510,6 @@ def _contract_fields(
     row: Mapping[str, Any],
     ticker: conventions.Ticker,
     life: tuple[date | None, date | None],
-    as_of: date,
     venue: str,
 ) -> dict[str, object] | str:
     """Everything else the class needs: currencies, contract size and contract dates.
@@ -472,7 +526,7 @@ def _contract_fields(
     }
     if rule.instrument_class is None:
         return fields
-    return _derivative(rule, row, ticker, life, as_of, venue, fields)
+    return _derivative(rule, row, ticker, life, venue, fields)
 
 
 def _derivative(
@@ -480,7 +534,6 @@ def _derivative(
     row: Mapping[str, Any],
     ticker: conventions.Ticker,
     life: tuple[date | None, date | None],
-    as_of: date,
     venue: str,
     fields: dict[str, object],
 ) -> dict[str, object] | str:
@@ -500,11 +553,6 @@ def _derivative(
         )
     underlying = _text(row, *UNDERLYING_FIELDS) or ticker.underlying
     listed, ends = life
-    if rule.asset_class == conventions.FUTURES:
-        product, refusal = _delivery(ticker, ends, as_of)
-        if refusal is not None:
-            return refusal
-        underlying = underlying or product
     if underlying is None:
         return f"{UNKNOWN}: the vendor's row names no underlying for this contract"
     if listed is None or ends is None:
@@ -531,39 +579,12 @@ def _derivative(
     return {key: value for key, value in fields.items() if value is not None}
 
 
-def _delivery(
-    ticker: conventions.Ticker, ends: date | None, as_of: date
-) -> tuple[str | None, str | None]:
-    """The product a futures key names, and the refusal a disagreeing year earns.
-
-    A futures key's year may be a single digit, which names one year in every decade. The
-    digit is resolved against the date the question is asked on, and the result is checked
-    against the expiry the source states: where they disagree, the key does not identify
-    one contract, and resolving it would mint an instrument id whose meaning changes with
-    the day it was resolved. That is refused, with the unambiguous spelling as the remedy.
-
-    A key that is no contract code at all yields neither: it is an ordinary symbol the
-    source happens to list in its futures market, and the row's own underlying names it.
-    """
-    parsed = conventions.contract_month(ticker.key, as_of)
-    if parsed is None:
-        return None, None
-    product, year, month = parsed
-    if ends is not None and (ends.year, ends.month) != (year, month):
-        return None, (
-            f"{UNKNOWN}: the key's delivery month resolves to {year}-{month:02d} and the "
-            f"source expires it {ends}; a one-digit year names one year in every decade, so "
-            f"this key names no single contract — write it with two digits"
-        )
-    return product, None
-
-
 def _option(row: Mapping[str, Any], ticker: conventions.Ticker) -> dict[str, object] | str:
     """The strike and the kind, from the row where it states them and the key where not.
 
     The key states them exactly — an OSI symbol encodes a complete date, a side and a
     strike in thousandths — so falling back to it invents nothing. The futures key gets no
-    such fallback, because its year is genuinely ambiguous and its expiry day is not in it.
+    such fallback: the vendor spells its year its own way, and no expiry day is in it.
     """
     kind = _text(row, *KIND_FIELDS) or ticker.option_kind
     if kind is None or kind.upper() not in ("CALL", "PUT"):

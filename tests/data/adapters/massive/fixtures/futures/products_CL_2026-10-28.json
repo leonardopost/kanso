@@ -1,0 +1,27 @@
+{
+ "status": "OK",
+ "request_id": "038625cdddc6475fb0068e705a8c2e8e",
+ "results": [
+  {
+   "asset_class": "commodity",
+   "asset_sub_class": "energy",
+   "clearing_venue": "NYMEX",
+   "clearing_symbol": "CL",
+   "date": "2026-10-28",
+   "last_updated": "2026-09-18T22:00:25-05:00",
+   "name": "Light Sweet Crude Oil Futures",
+   "price_quotation": "U.S. dollars and cents per barrel",
+   "product_code": "CL",
+   "provider_id": "J6RPLCCJNZSE",
+   "sector": "crude_oil",
+   "settlement_currency_code": "USD",
+   "settlement_method": "deliverable",
+   "settlement_type": "fut",
+   "trade_currency_code": "USD",
+   "trading_venue": "XNYM",
+   "type": "single",
+   "unit_of_measure": "BBL",
+   "unit_of_measure_qty": 1000.0
+  }
+ ]
+}

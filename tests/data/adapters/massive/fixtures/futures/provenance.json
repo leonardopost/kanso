@@ -16,7 +16,7 @@
       "status": 200,
       "recorded_at": "2026-10-29T00:17:00Z",
       "body": "trimmed: rows [0] of the 5 the page carried, in the order served; every other field, `next_url` included, as served",
-      "note": "asked with no date, a listed contract answers from the earliest day the source holds for it"
+      "note": "asked with no date, the listing answers with some row it holds under the key, rows of the era that states contract terms first: ESZ5's of 2025-03-12, though it holds earlier ones (asked by date, 2025-01-02 answered one); enough to say the key is recognised"
     },
     "contracts_ESZ5_2026-10-28.json": {
       "url": "https://api.massive.com/futures/v1/contracts?ticker=ESZ5&date=2026-10-28&limit=5",
@@ -161,6 +161,118 @@
       "body": "trimmed: rows [0, 1, 2] of the 1000 the page carried, in the order served; every other field, `next_url` included, as served",
       "asked_by": "kanso's own code, through a recording transport",
       "note": "the survey's floor question: ESZ6's first minute in the plan is 2025-09-10, a contract that traded nothing before"
+    },
+    "contracts_CLZ6_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2026-10-28&limit=1&ticker=CLZ6",
+      "status": 200,
+      "recorded_at": "2026-10-29T03:02:53Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own code (`MassiveReference.resolve`), through a transport that recorded each request and its answer",
+      "note": "CL's December 2026 contract: its last trade, 2026-11-20, falls in the month before delivery, as every one of CL's 137 singles listed that day did"
+    },
+    "products_CL_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/products?date=2026-10-28&limit=1&product_code=CL&type=single",
+      "status": 200,
+      "recorded_at": "2026-10-29T03:03:39Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own code (`MassiveReference.resolve`), through a transport that recorded each request and its answer",
+      "note": "CL's single product: BBL, 1000 a contract, quoted in dollars per barrel"
+    },
+    "contracts_CLZ30_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2026-10-28&limit=1&ticker=CLZ30",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:51:31Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "CL lists its contracts delivering from 2030 on under two year digits: CLZ30, December 2030's"
+    },
+    "contracts_CLZ36_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2026-10-28&limit=1&ticker=CLZ36",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:51:53Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "CLZ36 is December 2036's contract, listed beside CLZ6, December 2026's"
+    },
+    "contracts_CLF0_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2026-10-28&limit=1&ticker=CLF0",
+      "status": 200,
+      "recorded_at": "2026-10-29T02:59:32Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own code (`MassiveReference.resolve`), through a transport that recorded each request and its answer",
+      "note": "a one-digit spelling of January 2030's crude, which the vendor lists as CLF30: no row"
+    },
+    "contracts_CLF0_week_to_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date.gte=2026-10-22&date.lte=2026-10-28&limit=1000&ticker=CLF0",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:54:03Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "no row of CLF0 on any day of the week to 2026-10-28 either"
+    },
+    "contracts_ESZ5_week_to_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date.gte=2026-10-22&date.lte=2026-10-28&limit=1000&ticker=ESZ5",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:53:42Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "ten months past its last trade, ESZ5 has no row on any day of the week to 2026-10-28"
+    },
+    "contracts_ESH5_2025-01-04.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2025-01-04&limit=1&ticker=ESH5",
+      "status": 200,
+      "recorded_at": "2026-10-29T03:04:59Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own code (`MassiveReference.resolve`), through a transport that recorded each request and its answer",
+      "note": "a Saturday before 2025-03-12: no row, though ESH5 traded from 2022-12-16 to 2025-03-21"
+    },
+    "contracts_ESH5_week_to_2025-01-04.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date.gte=2024-12-29&date.lte=2025-01-04&limit=1000&ticker=ESH5",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:52:15Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "the week to that Saturday: six rows, 2024-12-29 to 2025-01-03, none on the Saturday"
+    },
+    "products_ES_2025-01-03.json": {
+      "url": "https://api.massive.com/futures/v1/products?date=2025-01-03&limit=1&product_code=ES&type=single",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:52:37Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "ES's single product as of the latest row of that week"
+    },
+    "contracts_ESH5_life_from_2025-01-04.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date.gte=2025-01-04&date.lte=2025-03-21&limit=1000&ticker=ESH5",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:52:58Z",
+      "body": "trimmed: rows [0, 9, 10, 65] of the 66 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "66 rows, no next_url: the 10 from 2025-03-12 state the tick, served first, then the 56 before them, which do not"
+    },
+    "contracts_ESZ4_2024-10-29.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2024-10-29&limit=1&ticker=ESZ4",
+      "status": 200,
+      "recorded_at": "2026-10-29T04:53:20Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "the December 2024 E-mini on the first day the plan serves its minutes: no tick"
+    },
+    "contracts_ESZ4_life.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date.gte=2024-10-29&date.lte=2024-12-20&limit=1000&ticker=ESZ4",
+      "status": 200,
+      "recorded_at": "2026-10-29T03:01:41Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "every row from 2024-10-29 to its last trade, 46 of them: none states a tick, since the source states a contract's terms from 2025-03-12 on"
+    },
+    "aggs_CLZ30_1min_unwindowed.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/CLZ30?limit=3&resolution=1min&sort=window_start.asc",
+      "status": 200,
+      "recorded_at": "2026-10-29T03:07:45Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own client, by hand, 21 s or more after the futures request before it",
+      "note": "the vendor serves CLZ30's minutes under its two-digit spelling, from 2024-11-04"
     }
   }
 }

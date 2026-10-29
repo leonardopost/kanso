@@ -90,7 +90,7 @@ def test_a_loader_that_needs_nothing_resolves_and_an_adapter_that_needs_three_do
     assert by_id["synthetic"]["credentials_resolve"] is True
     assert by_id["massive"]["credentials_resolve"] is False
     assert set(by_id["massive"]["credential_origins"].values()) == {None}
-    assert by_id["massive"]["quota"] == "90/s"
+    assert by_id["massive"]["quota"] == "90/s; futures 3/min"
 
 
 def test_the_vendor_loaders_are_listed_under_their_adapter_and_none_is_built(
@@ -428,6 +428,25 @@ def test_the_two_keys_that_expire_are_discovered_and_not_assumed(
     assert any("options/contracts" in asked.url for asked in wired.asked)
     assert any(asked.url.endswith(f"/futures/v1/aggs/{FUTURE}") for asked in wired.asked)
     assert found[("futures", "bars")]["outcome"] == "not_entitled"
+
+
+def test_a_plan_that_serves_futures_reports_the_front_month_s_floor(
+    runner: CliRunner, wired: Replay, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Futures minutes are read off `window_start` in nanoseconds, so a plan serving them from
+    a day reports that day as the floor — and the note that it is the front month's own."""
+    monkeypatch.setitem(massive_wire.PLAN, ("futures", "bars"), date(2025, 9, 10))
+
+    document = payload(at(runner, workspace, "data", "adapters", "--check", "--json"))
+
+    futures = reach_of(document)[("futures", "bars")]
+    assert (futures["ticker"], futures["outcome"], futures["floor"]) == (
+        FUTURE,
+        "ok",
+        "2025-09-10",
+    )
+    notes = [note for survey in document["reach"] for note in survey["notes"]]
+    assert any(f"the futures floor is {FUTURE}'s own" in note for note in notes)
 
 
 def test_the_survey_reports_the_requests_it_actually_made(

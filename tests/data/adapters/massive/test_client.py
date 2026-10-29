@@ -708,9 +708,13 @@ def test_a_resolved_key_builds_a_client_at_the_configured_host(
 
 
 def test_the_quota_is_reportable_without_opening_a_client(ws: Workspace) -> None:
-    """`data adapters` describes an adapter whose credential may not be set at all."""
-    assert ADAPTER.quota(ws) == f"{DEFAULT_REQUESTS_PER_SECOND}/s"
-    assert ADAPTER.quota(configured(ws, requests_per_second=12)) == "12/s"
+    """`data adapters` describes an adapter whose credential may not be set at all, with the
+    futures endpoints' own bucket beside the one every request counts against."""
+    assert ADAPTER.quota(ws) == (
+        f"{DEFAULT_REQUESTS_PER_SECOND}/s; futures {DEFAULT_FUTURES_PER_MINUTE}/min"
+    )
+    stated = configured(ws, requests_per_second=12, futures_requests_per_minute=2)
+    assert ADAPTER.quota(stated) == "12/s; futures 2/min"
 
 
 def test_the_table_is_validated_by_the_adapter_s_own_model(ws: Workspace) -> None:

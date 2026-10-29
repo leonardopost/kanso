@@ -384,9 +384,11 @@ FUTURES_REFERENCE: Final = Endpoint(
     params=(("ticker", "{ticker}"), ("limit", "1")),
 )
 """The control question for a futures key: does the vendor list a contract under it on any
-day? Asked with no date, it answers a listed contract's rows from the earliest it holds —
-measured, `ESZ5` came back with its row of 2025-03-12 — so an expired contract is still a key
-the vendor recognises, and a spelling it does not use answers with none."""
+day? Asked with no date, it answers with some row it lists under the key, rows of the era
+that states contract terms first — measured, `ESZ5` came back with its row of 2025-03-12,
+though the listing holds earlier ones, and `ESZ4`, whose life ended before that era, with its
+row of 2021-06-04 — which is enough to say whether the key is recognised, an expired
+contract's included."""
 
 
 def futures_aggregates(resolution: str, *, limit: int | None = None) -> Endpoint:
