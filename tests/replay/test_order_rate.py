@@ -847,6 +847,40 @@ def test_a_flip_s_second_leg_behind_an_exit_owed_behind_a_deferred_cancel_is_dro
     assert (held.commands.cancels, held.commands.refused_submits) == (1, dropped)
 
 
+BEHIND_A_CANCEL_IN_FLIGHT = sleeve(
+    """        elif self.seen == 3:
+            self.submit_exit(name)
+            self.submit_order(
+                self.order_factory.market(name, OrderSide.SELL, Quantity.from_int(100))
+            )
+"""
+)
+"""Exits at market on its third quote, behind its own sale resting at 20.00, and sells the long
+at market by hand in the same handler."""
+
+
+def test_a_leg_built_by_hand_behind_an_exit_owed_behind_a_cancel_in_flight_is_its_own_exit() -> (
+    None
+):
+    """At three a minute, one request a cancel and 20 ms, the exit at market on the third quote
+    cancels the sleeve's resting sale with the last whole token, and the cancel is in flight:
+    the sale can fill until it lands, so the exit is owed behind it, as it would be with no rate
+    stated, and is owed for no token and behind no cancel the rate deferred. `held` applies no
+    exit owed so, and nor does the rate: the sale the sleeve builds by hand behind it closes the
+    long it reads, and with no token left for it is an exit the strategy built itself, refused —
+    where behind a cancel the rate deferred it is an entry, dropped and counted (above)."""
+    refusal = refused(
+        rated(BEHIND_A_CANCEL_IN_FLIGHT, 3, per_cancel=1, latency_ms=20.0), [tuple(steady(10))]
+    )
+
+    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "SELL", at(3))
+    assert refusal.why.startswith(
+        "an exit the strategy built itself needed 1 of the 3 tokens a minute "
+        "costs.orders_per_minute allows, and the bucket held 0 after 3 command(s) in the 60 s "
+        "before it."
+    )
+
+
 def behind_a_cancel(then: str, *, also: str = "") -> bytes:
     """Buys 100 at market, rests a buy of 50 at 9.00 on its second quote, and any order `also`
     says, cancels the resting buy on its third — at two requests a cancel, a cancel that waits
