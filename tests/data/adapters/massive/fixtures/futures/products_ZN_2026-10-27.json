@@ -1,0 +1,27 @@
+{
+ "status": "OK",
+ "request_id": "04ddbce336224ecdb7878d4bd6188c10",
+ "results": [
+  {
+   "asset_class": "financials",
+   "asset_sub_class": "interest_rate",
+   "clearing_venue": "CBT",
+   "clearing_symbol": "21",
+   "date": "2026-10-27",
+   "last_updated": "2026-09-25T13:53:19-05:00",
+   "name": "U.S. Treasury Note Futures (6&frac12; to 8-Year)",
+   "price_quotation": "Points and fractions of points with par on the basis of 100 points",
+   "product_code": "ZN",
+   "provider_id": "MF4MMMFYNGTJ",
+   "sector": "long_term_gov",
+   "settlement_currency_code": "USD",
+   "settlement_method": "deliverable",
+   "settlement_type": "fut",
+   "trade_currency_code": "USD",
+   "trading_venue": "XCBT",
+   "type": "single",
+   "unit_of_measure": "USD",
+   "unit_of_measure_qty": 100000.0
+  }
+ ]
+}

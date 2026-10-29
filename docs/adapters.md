@@ -176,8 +176,12 @@ that kanso assumed otherwise.
 
 A key that expires — an option or a futures contract — is discovered from the reference
 endpoints at one request each rather than hard-coded, because a stale key comes back
-refused and would be reported as a plan that excludes the class. Where no contract is
-listed to probe with, that class is reported `unprobed`: nothing was asked, so nothing was
+refused and would be reported as a plan that excludes the class. A futures key is the E-mini
+S&P 500's front month on the last settled day, read off `/futures/v1/contracts`, and its
+minute aggregates are probed at `/futures/v1/aggs`, where the vendor serves them; the
+survey used to ask the generic ticker listing, which lists no futures contract, and
+reported futures `unprobed` on a plan that serves them. Where no contract is listed to
+probe with, that class is reported `unprobed`: nothing was asked, so nothing was
 established, which is a fifth answer and not one of the four above.
 
 ### What it offers
@@ -206,7 +210,7 @@ fetches through it needs `KANSO_MASSIVE_API_KEY`, as any request-path load does.
 
 | loader | serves | transport |
 |---|---|---|
-| `massive_bars` | aggregate bars for any class | REST |
+| `massive_bars` | aggregate bars for any class — futures from `/futures/v1/aggs`, at sizes under a day (Futures, below) | REST |
 | `massive_trades` | trade prints | REST |
 | `massive_quotes` | top-of-book quotes | REST |
 | `massive_bulk` | `1d` and `1m` bars for the classes the object store lays out | flat files over a signed object store |
@@ -262,6 +266,50 @@ Two things do *not* follow from that, and both are yours to keep straight.
   fetched. Declare them on both halves or on neither; declaring them on one is a series
   with two conventions for when its bars became known.
 
+### Futures
+
+A futures contract is read through the vendor's own futures endpoints and nowhere else:
+`/futures/v1/contracts` and `/futures/v1/products` define it and `/futures/v1/aggs` serves
+its bars. The generic ticker reference answers a futures key with a 404 and the generic
+aggregates path serves none, both measured on 2026-10-29 with the operator's key.
+
+```yaml
+loader: massive_bars
+asset_class: futures
+instruments: [ESH25]               # written with two digits, the id stays one contract
+venue: XCME                        # the contract's trading_venue
+resolution: 1m                     # under a day; 1m and 1h were measured served
+start: 2025-01-02
+end: 2025-03-07
+price_precision: 2                 # ES trades in 0.25
+```
+
+- **The vendor's key carries one year digit.** It lists and serves a contract as product,
+  month letter and the last digit of its year — `ESZ4`, never `ESZ24`, which it answers with
+  an empty page — so kanso asks under that spelling whatever the instrument id says, and the
+  window or the date resolved as of picks the decade.
+- **Bars are sub-day only.** A row's `window_start` is the minute's (or the hour's) start in
+  nanoseconds and the bar is stamped at its close, as every bar is. The vendor's session bar
+  opens the day before the session it settles and states no instant it closed at, so `1d`
+  and `1w` are refused before a request is spent. Bars are built from trades: a minute with
+  no trade has no bar, which in a deferred contract is most minutes.
+- **The quota is the futures endpoints' own.** The source throttled past a few futures
+  requests a minute (HTTP 429) where the rest of the API took 90 a second, so every request
+  under `/futures/` also counts against a bucket of `futures_requests_per_minute` (3 by
+  default: three at once, then one each twenty seconds). Measured on 2026-10-29, a load of two
+  sessions of one contract cost four — three to establish the plan and its floor, and one
+  page of up to 50,000 bars — over 61 s, and resolving a contract two or three more; none of
+  the 13 futures requests that run made, resolution and the survey's included, was throttled.
+- **The history floor is the contract's, inside the plan's.** A range from 1970 came back
+  truncated rather than refused, from 2024-10-29 for ESZ4 and ESH5 — two years before the
+  measurement, the plan's edge — and from 2025-09-10 for ESZ6, a deferred contract that traded
+  nothing inside the plan before then. A load records its contract's own; the survey's
+  futures line is the front month's, and says so in a note.
+- **No market calendar is on file for futures.** Coverage then counts every UTC day, so a
+  weekend at a chunk's edge is a hole. `data load` writes a spec's span as one dataset and
+  holds none; `data backfill`, which writes thirty days at a time, can leave a Saturday
+  between two of them that a snapshot refuses.
+
 ### What a bar's open and close are
 
 Measured on 2026-10-07 over REST: the unadjusted daily and one-minute aggregates
@@ -314,6 +362,24 @@ resolves ids through the adapter, one authenticated lookup per key, into the cat
 instrument store. Options and futures resolve from the reference endpoints, which carry no
 history window at all — a contract that expired long before the aggregate floor still
 resolves, even though its prices cannot be read.
+
+A futures contract resolves from its own two listings, as of the date asked: a bare key the
+generic reference does not carry and that is spelled as a contract code is asked of
+`/futures/v1/contracts` under the vendor's one-digit key, then its product of
+`/futures/v1/products`. Each field was read off rows measured on 2026-10-29 before it was
+trusted:
+
+| field | from |
+|---|---|
+| venue | the contract's `trading_venue` (`XCME`) |
+| tick | the contract's `trade_tick_size` (0.25 for ES); the source states it only from 2025-03-12, so a contract asked as of an earlier day takes it from the earliest day of its life that states one — a tick is a term the contract was listed with |
+| listed and expiry | the contract's `first_trade_date` and `last_trade_date`; after its last trade a contract is not listed at all |
+| underlying, currency | the contract's `product_code`, the product's `trade_currency_code` |
+| multiplier | the product's `unit_of_measure_qty`, only in a unit the price was measured quoted per one of: `IPNT` (ES, 50), `BBL` (CL, 1000), `TRYOZ` (GC, 100), `EUR` (6E, 125,000). ZN states 100,000 `USD` and is quoted in points of par, a point worth 1,000, so any other unit is refused by name and the contract is yours to write as a manual entry |
+
+The asset class stays `COMMODITY`, the convention's: the product states one (`financials`,
+`equity` for ES), but the engine's class is what picks a market calendar, and none is on
+file for an exchange's futures.
 
 Nothing is completed by a guess. A missing tick size, contract size, underlying, listing
 date or expiry fails *that key*, by name, rather than being filled in: a guessed activation
@@ -409,6 +475,7 @@ tolerated is a setting that silently does nothing. It holds no credential.
 |---|---|---|
 | `base_url` | the vendor's API host | where REST requests go |
 | `requests_per_second` | `90` | the rate limit every request in a command shares |
+| `futures_requests_per_minute` | `3` | the futures endpoints' own rate limit, beside the one above: a burst of this many, then one each `60 / n` seconds |
 | `timeout_s` | `120` | per-request timeout; a 50,000-row page of a liquid name's quotes measured well over 30 s |
 
 `timeout_s` bounds one asking. Inside a REST cursor walk — every loader but `massive_bulk`,

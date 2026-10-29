@@ -1,0 +1,66 @@
+{
+ "results": [
+  {
+   "ticker": "ESH5",
+   "window_start": 1735772400000000000,
+   "session_end_date": "2025-01-02",
+   "open": 5949.25,
+   "high": 5949.75,
+   "low": 5943.25,
+   "close": 5945.5,
+   "transactions": 383,
+   "volume": 1369,
+   "dollar_volume": 8140045.5
+  },
+  {
+   "ticker": "ESH5",
+   "window_start": 1735775880000000000,
+   "session_end_date": "2025-01-02",
+   "open": 5939.5,
+   "high": 5939.75,
+   "low": 5939.25,
+   "close": 5939.25,
+   "transactions": 24,
+   "volume": 39,
+   "dollar_volume": 231642
+  },
+  {
+   "ticker": "ESH5",
+   "window_start": 1735775940000000000,
+   "session_end_date": "2025-01-02",
+   "open": 5939.5,
+   "high": 5939.5,
+   "low": 5939,
+   "close": 5939.25,
+   "transactions": 38,
+   "volume": 69,
+   "dollar_volume": 409816.75
+  },
+  {
+   "ticker": "ESH5",
+   "window_start": 1735776000000000000,
+   "session_end_date": "2025-01-02",
+   "open": 5939.25,
+   "high": 5939.5,
+   "low": 5936.75,
+   "close": 5937.25,
+   "transactions": 142,
+   "volume": 281,
+   "dollar_volume": 1668583.5
+  },
+  {
+   "ticker": "ESH5",
+   "window_start": 1735941540000000000,
+   "session_end_date": "2025-01-03",
+   "open": 5984.75,
+   "high": 5985.75,
+   "low": 5984.75,
+   "close": 5985.25,
+   "transactions": 121,
+   "volume": 345,
+   "dollar_volume": 2064839.5
+  }
+ ],
+ "status": "OK",
+ "request_id": "085eeae75b87d7c41c5bde083a467080"
+}

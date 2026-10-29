@@ -45,6 +45,7 @@ from kanso.errors import ValidationError
 
 __all__ = [
     "CLASSES",
+    "CONTRACT_UNITS",
     "CONVENTIONS",
     "FOREX",
     "FUTURES",
@@ -66,6 +67,7 @@ __all__ = [
     "market_class",
     "pair_increment",
     "parse",
+    "vendor_contract",
 ]
 
 VENDOR: Final = "massive"
@@ -144,6 +146,16 @@ DIGITS: Final = re.compile(r"[0-9]+")
 LETTERS: Final = re.compile(r"[A-Za-z]+")
 """ASCII digits and letters. `str.isdigit` is not the test: it is true of digits from every
 script, and a key written in them would pass a format check and fail the engine."""
+
+CONTRACT_UNITS: Final[frozenset[str]] = frozenset({"IPNT", "BBL", "TRYOZ", "EUR"})
+"""The futures product units whose `unit_of_measure_qty` is the contract's multiplier: the
+units the product's price is quoted per one of, so the quantity of them is what one point of
+price is worth. Measured on 2026-10-29 from `/futures/v1/products`, single products as of
+2026-10-27: ES `IPNT` 50 "per index point", CL `BBL` 1000 "per barrel", GC `TRYOZ` 100 "per
+troy ounce" and 6E `EUR` 125000 "per Euro increment" — each the exchange's own contract size.
+The same field is not a multiplier everywhere: ZN states `USD` 100000 and is quoted in points
+of par, so a point is worth 1000. A unit not listed here is not read as a contract size, and
+a contract of one resolves only from a manual entry."""
 
 YEAR_BACK: Final = 1
 DECADE: Final = 10
@@ -425,6 +437,23 @@ def contract_month(symbol: str, as_of: date) -> tuple[str, int, int] | None:
     if len(digits) == 3:
         return None
     return product, contract_year(digits, as_of), MONTHS[month]
+
+
+def vendor_contract(symbol: str) -> str | None:
+    """The vendor's own key for a futures contract code, or `None` when it is not one.
+
+    The vendor lists and serves a contract under its product, its month letter and the last
+    digit of its year, and under no other spelling: measured on 2026-10-29, `/futures/v1/aggs`
+    served the December 2024 E-mini as `ESZ4` and answered `ESZ24` with an empty page, and
+    every contract `/futures/v1/contracts` listed was spelled with one digit. So a key written
+    with two or four digits — the stable spelling an instrument id should carry — is asked for
+    under its last digit, and the day it is asked as of decides which decade's contract it is.
+    """
+    found = CONTRACT.fullmatch(symbol.upper())
+    if found is None or len(found.group(3)) == 3:
+        return None
+    product, month, digits = found.groups()
+    return f"{product}{month}{digits[-1]}"
 
 
 def increments(

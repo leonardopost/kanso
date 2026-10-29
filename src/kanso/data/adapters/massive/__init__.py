@@ -242,7 +242,9 @@ class MassiveAdapter:
             creds.require(API_KEY, ws.root),
             transport=transport
             or pyo3_transport(
-                requests_per_second=settings.requests_per_second, timeout_s=settings.timeout_s
+                requests_per_second=settings.requests_per_second,
+                timeout_s=settings.timeout_s,
+                futures_per_minute=settings.futures_requests_per_minute,
             ),
             base_url=settings.base_url,
             requests_per_second=settings.requests_per_second,

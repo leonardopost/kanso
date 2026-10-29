@@ -1,0 +1,43 @@
+{
+ "results": [
+  {
+   "ticker": "ESZ6",
+   "window_start": 1757524200000000000,
+   "session_end_date": "2025-09-10",
+   "open": 6797.75,
+   "high": 6797.75,
+   "low": 6797.75,
+   "close": 6797.75,
+   "transactions": 1,
+   "volume": 1,
+   "dollar_volume": 6797.75
+  },
+  {
+   "ticker": "ESZ6",
+   "window_start": 1760126520000000000,
+   "session_end_date": "2025-10-10",
+   "open": 6800,
+   "high": 6800,
+   "low": 6800,
+   "close": 6800,
+   "transactions": 1,
+   "volume": 1,
+   "dollar_volume": 6800
+  },
+  {
+   "ticker": "ESZ6",
+   "window_start": 1760930040000000000,
+   "session_end_date": "2025-10-20",
+   "open": 6903.5,
+   "high": 6903.5,
+   "low": 6903.5,
+   "close": 6903.5,
+   "transactions": 1,
+   "volume": 1,
+   "dollar_volume": 6903.5
+  }
+ ],
+ "status": "OK",
+ "request_id": "7d34b571ddbed5ae41a73124f9bb379a",
+ "next_url": "https://api.massive.com/futures/v1/aggs/ESZ6?cursor=YXA9MTc4MTE5OTYwMDAwMDAwMDAwMCZhcz0yMDI2LTA2LTExJmxpbWl0PTEwMDAmcmVzb2x1dGlvbj0xbWluJnNvcnQ9d2luZG93X3N0YXJ0LmFzYyZ3aW5kb3dfc3RhcnQuZ3RlPTE5NzAtMDEtMDEmd2luZG93X3N0YXJ0Lmx0PTIwMjYtMTAtMzAmd2luZG93X3N0YXJ0Lmx0ZT0yMDI2LTEwLTI4"
+}

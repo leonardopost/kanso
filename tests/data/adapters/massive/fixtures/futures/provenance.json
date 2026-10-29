@@ -1,0 +1,166 @@
+{
+  "source": "Massive REST API (api.massive.com), the operator's key, whose plan serves futures reference and one-minute aggregates",
+  "authentication": "the key in an `Authorization: Bearer` header; no key is in any url or body here",
+  "recorded_with": "kanso's own client (the engine's HttpClient, nautilus_trader 1.231.0), from the operator's machine, 21 s between futures requests",
+  "scripts": "asked by hand through kanso's own client, 21 s apart, and by kanso's own code (reference resolution, a bars load and the survey) through a transport that recorded each request and its answer",
+  "files": {
+    "reference_tickers_ESZ5.json": {
+      "url": "https://api.massive.com/v3/reference/tickers/ESZ5",
+      "status": 404,
+      "recorded_at": "2026-10-29T00:16:38Z",
+      "body": "verbatim",
+      "note": "the generic ticker reference does not carry a futures contract"
+    },
+    "contracts_ESZ5_undated.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?ticker=ESZ5&limit=5",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:17:00Z",
+      "body": "trimmed: rows [0] of the 5 the page carried, in the order served; every other field, `next_url` included, as served",
+      "note": "asked with no date, a listed contract answers from the earliest day the source holds for it"
+    },
+    "contracts_ESZ5_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?ticker=ESZ5&date=2026-10-28&limit=5",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:25:30Z",
+      "body": "verbatim",
+      "note": "after its last trade date a contract is not listed"
+    },
+    "contracts_ESH5_2025-01-02.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?ticker=ESH5&date=2025-01-02&limit=5",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:17:44Z",
+      "body": "verbatim",
+      "note": "before 2025-03-12 the row states the contract's life and venue and no tick"
+    },
+    "contracts_ESH5_life.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?ticker=ESH5&date.gte=2025-01-02&date.lte=2025-03-21&limit=1000",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:24:02Z",
+      "body": "trimmed: rows [0, 9, 10, 67] of the 68 the page carried, in the order served; every other field, `next_url` included, as served",
+      "note": "68 rows, no next_url: the ten from 2025-03-12 state the tick, served first, then the 58 before them, which do not"
+    },
+    "contracts_ES_2026-10-28.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?date=2026-10-28&limit=1000&product_code=ES&type=single",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:21:12Z",
+      "body": "trimmed: rows [0, 2, 18, 19] of the 22 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "the survey's front-month question; 22 singles from ESH0 to ESZ9; kept: the first served, one not yet active, the front month ESZ6 and the next"
+    },
+    "contracts_sort_by_last_trade_date.json": {
+      "url": "https://api.massive.com/futures/v1/contracts?product_code=ES&active=true&type=single&sort=last_trade_date.asc&limit=2",
+      "status": 400,
+      "recorded_at": "2026-10-29T00:18:07Z",
+      "body": "verbatim",
+      "note": "the listing does not sort by last_trade_date"
+    },
+    "products_ES_2025-01-02.json": {
+      "url": "https://api.massive.com/futures/v1/products?product_code=ES&type=single&date=2025-01-02&limit=5",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:25:08Z",
+      "body": "verbatim"
+    },
+    "products_singles_2026-10-27.json": {
+      "url": "https://api.massive.com/futures/v1/products?product_code.any_of=ES%2CNQ%2CCL%2CGC%2CZN%2C6E&date=2026-10-27&limit=20",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:18:50Z",
+      "body": "trimmed: rows [1, 14, 16, 18] of the 20 the page carried, in the order served; every other field, `next_url` included, as served",
+      "note": "20 rows of the first page, singles and combos of 6E, CL, ES, GC and NQ; kept: the singles"
+    },
+    "products_ZN_2026-10-27.json": {
+      "url": "https://api.massive.com/futures/v1/products?product_code=ZN&type=single&date=2026-10-27&limit=5",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:24:46Z",
+      "body": "verbatim",
+      "note": "quoted in points of par: unit_of_measure_qty is not its multiplier"
+    },
+    "aggs_ESZ5_1min_2025-06-02.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ5?resolution=1min&window_start.gte=2025-06-02&window_start.lte=2025-06-03&sort=window_start.asc&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:19:12Z",
+      "body": "verbatim"
+    },
+    "aggs_ESZ5_1min_2025-06-02_page_2.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ5?cursor=YXA9MTc0ODg0NjI4MDAwMDAwMDAwMCZhcz0yMDI1LTA2LTAyJmxpbWl0PTMmcmVzb2x1dGlvbj0xbWluJnNvcnQ9d2luZG93X3N0YXJ0LmFzYyZ3aW5kb3dfc3RhcnQuZ3RlPTIwMjUtMDYtMDImd2luZG93X3N0YXJ0Lmx0PTIwMjYtMTAtMzAmd2luZG93X3N0YXJ0Lmx0ZT0yMDI1LTA2LTAz",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:19:35Z",
+      "body": "verbatim",
+      "note": "page 1's next_url, sent exactly as served, with no parameter added"
+    },
+    "aggs_ESZ5_1min_unsorted.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ5?resolution=1min&window_start.gte=2025-06-02&window_start.lte=2025-06-03&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:19:56Z",
+      "body": "verbatim",
+      "note": "asked with no sort, the rows come back newest first"
+    },
+    "aggs_ESZ5_1min_lte_desc.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ5?resolution=1min&window_start.gte=2025-06-02&window_start.lte=2025-06-03&sort=window_start.desc&limit=2",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:20:17Z",
+      "body": "verbatim",
+      "note": "window_start.lte=2025-06-03 ends at 2025-06-02 23:49: a date bound is its UTC midnight"
+    },
+    "aggs_ESZ24_1min.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ24?resolution=1min&window_start.gte=2024-11-04&window_start.lte=2024-11-05&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:21:00Z",
+      "body": "verbatim",
+      "note": "the two-digit spelling of the same contract is answered with nothing"
+    },
+    "aggs_ESZ5_1hour_2025-06-02.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ5?resolution=1hour&window_start.gte=2025-06-02&window_start.lte=2025-06-03&sort=window_start.asc&limit=3",
+      "status": 200,
+      "recorded_at": "2026-10-29T00:22:27Z",
+      "body": "verbatim"
+    },
+    "aggs_ESH5_1min_fortnight.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESH5?limit=50000&resolution=1min&sort=window_start.asc&window_start.gte=2026-10-14&window_start.lte=2026-10-28",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:19:24Z",
+      "body": "verbatim",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "an expired contract's fortnight holds nothing"
+    },
+    "aggs_ESH5_1min_unwindowed.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESH5?limit=50000&resolution=1min&sort=window_start.asc",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:19:49Z",
+      "body": "trimmed: rows [0, 1, 2] of the 50000 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "asked with no window, its oldest minutes inside the plan, from 2024-10-29 00:43"
+    },
+    "aggs_ESH5_1min_from_1970.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESH5?limit=50000&resolution=1min&sort=window_start.asc&window_start.gte=1970-01-01&window_start.lte=2026-10-28",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:20:09Z",
+      "body": "trimmed: rows [0, 1, 2] of the 50000 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "a range from 1970 served from the plan's floor, truncated: the floor is the first row"
+    },
+    "aggs_ESH5_1min_2025-01-01_2025-01-04.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESH5?limit=50000&resolution=1min&sort=window_start.asc&window_start.gte=2025-01-01&window_start.lte=2025-01-04",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:20:25Z",
+      "body": "trimmed: rows [0, 58, 59, 60, 2759] of the 2760 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "a load of 2025-01-02..03, widened a day each side; the minute that opened at 23:59 on 2025-01-01 closes on 2025-01-02 and is the first the load keeps; 2,701 of the 2,760 rows were kept"
+    },
+    "aggs_ESZ6_1min_fortnight.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ6?resolution=1min&sort=window_start.asc&window_start.gte=2026-10-14&window_start.lte=2026-10-28",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:24:52Z",
+      "body": "trimmed: rows [0, 1, 2] of the 1000 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "the survey's recent window on the front month, as the survey asks it (no limit)"
+    },
+    "aggs_ESZ6_1min_from_1970.json": {
+      "url": "https://api.massive.com/futures/v1/aggs/ESZ6?resolution=1min&sort=window_start.asc&window_start.gte=1970-01-01&window_start.lte=2026-10-28",
+      "status": 200,
+      "recorded_at": "2026-10-29T01:25:09Z",
+      "body": "trimmed: rows [0, 1, 2] of the 1000 the page carried, in the order served; every other field, `next_url` included, as served",
+      "asked_by": "kanso's own code, through a recording transport",
+      "note": "the survey's floor question: ESZ6's first minute in the plan is 2025-09-10, a contract that traded nothing before"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+ "status": "ERROR",
+ "request_id": "02057a59ec1f484589de1172fb82651b",
+ "error": "Invalid query parameter: 'sort'. Expected one of [date, product_code, ticker], but found: 'last_trade_date'."
+}

@@ -426,6 +426,8 @@ def test_the_two_keys_that_expire_are_discovered_and_not_assumed(
     assert found[("options", "bars")]["ticker"] == OPTION
     assert found[("futures", "bars")]["ticker"] == FUTURE
     assert any("options/contracts" in asked.url for asked in wired.asked)
+    assert any(asked.url.endswith(f"/futures/v1/aggs/{FUTURE}") for asked in wired.asked)
+    assert found[("futures", "bars")]["outcome"] == "not_entitled"
 
 
 def test_the_survey_reports_the_requests_it_actually_made(
@@ -618,7 +620,7 @@ def test_a_class_whose_key_cannot_be_found_is_reported_unprobed_not_unentitled(
     """Nothing was asked, so nothing was established — which is a fifth thing to say."""
 
     def scarce(url: str, params: Mapping[str, str]) -> Response:
-        if "options/contracts" in url or url.endswith("/v3/reference/tickers"):
+        if "options/contracts" in url or ("/futures/v1/contracts" in url and "date" in params):
             return refused()
         return massive_wire.answer(url, params)
 

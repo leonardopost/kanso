@@ -134,10 +134,11 @@ def _range(dataset: str, ticker: str, window: tuple[date, date]) -> Response:
 
 def _window(params: Mapping[str, str], path: str) -> tuple[date, date]:
     """The window a request names, whether in its path or in its parameters."""
-    if "timestamp.gte" in params:
-        return date.fromisoformat(params["timestamp.gte"]), date.fromisoformat(
-            params["timestamp.lte"]
-        )
+    for name in ("timestamp", "window_start"):
+        if f"{name}.gte" in params:
+            return date.fromisoformat(params[f"{name}.gte"]), date.fromisoformat(
+                params[f"{name}.lte"]
+            )
     parts = path.split("?")[0].rstrip("/").split("/")
     return date.fromisoformat(parts[-2]), date.fromisoformat(parts[-1])
 
@@ -171,6 +172,11 @@ def _definition(ticker: str) -> dict[str, Any]:
 
 TICKERS = "/v3/reference/tickers"
 """The generic reference: the universe listing, and every key the vendor carries there."""
+
+FUTURES_CONTRACTS = "/futures/v1/contracts"
+FUTURES_AGGS = "/futures/v1/aggs/"
+"""Where a futures contract and its aggregates live: the vendor keeps them under a path of
+their own, measured on 2026-10-29, and its generic listing names no futures contract."""
 
 CONTRACTS = "/v3/reference/options/contracts"
 """Where an option contract lives. The generic reference does not carry one and rejects an
@@ -227,7 +233,11 @@ def answer(url: str, params: Mapping[str, str]) -> Response:
     if path.startswith(f"{TICKERS}/"):
         return _generic(path.split(f"{TICKERS}/", 1)[1])
     if path == TICKERS:
-        return served([{"ticker": FUTURE}])
+        return nothing()
+    if path == FUTURES_CONTRACTS:
+        return _futures(params)
+    if path.startswith(FUTURES_AGGS):
+        return _range("bars", path.removeprefix(FUTURES_AGGS), _window(params, path))
     if path in LISTINGS:
         return _listing(LISTINGS[path], params)
     if path.startswith("/v2/aggs/ticker/"):
@@ -237,6 +247,25 @@ def answer(url: str, params: Mapping[str, str]) -> Response:
         dataset = "trades" if path.startswith("/v3/trades/") else "quotes"
         return _range(dataset, path.split(f"/v3/{dataset}/")[1], _window(params, path))
     return missing()
+
+
+def _futures(params: Mapping[str, str]) -> Response:
+    """The futures listing: a contract asked for by its key, or a product's singles on a day,
+    the front month among them expiring a quarter after it."""
+    if "ticker" in params:
+        return served([{"ticker": params["ticker"], "product_code": "ES"}])
+    expires = date.fromisoformat(params["date"]) + timedelta(days=90)
+    return served(
+        [
+            {
+                "ticker": FUTURE,
+                "product_code": params["product_code"],
+                "type": "single",
+                "active": True,
+                "last_trade_date": expires.isoformat(),
+            }
+        ]
+    )
 
 
 def _generic(ticker: str) -> Response:
