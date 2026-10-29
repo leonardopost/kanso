@@ -1690,8 +1690,7 @@ def test_an_exit_owed_for_want_of_a_token_takes_one_before_the_handler_can() -> 
     """At two a minute the cancel the exit calls for waits for the thirty-first quote, and the
     exit, owed behind it, finds the bucket empty again and is owed for want of a token. On the
     sixty-first a token comes back: the exit, asked for thirty seconds before, takes it before
-    the handler runs, as an account working its requests in turn would send it, and the entry
-    the handler sends finds the bucket empty and is dropped."""
+    the handler runs, and the entry the handler sends finds the bucket empty and is dropped."""
     unrated = both(rated(OWED_BEFORE_AN_ENTRY, None), [tuple(steady(70))])
     held = both(rated(OWED_BEFORE_AN_ENTRY, 2), [tuple(steady(70))])
 
@@ -1752,18 +1751,58 @@ def test_the_deferred_cancels_take_the_tokens_that_come_back_before_an_owed_exit
 ) -> None:
     """At two a minute, two requests a cancel, the entry and the resting buy empty the bucket:
     the exit at market asked for on the third quote finds no token and is owed for want of one,
-    and the cancel of the buy asked for on the fourth is deferred. An exit owed so goes before
-    any entry or modify asked after it (above), but the deferred cancels take the tokens that
-    come back first, whenever each was asked. With the fifth quote a second after the fourth,
-    a token is back on the thirty-first and the exit takes it, the cancel needing two; with it
-    five minutes after, the bucket is full again there, the cancel takes both, and the exit goes
-    thirty seconds later."""
+    and the cancel of the buy asked for on the fourth is deferred. Before each handler the
+    deferred cancels are sent first, and then the exits owed for want of a token are asked for
+    again. With the fifth quote a second after the fourth, a token is back on the thirty-first
+    and the exit takes it, the cancel needing two; with it five minutes after, the bucket is
+    full again there, the cancel, asked for after the exit, takes both, and the exit goes thirty
+    seconds later."""
     fifth = at(4) + gap * SECOND_NS
     groups: list[tuple[object, ...]] = [(*quoted(4), *quoted(196, first=fifth))]
     held = both(rated(OWED_THEN_CANCELLED, 2, per_cancel=2), groups)
 
     assert stamps(held)[2:] == [(exited_at, "SELL", "MARKET")]
     assert held.commands is not None and held.commands.cancels == 1
+
+
+OWED_BEHIND_A_CANCEL_OVERNIGHT = sleeve(
+    """        elif self.seen == 3:
+            self.submit_exit(name)
+        elif self.seen == 4:
+            THEN
+"""
+)
+"""Buys 100 at market, rests an exit of it at 20.00, asks for the whole position at market on its
+third quote and does `THEN` on its fourth, the next session's first."""
+
+
+@pytest.mark.parametrize(
+    ("then", "sold", "after"),
+    [("pass", 100.0, 0), ('self.submit_entry(name, "BUY", qty=10)', 110.0, 20)],
+    ids=["alone", "behind_an_entry"],
+)
+def test_an_exit_owed_behind_a_deferred_cancel_is_asked_for_once_the_cancel_has_landed(
+    then: str, sold: float, after: int
+) -> None:
+    """At three a minute, two requests a cancel, the entry and the resting exit leave a token and
+    a tenth on the third quote, too few for the cancel the exit at market calls for: the cancel
+    is deferred, and the exit owed behind it. The next session opens a day later with the bucket
+    full, and the cancel goes before the handler of its first quote, leaving one token. The exit
+    owed behind it is asked for again once the cancel has landed, after that handler: alone it
+    takes the token there, and behind the entry that handler sends, which takes the token first,
+    it goes twenty seconds later, once the next one is back, selling the 10 bought as well."""
+    day_two = T0 + 24 * 3_600 * SECOND_NS
+    groups: list[tuple[object, ...]] = [(*steady(3), *quoted(30, first=day_two))]
+    source = OWED_BEHIND_A_CANCEL_OVERNIGHT.replace(b"THEN", then.encode())
+    held = both(rated(source, 3, per_cancel=2), groups)
+
+    entered = [(day_two, "BUY", 10.0, "MARKET")] if after else []
+    assert [(ts, side, qty, kind) for ts, _, side, qty, kind, _ in held.intents][2:] == [
+        *entered,
+        (day_two + after * SECOND_NS, "SELL", sold, "MARKET"),
+    ]
+    assert held.commands is not None
+    assert (held.commands.cancels, held.commands.refused_submits) == (1, 0)
 
 
 GROWN = sleeve(

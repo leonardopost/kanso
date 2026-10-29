@@ -1116,15 +1116,16 @@ def test_the_pages_say_an_entry_past_the_rate_is_dropped_and_counted_and_the_car
 
 
 def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep() -> None:
-    """Of the order in which what waits for a token goes, the pages keep what the replay tests
-    pin on both paths: no entry or modify takes a token while a cancel waits, an exit takes one
-    the bucket holds, so exits asked for on every point can keep a cancel waiting, an exit owed
-    for want of a token goes before any entry or modify asked after it, the deferred cancels
-    taking their tokens first, and what waits goes on a later point, after the venue matched it.
-    They once said more: that what waited took every token that came back before the handler
-    could, though an exit owed behind a deferred cancel is asked for after the handler of the
-    point its cancel goes on; that an exit owed for want of a token went before anything asked
-    after it, though a cancel deferred after it takes the tokens first; that a whole
+    """Of when what waits for a token goes, the pages keep only what the replay tests pin on
+    both paths and an operator acts on: no entry or modify takes a token while a cancel waits,
+    an exit takes one the bucket holds, so exits asked for on every point can keep a cancel
+    waiting while its order fills, and what waits goes on a later point, after the venue has
+    matched it. They once said more, and each time it was more than the code kept: that what
+    waited took every token that came back before the handler could, though an exit owed behind
+    a deferred cancel is asked for after the handler of the point its cancel goes on; that an
+    exit owed for want of a token went before anything asked after it, though the deferred
+    cancels take the tokens first, and what an order that came to rest meanwhile cuts from it is
+    owed behind that order's deferred cancel, where an entry can go first; that a whole
     `submit_exit` could not keep a cancel waiting, though an order on the opening side whose
     cancel waits keeps filling; and that what waited went on the first point a token came back
     for it."""
@@ -1132,6 +1133,8 @@ def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep
     for name, text in said.items():
         for promise in (
             "before anything asked after it",
+            "before any entry or modify asked after it",
+            "takes the tokens it waits for first",
             "goes to what waited for it",
             "finds the bucket as they left it",
             "leaves nothing to close once it has gone",
@@ -1140,10 +1143,9 @@ def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep
             "take what tokens came back",
         ):
             assert promise not in text, (name, promise)
-    assert "goes before any entry or modify asked after it" in said["workspace.md"]
-    assert "a deferred cancel takes the tokens it waits for first" in said["workspace.md"]
     assert "can keep a cancel waiting" in said["workspace.md"]
     assert "can keep a cancel waiting" in said["concepts.md"]
+    assert "goes on a later point, after the venue has matched it" in said["workspace.md"]
 
 
 def test_the_pages_say_an_overlay_s_leg_or_clip_past_the_rate_is_not_told_to_use_submit_exit() -> (

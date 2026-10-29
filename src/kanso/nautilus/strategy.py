@@ -2735,15 +2735,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._rate_owed[(key, side)] = None
 
     def _pay_rated(self) -> None:
-        """Ask again, oldest first, for the exits the rate owed for want of a token, once the
-        deferred cancels have taken what tokens they wait for (`_send_behind_modify`) and before
-        the strategy's handler of the point can spend one on an order of its own.
-
-        An exit the rate held back is older than anything the handler sends, so it goes before
-        any entry or modify asked after it: one the bucket has a token for takes it, while a
-        cancel waits as well (`_command_spend`), and with none it is owed again, and the entry
-        the handler sends after finds none either. One owed for another reason, or no longer
-        owed, is left to `_pay_owed` after the handler, as before."""
+        """Ask again, oldest first, for the exits the rate owed for want of a token, after the
+        deferred cancels have been sent (`_send_behind_modify`) and before the strategy's handler
+        of the point: each is asked for again as `submit_exit` asks for it, and an order it
+        sends takes a token the bucket holds then, while a cancel waits as well
+        (`_command_spend`). One owed for another reason, or no longer owed, is left to
+        `_pay_owed` after the handler, as before."""
         held, self._rate_owed = self._rate_owed, {}
         for name in held:
             if name in self._owed:
@@ -2757,8 +2754,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`_command_spend`), so it is refused only when the bucket holds fewer than it needs,
         and a cancel still waiting then (`_waiting`) is named beside the level, as what holds
         every entry and modify back. The remedy names `submit_exit`, which is owed, for
-        the strategy's own exit; an overlay's leg or clip cannot close that way — under a
-        sizing rule `submit_exit` closes the host's own position and never a clip — so
+        the strategy's own exit; an overlay answers with legs and clips and cannot itself close
+        with `submit_exit`, and under a sizing rule `submit_exit` never closes a clip, so
         `overlay` leaves it out and names what an overlay can do instead."""
         bucket = self._command_bucket
         assert bucket is not None  # only a stated rate refuses anything

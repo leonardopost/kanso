@@ -1347,13 +1347,11 @@ tokens (below). Then:
   dropped and counted for want of the same token, never refused as `one_position`;
 - **an exit `submit_exit` sized is owed** — the strategy's, an exit rule's, an owed exit's —
   as it was asked: the whole position when no quantity was given, at the price given, asked
-  for again as `submit_exit` sends one (above, for what an owed exit is). One owed for want of
-  a token goes before any entry or modify asked after it; a deferred cancel takes the tokens it
-  waits for first, whenever it was asked. It is the only exit kanso owes, and one is owed a
-  side of a name, so a second `submit_exit` asked past the rate while the first is still owed
-  replaces it rather than adding to it, unless the first was an exit rule's, which its host's
-  ask neither replaces nor adds to: asked twice for half the position, the rate owes one half,
-  and the other stays held (`docs/backlog.md` row 234);
+  for again as `submit_exit` sends one (above, for what an owed exit is). It is the only exit
+  kanso owes, and one is owed a side of a name, so a second `submit_exit` asked past the rate
+  while the first is still owed replaces it rather than adding to it, unless the first was an
+  exit rule's, which its host's ask neither replaces nor adds to: asked twice for half the
+  position, the rate owes one half, and the other stays held (`docs/backlog.md` row 234);
 - **any other exit is refused** — one the strategy built itself, at market or at a limit,
   good till cancelled, for the day, immediate-or-cancel, fill-or-kill or good till a date, a
   stop, a post-only or part-displayed limit, an order sized in the quote's currency, an
