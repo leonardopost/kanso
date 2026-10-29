@@ -167,10 +167,7 @@ def _run(
             speed=speed,
             mode=mode,
         )
-    data: dict[str, Any] = {
-        **made.model_dump(mode="json", by_alias=True),
-        "path": str(_session_dir(ws, made)),
-    }
+    data: dict[str, Any] = {**_dumped(made), "path": str(_session_dir(ws, made))}
     return Report(data=data, lines=(*_session_lines(ws, made), field("next", "kanso replay show")))
 
 
@@ -212,15 +209,10 @@ def _parity(
 def _show(ws: Workspace, session: str | None) -> Report:
     if session is not None:
         found = read_session(ws, session)
-        data: dict[str, Any] = {
-            **found.model_dump(mode="json", by_alias=True),
-            "path": str(_session_dir(ws, found)),
-        }
+        data: dict[str, Any] = {**_dumped(found), "path": str(_session_dir(ws, found))}
         return Report(data=data, lines=_session_lines(ws, found))
     held = list_sessions(ws)
-    listing: dict[str, Any] = {
-        "sessions": [one.model_dump(mode="json", by_alias=True) for one in held]
-    }
+    listing: dict[str, Any] = {"sessions": [_dumped(one) for one in held]}
     lines = [field("sessions", f"{len(held)} held")]
     lines += [
         f"{one.mode:<{MODE}}{one.target:<{LABEL}}{one.session_id}  "
@@ -231,6 +223,14 @@ def _show(ws: Workspace, session: str | None) -> Report:
 
 
 # -- rendering --------------------------------------------------------------------
+
+
+def _dumped(session: Session) -> dict[str, Any]:
+    """A session as `--json` prints it: every field of its record, and `commands` only where
+    it recorded them — under a stated `costs.orders_per_minute` — so a session under no stated
+    rate prints what it printed before kanso counted, as `Parity.payload` writes parity's."""
+    unrecorded = {"commands"} if session.commands is None else None
+    return session.model_dump(mode="json", by_alias=True, exclude=unrecorded)
 
 
 def _target(strategy: str | None) -> tuple[str | None, int | None]:

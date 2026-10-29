@@ -313,8 +313,8 @@ def test_a_hedge_leg_that_closes_past_the_rate_is_refused_and_not_told_to_use_su
     take both, so the leg the overlay answers the second with, which buys its hedge back, finds
     none. kanso owes only an exit `submit_exit` sized, and an overlay's leg is not one: the leg
     is refused as `order_rate`, and the refusal does not tell the overlay to close with
-    `submit_exit`, which closes the host's own position and never a leg, but to send fewer
-    commands or state the account's figure."""
+    `submit_exit` — an overlay answers with legs and clips and cannot itself close with it — but
+    to send fewer commands or state the account's figure."""
 
     class Unwinds(Host):
         def on_bar(self, bar_: object) -> None:

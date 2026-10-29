@@ -126,7 +126,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
-| send an exit kanso did not size — one the strategy built itself, at market or at a limit, in any time in force, a stop, an order of a list or a list that closes, the engine's `close_position`, or an overlay's leg or clip — when the venue model's `costs.orders_per_minute` leaves the bucket too few tokens for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is, saying to close with `submit_exit`. An entry, an entry's list and a modify past the rate are not refused: each is dropped unsent and counted on the card's `commands`, and the card runs on; an exit `submit_exit` sized is owed and a cancel deferred (`costs.orders_per_minute`) |
+| send an exit kanso did not size — one the strategy built itself, at market or at a limit, in any time in force, a stop, an order of a list or a list that closes, the engine's `close_position`, or an overlay's leg or clip — when the venue model's `costs.orders_per_minute` leaves the bucket too few tokens for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is, saying, for an exit the strategy built itself, to close with `submit_exit`, and, for an overlay's leg or clip, to send fewer commands or state the account's own figure. An entry, an entry's list and a modify past the rate are not refused: each is dropped unsent and counted on the card's `commands`, and the card runs on; an exit `submit_exit` sized is owed and a cancel deferred (`costs.orders_per_minute`) |
 | state a `costs.orders_per_minute` below `costs.requests_per_cancel`, at any layer, the broker's declaration among them | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the venue, both keys and both figures: the bucket never holds what one cancel spends, so the sleeve's first cancel would wait for ever and every entry and modify behind it be dropped |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -1315,42 +1315,45 @@ each of its orders, all or none — or, for an entry or a modify, while a cancel
 tokens (below). Then:
 
 - **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
-  quantity given or sized by the room, whatever it does to the position; and an order built
-  by hand, or an overlay's hedge leg or clip, that opens or grows the position — inside the
+  quantity given or sized by the room, whatever it does to the position; and an order built by
+  hand, or an overlay's hedge leg or clip, that opens or grows the position — inside the
   handler that sent it: it is not sent, `submit_entry` answers `None` for it as for an entry a
   filter refused, its hedges are not placed, and a clip dropped so holds nothing. So is **an
-  entry's list** — one whose first order is an entry — short of a token for each of its
-  orders, dropped whole, and **a modify**, whichever order it moves: the order stays as it
-  was, at its own price and quantity, working as before. Each is counted on the card's
-  `commands` as `refused_submits` — one per order — or `refused_modifies`, and the card **runs
-  on** past it, measured on the entries the rate let through; a stage node, running the same
-  code, drops the same commands and does not halt. Whether an order built by hand opens is
-  read against the position the sleeve holds once its market orders in flight have filled and
-  the exits the rate owes it at market have gone — owed for want of a token, which the
-  account takes before anything asked after it, or behind a cancel of its own order on the
-  closing side that the rate deferred, which goes once that cancel has landed, no entry going
-  while the cancel waits — as `held` reads it: an exit owed at a price is a limit, and
-  is no more read as filling than a limit resting, an exit owed for part of the position takes
-  that part, and an exit owed at market behind a cancel in flight or an order on its way, with
-  or without a rate, is read as `held` reads it, not as gone. So **the second leg of a flip** —
-  `submit_exit` and then `submit_entry` on the other side, in one handler, behind an exit at
-  market or at a price, whether the exit took the last token or was owed — is an entry, dropped
-  and counted rather than owed as an exit and forgotten once the exit has left the sleeve
-  flat, and so is an order or a list built by hand on the other side behind an exit at market
-  that went or that the rate owes; behind an exit at a price, one built by hand closes the
-  position that limit may never close, and is an exit the strategy built itself (below). An
-  exit the rate owes at market frees the room an entry is sized to as one sent does, so a leg
-  sized by the room is sized, and dropped, whether its exit went or was owed; behind an exit at
-  a price, which frees no room until it fills, it is sized as it would be with no rate stated,
-  and dropped if it is sized at all. Under a sizing rule an exit owed for want of a token is in
-  flight as one sent is, so a flip or a rotation behind it is dropped and counted for want of
-  the same token, never refused as `one_position`;
+  entry's list** — one whose first order is an entry — short of a token for each of its orders,
+  dropped whole, and **a modify**, whichever order it moves: the order stays as it was, at its
+  own price and quantity, working as before. Each is counted on the card's `commands` as
+  `refused_submits` — one per order — or `refused_modifies`, and the card **runs on** past it,
+  measured on the entries the rate let through; a stage node, running the same code, drops the
+  same commands and does not halt. Whether an order built by hand opens is read against the
+  position the sleeve holds once its market orders in flight have filled and the exits the rate
+  owes it at market have gone — owed for want of a token, or behind a cancel of its own order
+  on the closing side that the rate deferred — as `held` reads it: an exit owed at a price is a
+  limit, and is no more read as filling than a limit resting, an exit owed for part of the
+  position takes that part, and an exit owed at market behind a cancel in flight or an order on
+  its way, with or without a rate, is read as `held` reads it, not as gone. So **the second leg
+  of a flip** — `submit_exit` and then `submit_entry` on the other side, in one handler, behind
+  an exit at market or at a price, whether the exit took the last token or was owed — is an
+  entry, dropped and counted rather than owed as an exit and forgotten once the exit has left
+  the sleeve flat, and so is an order or a list built by hand on the other side behind an exit
+  at market that went or that the rate owes; behind an exit at a price, one built by hand
+  closes the position that limit may never close, and is an exit the strategy built itself
+  (below). An exit the rate owes at market frees room as one sent does — the room an entry is
+  sized to, and what the book can fund for an order built by hand — so a leg sized by the room
+  is sized, and dropped, whether its exit went or was owed, and an order or a list built by
+  hand behind it, in that name or another, is funded as it is behind an exit that went, and
+  dropped; behind an exit at a price, which frees no room until it fills, a leg is sized as it
+  would be with no rate stated, and dropped if it is sized at all. Under a sizing rule an exit
+  owed for want of a token is in flight as one sent is, so a flip or a rotation behind it is
+  dropped and counted for want of the same token, never refused as `one_position`;
 - **an exit `submit_exit` sized is owed** — the strategy's, an exit rule's, an owed exit's —
   as it was asked: the whole position when no quantity was given, at the price given, asked
-  for again as `submit_exit` sends one (above, for what an owed exit is). It is the only exit
-  kanso owes, and one is owed a side of a name, so a second `submit_exit` asked past the rate
-  while the first is still owed replaces it rather than adding to it: asked twice for half the
-  position, the rate owes one half, and the other stays held (`docs/backlog.md` row 234);
+  for again as `submit_exit` sends one (above, for what an owed exit is). One owed for want of
+  a token goes before any entry or modify asked after it; a deferred cancel takes the tokens it
+  waits for first, whenever it was asked. It is the only exit kanso owes, and one is owed a
+  side of a name, so a second `submit_exit` asked past the rate while the first is still owed
+  replaces it rather than adding to it, unless the first was an exit rule's, which its host's
+  ask neither replaces nor adds to: asked twice for half the position, the rate owes one half,
+  and the other stays held (`docs/backlog.md` row 234);
 - **any other exit is refused** — one the strategy built itself, at market or at a limit,
   good till cancelled, for the day, immediate-or-cancel, fill-or-kill or good till a date, a
   stop, a post-only or part-displayed limit, an order sized in the quote's currency, an
@@ -1365,35 +1368,25 @@ tokens (below). Then:
   level and any cancel waiting for its tokens. A strategy that closes with `submit_exit` is
   owed instead, and is never refused for the rate;
 - **a cancel is deferred**: kept, its place in line held. A second cancel of an order whose
-  cancel waits goes at once if a token has come back since, and keeps the first one's place if
-  not. The order is working until the cancel is sent and lands, so an exit is sized to what it
-  can still fill and an exit at a price behind it is owed, as behind a cancel in flight. One
-  whose order filled or was cancelled meanwhile, or whose cancel went another way, is dropped
-  and pays nothing, and holds nothing back from the moment its order closed: an entry or a
-  modify sent from the handler of that order's fill finds the bucket as it is, and an exit
-  refused there names no cancel waiting.
+  cancel waits goes at once if the bucket now holds what it costs, and keeps the first one's
+  place if not. The order is working until the cancel is sent and lands, so an exit is sized to
+  what it can still fill and an exit at a price behind it is owed, as behind a cancel in
+  flight. One whose order filled or was cancelled meanwhile, or whose cancel went another way,
+  is dropped and pays nothing, and holds nothing back from the moment its order closed: an
+  entry or a modify sent from the handler of that order's fill finds the bucket as it is, and
+  an exit refused there names no cancel waiting.
 
-What waited goes first. Before the strategy's handler of each point, the deferred cancels are
-sent, oldest first, while the bucket holds tokens for them, and then the exits owed for want
-of a token are asked for, oldest first: a throttled account sends what it was asked first,
-first, so a token that came back goes to what waited for it, and an entry the handler sends
-after finds the bucket as they left it. While a cancel waits for its tokens no entry and no
-modify takes one — an entry finds none and is dropped, a modify too — so the handler's entries
-do not starve a cancel that spends two requests, as they would by taking each single token
-that comes back before the cancel had two. An exit takes a token the bucket holds all the
-same, owed or not, so the rate refuses no exit it has a token for, and exits can keep a cancel
-waiting. A `submit_exit` of the whole position leaves nothing to close once it has gone, an
-order whose cancel waits still counting as working, so it holds the cancel back no further;
-but one of part of it, asked for on every point, is owed each time the bucket is empty and
-takes each token that comes back for as long as the position lasts, while the order the
-cancel would take out works on and can fill. A sleeve acts only on points, and the venue
-matches a point before any handler of it runs, on both paths, so what waited goes on the
-**first point at or after the instant its token came back, after the venue has matched that
-point** — not at that instant. Across a gap that is the next point there is, however far: a
-cancel deferred on a session's last point goes on the next session's first, after the venue has
-matched it, so the order it was meant to cancel can fill there, and an exit owed then is held
-overnight. A strategy that must not carry an order into the next session cancels it with a
-token to spare.
+While a cancel waits for its tokens no entry and no modify takes one — an entry finds none and
+is dropped, a modify too — so the handler's entries do not starve a cancel that spends two
+requests, as they would by taking each single token that comes back before the cancel had two.
+An exit takes a token the bucket holds all the same, owed or not, so the rate refuses no exit
+it has a token for, and exits asked for on every point can keep a cancel waiting, while the
+order it would cancel works on and can fill. A sleeve acts only on points, and the venue
+matches a point before any handler of it runs, on both paths, so **what waits for a token goes
+on a later point, after the venue has matched it**: a cancel deferred on a session's last point
+waits at least for the next session's first, where the order it was meant to cancel can fill,
+and so does an exit owed there for want of a token. A strategy that must not carry an order
+into the next session cancels it with a token to spare.
 
 A command is counted, and pays its tokens, where the sleeve decides to send it — a cancel
 kanso holds back until the venue has the order, or behind a modify, when it is asked for —
@@ -2537,7 +2530,9 @@ none, as one an earlier kanso wrote has none, and parity judges the two paths on
 streams and their intents alone, as it did before kanso counted: a sleeve whose two paths
 already fill apart, and so cancel apart, keeps the verdict it had. Where neither session
 recorded any, `--json` carries neither field, and a `parity_replay` gate's evidence — and the
-certificate that holds it — is written as it was before kanso counted.
+certificate that holds it — is written as it was before kanso counted; and a session that
+recorded none is printed by `kanso replay run --json` and `kanso replay show --json` with no
+`commands` field, as it was before.
 
 A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
 stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a

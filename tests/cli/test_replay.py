@@ -221,6 +221,33 @@ def test_a_session_from_before_the_digest_shows_none(runner: CliRunner, deployed
     assert "2212224 point(s) · sha256 not recorded" in result.stdout
 
 
+def test_a_session_prints_the_commands_it_counted_only_where_it_recorded_them(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """No layer states a rate here, so no session records its commands, and `--json` prints
+    each as it printed before kanso counted, with no `commands` field — what `replay run` wrote,
+    that session shown, and the listing alike. A session that ran under a stated rate recorded
+    them, and prints them."""
+    made = payload(at(runner, deployed, "replay", "run", "--strategy", HYP_ID, "--json"))
+    shown = payload(at(runner, deployed, "replay", "show", made["session_id"], "--json"))
+    listed = payload(at(runner, deployed, "replay", "show", "--json"))["sessions"]
+
+    assert "commands" not in made and "commands" not in shown
+    assert [held["session_id"] for held in listed if "commands" in held] == []
+
+    from tests.replay.test_record import LEGACY
+
+    counted = deployed / "sessions" / "20261001T025018Z-node-9994868"
+    counted.mkdir(parents=True)
+    recorded = "commands:\n  submits: 3\n  cancels: 1\n  peak_60s: 4\n  p99_60s: 4\n"
+    (counted / "session.yaml").write_text(LEGACY + recorded)
+    result = at(runner, deployed, "replay", "show", counted.name, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result)["commands"]["submits"] == 3
+    assert payload(result)["commands"]["cancels"] == 1
+
+
 def test_a_session_this_workspace_never_ran_is_refused(runner: CliRunner, deployed: Path) -> None:
     result = at(runner, deployed, "replay", "show", "nothing-like-this", "--json")
 

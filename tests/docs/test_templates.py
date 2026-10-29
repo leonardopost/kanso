@@ -159,3 +159,24 @@ def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_re
         assert named in bullet, named
     assert "an entry, a modify or an order list refuses the card" not in bullet
     assert "is owed as you asked it" not in bullet
+
+
+def test_the_program_and_the_scaffold_say_an_overlay_s_closing_leg_or_clip_refuses_the_card() -> (
+    None
+):
+    """An attached construct's research reads the same `program.md`, and an overlay cannot close
+    with `submit_exit`: its leg or clip that closes past the rate refuses the card too, and the
+    remedy it is given is fewer commands or the account's own figure. The bullet keeps no order
+    among what waits beyond what the replay tests pin — it once promised that a token coming
+    back went to the owed exits and the waiting cancels before any entry — and says a second
+    ask past the rate does not replace an exit rule's."""
+    bullet = re.sub(
+        r"\s+", " ", line_with(template("program.md"), "- Under `costs.orders_per_minute`")
+    )
+    scaffold = re.sub(r"\s*#\s*", " ", template("hypothesis.yaml"))
+
+    assert "So does an overlay's leg or clip that closes" in bullet
+    assert "send fewer commands, or state the account's own figure" in bullet
+    assert "unless the first was an exit rule's" in bullet
+    assert "before any entry you send" not in bullet
+    assert "So is an overlay's leg or clip that closes: send fewer commands" in scaffold

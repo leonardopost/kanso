@@ -123,16 +123,18 @@ OVERLAY_REMEDY = (
     "matter — or state the account's own figure as costs.orders_per_minute"
 )
 """How an `order_rate` refusal of an overlay's leg or clip ends: what an overlay can do, and no
-`submit_exit`, which closes the host's own position and never a leg or a clip."""
+`submit_exit`. An overlay answers with legs and clips and cannot itself close with `submit_exit`,
+and under a sizing rule `submit_exit` never closes a clip."""
 
 
 def test_a_clip_taken_off_past_the_rate_is_refused_rather_than_owed(backtest) -> None:
     """At one a minute the host's exit on its seventh bar takes the token the overlay's `FLAT`
-    needs in the same instant. kanso owes only an exit `submit_exit` sized, which closes the
-    host's own position and never the overlay's clip, so the clip's exit is refused as
-    `order_rate`: owed, it would go as an order kanso built in its place, and dropped, it would
-    leave the clip open. The refusal does not tell the overlay to close with `submit_exit`,
-    which cannot close a clip, but to send fewer commands or state the account's figure."""
+    needs in the same instant. kanso owes only an exit `submit_exit` sized, which under a sizing
+    rule, as here, closes the host's own position and never the overlay's clip, so the clip's
+    exit is refused as `order_rate`: owed, it would go as an order kanso built in its place, and
+    dropped, it would leave the clip open. The refusal does not tell the overlay to close with
+    `submit_exit`, which it cannot itself close with, but to send fewer commands or state the
+    account's figure."""
 
     class TakesOff(Clipper):
         script = {8: (Clip("HEDGE.XNAS", "BUY"),), 12: (Clip("HEDGE.XNAS", "FLAT"),)}
