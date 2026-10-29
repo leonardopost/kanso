@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from math import sqrt
 
 from hypothesis import strategies as st
 
@@ -556,11 +557,13 @@ def powers(draw: st.DrawFn) -> Power:
 @st.composite
 def net_per_trades(draw: st.DrawFn) -> NetPerTrade:
     """A window's net per trade: one session with no error, or several with one, its t
-    the value over the error when the error is above zero."""
+    the value over the error when the error is above zero. The error is the root of a
+    variance, as `session_edge` strikes it, so above zero it is never small enough to carry
+    the t past the largest float."""
     trades = draw(st.integers(1, 5000))
     sessions = draw(st.integers(1, trades))
     value = draw(FINITE)
-    se = None if sessions < 2 else draw(NON_NEGATIVE)
+    se = None if sessions < 2 else sqrt(draw(NON_NEGATIVE))
     return NetPerTrade(
         net_per_trade_bp=value,
         net_se_session=se,
