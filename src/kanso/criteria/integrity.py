@@ -106,9 +106,10 @@ card always, `None` where the file states none, and on a stage from the version'
 which carries it only where the file states one. So a `Config` default of that name — an
 annotation with a value — would have a stage read bars at its own size where a card reads
 them at the resolution, and a binding that hides the field — an assignment with no
-annotation, a tuple's target, a property — would have every path read bars at a size the file
-does not state. A class of the file
-whose instances are a `KansoConfig` — reached as the base classes above are — is refused for
+annotation, a tuple's target, a property — would hand the strategy's own reads of it a size
+the file does not state, though the sleeve subscribes bars at the size kanso set past any
+such binding (`kanso.nautilus.strategy._BAR_RESOLUTION`). A class of the file whose
+instances are a `KansoConfig` — reached as the base classes above are — is refused for
 binding the name in its body, in a nested block too (`KANSO_FIELDS`, `_class_names`), with
 the remedy to rename it.
 
@@ -543,8 +544,9 @@ KANSO_FIELDS: Final = frozenset({"bar_resolution"})
 """The one field of `KansoConfig` a strategy's `Config` may not bind: `bar_resolution`, which
 a card sets from the file whatever it states and a stage only where the file states one. Not
 every field kanso sets from the file is held here: a `Config` default of `depth`,
-`data_by_instrument` or `session_scope` stands on a stage and not on a card too, as on main
-(`docs/backlog.md` row 233)."""
+`data_by_instrument` or `session_scope` stands on a stage and not on a card too
+(`docs/backlog.md` row 233), and a binding that hides any other field is read in kanso's
+place (row 235)."""
 
 BODIED: Final = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 """The nodes whose body binds in a scope of its own, while their decorators, defaults,
@@ -819,8 +821,8 @@ def _config_problems(tree: ast.Module) -> Iterator[str]:
                 yield (
                     f"line {line}: '{name}' is a field kanso sets on KansoConfig from the "
                     "hypothesis, and a Config may not bind it: a value bound there would stand "
-                    "in for the file's on a stage, or on every path where it hides the field; "
-                    "rename yours"
+                    "in for the file's on a stage, or, where it hides the field, in what the "
+                    "strategy reads of it; rename yours"
                 )
 
 

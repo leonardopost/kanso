@@ -571,9 +571,13 @@ fix nothing. A `Config` may not bind `bar_resolution` in its class body, however
 annotated or assigned, as a tuple's target or in a nested block, as a property or an import —
 though a method's locals are its own. kanso sets it from the hypothesis, and a stage's
 manifest carries it only where the file states one, so the strategy's own default would give a
-stage one bar size and a card another, and a binding that hides the field would give every
-path a size the file does not state: `strategy_integrity` discards such a file with the line
-and the remedy to rename the field.
+stage one bar size and a card another, and a binding that hides the field would hand the
+strategy's own reads of it a size the file does not state: `strategy_integrity` discards such
+a file with the line and the remedy to rename the field. Past a binding that hides the field —
+in the class, or one the gate does not read: set on the class after its body, by a decorator,
+or in a class `type()` builds — the sleeve still subscribes its bars at the size kanso set, on
+a card and a stage alike. A binding that hides another field kanso sets — `resolution` as a
+tuple's target, say — is read in kanso's place (`docs/backlog.md` row 235).
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;

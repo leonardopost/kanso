@@ -858,7 +858,8 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
 def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, line: int) -> None:
     """A version's manifest carries `bar_resolution` only where the hypothesis states one, so a
     Config's own default would set a stage's bar size and not a card's, and a binding that
-    hides the field would set both: a binding anywhere in the class's own scope is refused."""
+    hides the field would be what the strategy reads of it on both: a binding anywhere in the
+    class's own scope is refused."""
     source = (
         "from kanso.nautilus.strategy import KansoConfig as Base, KansoStrategy\n"
         "class Config(Base):\n"
@@ -871,7 +872,8 @@ def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, li
     assert scan(source) == [
         f"line {line}: 'bar_resolution' is a field kanso sets on KansoConfig from the "
         "hypothesis, and a Config may not bind it: a value bound there would stand in for the "
-        "file's on a stage, or on every path where it hides the field; rename yours"
+        "file's on a stage, or, where it hides the field, in what the strategy reads of it; "
+        "rename yours"
     ]
 
 

@@ -358,6 +358,17 @@ class KansoConfig(StrategyConfig, frozen=True):
             )
 
 
+_BAR_RESOLUTION: Final[Any] = KansoConfig.__dict__["bar_resolution"]
+"""`KansoConfig`'s own `bar_resolution` slot, which a card and a stage set from the hypothesis.
+
+The engine's configs are `msgspec.Struct`s (nautilus_trader 1.231.0, msgspec 0.21.1), whose
+fields are slots on the class that declares them, so the size is read through this one: an
+attribute of that name the strategy's file sets on its `Config` — in the body, after it, by a
+decorator, or in a class `type()` builds — hides the field from the strategy's own reads and
+never from the subscription. A `Config` that declares the field again keeps this slot and
+changes only its default, which `strategy_integrity` refuses (`KANSO_FIELDS`)."""
+
+
 class KansoModifierConfig(ActorConfig, frozen=True):
     """What an attached construct is configured with.
 
@@ -1210,7 +1221,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Called before `on_start`, so an author's `on_start` need not call anything. `bar`,
         `quote`, `trade` and `book` are subscribed per instrument — bars at `bar_resolution`
-        where the sleeve's resolution is no bar size, the book as level-two deltas, which the
+        where the sleeve's resolution is no bar size, read as kanso set it whatever the
+        `Config` binds over it (`_BAR_RESOLUTION`), the book as level-two deltas, which the
         venue keeps a book from and the author need not handle. A
         requirement naming a registered
         custom type is subscribed once, by its class, and its points — every instrument's
@@ -1228,7 +1240,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         from kanso.nautilus.backtest import CLIENT_ID
 
         own = dict(self._cfg.data_by_instrument)
-        size = self._cfg.bar_resolution or self._cfg.resolution
+        size = _BAR_RESOLUTION.__get__(self._cfg, type(self._cfg)) or self._cfg.resolution
         for instrument_id in self.universe:
             for requirement in own.get(str(instrument_id), self._cfg.data_requirements):
                 if requirement == BAR:

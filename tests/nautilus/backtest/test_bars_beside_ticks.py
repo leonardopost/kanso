@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
 from nautilus_trader.model.data import Bar, BarSpecification, BarType, QuoteTick
 from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
 from nautilus_trader.model.identifiers import InstrumentId
@@ -218,6 +219,43 @@ def test_the_node_path_hands_the_sleeve_the_same_bars_at_the_same_instants(reque
     assert not node.crashed, node.reason
     assert node.intents == engine.intents
     assert len(engine.intents) == len(BAR_CLOSES)
+
+
+UNHIDDEN = b"class Config(KansoConfig):\n    pass\n"
+"""`ON_BARS`'s `Config`, which binds nothing over the field."""
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        UNHIDDEN + b'\n\nConfig.bar_resolution = "5m"\n',
+        b'def sized(cls):\n    cls.bar_resolution = "5m"\n    return cls\n\n\n@sized\n' + UNHIDDEN,
+        b'Config = type("Config", (KansoConfig,), {"bar_resolution": "5m"})\n',
+        b'class Config(KansoConfig):\n    bar_resolution, every = "5m", 6\n',
+    ],
+    ids=["after its body", "by a decorator", "in a class type() builds", "a tuple's target"],
+)
+def test_a_config_hiding_bar_resolution_still_has_its_bars_read_at_the_file_s_size(
+    request_for, config: bytes
+) -> None:
+    """An attribute of that name set on the `Config` class hides the field from the strategy's
+    own reads, and the sleeve subscribes past it at the size kanso set: the signal's 1m bars
+    reach `on_bar` on the research path and the node path alike, where a 5m subscription would
+    hand the sleeve no bar and so no order. `strategy_integrity` refuses the tuple's target,
+    and reads none of the other three."""
+    request = request_for(source=ON_BARS.replace(UNHIDDEN, config), hypothesis_=tick_bars())
+    instruments = [instrument(), instrument("OTHR")]
+    groups = [tuple(minute_bars(BAR_CLOSES)), tuple(demo_quotes(QUOTES_AT))]
+
+    card = execute(request, instruments, groups)
+    node = session.run_node(request, instruments, groups).result
+
+    assert not card.crashed, card.reason
+    assert [intent[:3] for intent in card.intents] == [
+        (BAR_CLOSES[0], INSTRUMENT, "BUY"),
+        (BAR_CLOSES[1], INSTRUMENT, "BUY"),
+    ]
+    assert node.intents == card.intents
 
 
 def test_a_tick_sleeve_counts_its_warmup_sessions_on_its_ticks(tmp_path: Path) -> None:
