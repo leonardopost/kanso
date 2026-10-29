@@ -2319,16 +2319,72 @@ def test_an_attached_construct_reads_its_host_s_bars_at_the_host_s_size(ws: Work
     assert (failure.remedy or "").startswith("set bar_resolution to 1m to match ")
 
 
-def test_a_construct_reading_bars_at_a_size_its_host_does_not_is_told_to_drop_it(
+def test_a_construct_reading_bars_over_a_tick_host_that_reads_none_drops_the_bars_too(
     ws: Workspace,
 ) -> None:
-    host_with(ws, **{**TICK_BARS, "data_requirements": ["trade"], "data_by_instrument": {}})
-    tick = {**TICK_BARS, "bar_resolution": "1m"}
+    """A tick host that requires no bar reads none, so a construct's cards would hand it bars
+    it never read; dropping the size alone would leave `bar` required at no size, which the
+    schema refuses. The remedy drops both, and the file that follows it, its requirements as
+    the host's file states them, is admitted."""
+    host = {**TICK_BARS, "data_requirements": ["trade"], "data_by_instrument": {}}
+    host_with(ws, **host)
 
-    failure = refused(ws, document(**tick, **FILTER_CLASSIFICATION))
+    failure = refused(ws, document(**TICK_BARS, bar_resolution="1m", **FILTER_CLASSIFICATION))
+    followed = accepted(ws, document(**host, **FILTER_CLASSIFICATION))
 
-    assert "reads its bars at its own resolution and this file declares 1m" in failure.message
-    assert (failure.remedy or "").startswith("drop bar_resolution to match ")
+    assert failure.message.startswith(
+        "bar_resolution: host_sleeve@1 reads no bars beside its tick grain and this file "
+        "declares 1m"
+    )
+    assert (failure.remedy or "").startswith(
+        "drop bar_resolution, and bar from data_requirements and data_by_instrument, to match "
+    )
+    assert (followed.bar_resolution, followed.data_requirements) == (None, ["trade"])
+
+
+def test_a_construct_reading_bars_beside_ticks_over_a_bar_size_host_takes_its_grain(
+    ws: Workspace,
+) -> None:
+    """A bar-size host reads its bars at its own resolution, so a construct at tick reading
+    them at another size would hand it bars it was not certified on; dropping the size alone
+    leaves `bar` required at no size. The remedy is the host's resolution with the key
+    dropped, and the file that follows it is admitted."""
+    host_with(ws)
+    tick = {
+        "resolution": "tick",
+        "data_requirements": ["bar", "trade"],
+        "costs": TICK_BARS["costs"],
+    }
+
+    failure = refused(ws, document(**tick, bar_resolution="5m", **OVERLAY_CLASSIFICATION))
+    followed = accepted(ws, document(**{**tick, "resolution": "1m"}, **OVERLAY_CLASSIFICATION))
+
+    assert failure.message.startswith(
+        "bar_resolution: host_sleeve@1 states none, reading its bars at its own resolution, 1m, "
+        "and this file declares 5m"
+    )
+    assert (failure.remedy or "").startswith(
+        "set resolution to 1m and drop bar_resolution, to match "
+    )
+    assert (followed.resolution, followed.bar_resolution) == ("1m", None)
+
+
+def test_a_filter_off_a_host_reading_bars_beside_ticks_is_given_its_grain_and_size(
+    ws: Workspace,
+) -> None:
+    """Over such a host an overlay may not keep a bar clock of its own, so attaching as one is
+    no way off: the one remedy is the host's grain and size, and the file that follows it with
+    the host's types and latency is admitted."""
+    host_with(ws, **TICK_BARS, bar_resolution="1m")
+
+    failure = refused(ws, document(resolution="5m", **FILTER_CLASSIFICATION))
+    followed = accepted(ws, document(**TICK_BARS, bar_resolution="1m", **FILTER_CLASSIFICATION))
+
+    assert "resolution: 5m is not the host's tick; a filter is consulted on the host's grain" in (
+        failure.message
+    )
+    assert failure.remedy == "set resolution to tick and bar_resolution to 1m, requiring bar"
+    assert (followed.resolution, followed.bar_resolution) == ("tick", "1m")
 
 
 def test_a_construct_reading_bars_as_its_host_does_is_admissible(ws: Workspace) -> None:

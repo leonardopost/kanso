@@ -1084,16 +1084,17 @@ def _check_host_pairing(
     book policy, the size the host's bars are read at and the sizing rule.
 
     A filter or an exit rule is consulted on the host's grain and has no clock of its own,
-    so its resolution is the host's. A card of an attached construct runs the host sleeve
+    so its resolution is the host's — and, over a host that reads bars beside ticks, its
+    `bar_resolution` with it. A card of an attached construct runs the host sleeve
     underneath it, warmed as this file says, so the warmup has to be the host's own or the
     host is measured cold — or warm — under a construct that never asked for that; the
     book policy likewise, since a construct's cards run under this file's policy and its
     version is deployed under the sleeve's; and `bar_resolution` too, since the host's bars
     are read at the size this file states, and a host certified on one size would be
-    handed another, or bars of no size. So an overlay with a bar clock of its own is refused
-    over a host that reads bars beside ticks: a file at a bar-size resolution states no
-    `bar_resolution`, so its cards would hand the host bars of no size, and the one way off
-    is the host's own resolution and size. A
+    handed another, bars of no size, or bars it never read (`_host_bars`). So an overlay
+    with a bar clock of its own is refused over a host that reads bars beside ticks: a file
+    at a bar-size resolution states no `bar_resolution`, so its cards would hand the host
+    bars of no size, and the one way off is the host's own resolution and size. A
     budgeted overlay attaches to a budgeted host and an unbudgeted one to an unbudgeted
     host, because the overlay's book is the host's budget and its own together; and that
     book has to fit the ceilings the overlay's own file declares, since an overlay card
@@ -1135,7 +1136,12 @@ def _check_host_pairing(
             f"resolution: {hyp.resolution} is not the host's {host_hyp.resolution}; a "
             f"{construct_id} is consulted on the host's grain, and only an overlay has a "
             "clock of its own",
-            remedy=f"set resolution to {host_hyp.resolution}, or attach as an overlay",
+            remedy=(
+                f"set resolution to {host_hyp.resolution}, or attach as an overlay"
+                if host_hyp.bar_resolution is None
+                else f"set resolution to {host_hyp.resolution} and bar_resolution to "
+                f"{host_hyp.bar_resolution}, requiring bar"
+            ),
         )
     if host_hyp.bar_resolution is not None and is_duration(hyp.resolution):
         raise ValidationError(
@@ -1147,18 +1153,12 @@ def _check_host_pairing(
             f"{host_hyp.bar_resolution}, requiring bar, to match {path}",
         )
     if hyp.bar_resolution != host_hyp.bar_resolution:
-        size = host_hyp.bar_resolution
+        reads, remedy = _host_bars(host_hyp, path)
         raise ValidationError(
-            f"bar_resolution: {label} reads its bars at {size or 'its own resolution'} and "
-            f"this file declares {hyp.bar_resolution or 'none'}; a construct runs its host "
-            "underneath it, and the host reads its bars at the size the construct's own file "
-            "states",
-            remedy=(
-                f"drop bar_resolution to match {path}"
-                if size is None
-                else f"set bar_resolution to {size} to match {path}, requiring bar at "
-                f"resolution {host_hyp.resolution}"
-            ),
+            f"bar_resolution: {label} {reads} and this file declares "
+            f"{hyp.bar_resolution or 'none'}; a construct runs its host underneath it, and the "
+            "host reads its bars at the size the construct's own file states",
+            remedy=remedy,
         )
     if construct_id != OVERLAY:
         return
@@ -1197,6 +1197,35 @@ def _check_host_pairing(
             remedy=f"set max_position_pct to at least "
             f"{host_hyp.sizing.budget / capital * PERCENT:g}",
         )
+
+
+def _host_bars(host_hyp: Hypothesis, path: Path) -> tuple[str, str]:
+    """What a host reads its bars at, said of it, and the remedy that pairs a construct with it.
+
+    A host that states `bar_resolution` reads its bars at that size. One that states none reads
+    them at its own resolution where that is a bar size, and, at `tick`, `quote` or `trade`,
+    reads no bars at all, since the schema requires the key wherever `bar` is required there.
+    A construct that states one is at such a resolution and requires `bar`, and dropping the
+    key alone would leave that requirement at no size, which the schema refuses. So over a
+    host reading none it drops the bars with the size; and over a bar-size host it takes the
+    host's resolution and drops the key, reading bars at the host's size on the host's own
+    clock, since an overlay card would hand the host the overlay's tick, quote or trade clock
+    as a bar grain, at which no bar can be subscribed (`docs/backlog.md` row 234).
+    """
+    size = host_hyp.bar_resolution
+    if size is not None:
+        return f"reads its bars at {size}", (
+            f"set bar_resolution to {size} to match {path}, requiring bar at resolution "
+            f"{host_hyp.resolution}"
+        )
+    if is_duration(host_hyp.resolution):
+        return f"states none, reading its bars at its own resolution, {host_hyp.resolution},", (
+            f"set resolution to {host_hyp.resolution} and drop bar_resolution, to match {path}"
+        )
+    return f"reads no bars beside its {host_hyp.resolution} grain", (
+        "drop bar_resolution, and bar from data_requirements and data_by_instrument, to match "
+        f"{path}"
+    )
 
 
 def _book_text(book: Book) -> str:

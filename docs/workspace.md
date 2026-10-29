@@ -127,6 +127,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
 | attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution` |
+| attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one, `bar` dropped with the key over a tick host that reads no bars, and the host's resolution over one at a bar size |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -674,9 +675,17 @@ An attached construct states its host's `bar_resolution`, as it states its host'
 because its cards run the host underneath it; so an overlay with a bar clock of its own is
 refused (exit 3) over a host that reads bars beside ticks — a file at a bar-size resolution
 states no size for the host's bars — with the host's resolution and `bar_resolution` as the
-remedy (`docs/backlog.md` row 230). Adopting, changing or dropping the key re-pins the
-hypothesis and clears `best` with a `best_cleared` naming `bar_resolution`; a row pinned before
-it existed reads as stating none.
+remedy (`docs/backlog.md` row 230), and a filter or an exit rule off such a host's grain is
+given that remedy alone — attached as an overlay instead, it is refused with a bar clock and
+raises while subscribing with any other (row 234). A construct that states a `bar_resolution`
+its host does not is refused (exit 3) naming what the host reads: over a tick host that reads
+no bars the remedy drops the bars with the key, and over a host at a bar size it takes the
+host's resolution, since dropping the key alone leaves `bar` required at no size. Adopting,
+changing or dropping the key re-pins the hypothesis and clears `best` with a `best_cleared`
+naming `bar_resolution`; a row pinned before it existed reads as stating none. A tick file
+that requires `bar` and was registered before the key existed fails `kanso doctor`'s
+`instruments` check (exit 2), naming `bar_resolution` and the remedy, until it states one and
+`kanso hyp add` re-pins it.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
