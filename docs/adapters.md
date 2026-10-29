@@ -308,7 +308,8 @@ price_precision: 2                 # ES trades in 0.25
   load of two sessions of one contract cost four — three to establish the plan and its floor,
   and one page of up to 50,000 bars — over 61 s, and resolving a contract two or three more;
   none of the 13 futures requests that run made, resolution and the survey's included, was
-  throttled.
+  throttled. Resolving one asks at most four: the day's row, the week's where the day holds
+  none, the rows of its life where the row states no tick, and its product.
 - **The history floor is the contract's, inside the plan's.** A range from 1970 came back
   truncated rather than refused, from 2024-10-29 for ESZ4 and ESH5 — two years before the
   measurement, the plan's edge — and from 2025-09-10 for ESZ6, a deferred contract that traded
