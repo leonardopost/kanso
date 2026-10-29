@@ -161,8 +161,8 @@ def test_a_bar_size_resolution_reads_its_bars_at_itself() -> None:
 
 @pytest.mark.parametrize("resolution", ["tick", "quote", "trade"])
 def test_bars_beside_ticks_without_a_size_are_refused_with_the_remedy(resolution: str) -> None:
-    """The combination that used to pass validation and stop the first card: a sleeve with no
-    bar size subscribing bars of none."""
+    """The combination that used to pass validation and be refused at `research begin` for want
+    of a snapshot at its resolution: a sleeve with no bar size, reading bars of none."""
     with pytest.raises(ValidationError) as caught:
         build(**{**TICK_BARS, "resolution": resolution})
 
@@ -177,7 +177,10 @@ def test_a_bar_resolution_beside_a_bar_size_resolution_is_refused() -> None:
         build(bar_resolution="5m")
 
     assert "resolution 1m is a bar size" in caught.value.message
-    assert caught.value.remedy == "drop bar_resolution, or set resolution to 5m"
+    assert caught.value.remedy == (
+        "drop bar_resolution (resolution 1m is the bar size), or keep it and set resolution to "
+        "tick, quote or trade"
+    )
 
 
 def test_a_bar_resolution_with_no_bars_is_refused() -> None:

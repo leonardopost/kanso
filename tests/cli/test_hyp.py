@@ -125,8 +125,9 @@ TICK_BARS = {
 def test_validate_refuses_bars_beside_ticks_at_no_size_and_names_the_size_once_stated(
     runner: CliRunner, loaded: Path
 ) -> None:
-    """The combination that passed validation and stopped every card is refused with the
-    remedy, and the file that follows it is reported with the size its bars are read at."""
+    """The combination that passed validation, and that `research begin` then refused for want
+    of a snapshot at `tick`, is refused here with the remedy, and the file that follows it is
+    reported with the size its bars are read at."""
     refused = at(runner, loaded, "hyp", "validate", write_hypothesis(loaded, **TICK_BARS), "--json")
     path = write_hypothesis(loaded, **TICK_BARS, bar_resolution="1m")
     stated = at(runner, loaded, "hyp", "validate", path, "--json")

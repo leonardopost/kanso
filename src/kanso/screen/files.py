@@ -4,9 +4,10 @@
 `scaffold` writes it once from the packaged template, bound to a registered hypothesis or
 free; `validate` reads it and refuses it unless every rule holds — the file's own, the
 measure library's ranges, and, for a bound screen, its hypothesis's: the hypothesis must be
-registered, and every leg must be an instrument of its universe read at a type and grain
-the hypothesis requires, because a bound screen measures what that hypothesis's research
-would see and nothing else. A bound screen's window is its hypothesis's research window,
+registered, and every leg must be an instrument of its universe read at a type the
+hypothesis requires, a bar leg at the size it reads its bars at — `bar_resolution` beside a
+tick resolution, else `resolution` — because a bound screen measures what that hypothesis's
+research would see and nothing else. A bound screen's window is its hypothesis's research window,
 read from the pinned bytes rather than the workspace file, so an edit nobody has pinned
 does not move what the screen reads.
 """
@@ -158,10 +159,10 @@ def _bound(ws: Workspace, store: StateStore, screen: Screen) -> Hypothesis:
                 f"research never reads {leg.instrument} as {leg.type}",
                 remedy=f"read the leg as one of {', '.join(hypothesis.data_requirements)}",
             )
-        if leg.type == "bar" and leg.resolution != hypothesis.resolution:
+        if leg.type == "bar" and leg.resolution != hypothesis.bar_size:
             raise ValidationError(
-                f"legs.{name}: {leg.resolution} bars, where {hypothesis.id} researches "
-                f"{hypothesis.resolution}",
-                remedy=f"set the leg's resolution to {hypothesis.resolution}",
+                f"legs.{name}: {leg.resolution} bars, where {hypothesis.id} reads its bars at "
+                f"{hypothesis.bar_size}",
+                remedy=f"set the leg's resolution to {hypothesis.bar_size}",
             )
     return hypothesis

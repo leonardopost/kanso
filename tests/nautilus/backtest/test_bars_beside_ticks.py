@@ -5,7 +5,8 @@ prints. A hypothesis at `resolution: tick` names the size its `bar` instruments 
 (`bar_resolution`), and the runner reads them at it, the sleeve subscribes them at it, and
 both are merged among the ticks by `ts_init` — a bar is stamped at its close, so it reaches
 the sleeve at the instant its minute ended, never before. Before the key existed the same
-file passed validation and every card stopped at subscribing bars of no size.
+file passed `hyp validate` and `hyp add`, and `research begin` refused it for want of a
+snapshot at `tick` (exit 2), so no card ran.
 
 Synthetic points over a few instants of one day, small enough to read at a glance.
 """
@@ -126,11 +127,16 @@ def test_a_tick_request_reads_its_bars_at_the_size_its_hypothesis_states(
     } == {("Bar", f"{SIGNAL}-1-MINUTE-LAST-EXTERNAL"), ("QuoteTick", "")}
 
 
-def test_a_grain_that_is_a_bar_size_is_read_as_itself(request_for) -> None:
-    """A version's manifest hands a replay and a stage node the sleeve's own grain, and an
-    overlay's beside it; a bar size is read as it is, a tick grain at `bar_resolution`."""
-    assert _bar_sizes(request_for(hypothesis_=hypothesis(resolution="1d"))) == ("1d",)
-    assert _bar_sizes(request_for(hypothesis_=tick_bars(), grains=("tick", "5m"))) == ("1m", "5m")
+def test_each_grain_a_version_records_is_read_at_its_own_bar_size(request_for) -> None:
+    """A version's manifest hands a replay and a stage node the sleeve's own grain, and beside a
+    bar-size sleeve the grain an attached overlay keeps its own clock on: a bar size is read as
+    itself, and a tick sleeve's grain at its `bar_resolution`. An overlay with a bar clock of its
+    own over a tick sleeve that reads bars is refused at `hyp validate`, so no version records
+    those two together."""
+    sleeve_and_overlay = request_for(hypothesis_=hypothesis(resolution="1d"), grains=("1d", "1m"))
+
+    assert _bar_sizes(sleeve_and_overlay) == ("1d", "1m")
+    assert _bar_sizes(request_for(hypothesis_=tick_bars(), grains=("tick",))) == ("1m",)
 
 
 def test_the_bars_reach_the_sleeve_among_the_ticks_at_their_close(

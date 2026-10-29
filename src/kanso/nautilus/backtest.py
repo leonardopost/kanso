@@ -611,7 +611,8 @@ def _bar_sizes(request: RunRequest) -> tuple[str, ...]:
     and in place of a grain that is not — a sleeve clocked on quotes, prints or a book — the
     `bar_resolution` its hypothesis states. A stage node and a replay are handed the grains a
     version's manifest records, the sleeve's resolution among them, and read through here
-    with the hypothesis they deploy, so every path reads the bars a card read."""
+    with the hypothesis they deploy, so every path reads bars at the sizes a card read them
+    at."""
     stated = request.hyp.bar_resolution
     return tuple(
         dict.fromkeys(

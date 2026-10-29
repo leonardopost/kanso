@@ -31,6 +31,7 @@ from .conftest import (
     FIRST,
     FLAT,
     HYP_ID,
+    HYPOTHESIS,
     INSTRUMENT,
     RAISING,
     READING,
@@ -43,6 +44,7 @@ from .conftest import (
     payload,
     schedule_split,
     write_hypothesis,
+    write_spec,
     write_split,
 )
 
@@ -126,6 +128,37 @@ def test_a_run_needs_a_snapshot_covering_its_windows(runner: CliRunner, loaded: 
 
     assert result.exit_code == Exit.PRECONDITION
     assert "kanso data snapshot" in payload(result)["remedy"]
+
+
+def test_a_tick_run_whose_bars_are_held_at_no_snapshot_s_size_names_the_size(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """DEMO's prints are held and its bars at an hour; a tick file reading the bars two minutes
+    at a time is refused naming that size, which is the one thing missing, and not only the
+    tick grain the prints are held at."""
+    from kanso.data.snapshot import covering
+    from kanso.schemas import Hypothesis, load_yaml
+
+    prints = write_spec(loaded, name="prints.yaml", types=["trade"])
+    loaded_prints = at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", prints)
+    assert loaded_prints.exit_code == Exit.OK, loaded_prints.stdout
+    assert at(runner, loaded, "data", "snapshot").exit_code == Exit.OK
+    costs = {**HYPOTHESIS["costs"], "latency_ms": 20}
+    tick = {"resolution": "tick", "data_requirements": ["trade", "bar"], "costs": costs}
+    path = write_hypothesis(loaded, **tick, bar_resolution="2m")
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+
+    result = at(runner, loaded, "research", "begin", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert payload(result)["error"] == (
+        "no snapshot covers DEMO.SIM over the research and certification windows at tick, bars "
+        "at 2m"
+    )
+    hyp = load_yaml(Hypothesis, path)
+    held = covering(find(loaded), hyp.universe, hyp.data_requirements, "1h", hyp.windows)
+    assert held is not None, "the prints and the hourly bars are held"
 
 
 def test_a_run_begins_across_the_weekends_at_its_chunk_edges(

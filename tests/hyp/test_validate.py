@@ -2296,8 +2296,8 @@ def test_a_tick_hypothesis_reading_bars_at_a_stated_size_is_admissible(ws: Works
 def test_a_tick_hypothesis_reading_bars_at_no_size_is_refused_with_its_remedy(
     ws: Workspace,
 ) -> None:
-    """Admitted before the key existed, and every card of it stopped at subscribing bars of
-    no size."""
+    """Admitted before the key existed, and refused at `research begin` for want of a snapshot
+    at `tick` (exit 2), so no card of it ran."""
     failure = refused(ws, document(**TICK_BARS))
 
     assert "bar_resolution: resolution 'tick' is no bar size and 'bar' is required" in (
@@ -2337,6 +2337,26 @@ def test_a_construct_reading_bars_as_its_host_does_is_admissible(ws: Workspace) 
     parsed = accepted(ws, document(**TICK_BARS, bar_resolution="1m", **FILTER_CLASSIFICATION))
 
     assert parsed.bar_resolution == "1m"
+
+
+def test_an_overlay_on_a_clock_of_its_own_over_a_host_reading_bars_beside_ticks_is_refused_once(
+    ws: Workspace,
+) -> None:
+    """A file at a bar-size resolution states no `bar_resolution`, so its cards would hand the
+    host bars of no size. One refusal, whose remedy — the host's grain and size — is admitted."""
+    host_with(ws, **TICK_BARS, bar_resolution="1m")
+
+    failure = refused(ws, document(resolution="5m", **OVERLAY_CLASSIFICATION))
+    followed = accepted(ws, document(**TICK_BARS, bar_resolution="1m", **OVERLAY_CLASSIFICATION))
+
+    assert failure.message.startswith(
+        "resolution: 5m is a bar clock of this overlay's own, and host_sleeve@1 reads its bars "
+        "beside its tick grain at 1m"
+    )
+    assert (failure.remedy or "").startswith(
+        "set resolution to tick and bar_resolution to 1m, requiring bar, to match "
+    )
+    assert (followed.resolution, followed.bar_resolution) == ("tick", "1m")
 
 
 def test_an_overlay_may_keep_a_grain_of_its_own(ws: Workspace) -> None:

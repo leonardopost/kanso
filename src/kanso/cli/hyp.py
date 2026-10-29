@@ -236,19 +236,12 @@ def _summary(hypothesis: Hypothesis, path: Path) -> dict[str, Any]:
     }
 
 
-def _grain(hypothesis: Hypothesis) -> str:
-    """The resolution, and beside a tick one the size its bars are read at."""
-    if hypothesis.bar_resolution is None:
-        return hypothesis.resolution
-    return f"{hypothesis.resolution}, bars at {hypothesis.bar_resolution}"
-
-
 def _summary_lines(hypothesis: Hypothesis, path: Path, verdict: str) -> tuple[str, ...]:
     windows = hypothesis.windows
     return (
         field(verdict, f"{hypothesis.id} · {path}"),
         field("universe", ", ".join(hypothesis.universe)),
-        field("grain", f"{_grain(hypothesis)} · {', '.join(hypothesis.data_requirements)}"),
+        field("grain", f"{hypothesis.grain} · {', '.join(hypothesis.data_requirements)}"),
         indent(f"research      {windows.research.start}..{windows.research.end}"),
         indent(f"certification {windows.certification.start}..{windows.certification.end}"),
         indent(f"forward       {windows.forward.start}.."),

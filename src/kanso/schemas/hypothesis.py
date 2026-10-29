@@ -480,6 +480,14 @@ class Hypothesis(Versioned):
         one, else `resolution` — a bar size wherever `bar` is required."""
         return self.bar_resolution or self.resolution
 
+    @property
+    def grain(self) -> str:
+        """The resolution as an operator reads it: beside a tick one, with the size its bars
+        are read at — `tick, bars at 1m`."""
+        if self.bar_resolution is None:
+            return self.resolution
+        return f"{self.resolution}, bars at {self.bar_resolution}"
+
     def _check_resolution(self) -> None:
         required = self.data_requirements
         if is_duration(self.resolution):
@@ -506,9 +514,9 @@ class Hypothesis(Versioned):
         """Bars are read at a bar size: the resolution's, or the one `bar_resolution` states.
 
         A sleeve clocked on quotes, prints or a book has no bar size of its own, so a `bar`
-        requirement beside one names the size its bars are read at, or a run of it would
-        subscribe bars of no size and stop at its first card. A bar-size resolution is the
-        size its bars are read at, and a second would leave the file saying two things.
+        requirement beside one names the size its bars are read at, or nothing would say what
+        size to read, subscribe or snapshot them at. A bar-size resolution is the size its
+        bars are read at, and a second would leave the file saying two things.
         """
         stated = self.bar_resolution
         if is_duration(self.resolution):
@@ -516,7 +524,8 @@ class Hypothesis(Versioned):
                 raise RemedyError(
                     f"bar_resolution: resolution {self.resolution} is a bar size, and the bars "
                     "are read at it",
-                    remedy=f"drop bar_resolution, or set resolution to {stated}",
+                    remedy=f"drop bar_resolution (resolution {self.resolution} is the bar "
+                    "size), or keep it and set resolution to tick, quote or trade",
                 )
             return
         if "bar" in self.data_requirements and stated is None:

@@ -126,6 +126,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
+| attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution` |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -644,18 +645,32 @@ data_by_instrument:
 ```
 
 The runner reads every `bar` instrument at that size, the sleeve subscribes them at it and its
-`on_bar` is handed them, and a snapshot must cover them at it; a card, a certificate, a replay
-and a stage node all read them so, and `kanso replay parity` holds. A bar is stamped at its
-close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches the
-sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
+`on_bar` is handed them, and a snapshot must cover them at it; a card, a certificate and a
+replay read them so, and `kanso replay parity` holds. A version's manifest records
+`bar_resolution` where the file states one, so a stage node's sleeve reads bars at the size its
+card did — though not only the series its card did: the manifest carries neither
+`data_by_instrument` nor `session_scope`, so a stage sleeve subscribes every required type of
+every name — the signal's quotes and prints, the traded name's bars — as it does for any file
+that narrows what an instrument is asked for (`docs/backlog.md` row 229). A bar is stamped at
+its close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches
+the sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
 same instant. The sleeve's sessions — what `warmup` counts — are still the days its quotes or
-prints were printed, not the days a signal's bars were. `kanso hyp validate` refuses (exit 3)
-a tick file that requires `bar` and states no `bar_resolution`, which before the key existed
-was admitted and stopped every card at subscribing bars of no size, a `bar_resolution` beside
-a resolution that is itself a bar size, and one with no `bar` to read; an attached construct
-states its host's, as it states its host's `warmup`, because its cards run the host underneath
-it. Adopting, changing or dropping the key re-pins the hypothesis and clears `best` with a
-`best_cleared` naming `bar_resolution`; a row pinned before it existed reads as stating none.
+prints were printed, not the days a signal's bars were. A signal that trades round the clock —
+a future's twenty-three hours, a coin's twenty-four — moves the sleeve outside the traded
+name's session too: an order sent then is filled at that name's last quote or print, since the
+simulated venue keeps no market hours, and every UTC day that holds a point, a weekend's
+included, is a session of the run's digest and its period ends (`docs/backlog.md` row 231).
+`kanso hyp validate` refuses (exit 3) a tick file that requires `bar` and states no
+`bar_resolution` — before the key existed such a file passed `hyp validate` and `hyp add`, and
+`research begin` refused it for want of a snapshot at `tick` (exit 2), so no card ran — a
+`bar_resolution` beside a resolution that is itself a bar size, and one with no `bar` to read.
+An attached construct states its host's `bar_resolution`, as it states its host's `warmup`,
+because its cards run the host underneath it; so an overlay with a bar clock of its own is
+refused (exit 3) over a host that reads bars beside ticks — a file at a bar-size resolution
+states no size for the host's bars — with the host's resolution and `bar_resolution` as the
+remedy (`docs/backlog.md` row 230). Adopting, changing or dropping the key re-pins the
+hypothesis and clears `best` with a `best_cleared` naming `bar_resolution`; a row pinned before
+it existed reads as stating none.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session

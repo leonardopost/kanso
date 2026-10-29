@@ -124,7 +124,7 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
-from kanso.schemas.duration import TICK_RESOLUTIONS
+from kanso.schemas.duration import TICK_RESOLUTIONS, is_duration
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
     DEFAULT_CURRENCY,
@@ -1090,7 +1090,10 @@ def _check_host_pairing(
     book policy likewise, since a construct's cards run under this file's policy and its
     version is deployed under the sleeve's; and `bar_resolution` too, since the host's bars
     are read at the size this file states, and a host certified on one size would be
-    handed another, or bars of no size. A
+    handed another, or bars of no size. So an overlay with a bar clock of its own is refused
+    over a host that reads bars beside ticks: a file at a bar-size resolution states no
+    `bar_resolution`, so its cards would hand the host bars of no size, and the one way off
+    is the host's own resolution and size. A
     budgeted overlay attaches to a budgeted host and an unbudgeted one to an unbudgeted
     host, because the overlay's book is the host's budget and its own together; and that
     book has to fit the ceilings the overlay's own file declares, since an overlay card
@@ -1133,6 +1136,15 @@ def _check_host_pairing(
             f"{construct_id} is consulted on the host's grain, and only an overlay has a "
             "clock of its own",
             remedy=f"set resolution to {host_hyp.resolution}, or attach as an overlay",
+        )
+    if host_hyp.bar_resolution is not None and is_duration(hyp.resolution):
+        raise ValidationError(
+            f"resolution: {hyp.resolution} is a bar clock of this {construct_id}'s own, and "
+            f"{label} reads its bars beside its {host_hyp.resolution} grain at "
+            f"{host_hyp.bar_resolution}; a construct's cards run its host reading bars at the "
+            "size this file states, and a file at a bar-size resolution states none",
+            remedy=f"set resolution to {host_hyp.resolution} and bar_resolution to "
+            f"{host_hyp.bar_resolution}, requiring bar, to match {path}",
         )
     if hyp.bar_resolution != host_hyp.bar_resolution:
         size = host_hyp.bar_resolution
