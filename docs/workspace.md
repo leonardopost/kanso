@@ -1299,21 +1299,20 @@ warmup: the venue holds nothing of it, so nothing is sent or held and no token s
 strategy that cancels its last order on every point, whether or not it went, sends what one
 that cancels only what went does. With neither key stated such a cancel is held back and
 counted, as before the keys existed (below). Under a stated rate each command takes its tokens
-from a bucket
-of that many — a submit and a modify one, a cancel `requests_per_cancel` — full when the run
-starts and refilled at that many a minute **on the data clock** — `data_time`, held so a
-point published late refills nothing — and never past full: the shape of the quota kanso's
-broker clients hold themselves to, a burst of the rate and the rate after it, so a rolling
-minute can hold up to twice the figure. It is the same code on every path, so a card, `kanso
-replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
+from a bucket of that many — a submit and a modify one, a cancel `requests_per_cancel` — full
+when the run starts and refilled at that many a minute **on the data clock** — `data_time`,
+held so a point published late refills nothing — and never past full: the shape of the quota
+kanso's broker clients hold themselves to, a burst of the rate and the rate after it, so a
+rolling minute can hold up to twice the figure. It is the same code on every path, so a card,
+`kanso replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
 parity` compares the orders that came of it and the commands counted. A rate below what one
 cancel spends — an `orders_per_minute` under `requests_per_cancel` — is refused wherever the
-venue model is resolved, at `hyp validate`, `hyp add` and `research begin` (exit 3), naming
-the venue, both keys and both figures: the bucket never holds more than the rate, so the
-sleeve's first cancel would wait for ever and every entry and modify behind it be dropped. A
-command finds **no token available** to it when the bucket holds fewer than it costs — a list
-one for each of its orders, all or none — or, for an entry or a modify, while a cancel waits
-for its tokens (below). Then:
+venue model is resolved, at `hyp validate`, `hyp add` and `research begin` (exit 3), naming the
+venue, both keys and both figures: the bucket never holds more than the rate, so the sleeve's
+first cancel would wait for ever and every entry and modify behind it be dropped. A command
+finds **no token available** to it when the bucket holds fewer than it costs — a list one for
+each of its orders, all or none — or, for an entry or a modify, while a cancel waits for its
+tokens (below). Then:
 
 - **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
   quantity given or sized by the room, whatever it does to the position; and an order built
@@ -1327,9 +1326,10 @@ for its tokens (below). Then:
   on** past it, measured on the entries the rate let through; a stage node, running the same
   code, drops the same commands and does not halt. Whether an order built by hand opens is
   read against the position the sleeve holds once its market orders in flight have filled and
-  the exits the rate owes it at market have gone — owed for want of a token, or behind a
-  cancel of its own order on the closing side that the rate deferred, which the account takes
-  before anything asked after it — as `held` reads it: an exit owed at a price is a limit, and
+  the exits the rate owes it at market have gone — owed for want of a token, which the
+  account takes before anything asked after it, or behind a cancel of its own order on the
+  closing side that the rate deferred, which goes once that cancel has landed, no entry going
+  while the cancel waits — as `held` reads it: an exit owed at a price is a limit, and
   is no more read as filling than a limit resting, an exit owed for part of the position takes
   that part, and an exit owed at market behind a cancel in flight or an order on its way, with
   or without a rate, is read as `held` reads it, not as gone. So **the second leg of a flip** —
@@ -1386,14 +1386,14 @@ waiting. A `submit_exit` of the whole position leaves nothing to close once it h
 order whose cancel waits still counting as working, so it holds the cancel back no further;
 but one of part of it, asked for on every point, is owed each time the bucket is empty and
 takes each token that comes back for as long as the position lasts, while the order the
-cancel would take out works on and can fill. A sleeve acts
-only on points, and the venue matches a point before any handler of it runs, on both paths,
-so what waited goes on the **first point at or after the instant its token came back, after
-the venue has matched that point** — not at that instant. Across a gap that is the next point
-there is, however far: a cancel deferred on a session's last point goes on the next session's
-first, after the venue has matched it, so the order it was meant to cancel can fill there, and
-an exit owed then is held overnight. A strategy that must not carry an order into the next
-session cancels it with a token to spare.
+cancel would take out works on and can fill. A sleeve acts only on points, and the venue
+matches a point before any handler of it runs, on both paths, so what waited goes on the
+**first point at or after the instant its token came back, after the venue has matched that
+point** — not at that instant. Across a gap that is the next point there is, however far: a
+cancel deferred on a session's last point goes on the next session's first, after the venue has
+matched it, so the order it was meant to cancel can fill there, and an exit owed then is held
+overnight. A strategy that must not carry an order into the next session cancels it with a
+token to spare.
 
 A command is counted, and pays its tokens, where the sleeve decides to send it — a cancel
 kanso holds back until the venue has the order, or behind a modify, when it is asked for —

@@ -816,9 +816,9 @@ def test_a_flip_s_second_leg_behind_an_exit_owed_behind_a_deferred_cancel_is_dro
     closing side first, and the bucket holds too few tokens for the cancel: it waits, the order
     it would cancel is working until it goes, and the exit is owed behind it, to go once the
     cancel has — on the sixty-first quote at two a minute, one request a cancel, and on the
-    forty-first at three, two. The account takes that exit before anything asked after it, so
-    the second leg of the flip behind it reads it as gone, as it would read the market order the
-    rate held back: it opens the other side, and is the entry it is, dropped and counted — an
+    forty-first at three, two. The owed exit stands for the market order the rate held back,
+    and no entry goes while the cancel waits, so the second leg of the flip behind it reads it
+    as gone: it opens the other side, and is the entry it is, dropped and counted — an
     order or a list built by hand, an entry of a quantity given, an entry sized by the room the
     owed exit frees — and never sent as the order that closes the position in the owed exit's
     place, nor refused as an exit the strategy built itself. Unheld, the flip goes whole."""

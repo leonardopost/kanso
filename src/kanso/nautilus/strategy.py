@@ -2650,7 +2650,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         It is the position `held` reads, the reader a strategy sizes and flips by — an exit at
         market sent in this handler reads as gone — with an exit the rate owes at market, for
         want of a token or behind a cancel it deferred, read as gone too: it stands for the
-        market order the rate held back, which goes before anything asked after it. So
+        market order the rate held back, which goes once the rate lets it through (`_left`). So
         `submit_exit(name)` and then an order on the other side built by hand, in one handler,
         or a list whose first order is one, is an exit and an entry here whether the exit went
         or was so owed, where `classify` reads both as exits until the first fills. A limit or
@@ -2688,16 +2688,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         which `held` applies no more than it applies one resting, and the second is owed with
         or without a rate, and stands for nothing `held` applies on any path.
 
-        The account takes an exit the rate owes before anything asked after it — one owed for
-        a token as soon as a token comes back (`_pay_rated`), one behind a deferred cancel
-        once that cancel, which goes before any entry (`_command_spend`), has landed — so what
-        is asked after it reads it as an exit at market in flight, as it would read the order
-        the rate held back: an order built by hand (`_opens`), the room an unsized entry is
-        sized to (`_headroom`), and a sized entry's check of what it holds (`_sized_entry`).
-        So a flip or a rotation behind it is the entry it is, dropped and counted as no token
-        is available to it either, rather than refused as `one_position` or as an exit kanso
-        did not size, or sized to no room. With no rate stated nothing is owed so, and every
-        reader reads as it did before the bucket existed."""
+        Either stands for the market order the rate held back, which goes once the rate lets
+        it through: one owed for a token is asked again as soon as a token comes back, before
+        anything asked after it (`_pay_rated`), and one behind a deferred cancel once that
+        cancel has landed, the cancel going before any entry or modify (`_command_spend`). So
+        what is asked while it is owed reads it as an exit at market in flight, as it would
+        read the order the rate held back: an order built by hand (`_opens`), the room an
+        unsized entry is sized to (`_headroom`), and a sized entry's check of what it holds
+        (`_sized_entry`). A flip or a rotation behind it is then the entry it is, dropped and
+        counted, as no token is available to it either — the bucket holding too few, or the
+        cancel waiting — rather than refused as `one_position` or as an exit kanso did not
+        size, or sized to no room. With no rate stated nothing is owed so, and every reader
+        reads as it did before the bucket existed."""
         if not held:
             return held
         name = (key, OrderSide.SELL if held > 0 else OrderSide.BUY)
@@ -3700,8 +3702,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         venue alone, the old leg still filled the book and every flip was refused for a bar.
         An exit a stated `orders_per_minute` owes at market — for want of a token, or behind a
         cancel it deferred — counts as gone as well (`_left`): it stands for the market order
-        the rate held back, which goes before anything asked after it, so a flip behind it is
-        sized as one behind an exit that went.
+        the rate held back, which goes once the rate lets it through, so a flip behind it is
+        sized as one behind an exit that went, and dropped, as no token is available to it
+        either.
         """
         intended = self._holdings()
         if self._rate_owed or self._command_deferred:

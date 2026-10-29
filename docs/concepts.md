@@ -1890,19 +1890,18 @@ entry or modify takes one, so entries do not starve a cancel that spends two req
 exit takes one the bucket holds all the same — so a `submit_exit` of part of a position asked
 for on every point can keep a cancel waiting as long as the position lasts, the order it would
 cancel free to fill meanwhile. A cancel whose order has closed waits for nothing. An owed exit
-and a deferred cancel are what the account would have let through later, but a sleeve acts
-only on points, and the
-venue matches a point before any handler of it runs: they go on the first point at or after the
-instant a token comes back, after that point is matched, so one that waited over a gap — a
-session's close — goes on the next session's first point, where the order a deferred cancel was
-meant for can still fill. It is not a charge, so it is not struck again from a record: it
-decides which orders a run sends, as `latency_ms` decides when they land, and every card
-records how many it sent, how many it dropped and how many in its busiest 60 s whether or not a
-rate is stated (Card, above). A stage node runs the same code, so it drops the same entries and
-runs on rather than halting. Both paths count a command where the strategy decides to send it,
-so under a stated rate, where what one path spent decides what it may send next, `kanso replay
-parity` judges the counts, the dropped among them, beside the orders; with no rate stated it
-judges the orders alone, as it did before kanso counted.
+and a deferred cancel are what the account would have let through later, but a sleeve acts only
+on points, and the venue matches a point before any handler of it runs: they go on the first
+point at or after the instant a token comes back, after that point is matched, so one that
+waited over a gap — a session's close — goes on the next session's first point, where the order
+a deferred cancel was meant for can still fill. It is not a charge, so it is not struck again
+from a record: it decides which orders a run sends, as `latency_ms` decides when they land, and
+every card records how many it sent, how many it dropped and how many in its busiest 60 s
+whether or not a rate is stated (Card, above). A stage node runs the same code, so it drops the
+same entries and runs on rather than halting. Both paths count a command where the strategy
+decides to send it, so under a stated rate, where what one path spent decides what it may send
+next, `kanso replay parity` judges the counts, the dropped among them, beside the orders; with
+no rate stated it judges the orders alone, as it did before kanso counted.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the
