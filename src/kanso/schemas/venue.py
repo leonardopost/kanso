@@ -63,9 +63,12 @@ each submit and each modify spending one and each cancel of an order `requests_p
 the requests the broker's client sends for one (one unless stated), and with it unset nothing
 holds a sleeve to any rate. A broker states its figure and its client's cancel for its venues
 and a workspace its plan's figure; it is the sleeve's own figure, so sleeves sharing one
-account state shares of it. Unset, each is left out of the resolved model's serialised form
-altogether, so a model that states neither dumps, digests and records exactly as one did
-before the keys existed.
+account state shares of it. A rate below what one cancel spends is refused where the model is
+resolved, naming the venue, and by the model itself: the sleeve's bucket holds no more than the
+rate, so its first cancel would wait for ever and every entry and modify behind it be dropped.
+Unset, each is left out of the resolved model's serialised form altogether, so a model in which
+no layer states either, the broker's declaration included, dumps, digests and records exactly
+as one did before the keys existed.
 
 The resolved model records the origin of every field, so a number on a card, a certificate
 or a strategy version is always traceable to the venue that produced it.
@@ -182,6 +185,13 @@ class Costs(KansoModel):
             raise ValueError("fixed_bps: required when spread is fixed_bps")
         return self
 
+    @model_validator(mode="after")
+    def _cancel_fits_the_rate(self) -> Costs:
+        short = _cancel_past_rate(self.orders_per_minute, self.requests_per_cancel)
+        if short is not None:
+            raise ValueError(short)
+        return self
+
     @model_serializer(mode="wrap")
     def _unstated_rate_unwritten(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """The model as it dumps, without `orders_per_minute` or `requests_per_cancel` when
@@ -253,6 +263,7 @@ SANDBOX = ExecutionClientSpec(id="sandbox", capital="simulated", clock="replay")
 def _merge_costs(
     layers: list[tuple[Origin, CostsOverride | None]],
     *,
+    venue: str,
     quotes_available: bool,
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL,
 ) -> tuple[Costs, Origin]:
@@ -280,7 +291,32 @@ def _merge_costs(
             "costs.fixed_bps: no value declared and no quotes to take a spread from; "
             "set it on the hypothesis costs or on the venue"
         )
+    rate, per_cancel = values.get("orders_per_minute"), values.get("requests_per_cancel")
+    short = _cancel_past_rate(rate, per_cancel, venue)
+    if short is not None:
+        raise ValidationError(
+            short,
+            remedy=f"state costs.orders_per_minute of at least {per_cancel} — the share of the "
+            f"account's rate this sleeve may spend — in the hypothesis costs or under "
+            f"venues.{venue}.costs in portfolio.yaml",
+        )
     return Costs.model_validate(values), origin
+
+
+def _cancel_past_rate(rate: object, per_cancel: object, venue: str | None = None) -> str | None:
+    """Why a rate admits no cancel, or `None` when it admits one or either is unstated: a
+    bucket of `rate` tokens holds no more than `rate`, so a cancel that spends more never finds
+    them, and while it waits no entry or modify takes a token
+    (`kanso.nautilus.strategy.KansoStrategy`). `venue` names where it was resolved."""
+    if not isinstance(rate, int) or not isinstance(per_cancel, int) or rate >= per_cancel:
+        return None
+    where = "" if venue is None else f" on {venue}"
+    return (
+        f"costs.orders_per_minute: {rate}{where} is below costs.requests_per_cancel: "
+        f"{per_cancel}; a bucket of {rate} token(s) never holds the {per_cancel} one cancel "
+        "spends, so the sleeve's first cancel would wait for ever and every entry and modify "
+        "behind it be dropped"
+    )
 
 
 def resolve_venue_model(
@@ -329,6 +365,7 @@ def resolve_venue_model(
     ]
     costs, costs_origin = _merge_costs(
         cost_layers,
+        venue=venue,
         quotes_available=quotes_available,
         limit_fill=default_limit_fill,
     )

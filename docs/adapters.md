@@ -475,14 +475,16 @@ a minute per account on its standard plan and 1,000 on its Elite plan, and the c
 every request it sends to `requests_per_minute` (below), 190 by default, under the 200. A
 submit is one request and a modify one, and a cancel two: the `DELETE`, and then a read of the
 order, since no order stream reports what the cancel came to. So a workspace whose
-`[research] broker` is `alpaca` researches every card with its orders spending at most 190 of
-those requests a minute, a cancel two of them (`docs/workspace.md`, `costs.orders_per_minute`),
-which is what the client lets through, unless it states its plan's figure. Past it a card
-drops the entries and modifies it has no request left for and counts them on its `commands`,
-running on; it owes its exits and defers its cancels, and while a cancel waits for its two
+`[research] broker` is `alpaca` researches every card with its orders held to those requests —
+a burst of 190 and then 190 a minute, a cancel two of them (`docs/workspace.md`,
+`costs.orders_per_minute`) — which is what the client lets through, unless it states its
+plan's figure. Past it a card drops the entries and modifies no request is available to — none
+left, or a cancel waiting for its two — and counts them on its `commands`, running on; it owes
+the exits `submit_exit` sized and defers its cancels, and while a cancel waits for its two
 requests no entry or modify takes one that comes back, so a sleeve that cancels and re-posts
-cancels every order it sent but the last; and it is refused only for an exit kanso cannot send
-again as it was asked. An account on the Elite plan states, beside a
+its entries cancels every one it sent but the last; and it is refused only for an exit kanso
+did not size — one the strategy built itself, or an overlay's leg or clip — sent with no
+request left for it. An account on the Elite plan states, beside a
 `requests_per_minute` raised to match,
 
 ```yaml

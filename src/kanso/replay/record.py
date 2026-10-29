@@ -23,11 +23,12 @@ before the digest has none, and may still hold the file, which nothing reads.
 
 The intents are kept whole. They are what parity compares, field by field and with an
 instant tolerance a digest cannot honour, and they are what a reader opens to see where two
-paths parted. Beside them a session records how fast its strategy sent its orders
-(`commands`), counted on the data clock as a card counts them, where the strategy decides to
-send each — the instants both paths reach alike, which is what lets one bucket hold one
-strategy to one rate on both — so parity compares them after the intents
-(`kanso.replay.parity.Parity.counted`).
+paths parted. Beside them a session that ran under a stated `costs.orders_per_minute` records
+how fast its strategy sent its orders (`commands`), counted on the data clock as a card counts
+them, where the strategy decides to send each — the instants both paths reach alike, which is
+what lets one bucket hold one strategy to one rate on both — so parity compares them after the
+intents (`kanso.replay.parity.Parity.counted`). Under no stated rate it records none, and is
+written as it was before kanso counted.
 
 `clock_ts` is the availability instant of the last point released, in nanoseconds: the
 replay position a stage resumes from. It is held as digits rather than as a timestamp
@@ -185,8 +186,9 @@ class Session(Versioned):
     intents: int = Field(default=0, ge=0)
     commands: Commands | None = None
     """How fast the strategy sent its orders on this path (`kanso.nautilus.rate`): the
-    record a card's digest carries, kept on both code paths so parity compares the two;
-    `None` for a session that did not run to a result, or one an earlier kanso wrote."""
+    record a card's digest carries, kept on both code paths under a stated
+    `costs.orders_per_minute` so parity compares the two; `None` for a session under no stated
+    rate, one that did not run to a result, or one an earlier kanso wrote."""
     clock_ns: int | None = None
     started_at: datetime
     ended_at: datetime | None = None

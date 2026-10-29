@@ -2,15 +2,17 @@
 
 A sleeve under a venue model that states `costs.orders_per_minute` takes a token for every
 command it sends from a bucket of that many, refilled at that many a minute of the data
-clock — a cancel as many as `requests_per_cancel` says. With the bucket empty an entry, an
-entry's list and a modify are dropped unsent and counted as refused, and the run goes on; any
-other exit is owed and a cancel deferred, and what waited goes first once a token comes back,
-no submit or modify taking one while a cancel waits; an exit kanso cannot send again as it was
-asked is refused. The second leg of a flip is an entry there, and a dropped order is nothing
-to cancel or to move. Each scenario here runs on the
-research path (`backtest.execute`) and on the live one (`session.run_node`) and asserts both
-the behaviour and that the two agree on every intent, fill and count, the refused ones
-included; and with the key unset nothing a run does moves.
+clock — a cancel as many as `requests_per_cancel` says. With no token available to it an
+entry, an entry's list and a modify are dropped unsent and counted as refused, and the run
+goes on; an exit `submit_exit` sized is owed and a cancel deferred, and what waited goes first
+once a token comes back, no entry or modify taking one while a cancel waits, where an exit
+takes one the bucket holds; an exit the strategy built itself is refused. The second leg of a
+flip is an entry there — `submit_entry`'s in every form, and one built by hand behind an exit at
+market — and a dropped order is nothing to cancel or to move.
+Each scenario here runs on the research path (`backtest.execute`) and on the live one
+(`session.run_node`) and asserts both the behaviour and that the two agree on every intent,
+fill and count, the refused ones included; and with the key unset nothing a card's run does
+moves, and the one thing the node path does differently is pinned.
 
 The quotes are a second apart, so a rate of `n` a minute refills a token every `60 / n`
 quotes, and every instant asserted below is arithmetic on that: the bucket keeps its level
@@ -248,24 +250,15 @@ def test_an_exit_past_the_rate_is_owed_until_the_bucket_refills_on_both_paths() 
     assert held.commands == Commands(submits=3, cancels=1, peak_60s=4, p99_60s=4)
 
 
-HAND_BUILT_CLOSE = sleeve(
-    """        elif self.seen == 3:
-            self.cancel_order(self.resting)
-        elif self.seen == 4:
-            self.close_position(self.cache.positions_open(strategy_id=self.id)[0])
-"""
-)
-"""The same, closing by the engine's own `close_position`, a market order it builds."""
-
-
-def test_an_exit_the_strategy_built_at_market_is_owed_as_submit_exit_would_send_it() -> None:
-    held = both(rated(HAND_BUILT_CLOSE, 3), [tuple(steady(40))])
-
-    assert stamps(held)[-1] == (at(21), "SELL", "MARKET")
-    assert held.intents[-1][3] == 100.0
-
-
 HAND_BUILT = {
+    "market": "self.order_factory.market(name, OrderSide.SELL, Quantity.from_int(100))",
+    "limit": "self.order_factory.limit(name, OrderSide.SELL, Quantity.from_int(100), "
+    "Price(10.03, 2))",
+    "day": "self.order_factory.limit(name, OrderSide.SELL, Quantity.from_int(100), "
+    "Price(10.03, 2), time_in_force=TimeInForce.DAY)",
+    "market_immediate_or_cancel": "self.order_factory.market(name, OrderSide.SELL, "
+    "Quantity.from_int(100), time_in_force=TimeInForce.IOC)",
+    "past_flat": "self.order_factory.market(name, OrderSide.SELL, Quantity.from_int(150))",
     "stop": "self.order_factory.stop_market(name, OrderSide.SELL, Quantity.from_int(100), "
     "trigger_price=Price(9.0, 2))",
     "immediate_or_cancel": "self.order_factory.limit(name, OrderSide.SELL, "
@@ -286,9 +279,10 @@ HAND_BUILT = {
     "a_leg_of_a_list": "self.order_factory.bracket(name, OrderSide.SELL, "
     "Quantity.from_int(100), sl_trigger_price=Price(11.0, 2), tp_price=Price(9.0, 2)).orders[0]",
 }
-"""Exits a strategy built itself that `submit_exit` cannot send again as they were asked: a
-stop; a limit that would not rest, would rest only as a maker, would expire or would show part
-of itself; a size in the quote's currency; an emulated order; an order of a list."""
+"""Exits a strategy built itself: at market, at a good-till-cancelled limit, at a limit for the
+day, at market immediate-or-cancel, at market past flat; a stop; a limit that would not rest,
+would rest only as a maker, would expire or would show part of itself; a size in the quote's
+currency; an emulated order; an order of a list."""
 
 
 def hand_built(order: str) -> bytes:
@@ -302,15 +296,31 @@ def hand_built(order: str) -> bytes:
     )
 
 
-@pytest.mark.parametrize("built", sorted(HAND_BUILT))
-def test_an_exit_kanso_cannot_send_again_as_it_was_asked_is_refused(built: str) -> None:
-    """Owed and sent again through `submit_exit`, each would go as a plain order at market or
-    at a good-till-cancelled limit: an immediate-or-cancel exit would rest and fill later, a
-    post-only one take, a stop fill at once. So past the rate each is refused like an entry."""
-    refusal = refused(rated(hand_built(HAND_BUILT[built]), 3), [tuple(steady(10))])
+HAND_BUILT_CLOSE = sleeve(
+    """        elif self.seen == 3:
+            self.cancel_order(self.resting)
+        elif self.seen == 4:
+            self.close_position(self.cache.positions_open(strategy_id=self.id)[0])
+"""
+)
+"""The same, closing by the engine's own `close_position`, a market order it builds."""
+
+
+@pytest.mark.parametrize("built", [*sorted(HAND_BUILT), "close_position"])
+def test_an_exit_the_strategy_built_itself_is_refused_past_the_rate(built: str) -> None:
+    """kanso owes only an exit `submit_exit` sized. Owed and sent again as `submit_exit` sends
+    one, an exit the strategy built would go as an order kanso built in its place: one the
+    strategy holds no handle to, so a cancel or a modify of its own order would reach nothing,
+    and one cut at flat, so a sale past it would lose what it opened; an immediate-or-cancel
+    exit would rest and fill later, a post-only one take, a stop fill at once. So past the
+    rate each is refused, whatever its type, its time in force or its size, the engine's own
+    `close_position` among them, and the refusal names `submit_exit`, which is owed."""
+    source = HAND_BUILT_CLOSE if built == "close_position" else hand_built(HAND_BUILT[built])
+    refusal = refused(rated(source, 3), [tuple(steady(10))])
 
     assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "SELL", at(4))
-    assert refusal.why.startswith("an exit kanso cannot send again as it was asked needed 1")
+    assert refusal.why.startswith("an exit the strategy built itself needed 1 of the 3 tokens")
+    assert "close with submit_exit, which is owed rather than refused" in refusal.why
 
 
 def deferring(call: str, *, price: float = 20.0) -> bytes:
@@ -524,9 +534,9 @@ def test_an_entry_s_list_takes_a_token_for_each_of_its_orders_or_is_dropped_whol
 
 
 def test_a_list_that_closes_a_position_past_the_rate_is_refused() -> None:
-    """An order of a list is an exit kanso cannot send again as it was asked, so a list whose
-    first order closes the position is refused past the rate, as each of its orders would be,
-    rather than dropped with the position left open."""
+    """kanso owes only an exit `submit_exit` sized, and an order of a list is not one, so a list
+    whose first order closes the position is refused past the rate, as each of its orders would
+    be, rather than dropped with the position left open."""
     closing = sleeve(
         "",
         second="pass\n        elif self.seen == 3:\n            "
@@ -539,36 +549,203 @@ def test_a_list_that_closes_a_position_past_the_rate_is_refused() -> None:
     assert refusal.why.startswith(
         "a list of 3 orders closing a position needed 3 of the 1 tokens a minute"
     )
-    assert "an exit kanso cannot send again as it was asked is refused" in refusal.why
+    assert "kanso owes only an exit submit_exit sized" in refusal.why
 
+
+FIRST_LEGS = {"market": "self.submit_exit(name)", "priced": "self.submit_exit(name, price=10.05)"}
+"""The first leg of a flip: the whole position at market, or at a limit the bid reaches on the
+sixty-fifth quote."""
 
 FLIPS = {
     "entry": 'self.submit_entry(name, "SELL", qty=100)',
+    "room": 'self.submit_entry(name, "SELL")',
     "list": BRACKET.format(side="SELL", stop=11.0, target=9.0),
 }
-"""The second leg of a flip: an entry on the other side, or a bracket of three whose first
-order is one."""
+"""The second leg of a flip: an entry on the other side of a quantity given, or of what the
+room leaves, or a bracket of three whose first order is one."""
+
+ROOM_CAPITAL = 1_001.0
+"""A capital the long of 100 at 10.01 fills the room of, so the leg sized by the room finds
+some only where the first leg reads as gone."""
 
 
-@pytest.mark.parametrize("leg", sorted(FLIPS))
+@pytest.mark.parametrize(
+    ("first", "leg", "unheld", "dropped"),
+    [
+        ("market", "entry", 3, 1),
+        ("market", "room", 3, 1),
+        ("market", "list", 5, 3),
+        ("priced", "entry", 3, 1),
+        ("priced", "room", 2, 0),
+    ],
+)
 @pytest.mark.parametrize(("per_minute", "exited_at"), [(2, 2), (1, 61)], ids=["sent", "owed"])
 def test_the_second_leg_of_a_flip_past_the_rate_is_an_entry_dropped_and_counted(
-    leg: str, per_minute: int, exited_at: int
+    first: str, leg: str, unheld: int, dropped: int, per_minute: int, exited_at: int
 ) -> None:
     """A flip is `submit_exit` and then an entry on the other side, in one handler. At two a
     minute the exit takes the last token on the second quote, and at one it is owed, going on
     the sixty-first; either way the second leg finds no token and is the entry it is, dropped
-    and counted — every order of a bracket — never owed as an exit and forgotten once the exit
-    has left the sleeve flat, and never refused. Unheld, the sleeve ends the other side."""
-    flipping = sleeve("", second=f"self.submit_exit(name)\n            {FLIPS[leg]}")
-    unrated = both(rated(flipping, None), [tuple(steady(70))])
-    held = both(rated(flipping, per_minute), [tuple(steady(70))])
+    and counted — sized by a quantity or by the room, behind an exit at market or at a price,
+    every order of a bracket — never owed as an exit and forgotten once the exit has left the
+    sleeve flat, and never refused. An exit owed at market frees the room as the market order
+    it holds back would, so the leg sized by the room is sized and dropped whether the exit
+    went or was owed; one at a price is a limit resting or owed, which frees no room, so the
+    leg finds none there unheld or held, and the rate counts nothing it would have sent. Unheld,
+    every leg that found room is sent, and the sleeve ends the other side."""
+    flipping = sleeve("", second=f"{FIRST_LEGS[first]}\n            {FLIPS[leg]}")
+    groups: list[tuple[object, ...]] = [tuple(steady(70, rise_at=65))]
+    capital = {"capital": ROOM_CAPITAL} if leg == "room" else {}
+    unrated = both(replace(rated(flipping, None), **capital), groups)
+    held = both(replace(rated(flipping, per_minute), **capital), groups)
 
-    assert len(unrated.intents) == (3 if leg == "entry" else 5)
-    assert stamps(held) == [(at(1), "BUY", "MARKET"), (at(exited_at), "SELL", "MARKET")]
+    exited = "MARKET" if first == "market" else "LIMIT"
+    assert len(unrated.intents) == unheld
+    assert stamps(held) == [(at(1), "BUY", "MARKET"), (at(exited_at), "SELL", exited)]
     assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
     assert held.commands is not None
-    assert held.commands.refused_submits == (1 if leg == "entry" else 3)
+    assert held.commands.refused_submits == dropped
+
+
+BEHIND_AN_OWED_EXIT = {
+    "at_a_price": (
+        FIRST_LEGS["priced"],
+        BRACKET.format(side="SELL", stop=11.0, target=9.0),
+        "a list of 3 orders closing a position needed 3",
+    ),
+    "of_half": (
+        "self.submit_exit(name, qty=50)",
+        "self.submit_order(self.order_factory.market(name, OrderSide.SELL, Quantity.from_int(50)))",
+        "an exit the strategy built itself needed 1",
+    ),
+}
+"""An exit `submit_exit` owes, and an order built by hand on the closing side behind it."""
+
+
+@pytest.mark.parametrize("behind", sorted(BEHIND_AN_OWED_EXIT))
+def test_an_order_built_by_hand_reads_an_owed_exit_as_gone_only_for_what_it_takes_at_market(
+    behind: str,
+) -> None:
+    """At one a minute the exit asked for on the second quote is owed, and what the sleeve
+    builds by hand behind it in the same handler finds no token. An exit owed at a price stands
+    for a limit, which may never fill, and an exit owed for half the position takes only half:
+    so a bracket on the other side behind the first, and a sale of the other half behind the
+    second, each closes what the owed exit leaves, and is an exit the strategy built itself,
+    refused — not the second leg of a flip, dropped."""
+    first, then, why = BEHIND_AN_OWED_EXIT[behind]
+    refusal = refused(
+        rated(sleeve("", second=f"{first}\n            {then}"), 1), [tuple(steady(10))]
+    )
+
+    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "SELL", at(2))
+    assert refusal.why.startswith(why)
+
+
+def behind_a_cancel(then: str, *, also: str = "") -> bytes:
+    """Buys 100 at market, rests a buy of 50 at 9.00 on its second quote, and any order `also`
+    says, cancels the resting buy on its third — at two requests a cancel, a cancel that waits
+    for its tokens — and does `then` in the same handler."""
+    rest = (
+        "self.buy = self.order_factory.limit(name, OrderSide.BUY, Quantity.from_int(50), "
+        "Price(9.0, 2))\n            self.submit_order(self.buy)"
+    )
+    return sleeve(
+        f"""        elif self.seen == 3:
+            self.cancel_order(self.buy)
+            {then}
+""",
+        second=rest + (f"\n            {also}" if also else ""),
+    )
+
+
+SECOND_BUY = (
+    "self.other = self.order_factory.limit(name, OrderSide.BUY, Quantity.from_int(50), "
+    "Price(8.0, 2))\n            self.submit_order(self.other)"
+)
+"""A second buy resting, at 8.00, for a modify to move."""
+
+WHILE_A_CANCEL_WAITS = {
+    "stop": (
+        "self.submit_order(self.order_factory.stop_market(name, OrderSide.SELL, "
+        "Quantity.from_int(100), trigger_price=Price(9.0, 2)))",
+        (at(3), "SELL", "STOP_MARKET"),
+        Commands(submits=4, peak_60s=4, p99_60s=4),
+    ),
+    "exit": (
+        "self.submit_exit(name)",
+        (at(3), "SELL", "MARKET"),
+        Commands(submits=4, peak_60s=4, p99_60s=4),
+    ),
+    "entry": (
+        'self.submit_entry(name, "BUY", qty=10)',
+        (at(2), "BUY", "LIMIT"),
+        Commands(submits=3, peak_60s=3, p99_60s=3, refused_submits=1),
+    ),
+    "modify": (
+        "self.modify_order(self.other, price=Price(8.5, 2))",
+        (at(2), "BUY", "LIMIT"),
+        Commands(submits=3, peak_60s=3, p99_60s=3, refused_modifies=1),
+    ),
+}
+"""What the sleeve sends behind its waiting cancel, the last order it then sent, and the
+commands counted before the cancel goes."""
+
+
+@pytest.mark.parametrize("then", sorted(WHILE_A_CANCEL_WAITS))
+def test_while_a_cancel_waits_an_exit_takes_a_token_the_bucket_holds_and_an_entry_does_not(
+    then: str,
+) -> None:
+    """At four a minute, two requests a cancel, the entry and the two resting buys leave the
+    bucket more than one token and less than two on the third quote, where the cancel of the
+    first buy waits for its two. An exit sent behind it — a stop built by hand, `submit_exit`
+    at market — takes the token the bucket holds and goes: it is one order the account must
+    take, and the cancel goes once the bucket holds two again. An entry or a modify takes none
+    while the cancel waits, and is dropped and counted, so a cancel that costs two is not
+    starved."""
+    order, last, counted = WHILE_A_CANCEL_WAITS[then]
+    held = both(
+        rated(behind_a_cancel(order, also=SECOND_BUY), 4, per_cancel=2), [tuple(steady(10))]
+    )
+
+    assert stamps(held)[-1] == last
+    assert held.commands == counted
+
+
+OWED_BEHIND_A_CANCEL = behind_a_cancel("self.submit_exit(name)")
+"""At two a minute: the exit at market the sleeve asks for behind its waiting cancel finds no
+token, and is owed."""
+
+
+def test_an_exit_the_rate_owed_takes_a_token_that_comes_back_while_a_cancel_waits() -> None:
+    """At two a minute, two requests a cancel, the entry and the resting buy leave a thirtieth
+    of a token on the third quote: the cancel waits for two and the exit at market is owed. On
+    the thirty-first a whole token has come back, and the owed exit takes it before the
+    handler, though the cancel still waits for its second; the cancel goes once two have come
+    back again, on the ninety-first. Were the exit held behind the cancel, the cancel would go
+    on the sixty-first and the position stay open until the ninety-first."""
+    held = both(rated(OWED_BEHIND_A_CANCEL, 2, per_cancel=2), [tuple(steady(100))])
+
+    assert stamps(held)[2:] == [(at(31), "SELL", "MARKET")]
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert held.commands is not None and held.commands.cancels == 1
+
+
+def test_an_exit_built_by_hand_with_no_token_behind_a_cancel_is_refused_saying_what_waits() -> None:
+    """At two a minute, two requests a cancel, the bucket holds no whole token on the third
+    quote: the stop the sleeve builds behind its waiting cancel is refused, and the refusal says
+    what the bucket held and that a cancel waits for its two, ahead of every entry."""
+    stop = (
+        "self.submit_order(self.order_factory.stop_market(name, OrderSide.SELL, "
+        "Quantity.from_int(100), trigger_price=Price(9.0, 2)))"
+    )
+    refusal = refused(rated(behind_a_cancel(stop), 2, per_cancel=2), [tuple(steady(10))])
+
+    assert (refusal.rule, refusal.asked, refusal.ts_event) == (ORDER_RATE, "SELL", at(3))
+    assert refusal.why.startswith(
+        "an exit the strategy built itself needed 1 of the 2 tokens a minute "
+        "costs.orders_per_minute allows, and the bucket held 0, a cancel of 1 order(s) "
+        "waiting for 2 token(s) each, after 2 command(s) in the 60 s before it."
+    )
 
 
 SIZED_FLIP = b"""
@@ -836,6 +1013,39 @@ def test_an_unstated_rate_holds_nothing_back_and_moves_no_result(latency_ms: flo
     runs_alike(absent, unbinding)
     assert "orders_per_minute" not in dict(absent.run.venue_model["costs"])  # type: ignore[call-overload]
     assert absent.commands is not None and absent.commands.sent > 0
+
+
+CANCELLED_BEFORE_IT_WAS_SENT = sleeve(
+    """        elif self.seen == 3:
+            self.submit_order(self.unsent)
+""",
+    second="self.unsent = self.order_factory.limit(name, OrderSide.SELL, Quantity.from_int(100), "
+    "Price(10.04, 2))\n            self.cancel_order(self.unsent)",
+)
+"""Builds an exit at 10.04 on its second quote and cancels it before sending it, then sends that
+same order on its third; the bid reaches it on the fifth."""
+
+
+@pytest.mark.parametrize("latency_ms", [0.0, 20.0])
+def test_with_no_rate_a_cancel_of_an_order_never_sent_is_neither_sent_nor_held(
+    latency_ms: float,
+) -> None:
+    """The one thing that moves with no rate stated, on purpose. The engine was never handed
+    the order the sleeve cancels, so the cancel is no command: it is neither sent nor held, and
+    the order the sleeve sends a quote later rests and fills on both paths. kanso used to hold
+    such a cancel and send it once the same object was submitted, which the research engine
+    answered as not found and the node obeyed, cancelling the order on the node path alone: a
+    card, which runs on the engine, filled it, and a replay or a stage did not."""
+    held = both(
+        rated(CANCELLED_BEFORE_IT_WAS_SENT, None, latency_ms=latency_ms),
+        [tuple(steady(40, rise_at=5))],
+    )
+
+    assert [(fill.side, fill.qty, fill.px) for fill in held.run.fills] == [
+        ("BUY", 100.0, 10.01),
+        ("SELL", 100.0, 10.04),
+    ]
+    assert held.commands == Commands(submits=2, peak_60s=2, p99_60s=2)
 
 
 @pytest.mark.parametrize("per_cancel", [None, 2], ids=["one", "two"])

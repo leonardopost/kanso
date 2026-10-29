@@ -445,7 +445,7 @@ numbers, and records them with the card:
 | `net_bps_per_trade`, `net_bps_per_trade_se` | the mean of `pnl_net / notional` over the closed trades, in basis points of the position opened, and its error: the per-trade objective over the whole window as one fold, the error read period by period. What `edge_per_trade` judges. Read that way an error has as many degrees of freedom as periods that closed a trade, less one, and on `p` such periods reads low by `√((p − 1)/p)` — 0.71 of the error on two, 0.94 on eight — which the gate's margin allows for and this number does not; it is zero by construction when one period closed them all, however far apart they landed, so with fewer than two the error is `null` |
 | `cost_bps_per_trade`, `gross_bps_per_trade` | the mean of `cost / notional` on the same trades, and the net plus it |
 | `net_bps_per_session`, `cost_bps_per_session`, `gross_bps_per_session` | in basis points of the capital, per session: the sum of the returns — what the book made, an open position's mark included — every fill's cost, and the net plus it |
-| `commands` | how fast the strategy sent its orders, counted as it sent them on the data clock: `submits` (one per order), `modifies` (one per modify the engine sends), `cancels` (one per order a cancel would reach), and `peak_60s` and `p99_60s` — of the counts of commands in the 60 s ending at each command, that one and every other sent at the same instant included, the largest and the 99th percentile by nearest rank, so a cancel and the order replacing it in one handler each count two; and `refused_submits` and `refused_modifies`, the submits of an entry — every order of an entry's list — and the modifies a stated `costs.orders_per_minute` left no token for, dropped unsent while the card ran on, so in none of the other counts. What a stated `costs.orders_per_minute` is set against; `null` on a card recorded before cards kept it, and the refused counts zero on one recorded before they were kept |
+| `commands` | how fast the strategy sent its orders, counted as it sent them on the data clock: `submits` (one per order), `modifies` (one per modify the engine sends), `cancels` (one per order a cancel would reach), and `peak_60s` and `p99_60s` — of the counts of commands in the 60 s ending at each command, that one and every other sent at the same instant included, the largest and the 99th percentile by nearest rank, so a cancel and the order replacing it in one handler each count two; and `refused_submits` and `refused_modifies`, the submits of an entry — every order of an entry's list — and the modifies a stated `costs.orders_per_minute` had no token available to, the bucket empty or a cancel waiting for its tokens, dropped unsent while the card ran on, so in none of the other counts. A command is what the sleeve asks of the venue, so an order the engine's emulator holds is counted when the strategy submits it and its cancel when the strategy sends it. What a stated `costs.orders_per_minute` is set against; `null` on a card recorded before cards kept it, and the refused counts zero on one recorded before they were kept |
 
 Gross is before fill costs and net after, so gross less cost is net, per trade and per
 session; funding, which is a payment on what was held and not a fill cost, stays in both. A
@@ -1852,46 +1852,52 @@ the record.
 order, modify and cancel a strategy sends and answers past its rate by refusing or by making
 it wait; the simulated venue counts nothing, so a rule that re-posts on every move of the touch
 would trade on its card at a rate no account takes and behave otherwise once it trades through
-one. So the sleeve counts what it sends, on the data clock, on every path, and under a venue
-model that states `costs.orders_per_minute` takes tokens for each command from a bucket of
-that many, refilled at that many a minute of the data clock — one for a submit or a modify, and
-for a cancel the `requests_per_cancel` the broker's client sends for one (`docs/workspace.md`).
-The engine's own risk engine throttles on its own clock — a test clock on one path, the wall
-on the other — and is left unbounded on both for that reason; the account's rate is the
-sleeve's, where both paths read the same instants. With the bucket empty a command the account
-need not take is dropped and one it must take waits: **an entry and a modify are dropped
-unsent and counted**, and the card runs on — an entry built by `submit_entry`, by hand or by
-an overlay, every order of an entry's list with it, which `submit_entry` answers with `None`;
-a modify whichever order it moves, which stays as it was — so the card measures the entries
-the rate let through, and its digest carries how many it dropped (`refused_submits`,
-`refused_modifies`), which reaches the proposer beside its trades. An order is an entry there
-when it opens or grows the position the sleeve's market orders in flight and its exits owed at
-market leave, so the second leg of a flip is an entry, dropped, and is not owed as an exit;
+one. So the sleeve counts what it asks of the venue, on the data clock, on every path — an
+order the engine's emulator holds when the strategy submits it, and its cancel when the
+strategy sends it — and under a venue model that states `costs.orders_per_minute` takes tokens
+for each command from a bucket of that many, refilled at that many a minute of the data clock
+— one for a submit or a modify, and for a cancel the `requests_per_cancel` the broker's client
+sends for one, which no resolved model lets exceed the rate (`docs/workspace.md`). The
+engine's own risk engine throttles on its own clock — a test clock on one path, the wall on the
+other — and is left unbounded on both for that reason; the account's rate is the sleeve's,
+where both paths read the same instants. With no token available — the bucket empty, or, for
+an entry or a modify, a cancel waiting for its tokens — a command the account need not take is
+dropped and one it must take waits: **an entry and a modify are dropped unsent and counted**,
+and the card runs on — an entry built by `submit_entry` in every form, or one built by hand or
+by an overlay that opens, every order of an entry's list with it, which `submit_entry` answers
+with `None`; a modify whichever order it moves, which stays as it was — so the card measures
+the entries the rate let through, and its digest carries how many it dropped
+(`refused_submits`, `refused_modifies`), which reaches the proposer beside its trades. An order
+built by hand opens when it opens or grows the position the sleeve's market orders in flight
+and its exits owed at market leave, so the second leg of a flip — `submit_entry`'s, or one
+built by hand behind an exit at market — is an entry, dropped, and is not owed as an exit;
 under a sizing rule an owed exit is in flight as a sent one is, so a flip or a rotation behind
 it is dropped too, never refused. An order the engine was never handed, dropped so, is
-nothing to cancel or to move, and its cancel or modify is no command. **Any other exit is owed**,
-asked for again as it was asked until a token comes back, and **a cancel is deferred**. Only
-**an exit kanso cannot send again as it was asked** — a stop, an order of a list or a list that
-closes, an immediate-or-cancel or post-only limit among them — is refused as `order_rate`, the
-same refusal a sizing rule makes, and the card is a `discard` carrying a `sizing` gate with
-what was asked, when and what the bucket held: dropped, it would leave open what the strategy
-asked to close, and sent again as `submit_exit` sends one, it would be another order. What
-waited goes first: before the handler of each point the deferred cancels and then the owed
-exits take what tokens came back, oldest first, as an account working its requests in turn
-would send them, and an entry the handler sends after finds the bucket as they left it; while
-a cancel waits for its tokens no submit or modify takes one, so a cancel that spends two
-requests is not starved by single tokens. An
-owed exit and a deferred cancel are what the account would have let through later, but a
-sleeve acts only on points, and the venue matches a point before any handler of it runs: they
-go on the first point at or after the instant a token comes back, after that point is matched,
-so one that waited over a gap — a session's close — goes on the next session's first point,
-where the order a deferred cancel was meant for can still fill. It is not a charge, so it is
-not struck again from a record: it decides which orders a run sends, as `latency_ms` decides
-when they land, and every card records how many it sent, how many it dropped and how many in
-its busiest 60 s whether or not a rate is stated (Card, above). A stage node runs the same
-code, so it drops the same entries and runs on rather than halting. Both paths count a command
-where the strategy decides to send it, so `kanso replay parity` judges the counts, the
-dropped among them, beside the orders.
+nothing to cancel or to move, and its cancel or modify is no command. **An exit `submit_exit`
+sized is owed**, asked for again as it was asked until a token comes back, and **a cancel is
+deferred**. **Any other exit is refused** — one the strategy built itself, at market or at a
+limit in any time in force, a stop, an order of a list or a list that closes, an overlay's leg
+or clip — as `order_rate`, the same refusal a sizing rule makes, and the card is a `discard`
+carrying a `sizing` gate with what was asked, when and what the bucket held: dropped, it would
+leave open what the strategy asked to close, and owed, it would go as an order kanso built in
+its place, which the strategy could neither cancel nor move. What waited goes first: before the
+handler of each point the deferred cancels and then the owed exits take what tokens came back,
+oldest first, as an account working its requests in turn would send them, and an entry the
+handler sends after finds the bucket as they left it; while a cancel waits for its tokens no
+entry or modify takes one, so a cancel that spends two requests is not starved by single
+tokens, and an exit takes one the bucket holds all the same. An owed exit and a deferred cancel
+are what the account would have let through later, but a sleeve acts only on points, and the
+venue matches a point before any handler of it runs: they go on the first point at or after the
+instant a token comes back, after that point is matched, so one that waited over a gap — a
+session's close — goes on the next session's first point, where the order a deferred cancel was
+meant for can still fill. It is not a charge, so it is not struck again from a record: it
+decides which orders a run sends, as `latency_ms` decides when they land, and every card
+records how many it sent, how many it dropped and how many in its busiest 60 s whether or not a
+rate is stated (Card, above). A stage node runs the same code, so it drops the same entries and
+runs on rather than halting. Both paths count a command where the strategy decides to send it,
+so under a stated rate, where what one path spent decides what it may send next, `kanso replay
+parity` judges the counts, the dropped among them, beside the orders; with no rate stated it
+judges the orders alone, as it did before kanso counted.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the

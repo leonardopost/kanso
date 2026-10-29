@@ -111,7 +111,9 @@ def test_a_version_the_strategy_does_not_have_is_refused(runner: CliRunner, depl
 def test_parity_runs_both_paths_and_reports_that_they_agree(
     runner: CliRunner, deployed: Path
 ) -> None:
-    """The claim the whole design rests on, asked for in one command."""
+    """The claim the whole design rests on, asked for in one command. No layer states a rate
+    here, so neither session records its commands and the paths are judged on their streams
+    and their orders, as before kanso counted."""
     result = at(runner, deployed, "replay", "parity", "--strategy", HYP_ID, "--json")
 
     assert result.exit_code == Exit.OK, result.stdout
@@ -124,8 +126,7 @@ def test_parity_runs_both_paths_and_reports_that_they_agree(
     assert parity["node"] != parity["engine"]
     assert parity["node_released"] == parity["engine_released"] > 0
     assert parity["node_stream"] == parity["engine_stream"] is not None
-    assert parity["node_commands"] == parity["engine_commands"] is not None
-    assert parity["node_commands"]["submits"] == parity["node_intents"]
+    assert parity["node_commands"] is None and parity["engine_commands"] is None
 
 
 def test_parity_reads_as_the_verdict_and_the_two_sessions(

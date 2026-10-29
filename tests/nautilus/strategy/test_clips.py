@@ -120,9 +120,10 @@ def test_a_second_clip_while_one_is_held_is_refused(backtest) -> None:
 
 def test_a_clip_taken_off_past_the_rate_is_refused_rather_than_owed(backtest) -> None:
     """At one a minute the host's exit on its seventh bar takes the token the overlay's `FLAT`
-    needs in the same instant. An exit `submit_exit` would send again closes the host's own
-    position, never the overlay's clip, so a clip kanso cannot send again as it was asked is
-    refused like an entry rather than owed and dropped."""
+    needs in the same instant. kanso owes only an exit `submit_exit` sized, which closes the
+    host's own position and never the overlay's clip, so the clip's exit is refused as
+    `order_rate`: owed, it would go as an order kanso built in its place, and dropped, it would
+    leave the clip open."""
 
     class TakesOff(Clipper):
         script = {8: (Clip("HEDGE.XNAS", "BUY"),), 12: (Clip("HEDGE.XNAS", "FLAT"),)}
@@ -154,7 +155,7 @@ def test_a_clip_taken_off_past_the_rate_is_refused_rather_than_owed(backtest) ->
         "HEDGE.XNAS",
         "SELL",
     )
-    assert refused.why.startswith("an exit kanso cannot send again as it was asked needed 1")
+    assert refused.why.startswith("an exit an overlay asked for needed 1")
 
 
 def test_a_clip_entered_past_the_rate_is_dropped_and_holds_nothing(backtest) -> None:

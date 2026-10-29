@@ -125,6 +125,7 @@ def durations(draw: st.DrawFn, max_units: int = 99) -> str:
 @st.composite
 def costs(draw: st.DrawFn) -> Costs:
     spread = draw(st.sampled_from(["quotes", "fixed_bps"]))
+    per_cancel = draw(st.none() | st.integers(1, 4))
     return Costs(
         commission_bps=draw(NON_NEGATIVE),
         slippage_bps=draw(NON_NEGATIVE),
@@ -138,8 +139,9 @@ def costs(draw: st.DrawFn) -> Costs:
         limit_fill=draw(
             st.sampled_from(["touch", "through", "print_through", "print_through_whole"])
         ),
-        orders_per_minute=draw(st.none() | st.integers(1, 100_000)),
-        requests_per_cancel=draw(st.none() | st.integers(1, 4)),
+        # never below what a cancel spends, which the model refuses
+        orders_per_minute=draw(st.none() | st.integers(per_cancel or 1, 100_000)),
+        requests_per_cancel=per_cancel,
     )
 
 

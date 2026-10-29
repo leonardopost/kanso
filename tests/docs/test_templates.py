@@ -142,7 +142,10 @@ def test_the_program_says_the_print_rule_holds_where_nothing_states_it() -> None
 def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_refused() -> None:
     """The loop's strategy reads `program.md` and nothing else of the rate: it is told that an
     entry or a modify past it is dropped and counted while the card runs on, and which digest
-    fields count them, and that only an exit kanso cannot send again refuses the card."""
+    fields count them; that only an exit `submit_exit` sized is owed; and that an exit it built
+    itself refuses the card, whatever its type or time in force — the day's, a size in the
+    quote's currency and an execution algorithm named among them, where the bullet once
+    promised an exit built at market or at a good-till-cancelled limit was owed as asked."""
     bullet = re.sub(
         r"\s+", " ", line_with(template("program.md"), "- Under `costs.orders_per_minute`")
     )
@@ -150,5 +153,9 @@ def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_re
     assert "is dropped unsent and counted" in bullet
     assert "the card runs on" in bullet
     assert "`refused_submits` and `refused_modifies`" in bullet
+    assert "Only an exit `submit_exit` sized is owed" in bullet
     assert "refuses the card (`order_rate`" in bullet
+    for named in ("for the day", "sized in the quote's currency", "an execution algorithm"):
+        assert named in bullet, named
     assert "an entry, a modify or an order list refuses the card" not in bullet
+    assert "is owed as you asked it" not in bullet

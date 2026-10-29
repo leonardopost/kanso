@@ -39,10 +39,11 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # stated, which `kanso hyp validate` refuses at resolution tick, quote or trade
 #   orders_per_minute: 166         # the requests a minute this sleeve's orders may spend — one per order sent or
                                    # modified, requests_per_cancel per order cancelled — held on the data clock: past it
-                                   # an entry or a modify is dropped and counted and the card runs on, any other exit
-                                   # is owed and a cancel deferred, and an exit kanso cannot send again as asked is
-                                   # refused (order_rate). A broker states its client's figure and portfolio.yaml
-                                   # venues.<MIC> a plan's; unset, nothing holds it
+                                   # an entry or a modify is dropped and counted and the card runs on, an exit
+                                   # submit_exit sized is owed and a cancel deferred, and an exit the strategy built
+                                   # itself is refused (order_rate). A broker states its client's figure and
+                                   # portfolio.yaml venues.<MIC> a plan's; unset, nothing holds it; one below
+                                   # requests_per_cancel is refused, since no cancel could ever go
 #   requests_per_cancel: 2         # the requests a cancel of one order spends; one unless stated, and a broker states
                                    # what its client sends
 #   limit_fill: print_through      # print_through by default at tick resolution with every name asked for quote and

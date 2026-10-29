@@ -109,6 +109,37 @@ def test_validate_refuses_a_tick_hypothesis_with_no_latency(
     assert "state costs.latency_ms" in payload(result)["remedy"]
 
 
+def test_validate_refuses_a_rate_below_what_a_cancel_spends(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A bucket of one token never holds the two requests a cancel spends: the sleeve's first
+    cancel would wait for ever and every entry and modify behind it be dropped, so the file is
+    refused before anything runs, naming both keys, both figures and the venue."""
+    path = write_hypothesis(
+        loaded,
+        costs={
+            "commission_bps": 0.5,
+            "slippage_bps": 1.0,
+            "spread": "fixed_bps",
+            "fixed_bps": 2,
+            "orders_per_minute": 1,
+            "requests_per_cancel": 2,
+        },
+    )
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert payload(result)["error"].startswith(
+        "costs.orders_per_minute: 1 on SIM is below costs.requests_per_cancel: 2; a bucket of 1 "
+        "token(s) never holds the 2 one cancel spends"
+    )
+    assert payload(result)["remedy"].startswith(
+        "state costs.orders_per_minute of at least 2 — the share of the account's rate this "
+        "sleeve may spend — in the hypothesis costs or under venues.SIM.costs"
+    )
+
+
 def test_a_data_type_a_vendor_adapter_registers_is_admissible(
     runner: CliRunner, loaded: Path
 ) -> None:

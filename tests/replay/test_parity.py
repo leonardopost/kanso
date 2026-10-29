@@ -13,7 +13,7 @@ from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso import replay
-from kanso.nautilus import actions
+from kanso.nautilus import actions, backtest, session
 from kanso.replay import record
 from kanso.replay.parity import (
     COMMANDS,
@@ -30,6 +30,7 @@ from kanso.workspace import Workspace
 from tests.replay.conftest import (
     BLOCKING_FILTER,
     FLAT,
+    FORWARD,
     HOLDING,
     INSTRUMENT,
     RAISING,
@@ -180,13 +181,20 @@ def test_both_paths_were_released_the_same_stream_and_the_payload_says_which(
     assert node.stream_sha256 is not None
 
 
-def test_each_session_counts_its_commands_and_parity_judges_both(
-    ws: Workspace, store: StateStore, carded_hyp: str
+def stating(rate: int | None) -> dict[str, Any]:
+    """The demo hypothesis, its costs stating `rate` as `costs.orders_per_minute` when given."""
+    stated = {} if rate is None else {"orders_per_minute": rate}
+    return document(costs={**document()["costs"], **stated})
+
+
+def test_under_a_stated_rate_each_session_counts_its_commands_and_parity_judges_both(
+    ws: Workspace, store: StateStore
 ) -> None:
-    """Each path's session records what its strategy sent, as a card's digest counts it, and
-    the payload carries both; the two agree, and a session an earlier kanso wrote, which
-    counted none, is judged on its orders alone."""
-    result = replay.parity(ws, store, hyp=carded_hyp)
+    """Under a venue model that states `costs.orders_per_minute` each path's session records
+    what its strategy sent, as a card's digest counts it, and the payload carries both; the two
+    agree, and a session that recorded none, as an earlier kanso's did, is judged on its orders
+    alone."""
+    result = replay.parity(ws, store, hyp=carded(ws, store, doc=stating(1_000)))
     payload = result.payload()
     node, engine = replay.show(ws, result.node), replay.show(ws, result.engine)
 
@@ -196,6 +204,69 @@ def test_each_session_counts_its_commands_and_parity_judges_both(
     assert payload["node_commands"] == payload["engine_commands"] == node.commands.model_dump()
     unread = replace(result, node_commands=None).at(0)
     assert unread.identical and unread.payload()["node_commands"] is None
+
+
+REPOSTED_AND_MOVED = b'''
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """On every bar cancels all it has working in the name, posts a buy a dollar under the
+    close and moves it a cent lower, in one handler."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        name = bar.bar_type.instrument_id
+        self.cancel_all_orders(name)
+        posted = self.order_factory.limit(
+            name, OrderSide.BUY, Quantity.from_int(10), Price(float(bar.close) - 1.0, 2)
+        )
+        self.submit_order(posted)
+        self.modify_order(posted, price=Price(float(bar.close) - 1.01, 2))
+'''
+"""A sleeve whose two paths send the same orders and count different cancels: the backtest
+engine cancels the buy posted after `cancel_all_orders` in the same handler, where a node keeps
+it, so on the next bar the node has one more order to cancel. The paths parting so is older
+than the order rate, and parity on the orders alone never saw it."""
+
+
+@pytest.mark.parametrize("rate", [None, 1_000], ids=["unstated", "stated"])
+def test_the_commands_counted_are_judged_only_under_a_stated_rate(
+    ws: Workspace, store: StateStore, rate: int | None
+) -> None:
+    """This sleeve's two paths agree on every order and count different cancels. Under a stated
+    rate that is behaviour — what a path spent decides what it may send next — so both
+    sessions record their commands and the paths diverge at `commands`. Where no layer states
+    the rate it is not: a session records none, and parity gives the verdict it gave before
+    kanso counted, identical."""
+    unrated = request_for(source=REPOSTED_AND_MOVED)
+    engine = backtest.execute(unrated, [instrument()], [tuple(bars(FORWARD))])
+    node = session.run_node(unrated, [instrument()], [tuple(bars(FORWARD))]).result
+    assert node.intents == engine.intents
+    assert node.commands is not None and engine.commands is not None
+    assert node.commands.cancels != engine.commands.cancels
+
+    hyp_id = carded(ws, store, doc=stating(rate), strategy=REPOSTED_AND_MOVED)
+    result = replay.parity(ws, store, hyp=hyp_id)
+    recorded = (replay.show(ws, result.node), replay.show(ws, result.engine))
+
+    assert result.compared == len(engine.intents) > 0
+    if rate is None:
+        assert result.identical
+        assert [one.commands for one in recorded] == [None, None]
+        assert result.payload()["node_commands"] is None
+        return
+    assert result.divergence is not None and result.divergence.field == COMMANDS
+    counted = [one.commands for one in recorded]
+    assert None not in counted and counted[0] != counted[1]
 
 
 def counted(node: Commands, engine: Commands, ts_ns: int = 0) -> Parity:

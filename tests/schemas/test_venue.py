@@ -161,6 +161,46 @@ def test_what_a_cancel_costs_is_unstated_by_default_and_inherited_key_by_key() -
     assert VenueModel.model_validate(workspace.model_dump()) == workspace
 
 
+def test_a_rate_below_what_a_cancel_spends_is_refused_where_the_model_is_resolved() -> None:
+    """A bucket of one token never holds the two an Alpaca cancel spends, so the sleeve's first
+    cancel would wait for ever and drop every entry and modify behind it. A workspace stating a
+    share of one a minute under that declaration is refused as the model is resolved, naming
+    the venue, both keys and both figures, with the figure that admits a cancel in the remedy;
+    a share as large as a cancel's cost resolves; and a `Costs`, or a recorded model, stating
+    the pair is refused as well."""
+    declared = VenueDeclaration(costs=CostsOverride(orders_per_minute=190, requests_per_cancel=2))
+    share = VenueOverride(costs=CostsOverride(orders_per_minute=1))
+
+    with pytest.raises(ValidationError) as caught:
+        resolve_venue_model("XNAS", declaration=declared, override=share)
+
+    assert caught.value.code is Exit.VALIDATION
+    assert caught.value.message.startswith(
+        "costs.orders_per_minute: 1 on XNAS is below costs.requests_per_cancel: 2; a bucket of "
+        "1 token(s) never holds the 2 one cancel spends"
+    )
+    assert caught.value.remedy == (
+        "state costs.orders_per_minute of at least 2 — the share of the account's rate this "
+        "sleeve may spend — in the hypothesis costs or under venues.XNAS.costs in portfolio.yaml"
+    )
+    fits = resolve_venue_model(
+        "XNAS", declaration=declared, hypothesis_costs=CostsOverride(orders_per_minute=2)
+    )
+    assert (fits.costs.orders_per_minute, fits.costs.requests_per_cancel) == (2, 2)
+    with pytest.raises(ValidationError, match="is below costs.requests_per_cancel: 2"):
+        Costs(
+            commission_bps=0,
+            slippage_bps=0,
+            spread="quotes",
+            orders_per_minute=1,
+            requests_per_cancel=2,
+        )
+    with pytest.raises(ValidationError, match="is below costs.requests_per_cancel: 3"):
+        VenueModel.model_validate(
+            {**fits.model_dump(), "costs": {**fits.model_dump()["costs"], "requests_per_cancel": 3}}
+        )
+
+
 @pytest.mark.parametrize("key", ["orders_per_minute", "requests_per_cancel"])
 @pytest.mark.parametrize("value", [0, -5, 166.5])
 def test_an_order_rate_that_admits_nothing_or_is_not_a_whole_count_is_refused(

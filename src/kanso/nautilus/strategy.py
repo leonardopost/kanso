@@ -51,26 +51,38 @@ it is; the room reads the order at its new size and price from its next read on.
 rule denies a researched strategy `modify_order` (`kanso.criteria.integrity`); an unsized
 sleeve alone may call it (`docs/backlog.md` row 123). In a book it is refused.
 
-**It counts its orders, and holds itself to its account's rate.** Every command it sends —
-a submit per order, a modify, a cancel per order — is counted on the data clock
-(`kanso.nautilus.rate`), and a run reports the busiest 60 s beside its fills. Under a venue
-model that states `costs.orders_per_minute` each command takes its tokens from a bucket of
-that many, refilled at that many a minute on the data clock, before it goes — a submit and a
-modify one, a cancel the model's `requests_per_cancel`; with the bucket empty an entry — every
+**It counts its orders, and holds itself to its account's rate.** Every command it asks of
+the venue — a submit per order, a modify, a cancel per order — is counted on the data clock
+(`kanso.nautilus.rate`), and a run reports the busiest 60 s beside its fills. A command is
+what the sleeve asks of the venue, so an order the engine's emulator holds is counted when the
+strategy submits it, and its cancel when the strategy sends it, though the emulator sends the
+venue nothing while it holds the order, and sends the order itself, uncounted, when it
+releases it. Under a venue model that states `costs.orders_per_minute` each command takes its
+tokens from a bucket of that many, refilled at that many a minute on the data clock, before it
+goes — a submit and a modify one, a cancel the model's `requests_per_cancel`, which may not be
+more than the bucket holds (`kanso.schemas.venue`). With no token available to it an entry —
+`submit_entry`'s in every form, an order built by hand or an overlay's leg that opens, every
 order of an entry's list — and a modify are dropped unsent and counted as refused, and the run
-goes on past them (`_drop_rate`); any other exit is owed and a cancel is deferred; and an exit
-kanso cannot send again as it was asked, a list that closes among them, is refused
-(`order_rate`, the same `Refusal` a sizing rule raises). Whether an order is an entry or an
-exit there is read against the position its market orders in flight and its exits owed at
-market leave (`_opens`), so the second leg of a flip is an entry. The deferred cancels and
-then the owed exits are sent, oldest first, before the handler of the first point that finds
-a token for them, and while a cancel waits no submit or modify takes a token
-(`_command_spend`). An order the engine was never handed — one dropped so — is nothing to
-cancel or to move, and its cancel or modify is no command (`_never_sent`). It is the same
-code on every path, so a card, a replay and a node — a stage's among
-them — hold one strategy to one rate and drop the same entries; a stage node's flatten after
-its window lifts it (`_lift_rate`). Unstated, nothing is held back or dropped and nothing a
-run does changes.
+goes on past them (`_drop_rate`); an exit `submit_exit` sized is owed and a cancel is
+deferred; and any other exit — one the strategy built itself, a list that closes, an
+overlay's leg or clip — is refused (`order_rate`, the same `Refusal` a sizing rule raises). An
+order built by hand opens when it opens or grows the position its market orders in flight and
+its exits owed at market for want of a token leave (`_opens`), so the second leg of a flip —
+`submit_entry`'s, whatever it does to the position, or one built by hand behind an exit at
+market — is an entry. The deferred cancels and then the owed exits are sent, oldest first,
+before the handler of the first point that finds a token for them; while a cancel waits no
+entry or modify takes a token, where an exit takes one the bucket holds (`_command_spend`). An
+order the engine was never handed — one dropped so — is nothing to cancel or to move, and its
+cancel or modify is no command (`_never_sent`). It is the same code on every path, so a card,
+a replay and a node — a stage's among them — hold one strategy to one rate and drop the same
+entries; a stage node's flatten after its window lifts it (`_lift_rate`). Where no layer
+states either key, the broker's declaration included, nothing is held back or dropped, and a
+card's run, fills and digest — its `commands` aside — are what they were before the keys
+existed. One thing moves with neither stated, on purpose, and on the node path alone: a cancel
+of an order the engine was never handed is neither sent nor held (`_never_sent`), where it
+used to be held and sent once the strategy submitted that same object, which the backtest
+engine answered as not found and a node obeyed; the order now rests and fills on a replay's
+or a stage's node as it always did on the engine, the path every card runs.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -200,15 +212,12 @@ from nautilus_trader.model.enums import (
     BarAggregation,
     BookAction,
     BookType,
-    ContingencyType,
     LiquiditySide,
     OrderSide,
     OrderStatus,
     OrderType,
     PriceType,
     RecordFlag,
-    TimeInForce,
-    TriggerType,
     order_side_to_str,
     order_type_to_str,
 )
@@ -608,28 +617,6 @@ def _never_rests(order: Any) -> bool:
     return bool(order.order_type == OrderType.MARKET)
 
 
-def _owable(order: Any) -> bool:
-    """Whether `submit_exit` can send an exit the strategy built itself again as it was asked:
-    one order on the terms `KansoStrategy._order` builds one on, since `submit_exit` sends no
-    other. That is an order at market or at a limit, good till cancelled, not post-only, in
-    the instrument's own units, showing all of itself, with no contingency, no emulation
-    trigger and no execution algorithm: in nautilus_trader 1.231.0 `OrderFactory.market` and
-    `OrderFactory.limit` default every one of those (`common/factories.pyx`), and kanso passes
-    none. An immediate-or-cancel exit owed and sent again so would rest, a post-only one take,
-    a good-till-date one outlive its date. Reduce-only is admitted: `submit_exit` never sends
-    past flat, which is all that flag asks of an exit."""
-    return bool(
-        order.order_type in (OrderType.MARKET, OrderType.LIMIT)
-        and order.time_in_force == TimeInForce.GTC
-        and not order.is_post_only
-        and not order.is_quote_quantity
-        and getattr(order, "display_qty", None) is None
-        and order.exec_algorithm_id is None
-        and order.contingency_type == ContingencyType.NO_CONTINGENCY
-        and order.emulation_trigger == TriggerType.NO_TRIGGER
-    )
-
-
 def _modify_sends(order: Any, quantity: Any, price: Any, trigger_price: Any) -> bool:
     """Whether the engine's `modify_order` would send a modify of `order` at all.
 
@@ -825,14 +812,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._command_ns = 0
         """The data clock the tally and the bucket read: `data_time`, never run backwards."""
         self._command_deferred: dict[object, tuple[Any, Any, dict[str, object] | None]] = {}
-        """The cancels the bucket had no token for, oldest first, by client order id, each
-        with what it was sent with (`_defer_cancel`)."""
+        """The cancels the bucket held too few tokens for, oldest first, by client order id,
+        each with what it was sent with (`_defer_cancel`)."""
         self._rate_owed: dict[tuple[str, OrderSide], None] = {}
-        """The exits owed because the bucket held no token for them, oldest first: they have
+        """The exits owed because no token was available to them, oldest first: they have
         the first claim on a token that comes back (`_pay_rated`)."""
         self._command_closing: tuple[float | None, float | None] | None = None
-        """What `_close` asked for, as the next `submit_order` sends it: the exit an empty
-        bucket owes rather than refuses (`_short_of_rate`)."""
+        """What `_close` asked for, as the next `submit_order` sends it: the exit the rate
+        owes rather than refuses (`_short_of_rate`)."""
+        self._command_opening = False
+        """Whether the next `submit_order` sends an entry `submit_entry` sized, which the
+        rate reads as an entry whatever it does to the position (`_short_of_rate`)."""
         self._kept_quotes = self._charges.get("spread") == "quotes"
         """Whether the spread is the quoted one, which a quote of a name settles that name for."""
         self._kept_day: tuple[int, date] | None = None
@@ -1902,11 +1892,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Once every check has let it through it takes a token of the venue model's
         `orders_per_minute`, when one is stated, and is counted as a submit (`_command_spend`); with
-        the bucket empty it is not sent: an entry is dropped and counted as refused, and its
-        hedges are not placed; an exit kanso can send again as `submit_exit` would is owed;
-        and any other exit is refused (`_short_of_rate`).
+        no token available to it it is not sent: an entry is dropped and counted as refused,
+        and its hedges are not placed; an exit `submit_exit` sized is owed; and any other exit
+        is refused (`_short_of_rate`).
         """
         closing, self._command_closing = self._command_closing, None
+        opening, self._command_opening = self._command_opening, False
         if self._warming():
             return
         self._check_booked(order, "submit_order")
@@ -1917,9 +1908,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         ctx = self._context_for(order)
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
-        if not self._command_spend(SUBMIT):
-            self._short_of_rate(order, kind, closing)
-            return
+        if self._command_bucket is None:
+            self._command_spend(SUBMIT)
+        else:
+            exiting = closing is not None or (
+                not opening and kind != ENTRY and not self._opens(order)
+            )
+            if not self._command_spend(SUBMIT, exiting=exiting):
+                self._short_of_rate(order, exiting, closing)
+                return
         self._intents.append(self._intent(order))
         self._track(order)
         super().submit_order(order, position_id, client_id, params)
@@ -1935,12 +1932,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> None:
         """As `submit_order`, classifying and filtering the list by its first order. In a book
         it is refused (`_check_booked`): kanso sends no list. Under a stated `orders_per_minute`
-        it takes a token for each of its orders, all or none, and with fewer in the bucket it is
-        not sent: a list whose first order is an entry — read as `submit_order` reads one there,
-        against the position the sleeve's orders on their way leave (`_opens`) — is dropped
-        whole and each of its orders counted as refused, as an entry is; one whose first order
-        is an exit is refused, since kanso owes an exit only as `submit_exit` sends one, and an
-        order of a list is not."""
+        it takes a token for each of its orders, all or none, and with fewer available to it it
+        is not sent: a list whose first order is an entry — read as `submit_order` reads an
+        order built by hand, against the position the sleeve's orders on their way leave
+        (`_opens`) — is dropped whole and each of its orders counted as refused, as an entry
+        is; one whose first order is an exit is refused, since kanso owes an exit only as
+        `submit_exit` sized it, and an order of a list is not."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
@@ -1952,8 +1949,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         ctx = self._context_for(orders[0])
         if kind == ENTRY and not self._hedging and not self.before_entry(ctx):
             return
-        if not self._command_spend(SUBMIT, len(orders)):
-            if kind == ENTRY or self._opens(orders[0]):
+        exiting = self._command_bucket is not None and kind != ENTRY and not self._opens(orders[0])
+        if not self._command_spend(SUBMIT, len(orders), exiting=exiting):
+            if not exiting:
                 self._drop_rate(SUBMIT, len(orders))
                 return
             self._refuse_rate(
@@ -2156,7 +2154,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         In a book it is refused (`_check_booked`), since it would move an order the book or
         `submit_exit` sized past what either left it.
 
-        Under a stated `orders_per_minute` it takes a token, and with the bucket empty it is
+        Under a stated `orders_per_minute` it takes a token, and with none available to it —
+        the bucket empty, or a waiting cancel holding the tokens (`_command_spend`) — it is
         dropped unsent and counted as refused, as an entry is, whichever order it moves: the
         order stays as it was, at its own price and quantity, working or not as the venue
         holds it. kanso cannot send it later without sending terms the strategy may since have
@@ -2462,28 +2461,35 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     # --- the order rate: what the account takes, on the data clock -------------
 
-    def _command_spend(self, kind: str, count: int = 1) -> bool:
-        """Whether `count` commands of `kind` may go now, and count them if they may.
+    def _command_spend(self, kind: str, count: int = 1, *, exiting: bool = False) -> bool:
+        """Whether `count` commands of `kind` may go now, and count them if they may;
+        `exiting` says a submit is an exit (`submit_order`).
 
         Under a stated `orders_per_minute` they take their tokens from the bucket, all of them
         or none (`kanso.nautilus.rate.Bucket`) — one for a submit or a modify, and for a cancel
         the venue model's `requests_per_cancel`, the requests the broker's client sends for
         one; with no rate stated every command may go. Read on the data clock, `data_time`
         held so it never runs backwards, so both paths count the same commands at the same
-        instants. A command is counted where the sleeve decides to send it: a cancel kanso
-        holds back until the venue has the order, or behind a modify, is counted, and pays
-        its token, when it is asked for, where both paths ask for it alike, not when it
-        reaches the venue, where they do not.
+        instants. A command is what the sleeve asks of the venue, counted where the sleeve
+        decides to send it: a cancel kanso holds back until the venue has the order, or behind
+        a modify, is counted, and pays its token, when it is asked for, where both paths ask
+        for it alike, not when it reaches the venue, where they do not; and an order the
+        engine's emulator holds is counted, and pays its token, when the strategy submits it,
+        and its cancel when the strategy sends it, though the emulator sends the venue nothing
+        while it holds the order, and sends the order itself, uncounted, when it releases it.
 
-        The bucket is first come, first served. While a cancel waits for its tokens
-        (`_defer_cancel`) a submit or a modify takes none, so a cancel that costs more than
-        one request is not starved by the single tokens that come back, each of which a
-        handler's next order would otherwise take before the cancel had enough: a throttled
-        account sends what it was asked first, first. A cancel asked for meanwhile waits
-        behind it, since it costs as much. An exit owed for want of a token needs no such
-        rule: it is asked for again before every handler (`_pay_rated`), so while one waits
-        either a cancel waits ahead of it or the bucket holds less than the token any
-        command needs.
+        The bucket is first come, first served for entries and modifies. While a cancel waits
+        for its tokens (`_defer_cancel`) an entry's submit or a modify takes none, so a cancel
+        that costs more than one request is not starved by the single tokens that come back,
+        each of which a handler's next entry would otherwise take before the cancel had enough:
+        a throttled account sends what it was asked first, first. A cancel asked for
+        meanwhile waits behind it, since it costs as much. An exit takes a token the bucket
+        holds all the same, owed or not (`exiting`), so the rate refuses no exit it holds a
+        token for. `submit_exit` sends one only for what is left to close once the orders
+        still working are counted, an order whose cancel waits among them, so its exits do not
+        keep a cancel waiting the way a handler's stream of entries would; the cancel goes once
+        the bucket holds its cost, which a venue model always lets it hold, one whose rate is
+        below what a cancel costs being refused where it is resolved (`kanso.schemas.venue`).
         """
         if count <= 0:
             return True
@@ -2493,7 +2499,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._command_ns = now
         bucket = self._command_bucket
         if bucket is not None:
-            if kind != CANCEL and self._command_deferred:
+            if kind != CANCEL and not exiting and self._command_deferred:
                 return False
             tokens = count * self._cancel_tokens if kind == CANCEL else count
             if not bucket.take(now, tokens):
@@ -2534,7 +2540,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _defer_cancel(self, order: Any, client_id: Any, params: dict[str, object] | None) -> None:
-        """Keep a cancel the bucket had no token for, to be sent once it has one
+        """Keep a cancel the bucket held too few tokens for, to be sent once it holds them
         (`_send_deferred`); one already waiting keeps its place. The order counts as working
         meanwhile, as one whose cancel is in flight does, so an exit is sized to what it can
         still fill and an exit at a price is owed behind it (`_close`)."""
@@ -2562,63 +2568,68 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 super().cancel_order(current, client_id, params)
 
     def _short_of_rate(
-        self, order: Any, kind: str, closing: tuple[float | None, float | None] | None
+        self, order: Any, exiting: bool, closing: tuple[float | None, float | None] | None
     ) -> None:
-        """What an order the bucket held no token for comes to.
+        """What an order no token was available to comes to, `exiting` saying whether the rate
+        reads it as an exit (`submit_order`).
 
         An exit `submit_exit` sized — an author's, an exit rule's, one owed already — is owed,
         as it was asked for (`_owe`), and asked for again until the bucket takes it. An entry —
-        `submit_entry`'s, one built by hand, an overlay's hedge leg or clip — is dropped unsent
-        and counted as refused (`_drop_rate`), and the run goes on: the account would not have
-        taken it then, so a strategy that sends past its rate trades the entries the rate lets
-        through, and its card says how many it did not. A clip dropped so is forgotten as a
-        clip, since it holds nothing. An exit the strategy built itself that `submit_exit` can
-        send again as it was asked (`_owable`), and is not an overlay's clip, is owed at its
-        quantity and its limit. An exit kanso cannot send again as it was asked —
-        a stop, an immediate-or-cancel or post-only limit, a clip — is refused (`order_rate`):
-        dropped, it would leave open what the strategy asked to close, and owed, it would go
-        as another order.
-
-        An order `classify` reads as an exit is an entry here when it opens or grows the
-        position its market orders in flight and its exits owed at market leave (`_opens`):
-        the second leg of a flip, sent after the exit whether the exit went or was owed, is
-        dropped and counted as the entry it is, and is not owed as an exit to be forgotten
-        once the first leg has left the position flat.
+        `submit_entry`'s in every form, whatever it does to the position; an order built by
+        hand, an overlay's hedge leg or clip, that opens or grows the position its orders on
+        their way leave (`_opens`) — is dropped unsent and counted as refused (`_drop_rate`),
+        and the run goes on: the account would not have taken it then, so a strategy that
+        sends past its rate trades the entries the rate lets through, and its card says how
+        many it did not. A clip dropped so is forgotten as a clip, since it holds nothing. So
+        the second leg of a flip — `submit_exit` and then `submit_entry` on the other side, in
+        one handler — is dropped and counted whether its exit went at market or at a price or
+        was owed, and is not owed as an exit to be forgotten once the first leg has left the
+        position flat. Any other exit — one the strategy built itself, at market or at a
+        limit, a stop, in any time in force, an overlay's leg or clip — is refused
+        (`order_rate`): dropped, it would leave open what the strategy asked to close, and
+        owed, it would go as an order kanso built in its place, which the strategy holds no
+        handle to and cannot cancel or move, and which `submit_exit` would cut at flat.
         """
         key = order.instrument_id.value
         if closing is not None:
             self._owe(key, order.side, closing[0], closing[1])
             return
-        if kind == ENTRY or self._opens(order):
+        if not exiting:
             if self._is_clip(order):
                 self._clip_orders[key] = [
                     held for held in self._clip_orders[key] if held is not order
                 ]
             self._drop_rate(SUBMIT)
             return
-        if _owable(order) and not self._is_clip(order):
-            self._owe(key, order.side, float(order.quantity), _order_price(order))
-            return
+        overlay = self._hedging or self._is_clip(order)
         self._refuse_rate(
-            key, order_side_to_str(order.side), "an exit kanso cannot send again as it was asked"
+            key,
+            order_side_to_str(order.side),
+            "an exit an overlay asked for" if overlay else "an exit the strategy built itself",
         )
 
     def _opens(self, order: Any) -> bool:
-        """Whether an order opens or grows the position this sleeve's orders already on their
-        way leave: what `classify` decides on the position filled, decided once its market
-        orders in flight have filled and its exit owed at market on the order's side has gone.
+        """Whether an order the strategy built opens or grows the position this sleeve's
+        orders already on their way leave: what `classify` decides on the position filled,
+        decided once its market orders in flight have filled and an exit owed at market for
+        want of a token has gone (`_left`).
 
         It is the position `held` reads, the reader a strategy sizes and flips by — an exit at
-        market sent in this handler reads as gone — with an exit owed at market, which goes
-        as soon as a token comes back, read as gone too. So `submit_exit(name)` and then an
-        entry on the other side, in one handler, is an exit and an entry here whether the exit
-        went or was owed, where `classify` reads both as exits until the first fills. A limit
-        or a stop resting is not applied, as `held` applies none: it may never fill, so an exit
-        at market sent beside one is an exit. The position is read in the scope `classify`
-        reads it in: an unsized sleeve's whole, its overlays' clips in it; under a sizing rule
-        a clip's own, owing nothing of the host's, or the sleeve's own without its clips. A
-        clip is kept as one before it is sent (`_clip_order`), so its own quantity is taken
-        back out of what the clips intend."""
+        market sent in this handler reads as gone — with an exit owed at market for want of a
+        token, which stands for the market order the rate held back and goes as soon as a
+        token comes back, read as gone too. So `submit_exit(name)` and then an order on the
+        other side built by hand, in one handler, or a list whose first order is one, is an
+        exit and an entry here whether the exit went or was owed, where `classify` reads both
+        as exits until the first fills. A limit or a stop resting is not applied, as `held`
+        applies none: it may never fill. Neither is an exit owed at a price, which stands for
+        a limit the rate held back, nor an exit owed for want of a cancel's landing, which
+        `held` does not apply either. So an order built by hand behind an exit at a price,
+        resting or owed, is read against the position that exit may never close: it closes,
+        and is an exit kanso did not size. The position is read in the scope `classify` reads
+        it in: an unsized sleeve's whole, its overlays' clips in it; under a sizing rule a
+        clip's own, owing nothing of the host's, or the sleeve's own without its clips. A clip
+        is kept as one before it is sent (`_clip_order`), so its own quantity is taken back
+        out of what the clips intend."""
         key = order.instrument_id.value
         side = order.side
         clip = self._is_clip(order)
@@ -2629,27 +2640,39 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             held = self._own_intended(key)
             if not self.sized:
                 held += self._clips_intended(key) - mine
-            owed = self._owed.get((key, side))
-            closes = held > 0 if side == OrderSide.SELL else held < 0
-            if owed is not None and owed[1] is None and closes:
-                gone = abs(held) if owed[0] is None else min(owed[0], abs(held))
-                held = held - gone if held > 0 else held + gone
+            held = self._left(key, held)
         signed = -float(order.quantity) if side == OrderSide.SELL else float(order.quantity)
         return abs(held + signed) >= abs(held)
 
-    def _leaving(self, key: str, held: float) -> bool:
-        """Whether what this sleeve holds in a name is owed out at market for want of a token
-        (`_owe`), which under a sizing rule is the whole of it, the only exit `submit_exit`
-        sends there. The account takes it as soon as a token comes back, before anything asked
-        after it (`_pay_rated`), so a sized entry reads it as an exit in flight
-        (`_sized_entry`): a flip or a rotation behind it is the entry it is, dropped and
-        counted for want of the same token, rather than refused as `one_position`."""
+    def _left(self, key: str, held: float) -> float:
+        """`held`, this sleeve's intended position in a name, once the exit owed on it at
+        market for want of a token (`_owe`) has gone: the whole of it for an exit owed with no
+        quantity, and no more than the quantity owed for one that names one. An exit owed at
+        a price is not taken out, nor one owed for want of a cancel's landing: the first
+        stands for a limit, which `held` applies no more than it applies one resting, and the
+        second for nothing `held` applies on any path.
+
+        The account takes an exit owed so as soon as a token comes back, before anything
+        asked after it (`_pay_rated`), so what is asked after it reads it as an exit at market
+        in flight, as it would read the order the rate held back: an order built by hand
+        (`_opens`), the room an unsized entry is sized to (`_headroom`), and a sized entry's
+        check of what it holds (`_sized_entry`), so a flip or a rotation behind it is the
+        entry it is, dropped and counted for want of the same token, rather than refused as
+        `one_position` or sized to no room. With no rate stated nothing is owed so, and every
+        reader reads as it did before the bucket existed."""
+        if not held:
+            return held
         name = (key, OrderSide.SELL if held > 0 else OrderSide.BUY)
-        return name in self._rate_owed and name in self._owed
+        owed = self._owed.get(name) if name in self._rate_owed else None
+        if owed is None or owed[1] is not None:
+            return held
+        gone = abs(held) if owed[0] is None else min(owed[0], abs(held))
+        return held - gone if held > 0 else held + gone
 
     def _drop_rate(self, kind: str, count: int = 1) -> None:
-        """Count `count` commands of `kind` the bucket held no token for — a submit of each order
-        of an entry, a modify — as refused, and send none of them (`kanso.nautilus.rate.Tally`).
+        """Count `count` commands of `kind` no token was available to — the bucket empty, or a
+        waiting cancel holding the tokens (`_command_spend`) — a submit of each order of an
+        entry, a modify, as refused, and send none of them (`kanso.nautilus.rate.Tally`).
 
         The run goes on past them, on every path alike: a card is measured on what the rate
         let through and carries how many it dropped (`kanso.schemas.Commands`), and a node,
@@ -2658,44 +2681,56 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._command_tally.refuse(kind, count)
 
     def _owe(self, key: str, side: OrderSide, qty: float | None, price: float | None) -> None:
-        """Owe the exit the bucket held no token for, as `_close` owes one a cancel in flight
-        held back (`_pay_owed`), with the first claim on a token that comes back
-        (`_pay_rated`); an exit rule's owed exit is not replaced by its host's."""
+        """Owe the exit `submit_exit` sized that no token was available to, as `_close` owes
+        one a cancel in flight held back (`_pay_owed`), with the first claim on a token that
+        comes back (`_pay_rated`); an exit rule's owed exit is not replaced by its host's."""
         held = self._owed.get((key, side))
         if held is None or not held[2] or self._exiting:
             self._owed[(key, side)] = (qty, price, self._exiting)
         self._rate_owed[(key, side)] = None
 
     def _pay_rated(self) -> None:
-        """Ask again, oldest first, for the exits an empty bucket owed, before the strategy's
-        handler of a point can spend a token that came back on an order of its own.
+        """Ask again, oldest first, for the exits the rate owed, before the strategy's handler
+        of a point can spend a token that came back on an order of its own.
 
         A throttled account sends what it was asked first, first: an exit the rate held back
         is older than anything the handler sends, so it takes the token, and an entry the
-        handler sends after it finds the bucket as the exit left it. One owed for another
-        reason, or no longer owed, is left to `_pay_owed` after the handler, as before."""
+        handler sends after it finds the bucket as the exit left it. It takes a token while a
+        cancel waits as well (`_command_spend`). One owed for another reason, or no longer
+        owed, is left to `_pay_owed` after the handler, as before."""
         held, self._rate_owed = self._rate_owed, {}
         for name in held:
             if name in self._owed:
                 self._pay_owed(name)
 
     def _refuse_rate(self, key: str, asked: str, what: str, count: int = 1) -> NoReturn:
-        """Refuse a command the bucket held too few tokens for, saying what it held."""
+        """Refuse an exit the bucket held too few tokens for, saying what it held and what
+        waited for them. An exit takes a token the bucket holds while a cancel waits
+        (`_command_spend`), so it is refused only when the bucket holds fewer than it needs,
+        and a cancel waiting then is named beside the level, as what the next tokens go to
+        before any entry."""
         bucket = self._command_bucket
         assert bucket is not None  # only a stated rate refuses anything
         now = self._command_ns
+        waiting = len(self._command_deferred)
+        behind = (
+            f", a cancel of {waiting} order(s) waiting for {self._cancel_tokens} token(s) each,"
+            if waiting
+            else ""
+        )
         self._refuse(
             ORDER_RATE,
             key,
             asked,
             why=f"{what} needed {count} of the {bucket.per_minute} tokens a minute "
-            f"costs.orders_per_minute allows, and the bucket held {bucket.holds(now)} after "
-            f"{self._command_tally.within(now)} command(s) in the 60 s before it. Past the "
-            "rate an exit kanso cannot send again as it was asked is refused, while an entry "
-            "or a modify is dropped and counted, any other exit owed and a cancel deferred: "
-            "close with submit_exit, which is owed rather than refused, send fewer — re-post "
-            "only when the price has moved enough to matter — or state the account's own "
-            "figure as costs.orders_per_minute",
+            f"costs.orders_per_minute allows, and the bucket held {bucket.holds(now)}{behind} "
+            f"after {self._command_tally.within(now)} command(s) in the 60 s before it. Past "
+            "the rate kanso owes only an exit submit_exit sized: an exit it did not size — "
+            "built by hand at market or at a limit, in any time in force, a stop, an order of a "
+            "list, or an overlay's leg or clip — is refused, while an entry or a modify is "
+            "dropped and counted and a cancel deferred: close with submit_exit, which is owed "
+            "rather than refused, send fewer — re-post only when the price has moved enough to "
+            "matter — or state the account's own figure as costs.orders_per_minute",
         )
 
     def _lift_rate(self) -> None:
@@ -2733,8 +2768,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         freeing the room the entry takes, and the venue settles both at one price with the
         exit first. Attached overlays then scale it. Returns the submitted order, or `None`
         when nothing was submitted — no room, no price to size against, an attached filter
-        refused the entry, or a stated `orders_per_minute` left no token for it, which drops
-        it and counts it as refused (`_short_of_rate`).
+        refused the entry, or a stated `orders_per_minute` left no token available to it,
+        which drops it and counts it as refused (`_short_of_rate`). An exit the rate owed at
+        market is read as an exit in flight here too, freeing the room as the one it holds
+        back would (`_left`), so a flip whose exit was owed sizes its second leg as one whose
+        exit went, and the rate drops and counts it.
 
         **In a book the entry is the book's to place** (`kanso.nautilus.book`). It is
         collected, returning `None`, and placed when the instant ends, after every member's
@@ -2801,8 +2839,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _booked(self, order: object) -> object | None:
         """Submit an entry this sleeve sized, and in a book tell the book of it once it reached
-        the venue."""
+        the venue. It is an entry to the rate whatever it does to the position
+        (`_short_of_rate`): the strategy asked for one."""
         ledger = self._book_ledger
+        self._command_opening = True
         submitted = self._submitted(order)
         if submitted is not None and ledger is not None:
             ledger.placed(self, submitted)
@@ -2871,8 +2911,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Returns the order, or `None` when flat or when the orders still working already
         close what was asked, including when what is left is owed. Under a stated
-        `orders_per_minute` an exit the bucket holds no token for is owed whole, as it was
-        asked for, and returns `None` too (`_short_of_rate`).
+        `orders_per_minute` an exit no token is available to is owed whole, as it was asked
+        for, and returns `None` too (`_short_of_rate`); it is the only exit the rate owes.
 
         Exits are neither filtered nor scaled: a construct that shrinks an exit would leave
         exposure behind that nothing in the hypothesis accounts for.
@@ -2905,7 +2945,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         in flight, is refused. The exit an author submitted first in the same handler
         counts: its market order nets the old leg to nothing before this entry sizes, so
         a flip is legal at leverage one. So does an exit a stated `orders_per_minute` owed for
-        want of a token (`_leaving`), which goes before anything asked after it: the entry
+        want of a token (`_left`), which goes before anything asked after it: the entry
         behind it finds no token either, and is dropped and counted (`_short_of_rate`). The
         price is the last print of the finest grain loaded — what the venue's book holds —
         never the host grain's own close.
@@ -2925,9 +2965,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 why=f"{given} was passed, and under a sizing rule the harness sizes every "
                 "entry to the budget and places it at market; call submit_entry(id, side)",
             )
-        own = self._own_intended(key)
+        own = self._left(key, self._own_intended(key))
         signed = 1.0 if side == OrderSide.BUY else -1.0
-        if own != 0 and not self._leaving(key, own):
+        if own != 0:
             if (own > 0) == (signed > 0):
                 return None
             self._refuse(
@@ -2938,9 +2978,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 f"flight; submit_exit({key!r}) first, in the same handler",
             )
         elsewhere = {
-            name: held
-            for name, held in self._holdings().items()
-            if held != 0 and not self._leaving(name, held)
+            name: held for name, held in self._holdings().items() if self._left(name, held) != 0
         }
         if elsewhere:
             (name, held), *_ = elsewhere.items()
@@ -3098,8 +3136,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instant, after the modify's, and lands behind it there too.
         The order counts as working until the cancel lands (`_cancelling`, read then).
 
-        The cancel takes its token here, where the exit decided to send it, and with the
-        bucket empty it is deferred (`_defer_cancel`), to go on a later point, which reaches
+        The cancel takes its tokens here, where the exit decided to send it, and with too few
+        in the bucket it is deferred (`_defer_cancel`), to go on a later point, which reaches
         the venue behind the modify on both paths (`_send_deferred`).
         """
         if not self._cancel_sent(order) and not self._command_spend(CANCEL):
@@ -3130,8 +3168,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
         cancel goes out as it is taken, not from here.)
 
-        The cancels an empty bucket deferred are sent first, as many as it now holds tokens
-        for (`_send_deferred`), and then the exits it owed, oldest first (`_pay_rated`):
+        The cancels the bucket deferred are sent first, as many as it now holds tokens for
+        (`_send_deferred`), and then the exits the rate owed, oldest first (`_pay_rated`):
         this is the one place both paths reach before every handler of a point, and what a
         token refilled since the last point buys goes to what waited for it before the
         handler can spend it. A point is matched by the venue before any handler of it runs,
@@ -3210,10 +3248,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         is sent, held or counted, and a strategy that cancels its last order on every point,
         sent or not, sends what one that cancels only what was sent does.
 
-        Under a stated `orders_per_minute` a cancel that would go out takes a token, and with
-        the bucket empty it is deferred, to go out as soon as the bucket holds one; a second
-        cancel of an order whose cancel waits goes now if the bucket holds a token, and keeps
-        the first one's place if it does not (`_defer_cancel`).
+        Under a stated `orders_per_minute` a cancel that would go out takes its tokens, and
+        with too few in the bucket it is deferred, to go out as soon as the bucket holds them;
+        a second cancel of an order whose cancel waits goes now if the bucket holds them, and
+        keeps the first one's place if it does not (`_defer_cancel`). The cancel of an order the
+        engine's emulator holds is counted and pays its tokens as any other, though the emulator
+        answers it itself and sends the venue nothing: a command is what the sleeve asks of the
+        venue.
         """
         self._forget(order.instrument_id.value, order.side, priced_only=True)
         if _never_rests(order) or self._never_sent(order):
@@ -3591,8 +3632,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         submitted in the same handler counts as gone, so a flip fits at leverage one exactly
         as it does under a sizing rule, where the same rule was written first. Read on the
         venue alone, the old leg still filled the book and every flip was refused for a bar.
+        An exit a stated `orders_per_minute` owed at market counts as gone as well (`_left`):
+        it stands for the market order the rate held back, which goes before anything asked
+        after it, so a flip behind it is sized as one behind an exit that went.
         """
         intended = self._holdings()
+        if self._rate_owed:
+            intended = {name: self._left(name, held) for name, held in intended.items()}
         resting = self._resting(intended)
         key = instrument_id.value
         held = abs(intended.get(key, 0.0)) * reference * self._multiplier_of(instrument_id)

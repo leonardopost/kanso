@@ -22,16 +22,20 @@ against the stream rather than an intent, and no tolerance applies to it. The di
 keeps that check honest without the stream itself: the stream is never written, and two
 streams that differ in any point have different digests.
 
-**How fast each path sent its orders is compared after what it decided.** Each session
-records the commands its strategy counted on the data clock — its submits, modifies and
-cancels, how many it sent in its busiest 60 s, and the submits and modifies a stated rate
-dropped unsent (`kanso.nautilus.rate`). Both paths count them where the strategy decides to
-send them, at the data instants both reach alike, which is what lets one bucket hold one
-strategy to one account's rate on both; so under a stated `costs.orders_per_minute` the
-counts are behaviour, and two paths that counted or dropped differently diverge, at
-`commands`, with each path's counts. The counts are compared at any tolerance; the busiest
-60 s, read off the instants a tolerance lets differ, only at zero. A session written before
-kanso counted has none, and then nothing is compared.
+**How fast each path sent its orders is compared after what it decided, under a stated
+rate.** A session whose venue model states `costs.orders_per_minute` records the commands its
+strategy counted on the data clock — its submits, modifies and cancels, how many it sent in its
+busiest 60 s, and the submits and modifies the rate dropped unsent (`kanso.nautilus.rate`).
+Both paths count them where the strategy decides to send them, at the data instants both reach
+alike, which is what lets one bucket hold one strategy to one account's rate on both; so under
+a stated rate the counts are behaviour — what one path spent decides what it may send next —
+and two paths that counted or dropped differently diverge, at `commands`, with each path's
+counts. The counts are compared at any tolerance; the busiest 60 s, read off the instants a
+tolerance lets differ, only at zero. A session under no stated rate records none
+(`kanso.replay.run`), nor does one written before kanso counted, and then nothing is compared:
+with no layer stating the rate, the broker's declaration included, two paths are judged on
+their stream and their orders alone, as they were before kanso counted — so a sleeve whose two
+paths already fill apart, and so cancel apart, keeps the verdict it had.
 
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
@@ -156,7 +160,7 @@ class Parity:
     def counted(self, ts_ns: int) -> Divergence | None:
         """Where the two paths' command counts differed at instant tolerance `ts_ns`, or
         `None`: every count at any tolerance, the busiest 60 s too at zero, and nothing when
-        either session counted none."""
+        either session recorded none — under no stated rate, or written before kanso counted."""
         node, engine = self.node_commands, self.engine_commands
         if node is None or engine is None:
             return None

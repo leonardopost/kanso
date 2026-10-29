@@ -1099,11 +1099,16 @@ def test_the_pages_say_an_entry_past_the_rate_is_dropped_and_counted_and_the_car
     """Past `costs.orders_per_minute` an entry and a modify are dropped and counted, and the
     card runs on; once the pages said the card was refused, and a proposer told so stops
     sending what the rate would have let through. Each page names the fields that carry the
-    count and still names the one refusal the rate makes."""
+    count and still names the one refusal the rate makes: an exit the strategy built itself,
+    since kanso owes only an exit `submit_exit` sized. Once the pages said an exit built by
+    hand at market or at a good-till-cancelled limit was owed, which sent an order kanso built
+    in its place, one the strategy could neither cancel nor move."""
     for name in ("concepts.md", "workspace.md", "cli.md"):
         said = prose(page(name))
         assert "dropped unsent and counted" in said, name
-        assert "`order_rate`" in said and "exit kanso cannot send again as it was asked" in said
+        assert "`order_rate`" in said and "one the strategy built itself" in said, name
+        assert "`submit_exit` sized" in said, name
+        assert "exit kanso cannot send again as it was asked" not in said, name
         assert "an entry, a modify and an order list are refused" not in said, name
         assert "an entry is refused" not in said, name
     for name in ("concepts.md", "workspace.md"):

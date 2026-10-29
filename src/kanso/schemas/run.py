@@ -127,18 +127,22 @@ class Commands(KansoModel):
 
     Counted by `kanso.nautilus.rate.Tally` as the sleeve sends them, on both code paths: a
     submit per order, a modify per modify the engine sends, a cancel per order cancelled, each
-    at the data-clock instant the sleeve sent it. `peak_60s` is the most commands sent in the
-    60 s ending at any one of them, that one and every other sent at the same instant
-    included, and `p99_60s` the 99th percentile of that count over every command, by nearest
-    rank — so 99 in 100 of the sleeve's commands were sent in a minute holding no more than
-    it. Both are zero for a sleeve that sent nothing.
+    at the data-clock instant the sleeve sent it. A command is what the sleeve asks of the
+    venue: an order the engine's emulator holds is counted when the strategy submits it, and
+    its cancel when the strategy sends it, though the emulator sends the venue nothing while it
+    holds the order and sends the order itself, uncounted, when it releases it. `peak_60s` is
+    the most commands sent in the 60 s ending at any one of them, that one and every other sent
+    at the same instant included, and `p99_60s` the 99th percentile of that count over every
+    command, by nearest rank — so 99 in 100 of the sleeve's commands were sent in a minute
+    holding no more than it. Both are zero for a sleeve that sent nothing.
 
-    `refused_submits` and `refused_modifies` are what a stated `costs.orders_per_minute` left
-    no token for and the sleeve dropped unsent, the run going on past them: a submit per
-    order of an entry — every order of an entry's list — and a modify, the order it would
-    have moved staying as it was. They were never sent, so they are in none of the counts
-    above and in no minute. Both are zero under no stated rate, and for a session or a card
-    recorded before they were kept.
+    `refused_submits` and `refused_modifies` are what the sleeve dropped unsent under a stated
+    `costs.orders_per_minute` because no token was available to them — the bucket empty, or a
+    waiting cancel holding the tokens, which no entry or modify takes before it — the run
+    going on past them: a submit per order of an entry — every order of an entry's list — and
+    a modify, the order it would have moved staying as it was. They were never sent, so they
+    are in none of the counts above and in no minute. Both are zero under no stated rate, and
+    for a session or a card recorded before they were kept.
     """
 
     submits: int = Field(default=0, ge=0)
