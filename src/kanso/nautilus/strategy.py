@@ -1221,9 +1221,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Called before `on_start`, so an author's `on_start` need not call anything. `bar`,
         `quote`, `trade` and `book` are subscribed per instrument — bars at `bar_resolution`
-        where the sleeve's resolution is no bar size, read as kanso set it whatever the
-        `Config` binds over it (`_BAR_RESOLUTION`), the book as level-two deltas, which the
-        venue keeps a book from and the author need not handle. A
+        where the sleeve's resolution is no bar size, read from the slot kanso sets, past any
+        attribute of that name over it (`_BAR_RESOLUTION`), the book as level-two deltas, which
+        the venue keeps a book from and the author need not handle. A
         requirement naming a registered
         custom type is subscribed once, by its class, and its points — every instrument's
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
