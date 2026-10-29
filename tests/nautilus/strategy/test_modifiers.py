@@ -265,6 +265,30 @@ def test_an_overlay_hedge_leg_is_placed_beside_the_entry(backtest) -> None:
     ]
 
 
+def test_an_entry_dropped_past_the_rate_places_no_hedge_leg(backtest) -> None:
+    """At two a minute the host's first entry on its third bar and the hedge leg the overlay
+    answers it with take both tokens, and its second entry in the same handler is dropped and
+    counted. The overlay answers the second with a hedge leg too, and none is placed: a leg is
+    part of the entry it hedges, so nothing of it is sent, and nothing more is counted."""
+
+    class Twice(Host):
+        def on_bar(self, bar_: object) -> None:
+            self.bars += 1
+            if self.bars == 3:
+                self.submit_entry(DEMO, "BUY", qty=100)
+                self.submit_entry(DEMO, "BUY", qty=100)
+
+    rated = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "orders_per_minute": 2}}
+    config = host(venue_model=rated).kanso_config
+    run = backtest(Twice(config), [attached_for(Hedged, "Twice")], instruments=(DEMO, HEDGE))
+
+    assert [(i.instrument_id, i.side, i.qty) for i in run.strategy.intents] == [
+        ("DEMO.XNAS", "BUY", 100.0),
+        ("HEDGE.XNAS", "SELL", 40.0),
+    ]
+    assert run.strategy._command_tally.summary().refused_submits == 1
+
+
 def test_a_hedge_leg_is_not_itself_hedged_or_filtered(backtest) -> None:
     class Both(KansoModifier):
         construct = OVERLAY

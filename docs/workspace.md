@@ -1287,10 +1287,15 @@ a modify, and a cancel of each order, whether by `cancel_order`, `cancel_orders`
 `cancel_all_orders`. A cancel that would send nothing — of an order closed, or whose cancel is
 already on its way — is no command, and neither is the cancel of a market order, which kanso
 never sends, nor a modify the engine sends nothing for: one that changes nothing, or of an
-order closed or being cancelled. Under a stated rate each command takes its tokens from a
-bucket of that many — a submit and a modify one, a cancel `requests_per_cancel` — full when the
-run starts and refilled at that many a minute **on the data clock** — `data_time`, held so a
-point published late refills nothing — and never past full: the shape of the quota kanso's
+order closed or being cancelled. Nor is a cancel or a modify of an order the engine was never
+handed — an entry the rate dropped, which the strategy may still hold, one a filter refused
+or one sent in the warmup: the venue holds nothing of it, so nothing is sent and no token
+spent, and a strategy that cancels its last order on every point, whether or not it went,
+sends what one that cancels only what went does. Under a stated rate each command takes its
+tokens from a bucket of that many — a submit and a modify one, a cancel `requests_per_cancel`
+— full when the run starts and refilled at that many a minute **on the data clock** —
+`data_time`, held so a point published late refills nothing — and never past full: the shape
+of the quota kanso's
 broker clients hold themselves to, a burst of the rate and the rate after it, so a rolling
 minute can hold up to twice the figure. It is the same code on every path, so a card, `kanso
 replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
@@ -1305,7 +1310,16 @@ too few tokens for a command:
   moves: the order stays as it was, at its own price and quantity, working as before. Each is
   counted on the card's `commands` as `refused_submits` — one per order — or
   `refused_modifies`, and the card **runs on** past it, measured on the entries the rate let
-  through; a stage node, running the same code, drops the same commands and does not halt;
+  through; a stage node, running the same code, drops the same commands and does not halt.
+  Whether an order is an entry is read here against the position the sleeve holds once its
+  market orders in flight have filled and its exits owed at market have gone, as `held` reads
+  it: so **the second leg of a flip** — `submit_exit` and then an entry on the other side, in
+  one handler, or a list whose first order is one — is an entry whether the exit took the
+  last token or was owed, dropped and counted rather than owed as an exit and forgotten once
+  the exit has left the sleeve flat. A limit resting is not read as filling, so an exit at
+  market sent beside one is still an exit. Under a sizing rule an exit owed for want of a
+  token is in flight as one sent is, so a flip or a rotation behind it is dropped and counted
+  for want of the same token, never refused as `one_position`;
 - **an exit is owed**: one `submit_exit` sized — the strategy's, an exit rule's, an owed
   exit's — as it was asked, the whole position when no quantity was given; and one the
   strategy built itself on the terms `submit_exit` sends one on — one order at market or at a
@@ -1332,7 +1346,11 @@ What waited goes first. Before the strategy's handler of each point, the deferre
 sent, oldest first, while the bucket holds tokens for them, and then the exits owed for want
 of a token are asked for, oldest first: a throttled account sends what it was asked first,
 first, so a token that came back goes to what waited for it, and an entry the handler sends
-after finds the bucket as they left it. A sleeve acts only on points, and the venue matches a
+after finds the bucket as they left it. While a cancel waits for its tokens no submit and no
+modify takes one — an entry finds none and is dropped, a modify too, and an exit is owed
+behind it — so a cancel that spends two requests is not starved by the single tokens coming
+back, each of which the handler's next order would otherwise take before the cancel had two.
+A sleeve acts only on points, and the venue matches a
 point before any handler of it runs, on both paths, so what waited goes on the **first point
 at or after the instant its token came back, after the venue has matched that point** — not at
 that instant. Across a gap that is the next point there is, however far: a cancel deferred on

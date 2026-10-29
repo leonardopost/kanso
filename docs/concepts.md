@@ -1864,7 +1864,12 @@ unsent and counted**, and the card runs on — an entry built by `submit_entry`,
 an overlay, every order of an entry's list with it, which `submit_entry` answers with `None`;
 a modify whichever order it moves, which stays as it was — so the card measures the entries
 the rate let through, and its digest carries how many it dropped (`refused_submits`,
-`refused_modifies`), which reaches the proposer beside its trades. **Any other exit is owed**,
+`refused_modifies`), which reaches the proposer beside its trades. An order is an entry there
+when it opens or grows the position the sleeve's market orders in flight and its exits owed at
+market leave, so the second leg of a flip is an entry, dropped, and is not owed as an exit;
+under a sizing rule an owed exit is in flight as a sent one is, so a flip or a rotation behind
+it is dropped too, never refused. An order the engine was never handed, dropped so, is
+nothing to cancel or to move, and its cancel or modify is no command. **Any other exit is owed**,
 asked for again as it was asked until a token comes back, and **a cancel is deferred**. Only
 **an exit kanso cannot send again as it was asked** — a stop, an order of a list or a list that
 closes, an immediate-or-cancel or post-only limit among them — is refused as `order_rate`, the
@@ -1873,7 +1878,9 @@ what was asked, when and what the bucket held: dropped, it would leave open what
 asked to close, and sent again as `submit_exit` sends one, it would be another order. What
 waited goes first: before the handler of each point the deferred cancels and then the owed
 exits take what tokens came back, oldest first, as an account working its requests in turn
-would send them, and an entry the handler sends after finds the bucket as they left it. An
+would send them, and an entry the handler sends after finds the bucket as they left it; while
+a cancel waits for its tokens no submit or modify takes one, so a cancel that spends two
+requests is not starved by single tokens. An
 owed exit and a deferred cancel are what the account would have let through later, but a
 sleeve acts only on points, and the venue matches a point before any handler of it runs: they
 go on the first point at or after the instant a token comes back, after that point is matched,

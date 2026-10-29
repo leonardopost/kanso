@@ -4,8 +4,10 @@ A sleeve under a venue model that states `costs.orders_per_minute` takes a token
 command it sends from a bucket of that many, refilled at that many a minute of the data
 clock — a cancel as many as `requests_per_cancel` says. With the bucket empty an entry, an
 entry's list and a modify are dropped unsent and counted as refused, and the run goes on; any
-other exit is owed and a cancel deferred, and what waited goes first once a token comes back;
-an exit kanso cannot send again as it was asked is refused. Each scenario here runs on the
+other exit is owed and a cancel deferred, and what waited goes first once a token comes back,
+no submit or modify taking one while a cancel waits; an exit kanso cannot send again as it was
+asked is refused. The second leg of a flip is an entry there, and a dropped order is nothing
+to cancel or to move. Each scenario here runs on the
 research path (`backtest.execute`) and on the live one (`session.run_node`) and asserts both
 the behaviour and that the two agree on every intent, fill and count, the refused ones
 included; and with the key unset nothing a run does moves.
@@ -57,18 +59,23 @@ NAME = InstrumentId(Symbol(SYMBOL), Venue(VENUE))
 
 
 def quoted(
-    count: int, levels: dict[int, tuple[float, float]] | None = None, *, first: int = T0
+    count: int,
+    levels: dict[int, tuple[float, float]] | None = None,
+    *,
+    first: int = T0,
+    gap: int = SECOND_NS,
+    name: InstrumentId = NAME,
 ) -> list[QuoteTick]:
-    """`count` quotes a second apart from `first`, 1,000 a side, at 9.99/10.01 and, from each
-    `levels` key on, at its bid and ask."""
+    """`count` quotes of `name`, `gap` apart from `first` — a second unless given — 1,000 a
+    side, at 9.99/10.01 and, from each `levels` key on, at its bid and ask."""
     made: list[QuoteTick] = []
     bid, ask = 9.99, 10.01
     for seen in range(1, count + 1):
         bid, ask = (levels or {}).get(seen, (bid, ask))
-        instant = first + (seen - 1) * SECOND_NS
+        instant = first + (seen - 1) * gap
         made.append(
             QuoteTick(
-                NAME,
+                name,
                 Price(bid, 2),
                 Price(ask, 2),
                 Quantity.from_int(1_000),
@@ -131,10 +138,14 @@ def rated(
     return replace(request, venue_model=model)
 
 
-def both(request: RunRequest, groups: list[tuple[object, ...]]) -> RunResult:
-    """The request on both code paths, asserted to agree on every intent, fill and count."""
-    engine = backtest.execute(request, [instrument()], groups)
-    node = session.run_node(request, [instrument()], groups).result
+def both(
+    request: RunRequest, groups: list[tuple[object, ...]], symbols: tuple[str, ...] = (SYMBOL,)
+) -> RunResult:
+    """The request on both code paths, over the instruments `symbols` names, asserted to agree
+    on every intent, fill and count."""
+    instruments = [instrument(symbol) for symbol in symbols]
+    engine = backtest.execute(request, instruments, groups)
+    node = session.run_node(request, instruments, groups).result
     assert not node.crashed, node.traceback_tail
     assert node.intents == engine.intents
     assert node.run.fills == engine.run.fills
@@ -529,6 +540,209 @@ def test_a_list_that_closes_a_position_past_the_rate_is_refused() -> None:
         "a list of 3 orders closing a position needed 3 of the 1 tokens a minute"
     )
     assert "an exit kanso cannot send again as it was asked is refused" in refusal.why
+
+
+FLIPS = {
+    "entry": 'self.submit_entry(name, "SELL", qty=100)',
+    "list": BRACKET.format(side="SELL", stop=11.0, target=9.0),
+}
+"""The second leg of a flip: an entry on the other side, or a bracket of three whose first
+order is one."""
+
+
+@pytest.mark.parametrize("leg", sorted(FLIPS))
+@pytest.mark.parametrize(("per_minute", "exited_at"), [(2, 2), (1, 61)], ids=["sent", "owed"])
+def test_the_second_leg_of_a_flip_past_the_rate_is_an_entry_dropped_and_counted(
+    leg: str, per_minute: int, exited_at: int
+) -> None:
+    """A flip is `submit_exit` and then an entry on the other side, in one handler. At two a
+    minute the exit takes the last token on the second quote, and at one it is owed, going on
+    the sixty-first; either way the second leg finds no token and is the entry it is, dropped
+    and counted — every order of a bracket — never owed as an exit and forgotten once the exit
+    has left the sleeve flat, and never refused. Unheld, the sleeve ends the other side."""
+    flipping = sleeve("", second=f"self.submit_exit(name)\n            {FLIPS[leg]}")
+    unrated = both(rated(flipping, None), [tuple(steady(70))])
+    held = both(rated(flipping, per_minute), [tuple(steady(70))])
+
+    assert len(unrated.intents) == (3 if leg == "entry" else 5)
+    assert stamps(held) == [(at(1), "BUY", "MARKET"), (at(exited_at), "SELL", "MARKET")]
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert held.commands is not None
+    assert held.commands.refused_submits == (1 if leg == "entry" else 3)
+
+
+SIZED_FLIP = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_quote_tick(self, tick):
+        if tick.instrument_id.symbol.value != "DEMO":
+            return
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(tick.instrument_id, "BUY")
+        elif self.seen == 2:
+            self.submit_exit(tick.instrument_id)
+            self.submit_entry(INTO, "SIDE")
+"""
+"""Under a sizing rule, buys the whole budget on its first quote and on its second exits it and
+enters `INTO` on `SIDE`: the other side of the same name, a flip, or another name, a rotation."""
+
+OTHER = "OTHR"
+"""The name a sized rotation moves into, quoted at the same prices a nanosecond before each of
+`DEMO`'s quotes, so the bucket refills on `DEMO`'s alone."""
+
+TWO_NAMES = hypothesis(
+    resolution="tick",
+    horizon="1d",
+    data_requirements=["quote", "trade"],
+    universe=[f"{SYMBOL}.{VENUE}", f"{OTHER}.{VENUE}"],
+    risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+)
+
+
+@pytest.mark.parametrize(
+    ("into", "side"),
+    [("tick.instrument_id", "SELL"), ("'OTHR.XNAS'", "BUY")],
+    ids=["flip", "rotation"],
+)
+@pytest.mark.parametrize(("per_minute", "exited_at"), [(2, 2), (1, 61)], ids=["sent", "owed"])
+def test_a_sized_flip_or_rotation_past_the_rate_drops_its_entry_and_runs_on(
+    into: str, side: str, per_minute: int, exited_at: int
+) -> None:
+    """Under a sizing rule the exit a flip or a rotation sends first is in flight when the entry
+    sizes, so the entry is legal; one owed for want of a token is in flight too, since the
+    account takes it before anything asked after it. At two a minute the exit takes the last
+    token and at one it is owed, going on the sixty-first quote; either way the entry behind it
+    finds no token and is dropped and counted, never refused as `one_position` nor owed as an
+    exit `submit_exit` would refuse to send, and both paths run to the end."""
+    source = SIZED_FLIP.replace(b"INTO", into.encode()).replace(b"SIDE", side.encode())
+    request = replace(rated(source, per_minute), hyp=TWO_NAMES, sleeve_budget=10_000.0)
+    other = quoted(70, first=T0 - 1, name=InstrumentId(Symbol(OTHER), Venue(VENUE)))
+    groups: list[tuple[object, ...]] = [tuple(steady(70)), tuple(other)]
+
+    unrated = both(
+        replace(request, venue_model=rated(source, None).venue_model), groups, (SYMBOL, OTHER)
+    )
+    held = both(request, groups, (SYMBOL, OTHER))
+
+    assert len(unrated.intents) == 3
+    assert [(ts, name, sold) for ts, name, sold, *_ in held.intents] == [
+        (at(1), f"{SYMBOL}.{VENUE}", "BUY"),
+        (at(exited_at), f"{SYMBOL}.{VENUE}", "SELL"),
+    ]
+    assert [fill.side for fill in held.run.fills] == ["BUY", "SELL"]
+    assert held.commands is not None and held.commands.refused_submits == 1
+
+
+DROPPED_THEN = {
+    "cancel_order": "self.cancel_order(self.dropped)",
+    "cancel_orders": "self.cancel_orders([self.dropped])",
+    "modify_order": "self.modify_order(self.dropped, price=Price(6.0, 2))",
+}
+"""What a strategy may still do with an entry the rate dropped, which it holds all the same."""
+
+
+@pytest.mark.parametrize("call", sorted(DROPPED_THEN))
+def test_a_cancel_or_a_modify_of_an_entry_the_rate_dropped_is_no_command(call: str) -> None:
+    """At two a minute the entry and the resting exit leave a thirtieth of a token, and the buy
+    the sleeve builds on its third quote is dropped unsent, though the sleeve still holds it. By
+    the forty-fifth a token has come back: cancelling or moving the dropped buy sends the venue
+    nothing, so it takes no token and is counted as nothing, and the buy the sleeve rests after
+    it in the same handler takes the token."""
+    source = sleeve(
+        f"""        elif self.seen == 3:
+            self.dropped = self.order_factory.limit(
+                name, OrderSide.BUY, Quantity.from_int(50), Price(5.0, 2)
+            )
+            self.submit_order(self.dropped)
+        elif self.seen == 45:
+            {DROPPED_THEN[call]}
+            {resting_buy(5.0)}
+"""
+    )
+    held = both(rated(source, 2), [tuple(steady(50))])
+
+    assert stamps(held)[2:] == [(at(45), "BUY", "LIMIT")]
+    assert held.commands == Commands(submits=3, peak_60s=3, p99_60s=3, refused_submits=1)
+
+
+REPOSTING = b'''
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 10 far under the market and, on every quote, cancels it and rests
+    another: every buy it rested, or, under `CHECKS`, only one the engine was handed."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.resting = None
+
+    def on_quote_tick(self, tick):
+        last = self.resting
+        if last is not None and (not CHECKS or self.cache.order(last.client_order_id)):
+            self.cancel_order(last)
+        self.resting = self.order_factory.limit(
+            tick.instrument_id, OrderSide.BUY, Quantity.from_int(10), Price(5.0, 2)
+        )
+        self.submit_order(self.resting)
+'''
+
+
+def reposting(checks: bool) -> bytes:
+    """The re-posting sleeve, cancelling only what was sent when `checks`."""
+    return REPOSTING.replace(b"CHECKS", b"True" if checks else b"False")
+
+
+@pytest.mark.parametrize("per_cancel", [None, 2], ids=["one", "two"])
+def test_a_sleeve_that_cancels_its_last_order_sent_or_not_sends_what_one_that_checks_does(
+    per_cancel: int | None,
+) -> None:
+    """At twenty a minute a sleeve that cancels its resting buy and rests another on every quote
+    finds most of its buys dropped. A cancel of one dropped sends nothing and spends no token, so
+    the sleeve that cancels its last buy whatever became of it sends exactly what one that
+    cancels only a buy the engine was handed does: every buy it sent but the last, cancelled."""
+    groups: list[tuple[object, ...]] = [tuple(steady(300))]
+    blind = both(rated(reposting(False), 20, per_cancel=per_cancel), groups)
+    checking = both(rated(reposting(True), 20, per_cancel=per_cancel), groups)
+
+    assert blind.intents == checking.intents
+    assert blind.commands == checking.commands
+    assert blind.commands is not None and blind.commands.refused_submits > 0
+    assert blind.commands.cancels == blind.commands.submits - 1
+
+
+def test_a_cancel_that_costs_two_is_not_starved_by_the_single_tokens_coming_back() -> None:
+    """At the 190 a minute an Alpaca account declares, two requests a cancel, the re-posting
+    sleeve on quotes a quarter second apart wants three tokens a quote and gets under one. The
+    cancel that waits for two keeps its place: no buy takes a single token that comes back
+    before it has its two, as a throttled account working its requests in turn sends them, so
+    every buy sent but the last is cancelled. Were the single tokens the handler's, each would
+    go to the next buy and the cancels would wait while the buys piled up resting."""
+    groups: list[tuple[object, ...]] = [tuple(quoted(480, gap=SECOND_NS // 4))]
+    held = both(rated(reposting(True), 190, per_cancel=2), groups)
+
+    assert held.commands is not None and held.commands.refused_submits > 0
+    assert held.commands.cancels == held.commands.submits - 1
 
 
 def chase_groups() -> list[tuple[object, ...]]:
