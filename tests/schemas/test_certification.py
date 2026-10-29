@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import inf, nan
 from typing import Any
 
 import pytest
@@ -196,6 +197,13 @@ def test_a_certificate_carries_its_window_s_net_per_trade() -> None:
         ({"net_se_session": None}, "no error to divide by"),
         ({"sessions_with_trades": 1}, "one session closed every trade"),
         ({"sessions_with_trades": 401}, "cannot hold"),
+        ({"net_t": nan}, "finite number"),
+        ({"net_per_trade_bp": inf}, "finite number"),
+        ({"net_se_session": inf}, "finite number"),
+        (
+            {"net_per_trade_bp": 482.0, "net_se_session": 2.680770188266485e-306, "net_t": 1e308},
+            "over 2.680770188266485e-306 is not a finite number",
+        ),
     ],
 )
 def test_a_net_per_trade_whose_numbers_disagree_is_refused(

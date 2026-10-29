@@ -2179,9 +2179,10 @@ with their parameters and a rationale each — pinned once, re-minted only by `c
 --replan`. A certificate is the verdict, its evidence and its pins, the `power` it states and
 the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`,
 `sessions_with_trades` and `trades`, struck from the certification run, or `null` for a
-window that closed no trade (`docs/concepts.md`, *Certification*). The `.py` beside it is
-the certified source, byte for byte, so a certified subject travels with the files even where
-`state.db` does not:
+window that closed no trade (`docs/concepts.md`, *Certification*). A certificate whose
+`net_per_trade` holds a NaN or an infinity, or a value over its error past the largest
+float, is refused. The `.py` beside it is the certified source, byte for byte, so a
+certified subject travels with the files even where `state.db` does not:
 
 ```
 $ shasum -a 256 certificates/demo_mr/f729a53.py
