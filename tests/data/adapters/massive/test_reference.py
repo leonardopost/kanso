@@ -22,6 +22,7 @@ Three properties are asserted throughout and are the reason this module exists.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -59,7 +60,7 @@ from kanso.data.instruments import (
     build,
     definition_checksum,
 )
-from kanso.errors import Exit
+from kanso.errors import Exit, ValidationError
 from kanso.schemas import InstrumentEntry
 from kanso.workspace import Workspace, init
 
@@ -659,22 +660,49 @@ def test_a_futures_key_the_generic_reference_does_not_carry_is_asked_of_its_own_
     assert reader.sources("ESZ6.XCME") == {"massive": "ESZ6"}
 
 
-def test_a_bare_key_the_generic_reference_lists_as_a_future_is_resolved_as_one() -> None:
-    """The market field decides; nothing infers a class from the shape of a bare symbol."""
-    contract, stated = future("ES")
-    row = {
-        "ticker": "ES",
+def generic_future(ticker: str = "ES") -> dict[str, Any]:
+    """A futures contract as a row of the generic reference would list it, its terms the
+    futures listings' (`future`) under the names a generic row is read by. Measured, the
+    generic reference lists no futures key — it answered `ESZ5` with a 404, and nothing under
+    `market=futures` — so this is the route a key takes only if it ever does."""
+    contract, stated = future(ticker)
+    return {
+        "ticker": ticker,
         "market": "futures",
         "exchange": contract["trading_venue"],
         "min_tick": contract["trade_tick_size"],
         "list_date": contract["first_trade_date"],
         "expiration_date": contract["last_trade_date"],
         "multiplier": stated["unit_of_measure_qty"],
-        "underlying_ticker": "ES",
+        "underlying_ticker": ticker,
     }
-    found = one(Directory(rows={"ES": row}), "ES")
+
+
+def test_a_bare_key_the_generic_reference_lists_as_a_future_is_resolved_as_one() -> None:
+    """The market field decides; nothing infers a class from the shape of a bare symbol."""
+    found = one(Directory(rows={"ES": generic_future()}), "ES")
 
     assert fields_of(found)["type"] == "FuturesContract"
+
+
+@pytest.mark.parametrize(
+    ("dropped", "reason"),
+    [
+        ("multiplier", "the vendor's row states no contract size"),
+        ("underlying_ticker", "the vendor's row names no underlying for this contract"),
+    ],
+    ids=["no contract size", "no underlying"],
+)
+def test_a_future_the_generic_reference_lists_without_a_term_fails_by_name(
+    dropped: str, reason: str
+) -> None:
+    """The futures convention states no contract size, and a bare key names no underlying, so
+    a generic row that states neither leaves nothing to take one from."""
+    row = {name: value for name, value in generic_future().items() if name != dropped}
+    found = one(Directory(rows={"ES": row}), "ES")
+
+    assert isinstance(found, ResolveError)
+    assert reason in found.reason
 
 
 @pytest.mark.parametrize(
@@ -778,7 +806,7 @@ that drew it, its page size aside: the file and the instant are in `provenance.j
 
 def as_recorded(url: str, params: Mapping[str, str]) -> Response:
     """The futures listings as the source answered them, by request. The generic reference
-    answers every key with the 404 it gave ESZ5, as it gave ESH5, CLZ6 and CLF0 theirs."""
+    answers every key with the 404 it gave ESZ5, as it gave ESH5, CLZ6 and CLF30 theirs."""
     path = url.split("?", 1)[0].removeprefix(API)
     asked = dict(params)
     if path.startswith(f"{LISTING}/"):
@@ -873,6 +901,25 @@ def test_a_key_the_listing_names_no_contract_by_is_refused_with_where_to_read_it
     assert [params.get("ticker") for _, params in futures_asked(replay)] == ["CLF0", "CLF0"]
 
 
+def test_a_contract_still_listed_past_its_last_trade_with_no_tick_is_delisted_unread() -> None:
+    """The listing named CLX6 eight days after its last trade, inactive (recorded); a row of
+    that shape that states no tick, as no row did before 2025-03-12, is past its expiry, so it
+    is refused as delisted without its life being read for a tick, and is not sent to a manual
+    entry it has no use for."""
+    contract, stated = future(tick=None, expiry="2026-12-18")
+    listed = {**contract, "active": False, "date": "2026-12-28"}
+    replay = Replay(Directory(futures={"ESZ6": (listed, stated)}))
+    reader = MassiveReference(MassiveClient("test-key-not-a-secret", transport=replay))
+
+    found = reader.resolve(["ESZ6"], date(2026, 12, 28))["ESZ6"]
+
+    assert isinstance(found, ResolveError)
+    assert found.reason == f"{DELISTED} 2026-12-18, before 2026-12-28"
+    assert [params for path, params in futures_asked(replay) if path == FUTURES_CONTRACTS] == [
+        {"date": "2026-12-28", "limit": "1", "ticker": "ESZ6"}
+    ]
+
+
 def test_a_contract_past_its_last_trade_is_listed_nowhere_and_says_so() -> None:
     reader, _ = recorded_reader()
     found = reader.resolve(["ESZ5"], date(2026, 10, 28))["ESZ5"]
@@ -928,10 +975,52 @@ def test_a_contract_that_ended_before_the_source_stated_ticks_is_refused_to_a_ma
     assert found.reason == (
         f"{UNKNOWN}: no row of ESZ4's futures listing from 2024-10-29 to its last trade on "
         "2024-12-20 states a tick (the vendor's rows state one from 2025-03-12 on, measured on "
-        "ES's); define it as a `manual: true` entry in instruments.yaml, `instrument_class: "
-        "future`, with its tick, size and dates under `override`"
+        "ES's); define it as a `manual: true` entry in instruments.yaml whose `override` states "
+        "`instrument_class: future` and its `price_increment`, `multiplier`, `lot_size`, "
+        "`currency`, `underlying`, `activation_ns` and `expiration_ns`"
     )
     assert all(path == FUTURES_CONTRACTS for path, _ in futures_asked(replay))
+
+
+def test_the_manual_entry_that_refusal_names_defines_the_contract_and_needs_every_field() -> None:
+    """Followed as written, with ESZ4's terms — its row's dates, ES's tick, size and currency —
+    the entry builds the future; without any one field it names, it does not."""
+    reader, _ = recorded_reader()
+    found = reader.resolve(["ESZ4"], date(2024, 10, 29))["ESZ4"]
+    assert isinstance(found, ResolveError)
+    named = re.findall(r"`([a-z_]+)(?:: future)?`", found.reason.partition("`override`")[2])
+    terms = {
+        "instrument_class": "future",
+        "price_increment": "0.25",
+        "multiplier": "50",
+        "lot_size": "1",
+        "currency": "USD",
+        "underlying": "ES",
+        "activation_ns": "2021-06-04",
+        "expiration_ns": "2024-12-20",
+    }
+    dated = {"ts_event": date(2024, 10, 29), "ts_init": date(2024, 10, 29)}
+
+    def entry(*fields: str) -> InstrumentEntry:
+        return InstrumentEntry(
+            nautilus_id="ESZ4.XCME",
+            asset_class="COMMODITY",
+            manual=True,
+            corporate_actions="none",
+            override={name: terms[name] for name in fields},
+        )
+
+    assert sorted(named) == sorted(terms)
+    built = fields_of(build(entry(*named), dated))
+    assert (built["type"], built["price_increment"], built["multiplier"]) == (
+        "FuturesContract",
+        "0.25",
+        "50",
+    )
+    for missing in named:
+        refused_for = "implies no instrument class" if missing == "instrument_class" else missing
+        with pytest.raises(ValidationError, match=refused_for):
+            build(entry(*(name for name in named if name != missing)), dated)
 
 
 def test_a_product_quoted_in_points_of_par_has_no_contract_size_kanso_reads() -> None:

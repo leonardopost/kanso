@@ -297,8 +297,9 @@ class MassiveReference(InstrumentProvider):
                     f"{UNKNOWN}: no row of {ticker}'s futures listing from {as_of} to its last "
                     f"trade on {last} states a tick (the vendor's rows state one from "
                     "2025-03-12 on, measured on ES's); define it as a `manual: true` entry in "
-                    "instruments.yaml, `instrument_class: future`, with its tick, size and "
-                    "dates under `override`",
+                    "instruments.yaml whose `override` states `instrument_class: future` and "
+                    "its `price_increment`, `multiplier`, `lot_size`, `currency`, `underlying`, "
+                    "`activation_ns` and `expiration_ns`",
                 )
         code = _text(contract, "product_code")
         day = _text(contract, "date") or as_of.isoformat()

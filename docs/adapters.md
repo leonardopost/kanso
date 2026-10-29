@@ -308,8 +308,11 @@ price_precision: 2                 # ES trades in 0.25
   load of two sessions of one contract cost four — three to establish the plan and its floor,
   and one page of up to 50,000 bars — over 61 s, and resolving a contract two or three more;
   none of the 13 futures requests that run made, resolution and the survey's included, was
-  throttled. Resolving one asks at most four: the day's row, the week's where the day holds
-  none, the rows of its life where the row states no tick, and its product.
+  throttled. Resolving one asks for the day's row, the week's where the day holds none, its
+  product, and, where the row states no tick, the rows of its life from the day asked to its
+  last trade — one request for each page of up to 1,000 of them. Measured on 2026-10-29,
+  `ESZ5` as of Saturday 2021-06-12 asked five: the day (no row), the week (six), its life to
+  2025-12-19 in two pages, of 1,000 rows and of 455, and its product.
 - **The history floor is the contract's, inside the plan's.** A range from 1970 came back
   truncated rather than refused, from 2024-10-29 for ESZ4 and ESH5 — two years before the
   measurement, the plan's edge — and from 2025-09-10 for ESZ6, a deferred contract that traded
@@ -386,7 +389,7 @@ field was read off rows measured on 2026-10-29 before it was trusted:
 | field | from |
 |---|---|
 | venue | the contract's `trading_venue` (`XCME`) |
-| tick | the contract's `trade_tick_size` (0.25 for ES, 0.01 for CL); the source states it only from 2025-03-12 (measured on ES's rows), so a contract asked as of an earlier day takes it from the earliest day of its life that states one — a tick is a term the contract was listed with. A contract no row of which states one from the day asked to its last trade is refused, naming the `manual: true` entry in `instruments.yaml` that defines it with its tick: that is every ES contract that last traded before 2025-03-12, `ESZ4` among them, the December 2024 E-mini whose minutes the plan serves from 2024-10-29 — none of its 46 rows from then to its last trade states a tick |
+| tick | the contract's `trade_tick_size` (0.25 for ES, 0.01 for CL); the source states it only from 2025-03-12 (measured on ES's rows), so a contract asked as of an earlier day takes it from the earliest day of its life that states one — a tick is a term the contract was listed with. A contract no row of which states one from the day asked to its last trade is refused, naming the `manual: true` entry in `instruments.yaml` that defines it — `instrument_class: future` and its `price_increment`, `multiplier`, `lot_size`, `currency`, `underlying`, `activation_ns` and `expiration_ns` under `override`, which is every field a future needs: that is every ES contract that last traded before 2025-03-12, `ESZ4` among them, the December 2024 E-mini whose minutes the plan serves from 2024-10-29 — none of its 46 rows from then to its last trade states a tick |
 | listed and expiry | the contract's `first_trade_date` and `last_trade_date`; past its last trade a contract does not resolve, whether the listing still names it, inactive — `CLX6` eight days after — or names it no more — `ESZ5` ten months after |
 | underlying, currency | the contract's `product_code`, the product's `trade_currency_code` |
 | multiplier | the product's `unit_of_measure_qty`, only in a unit the price was measured quoted per one of: `IPNT` (ES, 50), `BBL` (CL, 1000), `TRYOZ` (GC, 100), `EUR` (6E, 125,000). ZN states 100,000 `USD` and is quoted in points of par, a point worth 1,000, so any other unit is refused by name and the contract is yours to write as a manual entry |
