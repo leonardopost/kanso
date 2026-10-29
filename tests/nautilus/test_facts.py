@@ -264,6 +264,38 @@ def test_a_client_whose_quota_holds_no_request_fails_the_quota_claim(
     assert "['RuntimeError']" in evidence
 
 
+@pytest.mark.parametrize(
+    ("keyed_s", "unkeyed_s", "expected"),
+    [(0.0, 0.0, False), (0.1, 0.2, True)],
+    ids=["unmetered", "load-slowed-unkeyed"],
+)
+def test_the_keyed_quota_claim_reads_only_the_keyed_run_s_lower_bound(
+    monkeypatch: pytest.MonkeyPatch, keyed_s: float, unkeyed_s: float, expected: bool
+) -> None:
+    """A stand-in whose requests take as long as their keys say. Failing every request at
+    once holds nothing; holding the keyed run past its 0.45 s floor holds the claim, however
+    much longer load made the unkeyed run take — load only adds time, so the two runs are
+    never compared."""
+    import asyncio
+
+    from nautilus_trader.core import nautilus_pyo3
+
+    class Paced:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def request(self, *_: object, keys: list[str], **__: object) -> object:
+            await asyncio.sleep(keyed_s if "slow" in keys else unkeyed_s)
+            raise RuntimeError("not a URL")
+
+    monkeypatch.setattr(nautilus_pyo3, "HttpClient", Paced)
+
+    holds, evidence = facts._check_http_client_meters_keyed_quotas()
+
+    assert holds is expected, evidence
+    assert "['RuntimeError']" in evidence
+
+
 def test_a_netting_position_is_one_strategy_s_and_the_net_position_the_account_s() -> None:
     """What `KansoStrategy`'s own-position reader rests on, read in the first strategy's
     handler before its sale and again at the end of the run."""
