@@ -546,20 +546,13 @@ every field kanso sets from the file is held here: a `Config` default of `depth`
 `data_by_instrument` or `session_scope` stands on a stage and not on a card too, as on main
 (`docs/backlog.md` row 233)."""
 
-SCOPES: Final = (
-    ast.FunctionDef,
-    ast.AsyncFunctionDef,
-    ast.ClassDef,
-    ast.Lambda,
-    ast.ListComp,
-    ast.SetComp,
-    ast.DictComp,
-    ast.GeneratorExp,
-)
-"""The nodes that open a scope of their own: what a function's, a lambda's or a nested class's
-body binds, and a comprehension's targets, are not bound in the class body holding it, and a
-walrus inside a comprehension is refused in a class body. Their decorators, defaults and bases
-run in the class's own scope and are not walked either, so a walrus there is not seen."""
+BODIED: Final = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+"""The nodes whose body binds in a scope of its own, while their decorators, defaults,
+annotations and bases run in the scope around them, where a walrus among them binds."""
+
+COMPREHENSIONS: Final = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+"""The nodes whose targets bind in a scope of their own; in a class body a walrus is refused
+anywhere inside one, its first iterable included, so nothing in one binds in the class's."""
 
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
@@ -837,9 +830,10 @@ def _class_names(node: ast.ClassDef) -> Iterator[tuple[int, str]]:
     Each statement is walked whole, every block nested in it included: a name stored — any
     assignment's target, a tuple's, a list's or a star's among them, a `for` or `with`
     target, a walrus, an annotation with or without a value — the name a `def` or a `class`
-    defines, a name an `import` binds and one a `match` pattern captures. A function, a
-    lambda, a class or a comprehension is not walked into (`SCOPES`): what its body binds is
-    its own.
+    defines, a name an `import` binds and one a `match` pattern captures. What binds in a
+    scope of its own is not walked: the body of a function, a lambda or a nested class
+    (`BODIED`), whose decorators, defaults, annotations and bases are, and a comprehension
+    (`COMPREHENSIONS`).
     """
     pending: list[ast.AST] = list(reversed(node.body))
     while pending:
@@ -847,8 +841,22 @@ def _class_names(node: ast.ClassDef) -> Iterator[tuple[int, str]]:
         bound = _bound(child)
         if bound is not None:
             yield bound
-        if not isinstance(child, SCOPES):
-            pending.extend(reversed(list(ast.iter_child_nodes(child))))
+        pending.extend(reversed(_in_scope(child)))
+
+
+def _in_scope(node: ast.AST) -> list[ast.AST]:
+    """The children of `node` that run in the scope `node` stands in, in order."""
+    if isinstance(node, COMPREHENSIONS):
+        return []
+    if not isinstance(node, BODIED):
+        return list(ast.iter_child_nodes(node))
+    return [
+        child
+        for field, value in ast.iter_fields(node)
+        if field != "body"
+        for child in (value if isinstance(value, list) else [value])
+        if isinstance(child, ast.AST)
+    ]
 
 
 def _bound(node: ast.AST) -> tuple[int, str] | None:

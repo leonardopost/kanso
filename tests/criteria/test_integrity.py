@@ -833,6 +833,8 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
         ("from math import pi as bar_resolution", 4),
         ('match "5m":\n        case bar_resolution:\n            pass', 5),
         ('match {"k": 5}:\n        case {**bar_resolution}:\n            pass', 5),
+        ('def size(self, every=(bar_resolution := "5m")) -> str:\n        return every', 4),
+        ("class Leg((bar_resolution := object)):\n        pass", 4),
     ],
     ids=[
         "annotated",
@@ -849,6 +851,8 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
         "import",
         "match capture",
         "match mapping rest",
+        "a default's walrus",
+        "a nested class's base",
     ],
 )
 def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, line: int) -> None:
@@ -872,8 +876,8 @@ def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, li
 
 
 def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> None:
-    """A function's, a lambda's, a nested class's and a comprehension's names bind in a scope
-    of their own, never on the Config."""
+    """What a function's, a lambda's or a nested class's body binds, and a comprehension's
+    targets, bind in a scope of their own, never on the Config."""
     source = (
         "from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
         "class Leg:\n"
@@ -883,6 +887,7 @@ def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> 
         "    fixed_params: tuple[str, ...] = ('lookback',)\n"
         "    sizes = [bar_resolution for bar_resolution in ('5m',)]\n"
         "    pick = lambda self, bar_resolution='5m': bar_resolution\n"
+        "    peek = lambda self: (bar_resolution := '5m')\n"
         "    class Inner:\n"
         "        bar_resolution = '5m'\n"
         "    def size(self) -> str:\n"
