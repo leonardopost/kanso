@@ -172,7 +172,11 @@ class _Stated:
 
     universe: tuple[str, ...]
     known: frozenset[str]
-    resolution: str
+    size: str
+    """The size the hypothesis reads its bars at: `bar_resolution` where it states one, else
+    `resolution`."""
+    named: str
+    """What the file calls that size, as a reason names it."""
     bar: tuple[int, str] | None
     required: frozenset[str]
 
@@ -185,7 +189,8 @@ class _Stated:
         return cls(
             universe=tuple(sorted(hyp.universe)),
             known=frozenset(names),
-            resolution=size,
+            size=size,
+            named="the resolution" if hyp.bar_resolution is None else "bar_resolution",
             bar=bar,
             required=frozenset(hyp.data_requirements),
         )
@@ -197,17 +202,18 @@ class _Stated:
         return f"line {line}: {name!r} is not in the universe ({', '.join(self.universe)})"
 
     def specification(self, step: int, aggregation: str, line: int) -> str | None:
-        """A bar whose step or aggregation is not the one the resolution names."""
+        """A bar whose step or aggregation is not the size the file reads its bars at, named
+        as the file names it: `bar_resolution` where it states one, else the resolution."""
         if self.bar is None:
             return (
-                f"line {line}: a {step}-{aggregation} bar, but the resolution is "
-                f"{self.resolution!r}, which is not a bar size"
+                f"line {line}: a {step}-{aggregation} bar, but {self.named} is "
+                f"{self.size!r}, which is not a bar size"
             )
         if (step, aggregation) == self.bar:
             return None
         return (
-            f"line {line}: a {step}-{aggregation} bar, but the resolution is "
-            f"{self.resolution!r} ({self.bar[0]}-{self.bar[1]})"
+            f"line {line}: a {step}-{aggregation} bar, but {self.named} is "
+            f"{self.size!r} ({self.bar[0]}-{self.bar[1]})"
         )
 
     def data_type(self, name: str, line: int) -> str | None:
