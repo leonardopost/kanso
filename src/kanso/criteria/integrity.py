@@ -101,13 +101,16 @@ runs, never kept as a list: everything `dir` shows of it, the engine's names ben
 included, and every attribute kanso's own classes set on `self`. What it leaves to its
 author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
 
-**kanso's own config fields are kanso's.** `bar_resolution` is set on the strategy's config
-from its hypothesis: on a card always, `None` where the file states none, and on a stage from
-the version's manifest, which carries it only where the file states one. So a `Config` that
-declares a field of that name would have a stage read bars at its own size and a card at the
-resolution. A class of the file whose instances are a `KansoConfig` — reached as the base
-classes above are — is refused for declaring one (`KANSO_FIELDS`), with the remedy to rename
-it.
+**`bar_resolution` is kanso's.** It is set on the strategy's config from its hypothesis: on a
+card always, `None` where the file states none, and on a stage from the version's manifest,
+which carries it only where the file states one. So a `Config` default of that name — an
+annotation with a value — would have a stage read bars at its own size where a card reads
+them at the resolution, and a binding that hides the field — an assignment with no
+annotation, a tuple's target, a property — would have every path read bars at a size the file
+does not state. A class of the file
+whose instances are a `KansoConfig` — reached as the base classes above are — is refused for
+binding the name in its body, in a nested block too (`KANSO_FIELDS`, `_class_names`), with
+the remedy to rename it.
 
 **The harness's sends are its own.** A sleeve hands the engine an order through the base's
 `submit_order`, `submit_order_list` and `modify_order`, which record the intent, ask the
@@ -537,9 +540,26 @@ WHY_SEND: Final = (
 )
 
 KANSO_FIELDS: Final = frozenset({"bar_resolution"})
-"""The fields of `KansoConfig` a version's manifest carries only where the hypothesis states
-one, so a strategy's own default would stand on a stage and not on a card, which sets the
-field from the file whatever it states."""
+"""The one field of `KansoConfig` a strategy's `Config` may not bind: `bar_resolution`, which
+a card sets from the file whatever it states and a stage only where the file states one. Not
+every field kanso sets from the file is held here: a `Config` default of `depth`,
+`data_by_instrument` or `session_scope` stands on a stage and not on a card too, as on main
+(`docs/backlog.md` row 233)."""
+
+SCOPES: Final = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+"""The nodes that open a scope of their own: what a function's, a lambda's or a nested class's
+body binds, and a comprehension's targets, are not bound in the class body holding it, and a
+walrus inside a comprehension is refused in a class body. Their decorators, defaults and bases
+run in the class's own scope and are not walked either, so a walrus there is not seen."""
 
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
@@ -796,27 +816,54 @@ def _bases() -> tuple[type, ...]:
 
 
 def _config_problems(tree: ast.Module) -> Iterator[str]:
-    """Every declaration of a field kanso sets (`KANSO_FIELDS`) on a class of the file whose
-    instances are a `KansoConfig`, annotated or assigned, valued or not."""
+    """Every binding of a field kanso sets (`KANSO_FIELDS`) in the body of a class of the file
+    whose instances are a `KansoConfig`, in a nested block too (`_class_names`)."""
     from kanso.nautilus.strategy import KansoConfig
 
     for node, _ in _harness_classes(tree, (KansoConfig,)):
-        for statement in node.body:
-            targets: list[ast.expr]
-            if isinstance(statement, ast.Assign):
-                targets = statement.targets
-            elif isinstance(statement, ast.AnnAssign | ast.AugAssign):
-                targets = [statement.target]
-            else:
-                continue
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id in KANSO_FIELDS:
-                    yield (
-                        f"line {statement.lineno}: '{target.id}' is a field kanso sets on "
-                        "KansoConfig from the hypothesis, and only where the hypothesis states "
-                        "one, so a Config that declares its own would have a stage read bars at "
-                        "its size and a card at the resolution; rename yours"
-                    )
+        for line, name in _class_names(node):
+            if name in KANSO_FIELDS:
+                yield (
+                    f"line {line}: '{name}' is a field kanso sets on KansoConfig from the "
+                    "hypothesis, and a Config may not bind it: a value bound there would stand "
+                    "in for the file's on a stage, or on every path where it hides the field; "
+                    "rename yours"
+                )
+
+
+def _class_names(node: ast.ClassDef) -> Iterator[tuple[int, str]]:
+    """`(line, name)` for every name a class body binds in the class's own scope, in order.
+
+    Each statement is walked whole, every block nested in it included: a name stored — any
+    assignment's target, a tuple's, a list's or a star's among them, a `for` or `with`
+    target, a walrus, an annotation with or without a value — the name a `def` or a `class`
+    defines, a name an `import` binds and one a `match` pattern captures. A function, a
+    lambda, a class or a comprehension is not walked into (`SCOPES`): what its body binds is
+    its own.
+    """
+    pending: list[ast.AST] = list(reversed(node.body))
+    while pending:
+        child = pending.pop()
+        bound = _bound(child)
+        if bound is not None:
+            yield bound
+        if not isinstance(child, SCOPES):
+            pending.extend(reversed(list(ast.iter_child_nodes(child))))
+
+
+def _bound(node: ast.AST) -> tuple[int, str] | None:
+    """The name `node` binds in the scope it stands in, with its line, if it binds one."""
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+        return node.lineno, node.id
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return node.lineno, node.name
+    if isinstance(node, ast.alias):
+        return node.lineno, (node.asname or node.name).partition(".")[0]
+    if isinstance(node, ast.MatchAs | ast.MatchStar) and node.name is not None:
+        return node.lineno, node.name
+    if isinstance(node, ast.MatchMapping) and node.rest is not None:
+        return node.lineno, node.rest
+    return None
 
 
 def _kanso_classes(base: type) -> list[type]:

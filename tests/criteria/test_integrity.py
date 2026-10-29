@@ -817,13 +817,44 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
 
 
 @pytest.mark.parametrize(
-    "declared",
-    ['bar_resolution: str = "5m"', "bar_resolution: str | None", 'bar_resolution = "5m"'],
-    ids=["annotated", "annotation alone", "assigned"],
+    ("declared", "line"),
+    [
+        ('bar_resolution: str = "5m"', 4),
+        ("bar_resolution: str | None", 4),
+        ('bar_resolution = "5m"', 4),
+        ('bar_resolution, every = "5m", 6', 4),
+        ('[every, bar_resolution] = [6, "5m"]', 4),
+        ('*every, bar_resolution = 6, "5m"', 4),
+        ('if True:\n        bar_resolution: str = "5m"', 5),
+        ('for bar_resolution in ("5m",):\n        pass', 4),
+        ('try:\n        bar_resolution = "5m"\n    except ValueError:\n        pass', 5),
+        ('every = (bar_resolution := "5m")', 4),
+        ('@property\n    def bar_resolution(self) -> str:\n        return "5m"', 5),
+        ("from math import pi as bar_resolution", 4),
+        ('match "5m":\n        case bar_resolution:\n            pass', 5),
+        ('match {"k": 5}:\n        case {**bar_resolution}:\n            pass', 5),
+    ],
+    ids=[
+        "annotated",
+        "annotation alone",
+        "assigned",
+        "tuple assign",
+        "list assign",
+        "starred",
+        "nested if",
+        "for target",
+        "nested try",
+        "walrus",
+        "property",
+        "import",
+        "match capture",
+        "match mapping rest",
+    ],
 )
-def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str) -> None:
+def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, line: int) -> None:
     """A version's manifest carries `bar_resolution` only where the hypothesis states one, so a
-    Config's own default would set a stage's bar size and not a card's: neither runs one."""
+    Config's own default would set a stage's bar size and not a card's, and a binding that
+    hides the field would set both: a binding anywhere in the class's own scope is refused."""
     source = (
         "from kanso.nautilus.strategy import KansoConfig as Base, KansoStrategy\n"
         "class Config(Base):\n"
@@ -834,13 +865,15 @@ def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str) ->
     )
 
     assert scan(source) == [
-        "line 4: 'bar_resolution' is a field kanso sets on KansoConfig from the hypothesis, and "
-        "only where the hypothesis states one, so a Config that declares its own would have a "
-        "stage read bars at its size and a card at the resolution; rename yours"
+        f"line {line}: 'bar_resolution' is a field kanso sets on KansoConfig from the "
+        "hypothesis, and a Config may not bind it: a value bound there would stand in for the "
+        "file's on a stage, or on every path where it hides the field; rename yours"
     ]
 
 
 def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> None:
+    """A function's, a lambda's, a nested class's and a comprehension's names bind in a scope
+    of their own, never on the Config."""
     source = (
         "from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
         "class Leg:\n"
@@ -848,6 +881,13 @@ def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> 
         "class Config(KansoConfig):\n"
         "    lookback: int = 60\n"
         "    fixed_params: tuple[str, ...] = ('lookback',)\n"
+        "    sizes = [bar_resolution for bar_resolution in ('5m',)]\n"
+        "    pick = lambda self, bar_resolution='5m': bar_resolution\n"
+        "    class Inner:\n"
+        "        bar_resolution = '5m'\n"
+        "    def size(self) -> str:\n"
+        "        bar_resolution = '5m'\n"
+        "        return bar_resolution\n"
         "class Strategy(KansoStrategy):\n"
         "    config_cls = Config\n"
     )

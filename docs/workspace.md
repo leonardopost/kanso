@@ -566,10 +566,13 @@ class Config(KansoConfig):
 
 A name that is not a numeric field of the class is refused when the strategy is built
 (`strategy.py: Config: fixed_params: … is not a numeric field`), so a typo cannot quietly
-fix nothing. A `Config` may not declare `bar_resolution`: kanso sets it from the hypothesis,
-and a stage's manifest carries it only where the file states one, so the strategy's own default
-would give a stage one bar size and a card another — `strategy_integrity` discards such a file
-with the line and the remedy to rename the field.
+fix nothing. A `Config` may not bind `bar_resolution` in its class body, however it does it —
+annotated or assigned, as a tuple's target or in a nested block, as a property or an import —
+though a method's locals are its own. kanso sets it from the hypothesis, and a stage's
+manifest carries it only where the file states one, so the strategy's own default would give a
+stage one bar size and a card another, and a binding that hides the field would give every
+path a size the file does not state: `strategy_integrity` discards such a file with the line
+and the remedy to rename the field.
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;
