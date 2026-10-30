@@ -1,0 +1,71 @@
+"""`Config` classes that give `bar_resolution` a default of their own, spelt the ways a file can.
+
+kanso sets `bar_resolution` from the hypothesis — on a card always, `None` where the file states
+none, and on a stage from the version's manifest, which carries it only where the file states
+one — so a class's own default would stand on a stage and not on its card, and the runner
+refuses one wherever it builds the class: in a card's child, where a version's manifest is
+written and where a node loads one. `strategy_integrity` reads the first spelling, a top-level
+class body; each of the other four makes the same class by a spelling its scan does not follow.
+Each block defines `Config` at module level, in place of a test source's own.
+"""
+
+from __future__ import annotations
+
+from typing import Final
+
+import pytest
+
+TOP_LEVEL: Final = b'class Config(KansoConfig):\n    bar_resolution: str | None = "5m"\n'
+IN_AN_IF: Final = (
+    b'if True:\n\n    class Config(KansoConfig):\n        bar_resolution: str | None = "5m"\n'
+)
+
+DECLARING: Final = pytest.mark.parametrize(
+    "config",
+    [
+        TOP_LEVEL,
+        IN_AN_IF,
+        b'Base = KansoConfig\n\n\nclass Config(Base):\n    bar_resolution: str | None = "5m"\n',
+        b'class Config(KansoStrategy.config_cls):\n    bar_resolution: str | None = "5m"\n',
+        b"Config = type(\n"
+        b'    "Config",\n'
+        b"    (KansoConfig,),\n"
+        b'    {"__annotations__": {"bar_resolution": "str | None"}, "bar_resolution": "5m"},\n'
+        b")\n",
+    ],
+    ids=[
+        "a top-level class",
+        "in a module-level if",
+        "off a base under another name",
+        "off KansoStrategy.config_cls",
+        "built by type() with its annotation",
+    ],
+)
+
+REFUSED: Final = (
+    "Config gives bar_resolution a default of '5m', where KansoConfig gives None; kanso sets the "
+    "field from the hypothesis — on a card always, None where the file states none, and on a "
+    "stage from the version's manifest, which carries it only where the file states one — so a "
+    "stage's sleeve would not be configured as its card's was"
+)
+"""What each spelling is refused with, after the name of the file it was read from."""
+
+CARD_REMEDY: Final = (
+    "delete bar_resolution from Config: kanso sets it, and a file reading bars beside ticks "
+    "states their size as bar_resolution in hypothesis.yaml"
+)
+VERSION_REMEDY: Final = (
+    "research and certify the strategy again with bar_resolution deleted from Config; a version "
+    "runs the bytes it was certified with"
+)
+"""The remedy on a card, whose file is the lane's, and on a version, whose bytes are certified."""
+
+STRATEGY: Final = b"class Strategy(KansoStrategy):"
+
+
+def hidden_after_its_body(source: bytes) -> bytes:
+    """`source` with `bar_resolution` set on its `Config` class once the class is made: an
+    attribute that hides the field without declaring it, so the class's default stays `None`,
+    and that no class body shows `strategy_integrity`."""
+    assert source.count(STRATEGY) == 1
+    return source.replace(STRATEGY, b'Config.bar_resolution = "5m"\n\n\n' + STRATEGY)

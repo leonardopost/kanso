@@ -36,6 +36,7 @@ from kanso.criteria.integrity import (
 )
 from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 from kanso.workspace import PACKAGE_ROOT
+from tests.own_bar_size import DECLARING, TOP_LEVEL
 
 ALLOWED_SOURCES = [
     "import numpy as np",
@@ -875,6 +876,22 @@ def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, li
         "file's on a stage, or, where it hides the field, in what the strategy reads of it; "
         "rename yours"
     ]
+
+
+@DECLARING
+def test_the_scan_reads_a_bar_size_default_in_a_top_level_class_body_alone(config: bytes) -> None:
+    """The scan reads the body of a top-level class reaching `KansoConfig` as the base classes
+    are reached, and no other: a class under an `if`, one deriving from a base held under
+    another name or read off `KansoStrategy.config_cls`, and one `type()` builds give the field a
+    default it does not see. The runner refuses all five where it builds the class
+    (`kanso.nautilus.strategy.refuse_own_bar_resolution`)."""
+    source = (
+        b"from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
+        + config
+        + b"class Strategy(KansoStrategy):\n    config_cls = Config\n"
+    )
+
+    assert len(scan(source.decode())) == (1 if config == TOP_LEVEL else 0)
 
 
 def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> None:

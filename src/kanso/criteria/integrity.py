@@ -88,11 +88,12 @@ it, and an order moved that way at the venue sends no modify; which receiver is 
 scan cannot tell, so the word is denied on any. What these routes do is measured where the
 sets are declared (`DENIED_BUS`, `DENIED_EVENTS`).
 
-**The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
-`KansoModifier` — it names one among its bases, through an alias, a module or a class of the
-file that does, or it is a class of the file such a class names — may not bind a name that
-base owns: not by `def`, not by assigning it in the class body, and not by assigning it on
-the instance a method receives (`self._close = 3`). Python raises nothing for any of them;
+**The base's names** belong to the base. A top-level class of the file whose instances are a
+`KansoStrategy` or a `KansoModifier` — it names one among its bases as itself, through an
+import alias or as a module's attribute, or names a top-level class of the file that does, or
+it is a top-level class such a class names — may not bind a name that base owns: not by
+`def`, not by assigning it in the class body, and not by assigning it on the instance a method
+receives (`self._close = 3`). Python raises nothing for any of them;
 the harness simply reaches the author's value where it expects its own, and the card crashes
 at the first exit, or sizes, gates or books differently, with a traceback that names the
 harness rather than the line. Under a sizing rule an override is also a size knob no
@@ -105,13 +106,17 @@ author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
 card always, `None` where the file states none, and on a stage from the version's manifest,
 which carries it only where the file states one. So a `Config` default of that name — an
 annotation with a value — would have a stage read bars at its own size where a card reads
-them at the resolution, and a binding that hides the field — an assignment with no
-annotation, a tuple's target, a property — would hand the strategy's own reads of it a size
-the file does not state, though the sleeve subscribes bars at the size kanso set past any
-such binding (`kanso.nautilus.strategy._BAR_RESOLUTION`). A class of the file whose
-instances are a `KansoConfig` — reached as the base classes above are — is refused for
-binding the name in its body, in a nested block too (`KANSO_FIELDS`, `_class_names`), with
-the remedy to rename it.
+them at the file's, and a binding that hides the field — an assignment with no annotation, a
+tuple's target, a property — would hand the strategy's own reads of it a size the file does
+not state, though the sleeve subscribes bars at the size kanso set past any such binding
+(`kanso.nautilus.strategy._BAR_RESOLUTION`). A top-level class of the file whose instances
+are a `KansoConfig` — reached as the base classes above are — is refused here for binding the
+name in its body, in a nested block too (`KANSO_FIELDS`, `_class_names`), with the line and
+the remedy to rename it. No other class is read: a default declared by a class this scan does
+not reach (*What the scan does not see*, below) is refused where the runner builds the class,
+in the card's child and wherever a version's sleeve is built
+(`kanso.nautilus.strategy.refuse_own_bar_resolution`), and a binding that hides the field
+there is read past as any other.
 
 **The harness's sends are its own.** A sleeve hands the engine an order through the base's
 `submit_order`, `submit_order_list` and `modify_order`, which record the intent, ask the
@@ -157,7 +162,13 @@ what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211
 * numpy, allowed whole, past its file functions (`DENIED_NUMPY_FILE`): the `open` of
   `numpy.lib.npyio.DataSource` opens a path, or downloads a URL and opens that,
   `numpy.lib.format.open_memmap` maps a file, and `numpy.ctypeslib.load_library` loads a
-  shared library.
+  shared library;
+* a class that is no top-level statement of the file — one under an `if` or a `try`, or made
+  in a function — and a base the scan does not resolve to a harness class: one held under an
+  assigned name (`Base = KansoStrategy`), read off an attribute other than its own name
+  (`KansoStrategy.config_cls`), or a class `type()` builds. The rules on the base's names and
+  on `bar_resolution` read no such class (`docs/backlog.md` row 236); a `Config` default of
+  `bar_resolution` is refused where the runner builds the class, whatever its spelling.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -541,12 +552,14 @@ WHY_SEND: Final = (
 )
 
 KANSO_FIELDS: Final = frozenset({"bar_resolution"})
-"""The one field of `KansoConfig` a strategy's `Config` may not bind: `bar_resolution`, which
-a card sets from the file whatever it states and a stage only where the file states one. Not
-every field kanso sets from the file is held here: a `Config` default of `depth`,
-`data_by_instrument` or `session_scope` stands on a stage and not on a card too
-(`docs/backlog.md` row 233), and a binding that hides any other field is read in kanso's
-place (row 235)."""
+"""The one field of `KansoConfig` the body of a top-level `Config` may not bind
+(`_config_problems`): `bar_resolution`, which a card sets from the file whatever it states and a
+stage only where the file states one. A `Config` the scan does not reach is held to it where
+the runner builds the class, and for a default alone
+(`kanso.nautilus.strategy.refuse_own_bar_resolution`). Not every field kanso sets from the file
+is held here: a `Config` default of `depth`, `data_by_instrument` or `session_scope` stands on a
+stage and not on a card too (`docs/backlog.md` row 233), and a binding that hides any other
+field is read in kanso's place (row 235)."""
 
 BODIED: Final = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 """The nodes whose body binds in a scope of its own, while their decorators, defaults,
@@ -811,8 +824,9 @@ def _bases() -> tuple[type, ...]:
 
 
 def _config_problems(tree: ast.Module) -> Iterator[str]:
-    """Every binding of a field kanso sets (`KANSO_FIELDS`) in the body of a class of the file
-    whose instances are a `KansoConfig`, in a nested block too (`_class_names`)."""
+    """Every binding of a field kanso sets (`KANSO_FIELDS`) in the body of a top-level class of
+    the file whose instances are a `KansoConfig` as `_harness_classes` reaches one, in a nested
+    block too (`_class_names`)."""
     from kanso.nautilus.strategy import KansoConfig
 
     for node, _ in _harness_classes(tree, (KansoConfig,)):
@@ -1093,12 +1107,16 @@ def _stores(node: ast.AST, owner: str) -> Iterator[ast.Attribute]:
 def _harness_classes(
     tree: ast.Module, roots: tuple[type, ...] | None = None
 ) -> list[tuple[ast.ClassDef, type]]:
-    """Every class of the file whose methods end up on a harness base's subclass, with that base.
+    """Every top-level class of the file whose methods end up on a harness base's subclass, with
+    that base.
 
     A class reaches a base by naming it among its bases — as itself, through an import
-    alias or as a module's attribute — or by naming a class of the file that reaches one;
-    every class of the file in that line, a mixin included, is held to the same base. The
-    bases are the strategy's and the modifier's (`_bases`) unless `roots` names others.
+    alias or as a module's attribute — or by naming a top-level class of the file that reaches
+    one; every top-level class of the file in that line, a mixin included, is held to the same
+    base. A class nested in a block or a function, a base held under an assigned name or read
+    off another attribute, and a class `type()` builds are not reached (`docs/backlog.md` row
+    236). The bases are the strategy's and the modifier's (`_bases`) unless `roots` names
+    others.
     """
     harness = {base.__name__: base for base in roots or _bases()}
     aliases = {

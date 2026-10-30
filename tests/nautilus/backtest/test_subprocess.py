@@ -17,12 +17,14 @@ from kanso.nautilus.backtest import (
     run_subprocess,
     run_subprocesses,
 )
+from tests.own_bar_size import CARD_REMEDY, IN_AN_IF, REFUSED
 from tests.processes import ends, running
 
 from .conftest import (
     CERTIFICATION,
     RAISING_SLEEVE,
     REFUSING_SLEEVE,
+    SLEEVE,
     SLOW_SLEEVE,
     TELLING_SLEEVE,
     VANISHING_SLEEVE,
@@ -208,6 +210,23 @@ def test_a_refusal_the_child_raised_brings_its_remedy_back(
 
     assert result.crashed is True
     assert result.remedy == "load it and try again"
+
+
+def test_a_config_giving_bar_resolution_a_default_of_its_own_is_refused_in_the_card_s_child(
+    store: Path, lane: Path, request_for
+) -> None:
+    """The child builds the sleeve, so it is the child that refuses a class giving the field a
+    default of its own — here one defined under an `if`, a class `strategy_integrity` does not
+    read — before anything runs, and the remedy crosses back as a value."""
+    source = SLEEVE.replace(b"class Config(KansoConfig):\n    every: int = 6\n", IN_AN_IF)
+
+    result = run_subprocess(request_for(source=source), store, lane)
+
+    assert result.crashed is True
+    assert result.reason == "exception"
+    assert f"strategy.py: {REFUSED}" in (result.traceback_tail or "")
+    assert result.remedy == CARD_REMEDY
+    assert result.run.returns == ()
 
 
 def test_a_card_that_leaves_no_report_is_a_crash(store: Path, lane: Path, request_for) -> None:

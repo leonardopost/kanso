@@ -25,6 +25,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
+from kanso.errors import ValidationError
 from kanso.nautilus import session
 from kanso.nautilus.backtest import (
     Marks,
@@ -37,10 +38,12 @@ from kanso.nautilus.backtest import (
     window_data,
 )
 from kanso.nautilus.cross_section import is_marker
+from kanso.nautilus.node import _reconfigured
 from kanso.schemas import Hypothesis, VenueModel, Warmup
 from kanso.strategy import impl
+from tests.own_bar_size import CARD_REMEDY, DECLARING, REFUSED, hidden_after_its_body
 
-from .conftest import INSTRUMENT, RESEARCH, SECOND_NS, catalog, hypothesis, instrument
+from .conftest import INSTRUMENT, RESEARCH, SECOND_NS, bars, catalog, hypothesis, instrument
 
 SIGNAL = "OTHR.XNAS"
 """The instrument that carries bars alone: a future's or an index's minute bars, say."""
@@ -270,8 +273,11 @@ def test_a_stage_sleeve_of_a_config_hiding_bar_resolution_subscribes_at_the_file
     request_for, config: bytes
 ) -> None:
     """A stage builds the sleeve's config from the version's manifest as `strategy.impl._build`
+    does, then rebuilds it with its deployed capital and identity as `nautilus.node._components`
     does, and that sleeve subscribes bars at the file's 1m past the same bindings — every name's
-    bars, since a stage's config carries no `data_by_instrument` (`docs/backlog.md` row 229)."""
+    bars, since a stage's config carries no `data_by_instrument` (`docs/backlog.md` row 229).
+    The rebuild reads the config's fields as attributes, which the binding hides, so it carries
+    the size from kanso's slot rather than the strategy's 5m."""
     strategy_cls = _module(ON_BARS.replace(UNHIDDEN, config), "sleeve").Strategy
     config_cls = strategy_cls.config_cls
     venue = VenueModel.model_validate(dict(request_for(hypothesis_=tick_bars()).venue_model))
@@ -286,10 +292,55 @@ def test_a_stage_sleeve_of_a_config_hiding_bar_resolution_subscribes_at_the_file
         def subscribe_quote_ticks(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-    Recorded(config_cls(**impl._typed(config_cls, manifest))).subscribe_universe()
+    built = config_cls(**impl._typed(config_cls, manifest))
+    deployed = _reconfigured(built, capital=40_000.0, order_id_tag="demo-1", books_funding=True)
+    Recorded(deployed).subscribe_universe()
 
     assert manifest["bar_resolution"] == "1m"
+    assert deployed.bar_resolution == "5m", "the strategy's own read is the binding's"
     assert seen == [f"{INSTRUMENT}-1-MINUTE-LAST-EXTERNAL", f"{SIGNAL}-1-MINUTE-LAST-EXTERNAL"]
+
+
+@DECLARING
+def test_a_config_giving_bar_resolution_a_default_of_its_own_is_refused_where_a_card_builds_it(
+    request_for, config: bytes
+) -> None:
+    """A card passes `bar_resolution` whatever the file states — `None` for this file at `1d`,
+    which states none — and a stage only where the file states one, so the class's own 5m would
+    have its stage subscribe five-minute bars where its card read daily ones. The runner refuses
+    the class where it builds the sleeve, on the research path and the node path alike, however
+    the file made it: in a top-level class body, which `strategy_integrity` refuses too, or by
+    one of the four spellings that gate does not read."""
+    request = request_for(source=ON_BARS.replace(UNHIDDEN, config), hypothesis_=hypothesis())
+    groups = [tuple(bars(RESEARCH))]
+
+    with pytest.raises(ValidationError) as card:
+        execute(request, [instrument()], groups)
+    with pytest.raises(ValidationError) as node:
+        session.run_node(request, [instrument()], groups)
+
+    assert card.value.message == node.value.message == f"strategy.py: {REFUSED}"
+    assert card.value.remedy == node.value.remedy == CARD_REMEDY
+
+
+def test_a_config_hiding_bar_resolution_after_its_body_is_no_default_and_runs_at_the_file_s_size(
+    request_for,
+) -> None:
+    """Set on the class once it is made, the attribute hides the field without declaring it, so
+    the class's default is still `None` and nothing refuses it: over a file at `1d` stating no
+    `bar_resolution`, its card and its node path trade every daily bar, as the same strategy
+    without it does."""
+    plain = request_for(source=ON_BARS, hypothesis_=hypothesis())
+    hidden = request_for(source=hidden_after_its_body(ON_BARS), hypothesis_=hypothesis())
+    groups = [tuple(bars(RESEARCH))]
+
+    expected = execute(plain, [instrument()], groups).intents
+    card = execute(hidden, [instrument()], groups)
+    node = session.run_node(hidden, [instrument()], groups).result
+
+    assert not card.crashed, card.reason
+    assert expected, "the strategy without the attribute trades the daily bars"
+    assert card.intents == node.intents == expected
 
 
 def test_a_tick_sleeve_counts_its_warmup_sessions_on_its_ticks(tmp_path: Path) -> None:

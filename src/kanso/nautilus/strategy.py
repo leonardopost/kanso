@@ -159,7 +159,7 @@ from datetime import date
 from decimal import ROUND_FLOOR, Decimal
 from functools import cache
 from math import fsum, prod
-from typing import Any, ClassVar, Final, NoReturn
+from typing import Any, ClassVar, Final, NoReturn, cast
 
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ActorConfig, StrategyConfig
@@ -365,8 +365,62 @@ The engine's configs are `msgspec.Struct`s (nautilus_trader 1.231.0, msgspec 0.2
 fields are slots on the class that declares them, so the size is read through this one: an
 attribute of that name the strategy's file sets on its `Config` — in the body, after it, by a
 decorator, or in a class `type()` builds — hides the field from the strategy's own reads and
-never from the subscription. A `Config` that declares the field again keeps this slot and
-changes only its default, which `strategy_integrity` refuses (`KANSO_FIELDS`)."""
+never from the subscription, nor from a configuration a stage or a book rebuilds with other
+fields replaced, which carries this slot (`kanso.nautilus.node._reconfigured`). A `Config`
+that declares the field again keeps this slot and changes only its default, which is refused
+wherever the class is built (`refuse_own_bar_resolution`)."""
+
+
+def _bar_resolution_of(config: KansoConfig) -> str | None:
+    """The bar size kanso set on `config`: its `bar_resolution`, read from `_BAR_RESOLUTION`."""
+    return cast("str | None", _BAR_RESOLUTION.__get__(config, type(config)))
+
+
+def refuse_own_bar_resolution(config_cls: object, where: str, *, certified: bool = False) -> None:
+    """Refuse a `KansoConfig` class whose `bar_resolution` default is not `None`.
+
+    kanso sets the field from the hypothesis: on a card always, `None` where the file states
+    none, and on a stage from the version's manifest, which carries it only where the file
+    states one. So a default of the class's own would stand on a stage and not on its card. It
+    is refused where the class is built — in the card's child (`kanso.nautilus.backtest._sleeve`,
+    which a replay's node path builds through too), where a version's manifest is written and
+    where a stage node loads one (`kanso.strategy.impl`) — since whatever spelling made the
+    class, the class holds the default: `strategy_integrity` reads only the body of a top-level
+    class of the file that names `KansoConfig` among its bases, and not a class in an `if`, one
+    deriving from a base held under another name or read off `KansoStrategy.config_cls`, nor one
+    `type()` builds.
+
+    The default is the one the class's constructor takes, read with `inspect.signature`, which
+    for an engine configuration class is msgspec's, derived from the struct's own fields
+    (nautilus_trader 1.231.0, msgspec 0.21.1): a field the class declares again carries the
+    default it declares, and `Parameter.empty` where it declares none. An attribute that hides
+    the field without declaring it — set on the class after its body, say — leaves the default
+    `None` and is read past (`_BAR_RESOLUTION`). A `config_cls` that is no `KansoConfig` is left
+    to its constructor, which refuses the fields kanso passes it. `certified` names the remedy:
+    a version's bytes are certified, so it is researched again rather than edited.
+    """
+    from inspect import Parameter, signature
+
+    if not (isinstance(config_cls, type) and issubclass(config_cls, KansoConfig)):
+        return
+    default = signature(config_cls).parameters["bar_resolution"].default
+    if default is None:
+        return
+    name = config_cls.__qualname__
+    given = "no default" if default is Parameter.empty else f"a default of {default!r}"
+    raise ValidationError(
+        f"{where}: {name} gives bar_resolution {given}, where KansoConfig gives None; kanso sets "
+        "the field from the hypothesis — on a card always, None where the file states none, and "
+        "on a stage from the version's manifest, which carries it only where the file states "
+        "one — so a stage's sleeve would not be configured as its card's was",
+        remedy=(
+            f"research and certify the strategy again with bar_resolution deleted from {name}; "
+            "a version runs the bytes it was certified with"
+            if certified
+            else f"delete bar_resolution from {name}: kanso sets it, and a file reading bars "
+            "beside ticks states their size as bar_resolution in hypothesis.yaml"
+        ),
+    )
 
 
 class KansoModifierConfig(ActorConfig, frozen=True):
@@ -1240,7 +1294,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         from kanso.nautilus.backtest import CLIENT_ID
 
         own = dict(self._cfg.data_by_instrument)
-        size = _BAR_RESOLUTION.__get__(self._cfg, type(self._cfg)) or self._cfg.resolution
+        size = _bar_resolution_of(self._cfg) or self._cfg.resolution
         for instrument_id in self.universe:
             for requirement in own.get(str(instrument_id), self._cfg.data_requirements):
                 if requirement == BAR:

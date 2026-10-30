@@ -15,6 +15,7 @@ from kanso.nautilus.strategy import (
     KansoModifierConfig,
     KansoStrategy,
     _bar_type,
+    refuse_own_bar_resolution,
     tunable_fields,
 )
 
@@ -32,6 +33,14 @@ class Sleeve(KansoStrategy):
 
 class Attached(KansoModifierConfig):
     pass
+
+
+class Restated(KansoConfig):
+    bar_resolution: str | None = None
+
+
+class Required(KansoConfig, kw_only=True):
+    bar_resolution: str | None
 
 
 class Gate(KansoModifier):
@@ -118,6 +127,27 @@ def test_a_sleeve_refuses_a_config_that_is_not_a_kanso_config() -> None:
         KansoStrategy(Bare())  # type: ignore[arg-type]
     assert raised.value.code == Exit.VALIDATION
     assert "KansoConfig" in raised.value.message
+
+
+def test_a_bar_resolution_default_is_read_off_the_constructor_and_none_is_kanso_s_own() -> None:
+    """`None` is `KansoConfig`'s own default, so a class restating it is built as any other; one
+    that requires the field would leave a stage that is not handed it unable to build the sleeve
+    at all, and is refused with the rest; and a configuration that is no `KansoConfig` is left to
+    its constructor, which refuses the fields kanso passes it."""
+    for admitted in (KansoConfig, Params, Restated, StrategyConfig, object()):
+        refuse_own_bar_resolution(admitted, "strategy.py")
+
+    with pytest.raises(ValidationError) as raised:
+        refuse_own_bar_resolution(Required, "strategy.py", certified=True)
+
+    assert raised.value.code == Exit.VALIDATION
+    assert raised.value.message.startswith(
+        "strategy.py: Required gives bar_resolution no default, where KansoConfig gives None"
+    )
+    assert raised.value.remedy == (
+        "research and certify the strategy again with bar_resolution deleted from Required; a "
+        "version runs the bytes it was certified with"
+    )
 
 
 def test_a_modifier_refuses_a_strategy_config_loudly() -> None:

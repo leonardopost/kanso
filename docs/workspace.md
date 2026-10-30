@@ -567,17 +567,30 @@ class Config(KansoConfig):
 
 A name that is not a numeric field of the class is refused when the strategy is built
 (`strategy.py: Config: fixed_params: … is not a numeric field`), so a typo cannot quietly
-fix nothing. A `Config` may not bind `bar_resolution` in its class body, however it does it —
-annotated or assigned, as a tuple's target or in a nested block, as a property or an import —
-though a method's locals are its own. kanso sets it from the hypothesis, and a stage's
-manifest carries it only where the file states one, so the strategy's own default would give a
-stage one bar size and a card another, and a binding that hides the field would hand the
-strategy's own reads of it a size the file does not state: `strategy_integrity` discards such
-a file with the line and the remedy to rename the field. Past a binding that hides the field —
-in the class, or one the gate does not read: set on the class after its body, by a decorator,
-or in a class `type()` builds — the sleeve still subscribes its bars at the size kanso set, on
-a card and a stage alike. A binding that hides another field kanso sets — `resolution` as a
-tuple's target, say — is read in kanso's place (`docs/backlog.md` row 235).
+fix nothing. `bar_resolution` is kanso's: it is set from the hypothesis — on a card always,
+`None` where the file states none, and on a stage from the version's manifest, which carries
+it only where the file states one — so a `Config` that gave it a default of its own would give
+a stage one bar size and its card another. The runner refuses such a class wherever it builds
+it, whatever made it — a class body annotating the field with a value, a class defined under an
+`if`, one deriving from `KansoConfig` held under another name or read off
+`KansoStrategy.config_cls`, one `type()` builds with the field in its `__annotations__`: in a
+card's child, where the card fails with `strategy.py: Config gives bar_resolution a default of
+'5m', …` and the remedy to delete the field; where `strat compose` writes a version's
+manifest; and where `portfolio deploy` loads a manifest an earlier kanso wrote — those two
+naming the generated module, with the remedy to research and certify the strategy again.
+Before any card runs, `strategy_integrity` reads the body of a top-level class of the file that
+names `KansoConfig` among its bases — as itself, through an import alias or as a module's
+attribute — or names a top-level class of the file that does, and discards the file where that
+body binds `bar_resolution`, however it does it — annotated or assigned, as a tuple's target or
+in a nested block, as a property or an import — though a method's locals are its own, with the
+line and the remedy to rename the field; it reads no other class. A binding that hides the
+field without declaring it — one the gate reads, or one it does not: set on the class after its
+body, by a decorator, or in a class `type()` builds with no annotation — is no default, and
+hands the strategy's own reads of the field a size the file does not state, but not its bars:
+the sleeve subscribes them at the size kanso set, on a card, in a book and on a stage alike,
+through the config a book or a stage node rebuilds with other fields replaced. A binding that
+hides another field kanso sets — `resolution` as a tuple's target, say — is read in kanso's
+place (`docs/backlog.md` row 235).
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;

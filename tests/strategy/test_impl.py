@@ -12,11 +12,12 @@ from kanso.data.manifest import catalog_path
 from kanso.errors import ValidationError
 from kanso.nautilus import backtest
 from kanso.nautilus.strategy import KansoModifier, KansoStrategy
-from kanso.schemas import Certificate, load_yaml
+from kanso.schemas import Certificate, StrategyVersion, load_yaml
 from kanso.state import StateStore
 from kanso.strategy import files, impl
 from kanso.strategy.composition import compose
 from kanso.workspace import Workspace
+from tests.own_bar_size import DECLARING, REFUSED, VERSION_REMEDY
 from tests.research.conftest import DOCUMENT, HYP_ID
 
 from .conftest import ALLOWING, BLOCKING, FILTER_ID, VARYING, certified_filter, pinned
@@ -301,6 +302,67 @@ def test_a_modifier_source_must_define_a_modifier(
 
     with pytest.raises(ValidationError, match="subclassing KansoModifier"):
         impl.generate(ws, store, HYP_ID, swapped, pinned(ws, store), 100_000.0)
+
+
+VARYING_CONFIG = b"class Config(KansoConfig):\n    notional: float = 2_000.0\n"
+"""`VARYING`'s own configuration class."""
+
+
+def _with_sleeve(version: StrategyVersion, strategy_sha: str) -> StrategyVersion:
+    """The version with its sleeve's bytes replaced by the blob under `strategy_sha`."""
+    return version.model_copy(
+        update={"sleeve": version.sleeve.model_copy(update={"strategy_sha": strategy_sha})}
+    )
+
+
+@DECLARING
+def test_a_sleeve_whose_config_gives_bar_resolution_a_default_of_its_own_writes_no_manifest(
+    ws: Workspace, store: StateStore, config: bytes
+) -> None:
+    """A manifest carries `bar_resolution` only where the file states one, so the class's own
+    5m would stand on every stage the version is deployed to where its card was passed the
+    file's. The version is refused before its manifest is written, naming the class however the
+    file made it, with the remedy for certified bytes: researched again, not edited."""
+    from .conftest import draft_hypothesis, draft_version
+
+    hyp = draft_hypothesis(ws, store, "demo_sized")
+    source = VARYING.replace(VARYING_CONFIG, config)
+    version = _with_sleeve(draft_version(store, "demo_sized"), store.put_blob(source))
+
+    with pytest.raises(ValidationError) as refused:
+        impl.generate(ws, store, "demo_sized", version, hyp, 1.0)
+
+    module = impl.module_name(impl.SLEEVE, "demo_sized", source)
+    assert refused.value.message == f"{module}.py: {REFUSED}"
+    assert refused.value.remedy == VERSION_REMEDY
+    assert not impl.manifest_file(ws, "demo_sized", 1).exists()
+
+
+@DECLARING
+def test_a_manifest_an_earlier_kanso_wrote_for_such_a_sleeve_is_refused_where_a_node_loads_it(
+    ws: Workspace, store: StateStore, config: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A version composed before the refusal existed has a manifest naming the class, and a
+    stage node builds its sleeve from it (`portfolio.deploy` loads every version it places this
+    way); the class is refused there as composition now refuses it, rather than built to read
+    bars at its own size."""
+    from kanso.nautilus import strategy
+
+    from .conftest import draft_hypothesis, draft_version
+
+    hyp = draft_hypothesis(ws, store, "demo_sized")
+    source = VARYING.replace(VARYING_CONFIG, config)
+    version = _with_sleeve(draft_version(store, "demo_sized"), store.put_blob(source))
+    with monkeypatch.context() as earlier:
+        earlier.setattr(strategy, "refuse_own_bar_resolution", lambda *_, **__: None)
+        impl.generate(ws, store, "demo_sized", version, hyp, 1.0)
+
+    with pytest.raises(ValidationError) as refused:
+        impl.load(ws, "demo_sized", 1)
+
+    module = impl.module_name(impl.SLEEVE, "demo_sized", source)
+    assert refused.value.message == f"{module}.py: {REFUSED}"
+    assert refused.value.remedy == VERSION_REMEDY
 
 
 HIDDEN_CONFIG = b'''

@@ -1155,11 +1155,19 @@ def _entry(module: ModuleType, entrypoint: str, base: Any, what: str) -> Any:
 
 
 def _sleeve(request: RunRequest) -> tuple[Any, Any]:
-    """The sleeve class and the configuration the hypothesis injects into it."""
-    from kanso.nautilus.strategy import KansoStrategy
+    """The sleeve class and the configuration the hypothesis injects into it.
+
+    `bar_resolution` is passed whatever the file states, `None` where it states none, and a
+    configuration class that gives the field a default of its own is refused before anything
+    is built (`kanso.nautilus.strategy.refuse_own_bar_resolution`): a stage builds the sleeve
+    from a version's manifest, which carries the field only where the file states one, so
+    that default would stand there and not here.
+    """
+    from kanso.nautilus.strategy import KansoStrategy, refuse_own_bar_resolution
 
     module = _module(request.strategy_source, "sleeve")
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+    refuse_own_bar_resolution(cls.config_cls, "strategy.py")
     hyp = request.hyp
     grains = _bar_grains(request)
     extra: tuple[str, ...] = ()

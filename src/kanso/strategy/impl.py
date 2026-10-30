@@ -343,13 +343,22 @@ def _write_source(
     strategy_sha: str,
     config: dict[str, Any],
 ) -> Component:
-    """Copy one certified source in, import it, and describe the classes it defines."""
+    """Copy one certified source in, import it, and describe the classes it defines.
+
+    A sleeve whose configuration class gives `bar_resolution` a default of its own is refused
+    here, so no manifest names one: the manifest carries the field only where the file states
+    one, and the default would stand on a stage where its card was passed the file's.
+    """
+    from kanso.nautilus.strategy import refuse_own_bar_resolution
+
     module = module_name(slot, hyp_id, source)
     (directory / f"{module}.py").write_bytes(source)
     invalidate_caches()
     entrypoint = SLEEVE_ENTRY if slot == SLEEVE else MODIFIER_ENTRY
     loaded = _import(module)
     cls = _entry(loaded, entrypoint, slot)
+    if slot == SLEEVE:
+        refuse_own_bar_resolution(cls.config_cls, f"{module}.py", certified=True)
     return Component(
         hyp_id=hyp_id,
         strategy_sha=strategy_sha,
@@ -492,10 +501,19 @@ def _named(module: ModuleType, config_cls: type, entrypoint: str) -> str:
 
 
 def _build(component: Component) -> Built:
-    """One component as its class and a configuration object built from the manifest."""
+    """One component as its class and a configuration object built from the manifest.
+
+    A sleeve's configuration class that gives `bar_resolution` a default of its own is refused
+    before it is built, as `_write_source` refuses it, so a manifest an earlier kanso wrote for
+    one is not loaded onto a stage to read bars at a size its card never did.
+    """
+    from kanso.nautilus.strategy import refuse_own_bar_resolution
+
     module = _import(component.module)
     cls = getattr(module, component.path.split(":", 1)[1])
     config_cls = getattr(module, component.config_path.split(":", 1)[1])
+    if component.construct == SLEEVE:
+        refuse_own_bar_resolution(config_cls, f"{component.module}.py", certified=True)
     return Built(
         construct=component.construct,
         hyp_id=component.hyp_id,
