@@ -1365,14 +1365,13 @@ tokens (below). Then:
   gate carries the refusal: what was asked, when, what was held, and in `why` the bucket's
   level and any cancel waiting for its tokens. A strategy that closes with `submit_exit` is
   owed instead, and is never refused for the rate;
-- **a cancel is deferred**: kept, its place in line held. A second cancel of an order whose
-  cancel waits goes at once if the bucket now holds what it costs, and keeps the first one's
-  place if not. The order is working until the cancel is sent and lands, so an exit is sized to
-  what it can still fill and an exit at a price behind it is owed, as behind a cancel in
-  flight. One whose order filled or was cancelled meanwhile, or whose cancel went another way,
-  is dropped and pays nothing, and holds nothing back from the moment its order closed: an
-  entry or a modify sent from the handler of that order's fill finds the bucket as it is, and
-  an exit refused there names no cancel waiting.
+- **a cancel is deferred**: kept, its place in line held. The order is working until the
+  cancel is sent and lands, so an exit is sized to what it can still fill and an exit at a
+  price behind it is owed, as behind a cancel in flight. One whose order filled or was
+  cancelled meanwhile, or whose cancel went another way, is dropped and pays nothing, and holds
+  nothing back from the moment its order closed: an entry or a modify sent from the handler of
+  that order's fill finds the bucket as it is, and an exit refused there names no cancel
+  waiting.
 
 While a cancel waits for its tokens no entry and no modify takes one — an entry finds none and
 is dropped, a modify too — so the handler's entries do not starve a cancel that spends two
