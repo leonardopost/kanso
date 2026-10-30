@@ -1133,8 +1133,8 @@ of every position open, at those opens a median of 0.23 bp and at most 1.13 bp o
 which a flatten at market pays past the limit. A name with no valid quote in
 force — none yet, or a last quote that is not `ask > bid > 0`, as a locked or crossed one is,
 which 48 of those 4,791 prints met — is marked as `balance` marks it, at its last print.
-Nothing kanso sizes, reserves or measures reads it: the room, a card's equity and every gate
-read `balance`.
+Nothing kanso sizes, reserves or measures reads it: the room reads `balance`, and a card is
+measured on the runner's equity, which `balance` mirrors.
 
 **A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
 keys). The runner applies it once, at each period end of the extraction, in one order: the

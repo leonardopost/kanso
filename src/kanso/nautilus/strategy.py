@@ -1052,14 +1052,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         cost. At those opens 48 of the 4,791 prints met such a quote. A quote from before a
         split the venue has since applied is restated by its ratio, as a print is.
 
-        Nothing of the harness reads it — sizing, the room and the card's equity read
-        `balance` — so a sleeve that never reads it trades as it did before it existed. It
-        books what `balance` books (`_kept_settle`), and what marks a position besides its
-        quote — its name, quantity and multiplier — is kept until anything it reads changes
-        (`_forget_kept`), as `held` keeps its read, so a read costs one quote read for each
-        position open: measured on 2026-10-30 on the suite's kept-reads tick sleeve over
-        20,000 points, a median 1.6 µs a read holding one position and 2.2 µs holding two,
-        where a read of `balance` took 1.8 µs and 2.6 µs.
+        Nothing of the harness reads it — sizing and the room read `balance`, and a card is
+        measured on the runner's equity, which `balance` mirrors — so a sleeve that never
+        reads it trades as it did before it existed. It books what `balance` books
+        (`_kept_settle`), and what marks a position besides its quote — its name, quantity
+        and multiplier — is kept until anything it reads changes (`_forget_kept`), as `held`
+        keeps its read, so a read costs one quote read for each position open: measured on
+        2026-10-30 on the suite's kept-reads tick sleeve over 20,000 points, a median 1.6 µs
+        a read holding one position and 2.2 µs holding two, where a read of `balance` took
+        1.8 µs and 2.6 µs.
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash

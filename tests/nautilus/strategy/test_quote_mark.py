@@ -97,9 +97,9 @@ def test_a_sleeve_no_engine_holds_reads_its_capital_at_the_quote() -> None:
 
 
 def test_no_part_of_kanso_reads_the_balance_at_quote() -> None:
-    """Sizing, the room, the card's equity and every gate read `balance`: the reader is a
-    strategy's alone, so a sleeve that never reads it trades as it did before it existed. The
-    one module of the package that names it is the one that defines it."""
+    """Sizing and the room read `balance`, and a card is measured on the runner's equity: the
+    reader is a strategy's alone, so a sleeve that never reads it trades as it did before it
+    existed. The one module of the package that names it is the one that defines it."""
     root = Path(kanso.__file__).parent
     naming = sorted(
         path.relative_to(root).as_posix()
