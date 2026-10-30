@@ -1137,10 +1137,12 @@ def _check_host_pairing(
             f"{construct_id} is consulted on the host's grain, and only an overlay has a "
             "clock of its own",
             remedy=(
-                f"set resolution to {host_hyp.resolution}, or attach as an overlay"
-                if host_hyp.bar_resolution is None
-                else f"set resolution to {host_hyp.resolution} and bar_resolution to "
+                f"set resolution to {host_hyp.resolution} and bar_resolution to "
                 f"{host_hyp.bar_resolution}, requiring bar"
+                if host_hyp.bar_resolution is not None
+                else f"set resolution to {host_hyp.resolution}, or attach as an overlay"
+                if hyp.bar_resolution is None
+                else _host_bars(host_hyp, hyp, path, regrain=True)[1]
             ),
         )
     if host_hyp.bar_resolution is not None and is_duration(hyp.resolution):
@@ -1153,13 +1155,8 @@ def _check_host_pairing(
             f"{host_hyp.bar_resolution}, requiring bar, to match {path}",
         )
     if hyp.bar_resolution != host_hyp.bar_resolution:
-        reads, remedy = _host_bars(host_hyp, path)
-        raise ValidationError(
-            f"bar_resolution: {label} {reads} and this file declares "
-            f"{hyp.bar_resolution or 'none'}; a construct runs its host underneath it, and the "
-            "host reads its bars at the size the construct's own file states",
-            remedy=remedy,
-        )
+        reason, remedy = _host_bars(host_hyp, hyp, path)
+        raise ValidationError(f"bar_resolution: {label} {reason}", remedy=remedy)
     if construct_id != OVERLAY:
         return
     if hyp.sizing is not None and host_hyp.sizing is None:
@@ -1199,32 +1196,50 @@ def _check_host_pairing(
         )
 
 
-def _host_bars(host_hyp: Hypothesis, path: Path) -> tuple[str, str]:
-    """What a host reads its bars at, said of it, and the remedy that pairs a construct with it.
+def _host_bars(
+    host_hyp: Hypothesis, hyp: Hypothesis, path: Path, *, regrain: bool = False
+) -> tuple[str, str]:
+    """Why this file's `bar_resolution` does not pair it with its host, and the remedy that does.
 
-    A host that states `bar_resolution` reads its bars at that size. One that states none reads
+    A host that states `bar_resolution` reads its bars at that size, and a construct's cards run
+    it reading them at the size the construct's own file states. One that states none reads
     them at its own resolution where that is a bar size, and, at `tick`, `quote` or `trade`,
     reads no bars at all, since the schema requires the key wherever `bar` is required there.
     A construct that states one is at such a resolution and requires `bar`, and dropping the
     key alone would leave that requirement at no size, which the schema refuses. So over a
-    host reading none it drops the bars with the size; and over a bar-size host it takes the
-    host's resolution and drops the key, reading bars at the host's size on the host's own
-    clock, since an overlay card would hand the host the overlay's tick, quote or trade clock
-    as a bar grain, at which no bar can be subscribed (`docs/backlog.md` row 234).
+    host reading none it drops the bars with the size — and a name it asked for bars alone,
+    since a name left asking for nothing is refused too, and with no remedy — and over a
+    bar-size host it takes the host's resolution and drops the key, reading bars at the
+    host's size on the host's own clock. Only an overlay states a size over a bar-size host
+    here, since a filter or an exit stating one is off the host's grain and refused on it first,
+    and the overlay's card would hand the host the overlay's own tick, quote or trade clock as a
+    bar grain beside the host's, at which no bar can be subscribed (`docs/backlog.md` row 234),
+    whatever size it states. `regrain` is that grain refusal's: its one remedy takes the host's
+    resolution as well.
     """
+    stated = hyp.bar_resolution or "none"
     size = host_hyp.bar_resolution
+    runs = (
+        f"and this file declares {stated}; a construct runs its host underneath it, and the host "
+        "reads its bars at the size the construct's own file states"
+    )
     if size is not None:
-        return f"reads its bars at {size}", (
+        return f"reads its bars at {size} {runs}", (
             f"set bar_resolution to {size} to match {path}, requiring bar at resolution "
             f"{host_hyp.resolution}"
         )
     if is_duration(host_hyp.resolution):
-        return f"states none, reading its bars at its own resolution, {host_hyp.resolution},", (
-            f"set resolution to {host_hyp.resolution} and drop bar_resolution, to match {path}"
-        )
-    return f"reads no bars beside its {host_hyp.resolution} grain", (
-        "drop bar_resolution, and bar from data_requirements and data_by_instrument, to match "
-        f"{path}"
+        return (
+            f"states none, reading its bars at its own resolution, {host_hyp.resolution}, and "
+            f"this file declares {stated}; an overlay's card hands its host this file's "
+            f"{hyp.resolution} clock as a bar grain beside its own, at which no bar can be "
+            "subscribed"
+        ), f"set resolution to {host_hyp.resolution} and drop bar_resolution, to match {path}"
+    grain = f"set resolution to {host_hyp.resolution}, " if regrain else ""
+    return f"reads no bars beside its {host_hyp.resolution} grain {runs}", (
+        f"{grain}drop bar_resolution, and bar from data_requirements and from every "
+        "data_by_instrument entry, an entry that asked for bar alone dropped with its name from "
+        f"the universe, to match {path}"
     )
 
 

@@ -2319,36 +2319,71 @@ def test_an_attached_construct_reads_its_host_s_bars_at_the_host_s_size(ws: Work
     assert (failure.remedy or "").startswith("set bar_resolution to 1m to match ")
 
 
+READING_NO_BARS: dict[str, Any] = {
+    **TICK_BARS,
+    "data_requirements": ["trade"],
+    "data_by_instrument": {},
+}
+"""A tick host whose file requires no `bar`, so it reads none."""
+
+DROP_THE_BARS = (
+    "drop bar_resolution, and bar from data_requirements and from every data_by_instrument "
+    "entry, an entry that asked for bar alone dropped with its name from the universe, to match "
+)
+"""The remedy over such a host, up to the host's path."""
+
+
+def without_bars(doc: dict[str, Any]) -> dict[str, Any]:
+    """`doc` with `DROP_THE_BARS` done as worded and nothing else."""
+    alone = {name for name, kinds in doc.get("data_by_instrument", {}).items() if kinds == ["bar"]}
+    return {
+        **{key: value for key, value in doc.items() if key != "bar_resolution"},
+        "universe": [name for name in doc["universe"] if name not in alone],
+        "data_requirements": [kind for kind in doc["data_requirements"] if kind != "bar"],
+        "data_by_instrument": {
+            name: [kind for kind in kinds if kind != "bar"]
+            for name, kinds in doc.get("data_by_instrument", {}).items()
+            if name not in alone
+        },
+    }
+
+
 def test_a_construct_reading_bars_over_a_tick_host_that_reads_none_drops_the_bars_too(
     ws: Workspace,
 ) -> None:
     """A tick host that requires no bar reads none, so a construct's cards would hand it bars
     it never read; dropping the size alone would leave `bar` required at no size, which the
-    schema refuses. The remedy drops both, and the file that follows it, its requirements as
-    the host's file states them, is admitted."""
-    host = {**TICK_BARS, "data_requirements": ["trade"], "data_by_instrument": {}}
-    host_with(ws, **host)
+    schema refuses, and dropping `bar` alone would leave the signal that asked for nothing else
+    asking for nothing, which it refuses too, with no remedy. The remedy drops the bars, and a
+    name asked for bars alone with them, and the file that follows it as worded is admitted."""
+    host_with(ws, **READING_NO_BARS)
+    stating = document(**TICK_BARS, bar_resolution="1m", **FILTER_CLASSIFICATION)
 
-    failure = refused(ws, document(**TICK_BARS, bar_resolution="1m", **FILTER_CLASSIFICATION))
-    followed = accepted(ws, document(**host, **FILTER_CLASSIFICATION))
+    failure = refused(ws, stating)
+    followed = accepted(ws, without_bars(stating))
 
     assert failure.message.startswith(
         "bar_resolution: host_sleeve@1 reads no bars beside its tick grain and this file "
         "declares 1m"
     )
-    assert (failure.remedy or "").startswith(
-        "drop bar_resolution, and bar from data_requirements and data_by_instrument, to match "
+    assert (failure.remedy or "").startswith(DROP_THE_BARS)
+    assert (followed.universe, followed.bar_resolution, followed.data_requirements) == (
+        ["DEMO"],
+        None,
+        ["trade"],
     )
-    assert (followed.bar_resolution, followed.data_requirements) == (None, ["trade"])
+    assert followed.data_by_instrument == {"DEMO": ["trade"]}
 
 
+@pytest.mark.parametrize("size", ["5m", "1m"])
 def test_a_construct_reading_bars_beside_ticks_over_a_bar_size_host_takes_its_grain(
-    ws: Workspace,
+    ws: Workspace, size: str
 ) -> None:
-    """A bar-size host reads its bars at its own resolution, so a construct at tick reading
-    them at another size would hand it bars it was not certified on; dropping the size alone
-    leaves `bar` required at no size. The remedy is the host's resolution with the key
-    dropped, and the file that follows it is admitted."""
+    """Only an overlay states a size over a bar-size host, and the overlay's card would hand the
+    host the overlay's tick clock as a bar grain beside its own, at which no bar can be
+    subscribed — at the host's very size as much as at another, so the refusal says that rather
+    than compare the two. Dropping the size alone leaves `bar` required at no size. The remedy
+    is the host's resolution with the key dropped, and the file that follows it is admitted."""
     host_with(ws)
     tick = {
         "resolution": "tick",
@@ -2356,17 +2391,73 @@ def test_a_construct_reading_bars_beside_ticks_over_a_bar_size_host_takes_its_gr
         "costs": TICK_BARS["costs"],
     }
 
-    failure = refused(ws, document(**tick, bar_resolution="5m", **OVERLAY_CLASSIFICATION))
+    failure = refused(ws, document(**tick, bar_resolution=size, **OVERLAY_CLASSIFICATION))
     followed = accepted(ws, document(**{**tick, "resolution": "1m"}, **OVERLAY_CLASSIFICATION))
 
-    assert failure.message.startswith(
+    assert failure.message.endswith(
         "bar_resolution: host_sleeve@1 states none, reading its bars at its own resolution, 1m, "
-        "and this file declares 5m"
+        f"and this file declares {size}; an overlay's card hands its host this file's tick clock "
+        "as a bar grain beside its own, at which no bar can be subscribed"
     )
     assert (failure.remedy or "").startswith(
         "set resolution to 1m and drop bar_resolution, to match "
     )
     assert (followed.resolution, followed.bar_resolution) == ("1m", None)
+
+
+@pytest.mark.parametrize("construct", ["filter", "exit"])
+def test_a_rule_stating_a_bar_size_off_a_bar_size_host_s_grain_is_given_one_remedy_that_clears(
+    ws: Workspace, construct: str
+) -> None:
+    """A filter or an exit is refused on its grain first. Setting the host's resolution alone
+    would leave a size beside a bar-size resolution, which the schema refuses, and attaching as
+    an overlay meets the refusal above; so the one remedy takes the host's resolution and drops
+    the key, and the file that follows it as worded is admitted."""
+    host_with(ws)
+    classification = {**FILTER_CLASSIFICATION, "construct": {"id": construct, "host": HOST_ID}}
+    stating = document(**TICK_BARS, bar_resolution="5m", **classification)
+
+    failure = refused(ws, stating)
+    followed = accepted(
+        ws, {**{k: v for k, v in stating.items() if k != "bar_resolution"}, "resolution": "1m"}
+    )
+
+    assert f"resolution: tick is not the host's 1m; a {construct} is consulted on the host's" in (
+        failure.message
+    )
+    assert (failure.remedy or "").startswith(
+        "set resolution to 1m and drop bar_resolution, to match "
+    )
+    assert (followed.resolution, followed.bar_resolution) == ("1m", None)
+
+
+def test_a_rule_stating_a_bar_size_off_a_tick_host_reading_none_takes_its_grain_and_drops_bars(
+    ws: Workspace,
+) -> None:
+    """Over a tick host reading no bars, the grain refusal's one remedy is the host's resolution
+    with the bars dropped as `DROP_THE_BARS` says, and the file that follows it is admitted."""
+    host_with(ws, **READING_NO_BARS)
+    stating = document(
+        **{
+            **TICK_BARS,
+            "resolution": "quote",
+            "data_requirements": ["bar", "quote"],
+            "data_by_instrument": {"DEMO": ["quote"], "EURO": ["bar"]},
+        },
+        bar_resolution="1m",
+        **FILTER_CLASSIFICATION,
+    )
+
+    failure = refused(ws, stating)
+    followed = accepted(ws, {**without_bars(stating), "resolution": "tick"})
+
+    assert "resolution: quote is not the host's tick" in failure.message
+    assert (failure.remedy or "").startswith(f"set resolution to tick, {DROP_THE_BARS}")
+    assert (followed.resolution, followed.universe, followed.data_requirements) == (
+        "tick",
+        ["DEMO"],
+        ["quote"],
+    )
 
 
 def test_a_filter_off_a_host_reading_bars_beside_ticks_is_given_its_grain_and_size(
