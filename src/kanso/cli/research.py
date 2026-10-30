@@ -217,6 +217,7 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
         field("card", f"{card.sha7} · {card.status} · {desc}"),
         field("metric", f"{card.metric:.6f} ± {card.metric_se:.6f} · {card.n_trades} trade(s)"),
         *_digest_lines(card.digest),
+        *_timing_lines(card.digest),
         field("cost", f"{card.wall_s:.1f}s · {card.peak_mem_gb:.2f} GB · trial {trials}"),
         field("best", "none yet" if run.best_sha is None else f"{run.best_sha[:7]}"),
     ]
@@ -270,6 +271,40 @@ def _seconds(value: float | None) -> str:
     if value < 7200:
         return f"{value / 60:.0f}m"
     return f"{value / 3600:.1f}h"
+
+
+def _timing_lines(digest: CardDigest | None) -> list[str]:
+    """When in its return periods a card filled, in one line: how many it filled in, the
+    offsets of a period's first and last fill from its opening, and the span between them.
+    Nothing for a card that never ran to a result or was recorded before the digest timed
+    its fills."""
+    if digest is None or digest.filled_periods is None:
+        return []
+    return [
+        field(
+            "timing",
+            f"{digest.filled_periods} period(s) filled in · "
+            f"first fill {_offset(digest.first_fill_s)} · last {_offset(digest.last_fill_s)} · "
+            f"active {_span(digest.active_s)}",
+        )
+    ]
+
+
+def _offset(value: float | None) -> str:
+    """An offset into a period as `+H:MM:SS.ss`, which at a daily period is the UTC time of
+    day; rounded to the hundredth first, so it never reads 60 seconds."""
+    if value is None:
+        return "n/a"
+    hours, rest = divmod(round(value * 100), 360_000)
+    minutes, rest = divmod(rest, 6_000)
+    return f"+{hours}:{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}"
+
+
+def _span(value: float | None) -> str:
+    """A span to the hundredth of a second under two minutes, and as a hold reads above."""
+    if value is None or value >= 120:
+        return _seconds(value)
+    return f"{value:.2f}s"
 
 
 def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:

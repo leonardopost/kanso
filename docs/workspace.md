@@ -1396,10 +1396,12 @@ never loses a row. Deleting it loses nothing. Its columns are `sha7 metric metri
 n_trades wall_s peak_mem_gb status desc`, then the card's digest — `trades_per_session
 hit_rate median_hold_s maker_share fill_ratio gross_bps_per_trade cost_bps_per_trade
 net_bps_per_trade net_bps_per_trade_se gross_bps_per_session cost_bps_per_session
-net_bps_per_session`, what its trades did (`docs/concepts.md`, Card) — appended after `desc` so
-that the first nine columns sit where they always sat. A digest number with nothing to be read
-off, and every digest cell of a crash, of a card refused before or during its backtest and of
-a card recorded before 0.17, is empty.
+net_bps_per_session`, what its trades did, then `first_fill_s last_fill_s active_s`, when in
+its return periods it filled (`docs/concepts.md`, Card) — appended after `desc` so that the
+first nine columns sit where they always sat, and the timing after the twelve that came before
+it. A digest number with nothing to be read off, and every digest cell of a crash, of a card
+refused before or during its backtest and of a card recorded before 0.17, is empty; so are the
+three timing cells of a card recorded before the digest timed its fills.
 
 ## `screens/<id>/`
 

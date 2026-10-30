@@ -595,6 +595,17 @@ def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None
     assert "The reading is by session" in said
 
 
+def test_the_instruction_says_from_where_a_card_s_timing_is_read() -> None:
+    """An offset is from somewhere: the proposer is told the timing numbers are read from the
+    opening of each return period on the UTC clock, not from any session's open, so a card
+    whose every fill lands in the same few seconds of each day reads as that."""
+    said = INSTRUCTIONS["propose"]
+    for name in ("filled_periods", "first_fill_s", "last_fill_s", "active_s"):
+        assert f"`{name}`" in said
+    assert "the median seconds from a period's opening to its first fill and to its last" in said
+    assert "at a daily period an offset is the UTC time of day" in said
+
+
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
     settings = ResearchConfig(local_cards=10, structural_cards=10)
     assert [driver.phase(settings, n) for n in (0, 9, 10, 19, 20, 29, 30)] == [

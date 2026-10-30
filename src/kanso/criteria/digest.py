@@ -4,9 +4,12 @@ A card is scored on one scalar, and one scalar cannot say how it moved. A per-tr
 rises when every clip earns more and when the clips that lost are dropped; a contribution
 falls when the trades get worse and when the book trades less; and the loop's proposer,
 shown nothing but the number, cannot tell which of the two it caused — so a search scored on
-a contribution "improves" by trading less while the loss per trade gets worse. The digest is
-the rest of the story in a dozen numbers: how often the card traded, how its trades and its
-orders filled, and what each trade and each session earned before and after costs.
+a contribution "improves" by trading less while the loss per trade gets worse. Nor can a
+number struck over a window say when in each day the card traded: a book whose every fill
+lands in the first second of a session, its day ended there by a stop, scores like one that
+trades all day. The digest is the rest of the story: how often the card traded, how its
+trades and its orders filled, when in its periods it filled, and what each trade and each
+session earned before and after costs.
 
 Every number is read off what the card already holds — the `CardRun` the runner extracted
 and the order intents its strategy submitted — so nothing here runs anything, and nothing
@@ -35,7 +38,17 @@ is a second definition of a quantity the toolbox already defines:
   the order's own events, and under nautilus_trader 1.231.0 an order the emulator released at
   market keeps the events of the order it was made from and fills with no limit; a modify
   that raised a quantity is not in the intent's either, so the ratio is a reading, not an
-  identity, and it can exceed one only through the second.
+  identity, and it can exceed one only through the second;
+* **when it filled** is read on the return periods the runner cut the window into, one after
+  another from the window's first midnight (`CardRun.period_ns`) — a UTC day each by default
+  — each fill in the one its instant falls in, which is the one the runner booked it to: over
+  the periods the run filled in, the median seconds from a period's opening to its first fill
+  and to its last, and from its first fill to its last. A period opens on the UTC clock and at
+  no venue's open, since no calendar is consulted, so at a daily period an offset is the UTC
+  time of day. Each median is the lower middle value over an even count, an offset some period
+  filled at: the mean of the two middle ones need be no such instant — on ten scalping cards
+  of 44 winter and 44 summer sessions it fell half an hour from every first fill, 14:00 where
+  the lower one reads 13:30.
 
 Funding is a payment on what was held, not a fill cost, so it stays in gross and in net
 alike; a run with none of something reads `None` for what that something measures.
@@ -46,7 +59,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Sequence
 from math import fsum, sqrt
-from statistics import median
+from statistics import median, median_low
 from typing import Final
 
 from kanso.criteria.objectives import net_edge_bps
@@ -163,11 +176,16 @@ def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
             "cost_bps_per_session": cost_session,
             "net_bps_per_session": net_session,
         }
+    filled, first, last, active = _timing(run)
     return CardDigest(
         sessions=sessions,
         fills=len(run.fills),
         maker_share=_maker_share(run),
         fill_ratio=_fill_ratio(run, intents),
+        filled_periods=filled,
+        first_fill_s=first,
+        last_fill_s=last,
+        active_s=active,
         **per_trade,
         **per_session,
     )
@@ -188,3 +206,28 @@ def _fill_ratio(run: CardRun, intents: Sequence[Intent]) -> float | None:
     if submitted <= 0:
         return None
     return fsum(abs(f.qty) for f in run.fills if f.limit is not None) / submitted
+
+
+def _timing(run: CardRun) -> tuple[int, float | None, float | None, float | None]:
+    """When in its periods the run filled: how many periods it filled in and, over those,
+    the lower median of the nanoseconds from a period's opening to its first fill and to its
+    last, and from its first fill to its last, each in seconds (see the module)."""
+    opens, _ = run.bounds
+    length = run.period_ns
+    spans: dict[int, tuple[int, int]] = {}
+    for fill in run.fills:
+        index = (fill.ts_ns - opens) // length
+        first, last = spans.get(index, (fill.ts_ns, fill.ts_ns))
+        spans[index] = (min(first, fill.ts_ns), max(last, fill.ts_ns))
+    if not spans:
+        return 0, None, None, None
+    offsets = [
+        (first - opens - index * length, last - opens - index * length)
+        for index, (first, last) in spans.items()
+    ]
+    return (
+        len(spans),
+        median_low(first for first, _ in offsets) / NS_PER_SECOND,
+        median_low(last for _, last in offsets) / NS_PER_SECOND,
+        median_low(last - first for first, last in offsets) / NS_PER_SECOND,
+    )

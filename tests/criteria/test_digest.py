@@ -7,6 +7,7 @@ the costs 2, 2, 2 and 1 bp, and the book made 100 on a capital of 100,000.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from statistics import mean, stdev
 
@@ -51,6 +52,9 @@ def test_every_number_of_the_digest_is_the_one_a_pencil_gets() -> None:
     assert made.net_bps_per_session == pytest.approx(100.0 / 100_000 * 10_000 / 4)
     assert made.cost_bps_per_session == pytest.approx(4.0 / 100_000 * 10_000 / 4)
     assert made.gross_bps_per_session == pytest.approx(2.5 + 0.1)
+    assert made.filled_periods == 1, "both fills are on the first day"
+    assert (made.first_fill_s, made.last_fill_s) == (12 * 3600.0, 13 * 3600.0)
+    assert made.active_s == 3600.0, "from the noon fill to the one an hour after it"
 
 
 def test_the_net_edge_per_trade_and_its_error_are_the_per_trade_objective_over_one_fold() -> None:
@@ -90,6 +94,8 @@ def test_a_run_that_traded_nothing_has_sessions_and_no_edge() -> None:
     assert made.net_bps_per_trade is None and made.hit_rate is None
     assert made.maker_share is None, "no fill, so no share of them was a maker's"
     assert made.fill_ratio is None, "no order carried a limit"
+    assert made.filled_periods == 0, "no period was filled in, so none is timed"
+    assert (made.first_fill_s, made.last_fill_s, made.active_s) == (None, None, None)
 
 
 def test_a_run_with_no_period_end_has_no_session_to_divide_by() -> None:
@@ -174,3 +180,67 @@ def test_trades_that_all_closed_on_one_session_have_no_session_error() -> None:
 
 def test_a_run_that_closed_no_trade_has_no_session_edge() -> None:
     assert session_edge(build_run((0.0, 0.0))) is None
+
+
+def instant(day: int, seconds: float) -> int:
+    """`seconds` after the midnight that opens day `day` of the window, in nanoseconds."""
+    return at(START + timedelta(days=day), 0) + round(seconds * 1e9)
+
+
+def fills_at(*instants: int) -> tuple[Fill, ...]:
+    """A fill of 100 at 100.00 at each instant, in time order."""
+    return tuple(Fill(ts, "DEMO", "BUY", 100.0, 100.0, cost=0.0) for ts in sorted(instants))
+
+
+def test_when_a_run_filled_is_read_from_the_opening_of_each_period_it_filled_in() -> None:
+    """Three days, each filled in its first seconds and never again: the first fills come
+    1, 1.5 and 0.5 s after the day opens and the last 3, 4 and 6 s after it, so the spans
+    are 2, 2.5 and 5.5 s; the digest states the middle of each, the periods it read them
+    off, and nothing of a period with no fill."""
+    run = build_run(
+        (0.0, 0.0, 0.0, 0.0),
+        fills=fills_at(
+            *(instant(0, s) for s in (1.0, 2.0, 3.0)),
+            *(instant(1, s) for s in (1.5, 4.0)),
+            *(instant(3, s) for s in (0.5, 6.0)),
+        ),
+    )
+
+    made = digest(run)
+
+    assert (made.sessions, made.filled_periods) == (4, 3)
+    assert (made.first_fill_s, made.last_fill_s, made.active_s) == (1.0, 4.0, 2.5)
+
+
+def test_the_middle_of_an_even_count_of_periods_is_an_offset_one_of_them_filled_at() -> None:
+    """Two winter sessions open at 14:30Z and two summer ones at 13:30Z, each filled once,
+    20 ms in: the mean of the two middle offsets is 14:00:00.02, an instant no session
+    filled at, so the digest states the lower of the two."""
+    opens = (14.5, 14.5, 13.5, 13.5)
+    run = build_run(
+        (0.0,) * 4,
+        fills=fills_at(*(instant(day, hours * 3600 + 0.02) for day, hours in enumerate(opens))),
+    )
+
+    made = digest(run)
+
+    assert made.filled_periods == 4
+    assert made.first_fill_s == made.last_fill_s == 48_600.02, "13:30:00.02"
+    assert made.active_s == 0.0, "one fill a period spans no time"
+
+
+def test_a_period_opens_where_the_runner_cut_the_window_and_not_at_every_midnight() -> None:
+    """Return periods are cut from the window's first midnight, one period after another: at
+    two days the second midnight opens nothing, so a fill an hour into the second day is 25
+    hours into the period the first midnight opened, and at an hour each hour opens its own."""
+    daily = build_run((0.0, 0.0), fills=fills_at(instant(0, 23 * 3600.0), instant(1, 3600.0)))
+
+    two_days = digest(replace(daily, period="2d"))
+    hourly = digest(replace(daily, period="1h"))
+
+    assert digest(daily).filled_periods == 2
+    assert two_days.filled_periods == 1
+    assert (two_days.first_fill_s, two_days.last_fill_s) == (23 * 3600.0, 25 * 3600.0)
+    assert two_days.active_s == 2 * 3600.0
+    assert hourly.filled_periods == 2
+    assert (hourly.first_fill_s, hourly.last_fill_s, hourly.active_s) == (0.0, 0.0, 0.0)

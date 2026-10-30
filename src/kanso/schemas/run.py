@@ -97,10 +97,14 @@ DIGEST_COLUMNS: Final = (
     "gross_bps_per_session",
     "cost_bps_per_session",
     "net_bps_per_session",
+    "first_fill_s",
+    "last_fill_s",
+    "active_s",
 )
 """The digest's numbers a `results.tsv` row carries after `desc`: appended rather than
 inserted, so a reader that takes the first nine columns by position reads what it always
-read."""
+read — and when in its periods a card filled after the twelve that came before it, for the
+same reason."""
 
 RESULTS_COLUMNS: Final = (
     "sha7",
@@ -144,6 +148,16 @@ class CardDigest(KansoModel):
     median_hold_s: Positive | None = None
     maker_share: Share | None = None
     fill_ratio: Positive | None = None
+    filled_periods: int | None = Field(default=None, ge=0)
+    """How many of the run's return periods it filled in — cut on the UTC clock from the
+    window's first midnight, at no venue's open (`kanso.criteria.digest`) — and over them the
+    lower median of the seconds from a period's opening to its first fill (`first_fill_s`) and
+    to its last (`last_fill_s`), and from its first fill to its last (`active_s`), which are
+    `None` when no period was filled in. All four are `None` on a digest recorded before they
+    were kept."""
+    first_fill_s: Positive | None = None
+    last_fill_s: Positive | None = None
+    active_s: Positive | None = None
     gross_bps_per_trade: Bps | None = None
     cost_bps_per_trade: Bps | None = None
     net_bps_per_trade: Bps | None = None
@@ -189,6 +203,44 @@ class CardDigest(KansoModel):
                 scale = max(1.0, abs(gross), abs(cost), abs(net))
                 if not isclose(gross - cost, net, rel_tol=0.0, abs_tol=1e-9 * scale):
                     raise ValueError(f"gross: {gross} less the cost {cost} is not the net {net}")
+        return self._timed()
+
+    def _timed(self) -> CardDigest:
+        """When in its periods the run filled is read off the periods it filled in: stated
+        with their count or not at all, a period for each fill at most, the offsets exactly
+        when one was filled in, and a period's last fill neither before its first nor nearer
+        its opening than the span from its first fill — which their lower medians inherit,
+        since each is the same middle of a list that is no smaller element by element."""
+        timing = (self.first_fill_s, self.last_fill_s, self.active_s)
+        if self.filled_periods is None:
+            if any(value is not None for value in timing):
+                raise ValueError(
+                    "filled_periods: when a run filled is read off the periods it filled in, so "
+                    "it is stated with their count or not at all"
+                )
+            return self
+        if (self.filled_periods == 0) != (self.fills == 0) or self.filled_periods > self.fills:
+            raise ValueError(
+                f"filled_periods: {self.filled_periods} period(s) filled in by {self.fills} "
+                "fill(s); every fill lies in one period, and a period is filled in by a fill"
+            )
+        if any((value is None) != (self.filled_periods == 0) for value in timing):
+            raise ValueError(
+                "first_fill_s: the offsets are stated together, exactly when a period was filled in"
+            )
+        first, last, active = timing
+        if first is None or last is None or active is None:
+            return self
+        if last < first:
+            raise ValueError(
+                f"last_fill_s: {last} is before the first fill's offset {first}, and a period's "
+                "last fill is at or after its first"
+            )
+        if active > last:
+            raise ValueError(
+                f"active_s: {active} is longer than the last fill's offset {last}, and a "
+                "period's fills span no more than its opening to its last fill"
+            )
         return self
 
     def cells(self) -> tuple[str, ...]:

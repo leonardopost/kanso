@@ -325,6 +325,9 @@ def test_results_tsv_is_rendered_from_state_and_survives_a_restore(
         "gross_bps_per_session",
         "cost_bps_per_session",
         "net_bps_per_session",
+        "first_fill_s",
+        "last_fill_s",
+        "active_s",
     ]
     assert [row.split("\t")[8] for row in rows[1:]] == [
         "baseline",
@@ -364,6 +367,7 @@ def test_a_card_reads_as_a_few_lines_for_a_human(runner: CliRunner, registered: 
     assert "min_trades: pass" in result.stdout
     assert " a session over " in result.stdout, "how often it traded, beside the metric"
     assert " bp a trade net (gross " in result.stdout, "and what a trade earned"
+    assert " period(s) filled in · first fill +" in result.stdout, "and when it traded"
 
 
 def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers(
@@ -385,6 +389,41 @@ def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers
     cells = dict(zip(rows[0].split("\t"), rows[-1].split("\t"), strict=True))
     assert cells["net_bps_per_trade"] == f"{digest['net_bps_per_trade']:.4f}"
     assert cells["fill_ratio"] == ""
+    assert 0 < digest["filled_periods"] <= digest["sessions"], "a daily period is a session"
+    assert digest["first_fill_s"] <= digest["last_fill_s"] < 86_400.0
+    for name in ("first_fill_s", "last_fill_s", "active_s"):
+        assert cells[name] == f"{digest[name]:.4f}"
+
+
+def test_when_a_card_traded_reads_as_offsets_into_its_period() -> None:
+    """An offset reads as hours, minutes and seconds to the hundredth — at a daily period the
+    UTC time of day — and a span as seconds; a run that filled nothing reads as no time,
+    and a card recorded before the digest kept its timing has no line for it."""
+    from kanso.cli.research import _timing_lines
+    from kanso.schemas import CardDigest
+
+    timed = CardDigest(
+        sessions=0,
+        fills=5138,
+        filled_periods=88,
+        first_fill_s=48_600.0532,
+        last_fill_s=48_602.0449,
+        active_s=0.5394,
+    )
+    assert _timing_lines(timed) == [
+        "timing     88 period(s) filled in · first fill +13:30:00.05 · last +13:30:02.04 · "
+        "active 0.54s"
+    ]
+    week = CardDigest(
+        sessions=0, fills=2, filled_periods=1, first_fill_s=0.004, last_fill_s=4e5, active_s=4e5
+    )
+    assert "first fill +0:00:00.00 · last +111:06:40.00 · active 111.1h" in _timing_lines(week)[0]
+    idle = CardDigest(sessions=0, fills=0, filled_periods=0)
+    assert _timing_lines(idle) == [
+        "timing     0 period(s) filled in · first fill n/a · last n/a · active n/a"
+    ]
+    assert _timing_lines(CardDigest(sessions=0, fills=4)) == []
+    assert _timing_lines(None) == []
 
 
 def test_a_digest_reads_as_two_lines_and_a_number_it_lacks_reads_as_none() -> None:

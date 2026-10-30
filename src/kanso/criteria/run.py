@@ -248,6 +248,19 @@ class CardRun:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1] + timedelta(days=1))
 
+    @property
+    def period_ns(self) -> int:
+        """The return period in nanoseconds: the length the runner cut the window into, one
+        period after another from its first midnight (`RunRequest.period_ns` in
+        `kanso.nautilus.backtest`); a period of no time at all is refused, as it is there."""
+        length = int(parse_duration(self.period, "period").total_seconds() * NS_PER_SECOND)
+        if length <= 0:
+            raise ValidationError(
+                f"period: {self.period!r} is no time at all, so the window holds no return "
+                "periods to measure"
+            )
+        return length
+
     def folds(self, n: int) -> tuple[CardRun, ...]:
         """`n` contiguous, equal calendar spans of this window, each as its own run."""
         if n < 1:
