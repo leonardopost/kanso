@@ -1128,8 +1128,9 @@ def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep
     owed behind that order's deferred cancel, where an entry can go first; that a whole
     `submit_exit` could not keep a cancel waiting, though an order on the opening side whose
     cancel waits keeps filling; that what waited went on the first point a token came back for
-    it; and that a second cancel of an order whose cancel waits goes at once when the bucket
-    holds what it costs, which no test pinned and no operator acts on."""
+    it; that a second cancel of an order whose cancel waits goes at once when the bucket holds
+    what it costs, which no test pinned and no operator acts on; and that a deferred cancel
+    keeps its place in line, though an exit takes a token the bucket holds while it waits."""
     said = {name: prose(page(name)) for name in ("concepts.md", "workspace.md", "cli.md")}
     for name, text in said.items():
         for promise in (
@@ -1143,6 +1144,7 @@ def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep
             "before the strategy's handler of the first point",
             "take what tokens came back",
             "goes at once if the bucket",
+            "its place in line",
         ):
             assert promise not in text, (name, promise)
     assert "can keep a cancel waiting" in said["workspace.md"]

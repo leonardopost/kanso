@@ -2174,7 +2174,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         to the engine's own as every modify the rate does not drop is. So is what is not an
         order at all — `None`, which `submit_exit` answers when it sent nothing, or a value of
         another type — which the rate reads nothing of, so the engine raises its own error for
-        it, as it did before the keys existed."""
+        it, as it did before the keys existed: in nautilus_trader 1.231.0
+        `Strategy.modify_order` takes an `Order` and refuses `None` with `Condition.not_none`
+        (`trading/strategy.pyx`), a `TypeError` either way."""
         self._check_booked(order, "modify_order")
         if (
             isinstance(order, Order)
@@ -3297,19 +3299,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         so on a level-two book the rest of one deeper than the book stays open.
 
         Under a stated `orders_per_minute` a cancel that would go out takes its tokens, and
-        with too few in the bucket it is deferred, to go out in its turn once the bucket holds
-        them (`_send_deferred`); a second cancel of an order whose cancel waits goes now if the
-        bucket holds them, and keeps the first one's place if it does not (`_defer_cancel`).
-        The cancel of an order the engine's emulator holds is counted and pays its tokens as
-        any other, though the emulator answers it itself and sends the venue nothing: a command
-        is what the sleeve asks of the venue. Under the rate the cancel of an order the engine
-        was never handed — an entry the rate dropped, one a filter refused or sent while warming
-        (`_never_sent`) — is neither sent nor held: the venue holds nothing of it, so nothing is
-        sent, held or counted, and a strategy that cancels its last order on every point, sent
-        or not, sends what one that cancels only what was sent does. With no rate stated such a
-        cancel is held back as any order not yet handed over is, as before the keys existed,
-        and sent once the strategy submits that same object, which the backtest engine answers
-        as not found and a node obeys (`docs/backlog.md` row 233).
+        with too few in the bucket it is deferred (`_defer_cancel`), to go out in its turn once
+        the bucket holds them (`_send_deferred`). The cancel of an order the engine's emulator
+        holds is counted and pays its tokens as any other, though the emulator answers it
+        itself and sends the venue nothing: a command is what the sleeve asks of the venue.
+        Under the rate the cancel of an order the engine was never handed — an entry the rate
+        dropped, one a filter refused or sent while warming (`_never_sent`) — is neither sent
+        nor held: the venue holds nothing of it, so nothing is sent, held or counted, and a
+        strategy that cancels its last order on every point, sent or not, sends what one that
+        cancels only what was sent does. With no rate stated such a cancel is held back as any
+        order not yet handed over is, as before the keys existed, and sent once the strategy
+        submits that same object, which the backtest engine answers as not found and a node
+        obeys (`docs/backlog.md` row 233).
         """
         self._forget(order.instrument_id.value, order.side, priced_only=True)
         if _never_rests(order) or (self._command_bucket is not None and self._never_sent(order)):

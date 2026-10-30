@@ -1241,9 +1241,9 @@ def test_a_cancel_that_costs_two_is_not_starved_by_entries_taking_the_single_tok
     """At the 190 a minute an Alpaca account declares, two requests a cancel, the re-posting
     sleeve on quotes a quarter second apart wants three tokens a quote and gets under one. The
     cancel that waits for two keeps its place: no buy takes a single token that comes back
-    before it has its two, as a throttled account working its requests in turn sends them, so
-    every buy sent but the last is cancelled. Were the single tokens the handler's, each would
-    go to the next buy and the cancels would wait while the buys piled up resting."""
+    before it has its two, so every buy sent but the last is cancelled. Were the single tokens
+    the handler's, each would go to the next buy and the cancels would wait while the buys piled
+    up resting."""
     groups: list[tuple[object, ...]] = [tuple(quoted(480, gap=SECOND_NS // 4))]
     held = both(rated(reposting(True), 190, per_cancel=2), groups)
 
