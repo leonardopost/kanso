@@ -718,6 +718,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._kept_settled = False
         """Whether every order the balance reads has been folded in since anything it folds
         last changed (`_settle`)."""
+        self._kept_marked: list[tuple[str, float, float, Any]] | None = None
+        """Each open position as `balance_at_quote` marks it, kept (`_kept_marks`)."""
         self._data_time = 0
         self._intents: list[OrderIntent] = []
         self._last_bar: dict[str, Bar] = {}
@@ -1019,6 +1021,94 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._kept_settle()
         worth = sum((self._worth(position) for position in self._kept_positions()), 0.0)
         return self._cash + worth
+
+    @property
+    def balance_at_quote(self) -> float:
+        """`balance` with each open position marked at the mid of its name's quote in force —
+        the last quote the sleeve was handed — instead of at its last print: the number for a
+        strategy's own limits, a daily stop or a daily target, which a print outside the quote
+        moves no further than the quote moves.
+
+        `balance` marks a name at its last print, a quote's mid or a trade's price, whichever
+        came last, as the card's equity does, and a trade can print well outside the quote.
+        Measured on 2026-10-30 over the first second of nine opens — SPY, QQQ and IWM on
+        2025-01-02, 2025-01-03 and 2025-02-03 — 1,744 of 4,791 prints lay outside the quote in
+        force at them, a median of 0.68 bp and at most 13.7 bp of the price from its mid; one
+        NVDA print of a single share, at 140.00 against a last print of 141.10, took a
+        scalping card's balance from -0.9 bp of its book to -54 bp and ended its day at its
+        -40 bp stop.
+
+        The mark is the mid and not the side a close would take, because `balance` and the card
+        mark a quote at its mid: wherever the last point of every name held was a valid quote
+        this is `balance`, bit for bit, and elsewhere it differs from it only by what prints
+        moved. The side a close would take — the bid for a long, the ask for a short, where an
+        exit at market fills — would also move every limit by half the spread of every position
+        open, at those opens a median of 0.23 bp and at most 1.13 bp of the price: what a
+        flatten pays on top of this, and what a limit read off it has not paid.
+
+        A name with no valid quote in force — none yet, a name the sleeve is handed no quotes
+        of, or one whose last quote is locked, crossed or one-sided, so not `ask > bid > 0` —
+        is marked as `balance` marks it: at its last print, and with none at its split-aware
+        cost. At those opens 48 of the 4,791 prints met such a quote. A quote from before a
+        split the venue has since applied is restated by its ratio, as a print is.
+
+        Nothing of the harness reads it — sizing, the room and the card's equity read
+        `balance` — so a sleeve that never reads it trades as it did before it existed. It
+        books what `balance` books (`_kept_settle`), and what marks a position besides its
+        quote — its name, quantity and multiplier — is kept until anything it reads changes
+        (`_forget_kept`), as `held` keeps its read, so a read costs one quote read for each
+        position open: measured on 2026-10-30 on the suite's kept-reads tick sleeve over
+        20,000 points, a median 1.6 µs a read holding one position and 2.2 µs holding two,
+        where a read of `balance` took 1.8 µs and 2.6 µs.
+        """
+        if self.cache is None:  # not registered with an engine: nothing booked, nothing held
+            return self._cash
+        self._kept_settle()
+        worth = sum((self._at_quote(*marked) for marked in self._kept_marks()), 0.0)
+        return self._cash + worth
+
+    def _kept_marks(self) -> list[tuple[str, float, float, Any]]:
+        """Each open position as `balance_at_quote` marks it — its name, its signed quantity,
+        its multiplier and the position itself — in the order the cache lists them, kept
+        until anything it reads could change (`_forget_kept`)."""
+        kept = self._kept_marked
+        if kept is not None and not self._recheck_kept:
+            return kept
+        read: list[tuple[str, float, float, Any]] = []
+        for position in self._kept_positions():
+            instrument_id = position.instrument_id
+            key = self._kept_names.get(instrument_id) or instrument_id.value
+            qty = float(position.signed_qty)
+            read.append((key, qty, self._multiplier_of(instrument_id), position))
+        if kept is not None and (
+            len(kept) != len(read)
+            or any(
+                was[0] != now[0]
+                or was[1].hex() != now[1].hex()
+                or was[2].hex() != now[2].hex()
+                or was[3] is not now[3]
+                for was, now in zip(kept, read, strict=True)
+            )
+        ):
+            raise AssertionError(
+                f"_kept_marks kept {kept!r} where the positions read {read!r} now: something "
+                "it reads changed and did not forget the reads kept (KansoStrategy._forget_kept)"
+            )
+        self._kept_marked = read
+        return read
+
+    def _at_quote(self, key: str, qty: float, multiplier: float, position: Any) -> float:
+        """One open position's market value at the mid of its name's quote in force, quoted in
+        the shares held now; with no valid quote, its value as `balance` marks it (`_worth`)."""
+        quote = self._last_quote.get(key)
+        if quote is not None:
+            bid, ask = float(quote.bid_price), float(quote.ask_price)
+            if ask > bid > 0.0:
+                mid = (bid + ask) / 2.0
+                if key in self._restated:
+                    mid /= self._restating(key, int(quote.ts_event))
+                return qty * mid * multiplier
+        return self._worth(position)
 
     # --- the book policy: the runner's period ends, mirrored -------------------
 
@@ -2204,8 +2294,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _forget_kept(self) -> None:
         """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`), the
-        open positions the balance marks (`_kept_positions`), and that the balance has folded
-        in every order (`_kept_settle`).
+        open positions the balance marks (`_kept_positions`) and what `balance_at_quote` marks
+        each with (`_kept_marks`), and that the balance has folded in every order
+        (`_kept_settle`).
 
         A tick sleeve asks them of every name on every point — every tk_* seed walks its
         universe asking `held` once its day is done, and reads its balance — and measured on
@@ -2243,10 +2334,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         runs again). With `_recheck_kept` set every kept read is read again and compared,
         bit for bit, and a difference raises; the suite sets it for every test
         (`tests/conftest.py`), and a card does not.
+
+        `_kept_marks` reads each position's instrument besides, for its multiplier, which no
+        point of a run changes. No quote moves a kept read: `balance_at_quote` reads the quote
+        of each name afresh.
         """
         self._kept_filled.clear()
         self._kept_intended.clear()
         self._kept_open = None
+        self._kept_marked = None
         self._kept_settled = False
 
     def _kept_positions(self) -> list[Any]:

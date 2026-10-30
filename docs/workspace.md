@@ -527,7 +527,16 @@ equity curve strikes at each period end, and one a strategy may size from. Readi
 bar costs what the sleeve's orders gained since the last read, however long they have lived,
 so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
 does not save memory either, since the engine keeps every order's events for the run
-(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
+(`docs/concepts.md`).
+`self.balance_at_quote` is that balance with each open position marked at the mid of its
+name's last quote instead of its last print: the number to hold a strategy's own daily stop or
+target to, since a print outside the quote moves `balance` and not it. Where every name held
+last had a valid quote it is `balance` exactly; a name whose last quote is not `ask > bid > 0`
+— locked, crossed or one-sided — or that has none, a bar sleeve's among them, is marked as
+`balance` marks it, at its last print. It is the mid, not the bid of a long or the ask of a
+short, so a flatten at market still pays half the spread past it; nothing kanso sizes or
+measures reads it, and a read costs one quote for each position open.
+`strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
 the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness

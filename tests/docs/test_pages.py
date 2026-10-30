@@ -473,6 +473,23 @@ def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> Non
     assert "`cancel_orders` cancels it on its own, through the emulator" in text
 
 
+def test_the_pages_say_the_balance_at_quote_is_the_mid_and_read_by_no_part_of_kanso() -> None:
+    """`balance_at_quote` marks at the quote's mid, as `balance` would without a valid quote,
+    and only a strategy reads it (`tests/replay/test_quote_mark.py`,
+    `tests/nautilus/strategy/test_quote_mark.py`)."""
+    workspace = prose(page("workspace.md"))
+    assert (
+        "`self.balance_at_quote` is that balance with each open position marked at the mid of"
+        " its name's last quote instead of its last print"
+    ) in workspace
+    assert "is marked as `balance` marks it, at its last print" in workspace
+    assert "nothing kanso sizes or measures reads it" in workspace
+    concepts = prose(page("concepts.md"))
+    assert "**A strategy's own limits can be read at the quote.**" in concepts
+    assert "is marked as `balance` marks it, at its last print" in concepts
+    assert "Nothing kanso sizes, reserves or measures reads it" in concepts
+
+
 def test_the_research_template_says_an_exit_can_return_none_while_exits_are_working() -> None:
     """The loop model writes `strategy.py` from `program.md`, so it is told what the docs say:
     `submit_exit` returns `None` while working exits cover it, and a cancel is not instant."""

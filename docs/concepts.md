@@ -1119,6 +1119,23 @@ order saves none of it: one resting order moved on each of 30,000 one-second bar
 engine holding 60,001 events, and the same sleeve cancelling it for a fresh one every 2,000
 moves left it holding 60,043 across fifteen orders, at the same peak.
 
+**A strategy's own limits can be read at the quote.** `self.balance_at_quote` is that balance
+with each open position marked at the mid of its name's quote in force instead of its last
+print, for a strategy that stops or takes its day at a level of its own. A trade can print
+well outside the quote: measured on 2026-10-30 over the first second of nine opens — SPY, QQQ
+and IWM on 2025-01-02, 2025-01-03 and 2025-02-03 — 1,744 of 4,791 prints lay outside the quote
+in force at them, a median of 0.68 bp and at most 13.7 bp of the price from its mid, and one
+NVDA print of a single share took a scalping card's balance from -0.9 bp of its book to -54 bp
+and ended its day at its -40 bp stop. The mark is the mid because `balance` and the card mark
+a quote at its mid, so the two readers differ only by what prints moved; the side a close would
+take — the bid for a long, the ask for a short — would also move every limit by half the spread
+of every position open, at those opens a median of 0.23 bp and at most 1.13 bp of the price,
+which a flatten at market pays past the limit. A name with no valid quote in
+force — none yet, or a last quote that is not `ask > bid > 0`, as a locked or crossed one is,
+which 48 of those 4,791 prints met — is marked as `balance` marks it, at its last print.
+Nothing kanso sizes, reserves or measures reads it: the room, a card's equity and every gate
+read `balance`.
+
 **A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
 keys). The runner applies it once, at each period end of the extraction, in one order: the
 carry — the yearly `financing_rate_bps` on gross exposure, shorts counted, above the book's
