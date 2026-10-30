@@ -818,12 +818,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._command_ns = 0
         """The data clock the tally and the bucket read: `data_time`, never run backwards."""
         self._command_deferred: dict[object, tuple[Any, Any, dict[str, object] | None]] = {}
-        """The cancels the bucket held too few tokens for, oldest first, by client order id,
-        each with what it was sent with (`_defer_cancel`)."""
+        """The cancels the bucket held too few tokens for, by client order id, each with what it
+        was sent with (`_defer_cancel`)."""
         self._rate_owed: dict[tuple[str, OrderSide], None] = {}
-        """The exits owed because no token was available to them, oldest first, each asked for
-        again before the strategy's handler of every later point until it goes or is owed no
-        longer (`_pay_rated`)."""
+        """The exits owed because no token was available to them, each asked for again before
+        the strategy's handler of every later point until it goes or is owed no longer
+        (`_pay_rated`)."""
         self._command_closing: tuple[float | None, float | None] | None = None
         """What `_close` asked for, as the next `submit_order` sends it: the exit the rate
         owes rather than refuses (`_short_of_rate`)."""
@@ -2556,14 +2556,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
 
     def _defer_cancel(self, order: Any, client_id: Any, params: dict[str, object] | None) -> None:
-        """Keep a cancel the bucket held too few tokens for, to be sent in its turn once it holds
-        them (`_send_deferred`); one already waiting keeps its place. The order counts as working
-        meanwhile, as one whose cancel is in flight does, so an exit is sized to what it can
-        still fill and an exit at a price is owed behind it (`_close`)."""
+        """Keep a cancel the bucket held too few tokens for, for `_send_deferred` to send. The
+        order counts as working meanwhile, as one whose cancel is in flight does, so an exit is
+        sized to what it can still fill and an exit at a price is owed behind it (`_close`)."""
         self._command_deferred.setdefault(order.client_order_id, (order, client_id, params))
 
     def _waiting(self) -> dict[object, tuple[Any, Any, dict[str, object] | None]]:
-        """The deferred cancels still waiting for their tokens, oldest first.
+        """The deferred cancels still waiting for their tokens.
 
         One whose order has closed since — filled, cancelled, expired — or whose cancel has
         gone another way — sent by a later `cancel_order` or by the engine's own cancel of the
@@ -2582,8 +2581,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return deferred
 
     def _send_deferred(self) -> None:
-        """Send the deferred cancels still waiting (`_waiting`), oldest first, while the bucket
-        holds their tokens.
+        """Send the deferred cancels still waiting (`_waiting`) while the bucket holds their
+        tokens.
 
         Each is sent as `cancel_order` sends it, held back if the venue does not have the order
         yet; one whose order no longer needs it has been dropped, and pays nothing. One
@@ -2737,12 +2736,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._rate_owed[(key, side)] = None
 
     def _pay_rated(self) -> None:
-        """Ask again, oldest first, for the exits the rate owed for want of a token, once the
-        deferred cancels the bucket holds tokens for have been sent (`_send_behind_modify`) and
-        before the strategy's handler of the point: each is asked for again as `submit_exit`
-        asks for it, and an order it sends takes a token the bucket holds then, while a cancel
-        waits as well (`_command_spend`). One owed for another reason, or no longer owed, is
-        left to `_pay_owed` after the handler, as before."""
+        """Ask again for the exits the rate owed for want of a token, once the deferred cancels
+        the bucket holds tokens for have been sent (`_send_behind_modify`) and before the
+        strategy's handler of the point: each is asked for again as `submit_exit` asks for it,
+        and an order it sends takes a token the bucket holds then, while a cancel waits as well
+        (`_command_spend`). One owed for another reason, or no longer owed, is left to
+        `_pay_owed` after the handler, as before."""
         held, self._rate_owed = self._rate_owed, {}
         for name in held:
             if name in self._owed:
@@ -3224,11 +3223,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
         cancel goes out as it is taken, not from here.)
 
-        The cancels the bucket deferred are sent first, oldest first, as many as it now holds
-        tokens for (`_send_deferred`), and then the exits the rate owed for want of a token,
-        oldest first (`_pay_rated`): this is the one place both paths reach before every
-        handler of a point. A point is matched by the venue before any handler of it runs, on
-        both paths, so what waited goes on a later point, after the venue has matched it.
+        The cancels the bucket deferred are sent first, as many as it now holds tokens for
+        (`_send_deferred`), and then the exits the rate owed for want of a token are asked for
+        again (`_pay_rated`): this is the one place both paths reach before every handler of a
+        point. A point is matched by the venue before any handler of it runs, on both paths,
+        so what waited goes on a later point, after the venue has matched it.
         """
         if self._command_deferred:
             self._send_deferred()
@@ -3299,10 +3298,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         so on a level-two book the rest of one deeper than the book stays open.
 
         Under a stated `orders_per_minute` a cancel that would go out takes its tokens, and
-        with too few in the bucket it is deferred (`_defer_cancel`), to go out in its turn once
-        the bucket holds them (`_send_deferred`). The cancel of an order the engine's emulator
-        holds is counted and pays its tokens as any other, though the emulator answers it
-        itself and sends the venue nothing: a command is what the sleeve asks of the venue.
+        with too few in the bucket it is deferred (`_defer_cancel`, `_send_deferred`). The
+        cancel of an order the engine's emulator holds is counted and pays its tokens as any
+        other, though the emulator answers it itself and sends the venue nothing: a command is
+        what the sleeve asks of the venue.
         Under the rate the cancel of an order the engine was never handed — an entry the rate
         dropped, one a filter refused or sent while warming (`_never_sent`) — is neither sent
         nor held: the venue holds nothing of it, so nothing is sent, held or counted, and a
