@@ -1116,9 +1116,9 @@ def test_the_pages_say_an_entry_past_the_rate_is_dropped_and_counted_and_the_car
 
 
 def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep() -> None:
-    """Of when what waits for a token goes, the pages keep only what the replay tests pin on
-    both paths and an operator acts on: no entry or modify takes a token while a cancel waits,
-    an exit takes one the bucket holds, so exits asked for on every point can keep a cancel
+    """Of when what waits for a token goes, the pages keep what the replay tests pin on both
+    paths and an operator acts on: no entry or modify takes a token while a cancel waits, an
+    exit takes one the bucket holds, so exits asked for on every point can keep a cancel
     waiting while its order fills, and what waits goes on a later point, after the venue has
     matched it. They once said more, and each time it was more than the code kept: that what
     waited took every token that came back before the handler could, though an exit owed behind

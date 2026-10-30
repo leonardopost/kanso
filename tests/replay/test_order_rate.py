@@ -1746,7 +1746,7 @@ third quote and cancels the buy on its fourth."""
     [(1, at(31)), (300, at(4) + 330 * SECOND_NS)],
     ids=["a_second", "five_minutes"],
 )
-def test_the_deferred_cancels_take_the_tokens_that_come_back_before_an_owed_exit(
+def test_the_deferred_cancels_the_bucket_holds_tokens_for_go_before_an_owed_exit(
     gap: int, exited_at: int
 ) -> None:
     """At two a minute, two requests a cancel, the entry and the resting buy empty the bucket:
@@ -1781,16 +1781,16 @@ third quote and does `THEN` on its fourth, the next session's first."""
     [("pass", 100.0, 0), ('self.submit_entry(name, "BUY", qty=10)', 110.0, 20)],
     ids=["alone", "behind_an_entry"],
 )
-def test_an_exit_owed_behind_a_deferred_cancel_is_asked_for_once_the_cancel_has_landed(
+def test_an_exit_owed_behind_a_deferred_cancel_is_asked_for_after_the_handler(
     then: str, sold: float, after: int
 ) -> None:
     """At three a minute, two requests a cancel, the entry and the resting exit leave a token and
     a tenth on the third quote, too few for the cancel the exit at market calls for: the cancel
     is deferred, and the exit owed behind it. The next session opens a day later with the bucket
     full, and the cancel goes before the handler of its first quote, leaving one token. The exit
-    owed behind it is asked for again once the cancel has landed, after that handler: alone it
-    takes the token there, and behind the entry that handler sends, which takes the token first,
-    it goes twenty seconds later, once the next one is back, selling the 10 bought as well."""
+    owed behind it is asked for again after that handler: alone it takes the token there, and
+    behind the entry that handler sends, which takes the token first, it goes twenty seconds
+    later, once the next one is back, selling the 10 bought as well."""
     day_two = T0 + 24 * 3_600 * SECOND_NS
     groups: list[tuple[object, ...]] = [(*steady(3), *quoted(30, first=day_two))]
     source = OWED_BEHIND_A_CANCEL_OVERNIGHT.replace(b"THEN", then.encode())
