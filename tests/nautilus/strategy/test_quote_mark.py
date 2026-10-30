@@ -1,6 +1,7 @@
 """`balance_at_quote` on the engine: a quote from before a split the venue has applied is restated
 as `balance` restates a print, a sleeve no engine holds reads its capital, what it keeps is read
-again and compared under the suite's check, and reading it on every point changes no card."""
+again and compared under the suite's check, and a read of it books what a read of `balance` at
+the same point books and changes nothing else."""
 
 from __future__ import annotations
 
@@ -125,6 +126,21 @@ class Strategy(Strategy):
         super().on_trade_tick(tick)
 """
 
+BALANCE = b"""
+
+
+class Strategy(Strategy):
+    \"\"\"The same sleeve, reading `balance` where the other reads `balance_at_quote`.\"\"\"
+
+    def on_quote_tick(self, tick):
+        self.balance
+        super().on_quote_tick(tick)
+
+    def on_trade_tick(self, tick):
+        self.balance
+        super().on_trade_tick(tick)
+"""
+
 
 @settings(max_examples=20, deadline=None)
 @given(
@@ -134,28 +150,30 @@ class Strategy(Strategy):
     ),
     rechecked=st.booleans(),
 )
-def test_reading_the_balance_at_quote_on_every_point_changes_no_card(
+def test_a_read_of_the_balance_at_quote_books_what_a_read_of_the_balance_books(
     tmp_path_factory: pytest.TempPathFactory,
     script: list[Step],
     costs: tuple[str, str, float],
     rechecked: bool,
 ) -> None:
-    """Over random tapes of two names, a sleeve that reads `balance_at_quote` on every quote and
-    print — on a print, where nothing else of the sleeve's reads its balance, it books the fills
-    the venue made on it first — reads every balance and holding and makes every fill, period end
-    and intent the sleeve that never reads it makes, to the last bit: with what it keeps answered
-    as kept, as in a card, and read again and compared beside it."""
+    """Over random tapes of two names, a sleeve that reads `balance_at_quote` before it handles
+    each quote and print reads every balance and holding and makes every fill, period end and
+    intent the same sleeve reading `balance` there makes, to the last bit — with what it keeps
+    answered as kept, as in a card, and read again and compared beside it. A read books the fills
+    the venue made since the last, as a read of `balance` does, and moves nothing else. A sleeve
+    that reads nothing on a print books a fill made there at its next read instead, and may add
+    the same sums in another order, so it is not the one compared (`balance_at_quote`)."""
     hyp = tick_hypothesis(*costs)
     groups = tape(script)
     root = tmp_path_factory.mktemp("at_quote")
-    plain = card(hyp, groups, SLEEVE, root / "plain.txt", ruled=False)
+    balanced = card(hyp, groups, SLEEVE + BALANCE, root / "balance.txt", ruled=False)
     was = KansoStrategy._recheck_kept
     KansoStrategy._recheck_kept = rechecked
     try:
         reading = card(hyp, groups, SLEEVE + READS, root / "reading.txt", ruled=False)
     finally:
         KansoStrategy._recheck_kept = was
-    assert_the_same(reading, plain)
+    assert_the_same(reading, balanced)
 
 
 STALE = b"""

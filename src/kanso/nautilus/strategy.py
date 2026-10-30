@@ -1054,13 +1054,22 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Nothing of the harness reads it — sizing and the room read `balance`, and a card is
         measured on the runner's equity, which `balance` mirrors — so a sleeve that never
-        reads it trades as it did before it existed. It books what `balance` books
-        (`_kept_settle`), and what marks a position besides its quote — its name, quantity
-        and multiplier — is kept until anything it reads changes (`_forget_kept`), as `held`
-        keeps its read, so a read costs one quote read for each position open: measured on
-        2026-10-30 on the suite's kept-reads tick sleeve over 20,000 points, a median 1.6 µs
-        a read holding one position and 2.2 µs holding two, where a read of `balance` took
-        1.8 µs and 2.6 µs.
+        reads it trades as it did before it existed. A read books the fills the venue has
+        made since the last, as a read of `balance` does (`_kept_settle`), and moves nothing
+        else, so a sleeve that reads it books, reads and trades as one that reads `balance` at
+        the same points. Read on a point where the sleeve reads nothing else, it books a fill
+        there and not at the sleeve's next read, as `balance` read there would, and the same
+        fills booked in another order can leave the cash a unit in its last place apart:
+        measured on 2026-10-31 on the suite's kept-reads tick sleeve, booking a fill a print
+        made on that print rather than after the next quote's own fills left the next 65
+        balances the sleeve read one unit in the last place apart, and moved no fill, period
+        end or return.
+
+        What marks a position besides its quote — its name, quantity and multiplier — is kept
+        until anything it reads changes (`_forget_kept`), as `held` keeps its read, so a read
+        costs one quote read for each position open: measured on 2026-10-30 on the suite's
+        kept-reads tick sleeve over 20,000 points, a median 1.6 µs a read holding one position
+        and 2.2 µs holding two, where a read of `balance` took 1.8 µs and 2.6 µs.
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
