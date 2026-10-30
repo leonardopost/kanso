@@ -126,8 +126,8 @@ Positive = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
 class CardDigest(KansoModel):
-    """What a card's trades did: how often it traded, how it filled, and what each trade and
-    each session earned before and after costs.
+    """What a card's trades did: how often it traded, how it filled, when in its return
+    periods it filled, and what each trade and each session earned before and after costs.
 
     Computed by `kanso.criteria.digest` from the run the card measured — its fills, its
     closed trades, its return series — and the orders it submitted, once, in the lane, and
