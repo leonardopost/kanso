@@ -104,7 +104,7 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
     )
     assert run.card_budget_s == max(loop.MIN_CARD_BUDGET_S, loop.HEADROOM * run.baseline_wall_s)
     # The two numbers `docs/concepts.md` states for the card budget, and the `kanso.toml`
-    # template for the memory cap: three times the baseline, never under 60 s.
+    # template for the memory cap: three times a card's wall, never under 60 s.
     assert (loop.MIN_CARD_BUDGET_S, loop.HEADROOM) == (60.0, 3.0)
     assert run.baseline_wall_s > 0.0
 
@@ -136,6 +136,79 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
         .read_text(encoding="utf-8")
         .splitlines()[1]
         .startswith(baseline.sha7)
+    )
+
+
+def test_the_card_budget_is_struck_from_the_run_s_first_card_that_trades(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stub's baseline trades nothing, so until a card trades the budget is three times the
+    baseline's wall; the first card that trades strikes it from its own, the run records that
+    card, and neither a card that trades nothing nor a later one that trades moves it.
+    Without the floor, so the three-times term is the budget on any host."""
+    monkeypatch.setattr(loop, "MIN_CARD_BUDGET_S", 0.0)
+    run = loop.begin(ws, store, registered)
+    assert records.cards_of(store, registered)[0].n_trades == 0
+    assert (run.card_budget_s, run.budget_sha) == (loop.HEADROOM * run.baseline_wall_s, None)
+
+    edit(ws, run, FLAT + b"# still nothing\n")
+    with pytest.raises(loop.RedundantError):  # the flat book again, and judged all the same
+        loop.card(ws, store, registered, "trades nothing")
+    assert records.cards_of(store, registered)[-1].n_trades == 0
+    assert records.require_active(store, registered).budget_sha is None
+
+    edit(ws, run, REVERTING)
+    first = loop.card(ws, store, registered, "trades")
+    struck = records.require_active(store, registered)
+    assert first.n_trades > 0
+    assert (struck.card_budget_s, struck.budget_sha) == (
+        loop.HEADROOM * first.wall_s,
+        first.strategy_sha,
+    )
+
+    edit(ws, run, WEAK)
+    later = loop.card(ws, store, registered, "trades too")
+    assert later.n_trades > 0
+    after = records.require_active(store, registered)
+    assert (after.card_budget_s, after.budget_sha) == (struck.card_budget_s, struck.budget_sha)
+
+
+def test_a_baseline_that_trades_strikes_its_run_s_card_budget(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+
+    run = loop.begin(ws, store, hyp_id)
+
+    baseline = records.cards_of(store, hyp_id)[0]
+    assert baseline.n_trades > 0
+    assert run.budget_sha == run.base_sha == baseline.strategy_sha
+    assert run.card_budget_s == max(loop.MIN_CARD_BUDGET_S, loop.HEADROOM * baseline.wall_s)
+
+
+def test_a_turn_s_first_card_that_trades_in_slot_order_strikes_the_card_budget(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(loop, "MIN_CARD_BUDGET_S", 0.0)
+    loop.begin(ws, store, registered)
+
+    made = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [
+            ("trades nothing", FLAT + b"# still nothing\n", ["refactor"]),
+            ("weak", WEAK, ["refactor"]),
+            ("revert", REVERTING, ["refactor"]),
+        ],
+        slots=3,
+    )
+
+    assert [card.n_trades > 0 for card in made] == [False, True, True]
+    struck = records.require_active(store, registered)
+    assert (struck.card_budget_s, struck.budget_sha) == (
+        loop.HEADROOM * made[1].wall_s,
+        made[1].strategy_sha,
     )
 
 
@@ -1186,10 +1259,10 @@ def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
 def test_a_turn_s_cards_each_run_on_the_card_budget_times_the_turn_s_width(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The children of a turn share the lane's cores, and the budget was struck from a
-    baseline that had them to itself, so each runs on the card budget times the width and
-    the lane's share divided by it. A child the runner killed for its memory or its clock is
-    a crash carrying the `resources` verdict that says which limit and what it reached."""
+    """The children of a turn share the lane's cores, so each runs on the card budget times
+    the width and the lane's share divided by it. A child the runner killed for its memory or
+    its clock is a crash carrying the `resources` verdict that says which limit and what it
+    reached."""
     from kanso.nautilus.backtest import RunResult
 
     run = loop.begin(ws, store, registered)

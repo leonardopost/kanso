@@ -113,6 +113,28 @@ def test_the_cli_page_says_the_daemon_starts_a_child_that_died_again() -> None:
     assert "started again" in status
 
 
+def test_the_pages_say_a_card_budget_is_struck_from_the_first_card_that_traded() -> None:
+    """Struck once from a baseline that traded nothing, a card that traded spent the headroom on
+    its fills (`docs/backlog.md` row 139); the pages say which card strikes it now."""
+    from kanso.research import loop
+
+    assert (loop.MIN_CARD_BUDGET_S, loop.HEADROOM) == (60.0, 3.0)
+    card = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research card")
+    )
+    struck = "The time budget is three times the wall of the run's first card that traded"
+    assert f"{struck}, never under 60 s" in card
+    assert "(`budget`: the seconds, then `struck by` that card's sha7 or `the baseline's`" in card
+    concepts = prose(section(page("concepts.md"), "Card"))
+    assert (
+        "The wall-time budget is three times the wall of the run's first card that traded"
+        in concepts
+    )
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 139 |"))
+    assert "~~A card's time budget is three times its run's baseline wall" in row
+    assert "**closed:**" in row
+
+
 def test_the_cli_page_says_stop_sees_the_cards_it_left_end() -> None:
     """`stop` once slept a second for the cards its kills left and called that their end; CI
     found one still running when it returned. The page says what it waits on now, what it

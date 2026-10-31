@@ -17,14 +17,16 @@ moves the hypothesis's best only when a keep beats it.
 
 **The baseline calibrates the run.** It runs the unmodified `strategy.py` under
 `[research] baseline_budget_s` with memory uncapped, and what it costs becomes what a
-card is allowed: three times its wall time (never under a minute) and, for memory, the
-lane's own share floored at three times what the baseline actually needed. A turn that runs
-several cards at once allows each the same: its clock is the card budget times the cards
-the turn runs, because they share the lane's cores and the baseline had them to itself, and
-its memory is the share divided across them, never under that floor — a width whose part
-of the share would fall under it is refused before the turn is proposed (`mem_cap`). A
-baseline that times out or raises leaves no run record at all — a hypothesis whose
-starting point cannot run has nothing to research.
+card is allowed: for memory, the lane's own share floored at three times what the
+baseline actually needed; for time, three times the wall of the run's first card that
+traded (never under a minute) — the baseline's own, when the baseline traded, and three
+times the baseline's until a card has — and the run records which card struck it
+(`RunRecord.budget_sha`). A turn that runs several cards at once allows each the same: its
+clock is the card budget times the cards the turn runs, because they share the lane's
+cores, and its memory is the share divided across them, never under that floor — a width
+whose part of the share would fall under it is refused before the turn is proposed
+(`mem_cap`). A baseline that times out or raises leaves no run record at all — a
+hypothesis whose starting point cannot run has nothing to research.
 
 **A kill is not a fault in the code.** A card the runner killed for its memory or its
 clock measured nothing and is a crash, but it carries a failed `resources` verdict naming
@@ -941,6 +943,8 @@ def _record(
         measured_sha=measured_sha,
     )
     records.record_card(store, run, made)
+    if n_trades > 0:
+        records.strike_budget(store, run, strategy_sha, _budget(wall_s))
     if status == "keep":
         records.set_best(store, run, strategy_sha, metric)
         if records.best_of(store, run.hyp_id)[0] == strategy_sha:
@@ -1296,7 +1300,7 @@ def begin(
             snapshot_id=snapshot.snapshot_id,
             criteria_version=criteria_version(),
             host_version=setup.harness.host.version if setup.harness.host else None,
-            card_budget_s=max(MIN_CARD_BUDGET_S, HEADROOM * result.wall_s),
+            card_budget_s=_budget(result.wall_s),
             baseline_wall_s=result.wall_s,
             baseline_peak_mem_gb=result.peak_mem_gb,
             started_at=records.now(),
@@ -1325,6 +1329,11 @@ def begin(
         benchmark_run=benchmark_run,
     )
     return records.require_active(store, hyp_id)
+
+
+def _budget(wall_s: float) -> float:
+    """What a card is allowed against the wall of the card its budget is struck from."""
+    return max(MIN_CARD_BUDGET_S, HEADROOM * wall_s)
 
 
 def _base_source(
@@ -1568,11 +1577,11 @@ def run_batch(
 
     The backtests that integrity lets through run together, from one read of the window,
     each under `slots`' share of the lane's memory (`mem_cap`, which refuses a width the
-    share cannot fund) and `slots` times the run's card budget: the children share the
-    lane's cores, and the baseline the budget was struck from had them to itself. On 0.18.0
-    every slot had one card's budget, so on a host whose lanes already fill its cores each
-    child of a turn of `w` had about a `w`-th of its baseline's core and would run about `w`
-    times its wall: four at the three-times kill line, eight all killed. Gates and the
+    share cannot fund) and `slots` times the run's card budget, because the children share
+    the lane's cores. On 0.18.0 every slot had one card's budget, so on a host whose lanes
+    already fill its cores each child of a turn of `w` had about a `w`-th of its baseline's
+    core and would run about `w` times its wall: four at the three-times kill line, eight all
+    killed. Gates and the
     keep rule see that pre-turn best and a trial count that already includes every proposal
     of the turn.
     The highest metric that clears the floor is the one keep; a tie keeps the earlier

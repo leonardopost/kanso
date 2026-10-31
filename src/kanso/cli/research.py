@@ -211,13 +211,17 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
         "n_trials": trials,
         "best_sha": run.best_sha,
         "best_metric": run.best_metric,
+        "card_budget_s": run.card_budget_s,
+        "budget_sha": run.budget_sha,
         "results": str(research.results_file(ws, hyp_id)),
     }
+    struck = "the baseline's" if run.budget_sha is None else f"struck by {run.budget_sha[:7]}"
     lines = [
         field("card", f"{card.sha7} · {card.status} · {desc}"),
         field("metric", f"{card.metric:.6f} ± {card.metric_se:.6f} · {card.n_trades} trade(s)"),
         *_digest_lines(card.digest),
         field("cost", f"{card.wall_s:.1f}s · {card.peak_mem_gb:.2f} GB · trial {trials}"),
+        field("budget", f"{run.card_budget_s:.0f}s · {struck}"),
         field("best", "none yet" if run.best_sha is None else f"{run.best_sha[:7]}"),
     ]
     lines += [

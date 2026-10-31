@@ -27,7 +27,7 @@ reseed_after_stalls = 2   # consecutive stalls on the same best after which the 
 explore_after_stalls = 5  # stalls on the same best, since the last exploration, after which a daemon lane writes a draft hypothesis (`kanso hyp explore`); 0 = never
 folds = 4                 # contiguous folds the metric is a mean of; metric_se is read off the per-period series
 max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more lines must clear max(min_delta, 2 × k_se × metric_se)
-baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × baseline_wall_s)
+baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × the wall of the run's first card that traded), the baseline's until one has
 cards_per_turn = 1        # proposals evaluated at once in one run; 1 is one card a turn. Above 1 the lane's memory is divided across that many children, each on that many times card_budget_s; a width whose share falls under 3 × the baseline peak is refused. At most 8
 
 [screen]

@@ -146,6 +146,7 @@ __all__ = [
     "runs_of",
     "set_best",
     "signature",
+    "strike_budget",
     "superseded",
     "trial_metrics",
     "unset_best",
@@ -176,6 +177,7 @@ _RUN_COLUMNS = (
     "card_budget_s",
     "baseline_wall_s",
     "baseline_peak_mem_gb",
+    "budget_sha",
     "best_sha",
     "best_metric",
     "started_at",
@@ -237,6 +239,7 @@ def insert(store: StateStore, record: RunRecord) -> RunRecord:
         record.card_budget_s,
         record.baseline_wall_s,
         record.baseline_peak_mem_gb,
+        record.budget_sha,
         record.best_sha,
         record.best_metric,
         record.started_at.isoformat(),
@@ -301,6 +304,16 @@ def next_tag(store: StateStore, hyp_id: str, today: date) -> str:
         "SELECT COUNT(*) FROM runs WHERE hyp_id = ? AND tag LIKE ?", (hyp_id, f"{day}-%")
     ).fetchone()
     return f"{day}-{int(row[0]) + 1}"
+
+
+def strike_budget(store: StateStore, run: RunRecord, sha: str, budget_s: float) -> bool:
+    """Strike the run's card budget from the card `sha` traded, unless a card has struck it
+    already; whether this one did."""
+    cursor = store.connection.execute(
+        "UPDATE runs SET card_budget_s = ?, budget_sha = ? WHERE run_id = ? AND budget_sha IS NULL",
+        (budget_s, sha, run.run_id),
+    )
+    return cursor.rowcount == 1
 
 
 def set_best(store: StateStore, run: RunRecord, sha: str, metric: float) -> RunRecord:
