@@ -13,6 +13,7 @@ from kanso.schemas import (
     CardDigest,
     Certificate,
     CertificationPlan,
+    Commands,
     ConstructItem,
     CriteriaItem,
     Envelope,
@@ -58,6 +59,17 @@ def test_card_digest_round_trips_through_the_json_a_card_row_holds(value: CardDi
         assert abs(
             value.gross_bps_per_trade - value.cost_bps_per_trade - value.net_bps_per_trade
         ) <= 1e-9 * max(1.0, abs(value.gross_bps_per_trade), abs(value.cost_bps_per_trade))
+
+
+@given(gen.commands())
+def test_command_counts_round_trip_and_read_off_what_was_sent(value: Commands) -> None:
+    """A run's command counts cross a card's process boundary, a card row and a session file
+    and read back whole; the 99th percentile never above the peak, the peak never above what
+    was sent, and both zero exactly when nothing was."""
+    assert Commands.model_validate(value.model_dump(mode="json")) == value
+    assert parse_yaml(Commands, dump_yaml(value)) == value
+    assert value.p99_60s <= value.peak_60s <= value.sent
+    assert (value.peak_60s == 0) == (value.sent == 0)
 
 
 @given(gen.plans())

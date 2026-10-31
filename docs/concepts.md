@@ -445,14 +445,17 @@ numbers, and records them with the card:
 | `net_bps_per_trade`, `net_bps_per_trade_se` | the mean of `pnl_net / notional` over the closed trades, in basis points of the position opened, and its error: the per-trade objective over the whole window as one fold, the error read period by period. What `edge_per_trade` judges. Read that way an error has as many degrees of freedom as periods that closed a trade, less one, and on `p` such periods reads low by `√((p − 1)/p)` — 0.71 of the error on two, 0.94 on eight — which the gate's margin allows for and this number does not; it is zero by construction when one period closed them all, however far apart they landed, so with fewer than two the error is `null` |
 | `cost_bps_per_trade`, `gross_bps_per_trade` | the mean of `cost / notional` on the same trades, and the net plus it |
 | `net_bps_per_session`, `cost_bps_per_session`, `gross_bps_per_session` | in basis points of the capital, per session: the sum of the returns — what the book made, an open position's mark included — every fill's cost, and the net plus it |
+| `commands` | how fast the strategy sent its orders, counted as it sent them on the data clock: `submits` (one per order), `modifies` (one per modify the engine sends), `cancels` (one per order a cancel would reach), and `peak_60s` and `p99_60s` — of the counts of commands in the 60 s ending at each command, that one and every other sent at the same instant included, the largest and the 99th percentile by nearest rank, so a cancel and the order replacing it in one handler each count two; and `refused_submits` and `refused_modifies`, the submits of an entry — every order of an entry's list — and the modifies a stated `costs.orders_per_minute` had no token available to, the bucket holding fewer tokens than they cost — a list one for each of its orders, all or none — or a cancel waiting for its tokens, dropped unsent while the card ran on, so in none of the other counts. A command is what the sleeve asks of the venue, so an order the engine's emulator holds is counted when the strategy submits it and its cancel when the strategy sends it. What a stated `costs.orders_per_minute` is set against; `null` on a card recorded before cards kept it, and the refused counts zero on one recorded before they were kept |
 
 Gross is before fill costs and net after, so gross less cost is net, per trade and per
 session; funding, which is a payment on what was held and not a fill cost, stays in both. A
 number with nothing to be read off — an edge with no closed trade, a share with no fill — is
 `null`, never a zero. The proposer is shown every recent card's `n_trades` and digest beside
 its metric, rounded to four places; `research card` prints it as a `trades` line and an `edge`
-line and carries it under `--json` as `digest`; `research show --json` carries the newest card
-of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
+line, and a `commands` line where it counted them, and carries it under `--json` as `digest`;
+`research show --json` carries the newest card
+of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc` — none of
+`commands` — appended so
 that a reader taking the first nine columns by position reads what it always read, an absent
 number an empty cell. A card of a turn that ran several carries the digest one card of the
 same bytes carries; 0.18.0 and 0.19.0 recorded such cards with none. A crash, a card
@@ -1512,8 +1515,10 @@ or not. The base's private helpers that send an order as kanso's own — `_submi
 `_booked`, `_close` and every private method of the base that calls one of the three on
 itself or on `super()`, or calls one that does — are refused when read off a strategy, with
 the mark a book recognises kanso's order by (`_sending`) and the book's ledger
-(`_book_ledger`); on a class of the file that is not the harness's, the names are the
-author's own. And a method the engine defines and the base overrides — `submit_order`,
+(`_book_ledger`); and so is what holds a strategy to its account's order rate — the bucket,
+the tally, what spends them, and the lift only a stage's flatten calls (`RATE_MARKS`) — which a
+strategy that reached it could send past the rate with or rewrite what its card counted. On a
+class of the file that is not the harness's, the names are the author's own. And a method the engine defines and the base overrides — `submit_order`,
 `modify_order`, `cancel_order`, the `handle_*` handlers and the rest — is refused when read
 off anything but `self`, the instance a method receives, or `super()` with no arguments: off
 the engine's class, as `Strategy.submit_order(self, order)`, or a two-argument
@@ -1842,6 +1847,59 @@ equity the runner strikes. A fill that took liquidity can be charged a tick as w
 never past the limit its order carried and never on a maker's fill (`docs/workspace.md`), and
 each recorded fill keeps the increment and that limit, so this charge too is struck again from
 the record.
+
+**An account takes orders at a rate, and the sleeve holds itself to it.** A broker counts every
+order, modify and cancel a strategy sends and answers past its rate by refusing or by making
+it wait; the simulated venue counts nothing, so a rule that re-posts on every move of the touch
+would trade on its card at a rate no account takes and behave otherwise once it trades through
+one. So the sleeve counts what it asks of the venue, on the data clock, on every path — an
+order the engine's emulator holds when the strategy submits it, and its cancel when the
+strategy sends it — and under a venue model that states `costs.orders_per_minute` takes tokens
+for each command from a bucket of that many, refilled at that many a minute of the data clock
+— one for a submit or a modify, and for a cancel the `requests_per_cancel` the broker's client
+sends for one, which no resolved model lets exceed the rate (`docs/workspace.md`). The
+engine's own risk engine throttles on its own clock — a test clock on one path, the wall on the
+other — and is left unbounded on both for that reason; the account's rate is the sleeve's,
+where both paths read the same instants. With no token available — the bucket holding fewer
+tokens than the command costs, a list one for each of its orders, all or none, or, for an
+entry or a modify, a cancel waiting for its tokens — a command the account need not take is
+dropped, and one it must take waits or, when kanso did not size it, refuses the card: **an
+entry and a modify are dropped unsent and counted**, and the card runs on — an entry built by
+`submit_entry` in every form, or one built by hand or by an overlay that opens, every order of
+an entry's list with it, which `submit_entry` answers with `None`; a modify whichever order it
+moves, which stays as it was — so the card measures the entries the rate let through, and its
+digest carries how many it dropped (`refused_submits`, `refused_modifies`), which reaches the
+proposer beside its trades. An order built by hand opens when it opens or grows the position
+the sleeve's market orders in flight and the exits the rate owes it at market — for want of a
+token, or behind a cancel it deferred — leave, so the second leg of a flip — `submit_entry`'s,
+or one built by hand behind an exit at market sent or so owed — is an entry, dropped, and not
+owed as an exit. The bucket is asked for an entry `submit_entry` sizes, or one built by hand,
+before it is sized or funded, so one past the rate is dropped and counted unsized and unfunded,
+never refused, and the room and the funding are read only for one it lets through, as with no
+rate stated. An order the engine was never handed, dropped so, is nothing to cancel or to move,
+and its cancel or modify is no command. **An exit `submit_exit` sized is owed**, asked for again
+as it was asked, and **a cancel is deferred**. **Any other exit is refused** — one the strategy
+built itself, at market or at a limit in any time in force, a stop, an order of a list or a list
+that closes, an overlay's leg or clip — as `order_rate`, the same refusal a sizing rule makes,
+and the card is a `discard`
+carrying a `sizing` gate with what was asked, when and what the bucket held: dropped, it would
+leave open what the strategy asked to close, and owed, it would go as an order kanso built in
+its place, which the strategy could neither cancel nor move. While a cancel waits for its
+tokens no entry or modify takes one, so entries do not starve a cancel that spends two
+requests, and an exit takes one the bucket holds all the same — so exits asked for on every
+point can keep a cancel waiting, the order it would cancel free to fill meanwhile. A cancel
+whose order has closed waits for nothing. An owed exit and a deferred cancel are what the
+account would have let through later, but a sleeve acts only on points, and the venue matches a
+point before any handler of it runs: they go on a later point, after it is matched, so one that
+waits over a session's close goes on the next session's first point or later, where the order a
+deferred cancel was meant for can still fill. It is not a charge, so it is not struck again
+from a record: it decides which orders a run sends, as `latency_ms` decides when they land, and
+every card records how many it sent, how many it dropped and how many in its busiest 60 s
+whether or not a rate is stated (Card, above). A stage node runs the same code, so it drops the
+same entries and runs on rather than halting. Both paths count a command where the strategy
+decides to send it, so under a stated rate, where what one path spent decides what it may send
+next, `kanso replay parity` judges the counts, the dropped among them, beside the orders; with
+no rate stated it judges the orders alone, as it did before kanso counted.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the

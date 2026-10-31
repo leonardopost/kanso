@@ -111,7 +111,9 @@ def test_a_version_the_strategy_does_not_have_is_refused(runner: CliRunner, depl
 def test_parity_runs_both_paths_and_reports_that_they_agree(
     runner: CliRunner, deployed: Path
 ) -> None:
-    """The claim the whole design rests on, asked for in one command."""
+    """The claim the whole design rests on, asked for in one command. No layer states a rate
+    here, so neither session records its commands, the paths are judged on their streams and
+    their orders, and the object carries no commands field, as before kanso counted."""
     result = at(runner, deployed, "replay", "parity", "--strategy", HYP_ID, "--json")
 
     assert result.exit_code == Exit.OK, result.stdout
@@ -124,6 +126,7 @@ def test_parity_runs_both_paths_and_reports_that_they_agree(
     assert parity["node"] != parity["engine"]
     assert parity["node_released"] == parity["engine_released"] > 0
     assert parity["node_stream"] == parity["engine_stream"] is not None
+    assert "node_commands" not in parity and "engine_commands" not in parity
 
 
 def test_parity_reads_as_the_verdict_and_the_two_sessions(
@@ -216,6 +219,33 @@ def test_a_session_from_before_the_digest_shows_none(runner: CliRunner, deployed
 
     assert result.exit_code == Exit.OK
     assert "2212224 point(s) · sha256 not recorded" in result.stdout
+
+
+def test_a_session_prints_the_commands_it_counted_only_where_it_recorded_them(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """No layer states a rate here, so no session records its commands, and `--json` prints
+    each as it printed before kanso counted, with no `commands` field — what `replay run` wrote,
+    that session shown, and the listing alike. A session that ran under a stated rate recorded
+    them, and prints them."""
+    made = payload(at(runner, deployed, "replay", "run", "--strategy", HYP_ID, "--json"))
+    shown = payload(at(runner, deployed, "replay", "show", made["session_id"], "--json"))
+    listed = payload(at(runner, deployed, "replay", "show", "--json"))["sessions"]
+
+    assert "commands" not in made and "commands" not in shown
+    assert [held["session_id"] for held in listed if "commands" in held] == []
+
+    from tests.replay.test_record import LEGACY
+
+    counted = deployed / "sessions" / "20261001T025018Z-node-9994868"
+    counted.mkdir(parents=True)
+    recorded = "commands:\n  submits: 3\n  cancels: 1\n  peak_60s: 4\n  p99_60s: 4\n"
+    (counted / "session.yaml").write_text(LEGACY + recorded)
+    result = at(runner, deployed, "replay", "show", counted.name, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result)["commands"]["submits"] == 3
+    assert payload(result)["commands"]["cancels"] == 1
 
 
 def test_a_session_this_workspace_never_ran_is_refused(runner: CliRunner, deployed: Path) -> None:

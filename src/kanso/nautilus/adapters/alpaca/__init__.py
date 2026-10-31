@@ -167,6 +167,11 @@ class AlpacaBroker:
         """The rate limit this workspace would enforce, reported without a credential."""
         return self.config(ws).quota
 
+    def requests_per_minute(self, ws: Workspace) -> int | None:
+        """`[adapters.alpaca] requests_per_minute`: the quota the one connection every
+        request of a client goes through holds to (`transport`)."""
+        return self.config(ws).requests_per_minute
+
     def describe(self, ws: Workspace) -> dict[str, object]:
         """The whole offer as one JSON object, carrying no credential and no value.
 

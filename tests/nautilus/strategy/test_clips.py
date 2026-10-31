@@ -12,6 +12,7 @@ from kanso.nautilus.sizing import (
     CLIP_WITHOUT_BUDGET,
     HEDGE_UNDER_SIZING,
     ONE_CLIP,
+    ORDER_RATE,
     SizingError,
     full_book_quantity,
 )
@@ -115,6 +116,89 @@ def test_a_second_clip_while_one_is_held_is_refused(backtest) -> None:
     assert refused.rule == ONE_CLIP
     assert "a clip of 999 is held in HEDGE.XNAS" in refused.why
     assert "Clip('HEDGE.XNAS', 'FLAT') in the same answer" in refused.why
+
+
+OVERLAY_REMEDY = (
+    "a cancel deferred: send fewer commands — re-post only when the price has moved enough to "
+    "matter — or state the account's own figure as costs.orders_per_minute"
+)
+"""How an `order_rate` refusal of an overlay's leg or clip ends: what an overlay can do, and no
+`submit_exit`. An overlay answers with legs and clips and cannot itself close with `submit_exit`,
+and under a sizing rule `submit_exit` never closes a clip."""
+
+
+def test_a_clip_taken_off_past_the_rate_is_refused_rather_than_owed(backtest) -> None:
+    """At one a minute the host's exit on its seventh bar takes the token the overlay's `FLAT`
+    needs in the same instant. kanso owes only an exit `submit_exit` sized, which under a sizing
+    rule, as here, closes the host's own position and never the overlay's clip, so the clip's
+    exit is refused as `order_rate`: owed, it would go as an order kanso built in its place, and
+    dropped, it would leave the clip open. The refusal does not tell the overlay to close with
+    `submit_exit`, which it cannot itself close with, but to send fewer commands or state the
+    account's figure."""
+
+    class TakesOff(Clipper):
+        script = {8: (Clip("HEDGE.XNAS", "BUY"),), 12: (Clip("HEDGE.XNAS", "FLAT"),)}
+
+    class LeavesAtSeven(Enters):
+        def after(self, bars: int) -> None:
+            if bars == 7:
+                self.submit_exit(DEMO)
+
+    rated = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "orders_per_minute": 1,
+        }
+    }
+    with pytest.raises(SizingError) as failure:
+        backtest(
+            LeavesAtSeven(sized(venue_model=rated)),
+            [clipper(TakesOff, host="LeavesAtSeven")],
+            data=two_names(),
+            instruments=(DEMO, HEDGE),
+        )
+
+    refused = failure.value.refusal
+    assert (refused.rule, refused.instrument_id, refused.asked) == (
+        ORDER_RATE,
+        "HEDGE.XNAS",
+        "SELL",
+    )
+    assert refused.why.startswith("an exit an overlay asked for needed 1")
+    assert refused.why.endswith(OVERLAY_REMEDY)
+    assert "close with submit_exit" not in refused.why
+
+
+def test_a_clip_entered_past_the_rate_is_dropped_and_holds_nothing(backtest) -> None:
+    """At one a minute the host's entry on its third bar takes the token the clip its overlay
+    asks for in the same instant needs: the clip is dropped unsent and counted as refused, and
+    holds nothing, so the same clip asked for two bars on, once a token has come back, goes."""
+
+    class Twice(Clipper):
+        script = {5: (Clip("HEDGE.XNAS", "BUY"),), 8: (Clip("HEDGE.XNAS", "BUY"),)}
+
+    rated = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "quotes",
+            "orders_per_minute": 1,
+        }
+    }
+    run = backtest(
+        Enters(sized(venue_model=rated)),
+        [clipper(Twice)],
+        data=two_names(),
+        instruments=(DEMO, HEDGE),
+    )
+
+    assert [row for row in intents(run) if row[0] == "HEDGE.XNAS"] == [
+        ("HEDGE.XNAS", "BUY", HEDGE_CLIP)
+    ]
+    assert positions(run)["HEDGE.XNAS"] == HEDGE_CLIP
+    assert run.strategy._command_tally.summary().refused_submits == 1
 
 
 def test_the_other_side_of_a_held_clip_is_refused_until_flat(backtest) -> None:

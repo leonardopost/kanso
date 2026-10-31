@@ -23,7 +23,12 @@ before the digest has none, and may still hold the file, which nothing reads.
 
 The intents are kept whole. They are what parity compares, field by field and with an
 instant tolerance a digest cannot honour, and they are what a reader opens to see where two
-paths parted.
+paths parted. Beside them a session that ran under a stated `costs.orders_per_minute` records
+how fast its strategy sent its orders (`commands`), counted on the data clock as a card counts
+them, where the strategy decides to send each — the instants both paths reach alike, which is
+what lets one bucket hold one strategy to one rate on both — so parity compares them after the
+intents (`kanso.replay.parity.Parity.counted`). Under no stated rate it records none, and is
+written as it was before kanso counted.
 
 `clock_ts` is the availability instant of the last point released, in nanoseconds: the
 replay position a stage resumes from. It is held as digits rather than as a timestamp
@@ -45,7 +50,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from pydantic import Field
 
 from kanso.errors import PreconditionError
-from kanso.schemas import Versioned, load_yaml, write_yaml
+from kanso.schemas import Commands, Versioned, load_yaml, write_yaml
 from kanso.schemas.base import NonEmpty, Sha256
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -179,6 +184,11 @@ class Session(Versioned):
     released: int = Field(default=0, ge=0)
     stream_sha256: Sha256 | None = None
     intents: int = Field(default=0, ge=0)
+    commands: Commands | None = None
+    """How fast the strategy sent its orders on this path (`kanso.nautilus.rate`): the
+    record a card's digest carries, kept on both code paths under a stated
+    `costs.orders_per_minute` so parity compares the two; `None` for a session under no stated
+    rate, one that did not run to a result, or one an earlier kanso wrote."""
     clock_ns: int | None = None
     started_at: datetime
     ended_at: datetime | None = None
