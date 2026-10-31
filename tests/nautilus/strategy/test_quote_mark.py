@@ -1,7 +1,7 @@
 """`balance_at_quote` on the engine: a quote, a print or a cost from before a split the venue has
-applied is restated as `balance` restates a print, a sleeve no engine holds reads its capital,
-what it keeps is read again and compared under the suite's check, and a read of it books what a
-read of `balance` at the same point books and changes nothing else."""
+applied is restated in the new count, a sleeve no engine holds reads its capital, what it keeps
+is read again and compared under the suite's check, and a read of it books what a read of
+`balance` at the same point books and changes nothing else."""
 
 from __future__ import annotations
 
