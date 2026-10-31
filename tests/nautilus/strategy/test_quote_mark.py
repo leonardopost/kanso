@@ -94,8 +94,9 @@ def test_a_quote_from_before_a_split_is_restated_as_the_balance_restates_a_print
     9.98/10.03, stamped ninety seconds before the split's instant and published thirty seconds
     before it or after it — after DEMO's first bar has applied the split. Either way it is
     quoted in the old count: both balances mark the 100 shares the split leaves at its mid in
-    the new count, 100.05, and are one number. A mid left in the old count, or restated by
-    the instant it was published, would mark them at a tenth of that."""
+    the new count, 100.05, and are one number. A mid left in the old count would mark them
+    at a tenth of that, and so would the quote published after the split restated by the
+    instant it was published."""
     midnight = midnight_ns(EX)
     balance, at_quote, cash = held_through(
         backtest,

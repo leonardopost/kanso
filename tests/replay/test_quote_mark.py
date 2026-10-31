@@ -3,10 +3,10 @@ print outside the quote moves `balance` and not it; with no valid quote at the l
 at cost before any, never at that quote's mid; under `depth` at the last level one handed; and
 the two code paths read the same number on every point.
 
-The tick sleeve buys 100 at market on its first point and holds them, writing down both readers
-on every quote and print it handles. Instants are milliseconds after 15:00 UTC on 2024-03-04, a
-point's `ts_event` is its `ts_init`, and the venue fills by the tape (`limit_fill:
-print_through`).
+The quote and print sleeve (`HOLDS`) buys 100 at market on its first point and holds them,
+writing down both readers on every quote and print it handles. Its instants are milliseconds
+after 15:00 UTC on 2024-03-04, a point's `ts_event` is its `ts_init`, and the venue fills by the
+tape (`limit_fill: print_through`). The bar and `depth` tests run sleeves of their own.
 """
 
 from __future__ import annotations
@@ -176,12 +176,12 @@ def test_with_no_valid_quote_in_force_the_balance_at_quote_marks_at_the_last_tra
     tmp_path: Path,
 ) -> None:
     """A locked quote, a crossed one and one that shows no bid are not `ask > bid > 0`, so on
-    each `balance_at_quote` marks the 100 held at the last trade, where `balance` marks them at
-    that quote's own mid: on the locked quote, before any trade, at the 10.02 they cost against
-    its 10.00; on the crossed one at the 9.60 printed before it against its 10.00; on the
-    one-sided one at 9.70 against its 5.01, half the offer. On the print after each the two
-    are one number. The next valid quote is marked at its mid again, and a print outside it
-    moves `balance` alone."""
+    each `balance_at_quote` marks the 100 held at the last trade, or at cost before any, where
+    `balance` marks them at that quote's own mid: on the locked quote, before any trade, at the
+    10.02 they cost against its 10.00; on the crossed one at the 9.60 printed before it against
+    its 10.00; on the one-sided one at 9.70 against its 5.01, half the offer. On the print after
+    each the two are one number. The next valid quote is marked at its mid again, and a print
+    outside it moves `balance` alone."""
     read = both_paths(
         [
             q(9.98, 10.02, 10),
@@ -313,9 +313,10 @@ def test_under_depth_the_balance_at_quote_marks_at_the_last_level_one_handed(
     tmp_path: Path,
 ) -> None:
     """Under `depth` level one is the harness's, read off its own copy of the book, and moves no
-    last print. Bought at the 10.02 offer, the 100 held are marked on every point at the mid of
-    the last level one the sleeve was handed, on both paths alike, so a one-share print at 9.50
-    under the 9.99 bid moves `balance` 49.00 down and leaves `balance_at_quote` where it was."""
+    last print. Bought at the 10.02 offer, the 100 are marked at the mid of the last level one
+    the sleeve was handed on every point from the one their fill is booked on, on both paths
+    alike, so a one-share print at 9.50 under the 9.99 bid moves `balance` 49.00 down and leaves
+    `balance_at_quote` where it was."""
     from tests.nautilus.backtest.test_depth import _base, _id, book, prints
 
     day = FORWARD[0]
