@@ -5,6 +5,7 @@ the same point books and changes nothing else."""
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -99,8 +100,8 @@ def test_a_sleeve_no_engine_holds_reads_its_capital_at_the_quote() -> None:
 
 def test_no_part_of_kanso_reads_the_balance_at_quote() -> None:
     """Sizing and the room read `balance`, and a card is measured on the runner's equity: the
-    reader is a strategy's alone, so a sleeve that never reads it trades as it did before it
-    existed. The one module of the package that names it is the one that defines it."""
+    reader is a strategy's alone. The one module of the package that names it is the one that
+    defines it, and no expression of that module reads it."""
     root = Path(kanso.__file__).parent
     naming = sorted(
         path.relative_to(root).as_posix()
@@ -108,6 +109,12 @@ def test_no_part_of_kanso_reads_the_balance_at_quote() -> None:
         if "balance_at_quote" in path.read_text(encoding="utf-8")
     )
     assert naming == ["nautilus/strategy.py"]
+    tree = ast.parse((root / "nautilus" / "strategy.py").read_text(encoding="utf-8"))
+    assert not [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "balance_at_quote"
+    ]
 
 
 READS = b"""
@@ -207,8 +214,9 @@ class Strategy(KansoStrategy):
 @pytest.mark.parametrize(
     "stale",
     [
-        "self._kept_marked = []",
-        "self._kept_marked = [(n, q * 2, m, p) for n, q, m, p in self._kept_marked]",
+        "self._balance_at_quote_kept = []",
+        "self._balance_at_quote_kept = "
+        "[(n, q * 2, m, p) for n, q, m, p in self._balance_at_quote_kept]",
     ],
     ids=["a position dropped", "a quantity moved"],
 )
@@ -224,7 +232,7 @@ def test_a_kept_mark_that_went_stale_raises_when_read_again(stale: str) -> None:
         venue_model=venue_model(hyp, quotes_available=True),
         capital=CAPITAL,
     )
-    with pytest.raises(AssertionError, match="_kept_marks"):
+    with pytest.raises(AssertionError, match="_balance_at_quote_marks"):
         execute(
             request,
             [backtest_instrument(SYMBOL), backtest_instrument(OTHER)],
@@ -274,7 +282,7 @@ class Strategy(Strategy):
         self._settle()
         return self._cash + sum(
             (
-                self._at_quote(
+                self._balance_at_quote_worth(
                     self._kept_names.get(position.instrument_id) or position.instrument_id.value,
                     float(position.signed_qty),
                     self._multiplier_of(position.instrument_id),

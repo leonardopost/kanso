@@ -718,8 +718,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._kept_settled = False
         """Whether every order the balance reads has been folded in since anything it folds
         last changed (`_settle`)."""
-        self._kept_marked: list[tuple[str, float, float, Any]] | None = None
-        """Each open position as `balance_at_quote` marks it, kept (`_kept_marks`)."""
+        self._balance_at_quote_kept: list[tuple[str, float, float, Any]] | None = None
+        """Each open position as `balance_at_quote` marks it, kept (`_balance_at_quote_marks`)."""
         self._data_time = 0
         self._intents: list[OrderIntent] = []
         self._last_bar: dict[str, Bar] = {}
@@ -1053,17 +1053,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         split the venue has since applied is restated by its ratio, as a print is.
 
         Nothing of the harness reads it — sizing and the room read `balance`, and a card is
-        measured on the runner's equity, which `balance` mirrors — so a sleeve that never
-        reads it trades as it did before it existed. A read books the fills the venue has
-        made since the last, as a read of `balance` does (`_kept_settle`), and moves nothing
-        else, so a sleeve that reads it books, reads and trades as one that reads `balance` at
-        the same points. Read on a point where the sleeve reads nothing else, it books a fill
-        there and not at the sleeve's next read, as `balance` read there would, and the same
-        fills booked in another order can leave the cash a unit in its last place apart:
-        measured on 2026-10-31 on the suite's kept-reads tick sleeve, booking a fill a print
-        made on that print rather than after the next quote's own fills left the next 65
-        balances the sleeve read one unit in the last place apart, and moved no fill, period
-        end or return.
+        measured on the runner's equity, which `balance` mirrors — so a sleeve that neither
+        reads it nor binds a name it adds trades as it did before it existed. A read books the
+        fills the venue has made since the last, as a read of `balance` does (`_kept_settle`),
+        and moves nothing else, so a sleeve that reads it books, reads and trades as one that
+        reads `balance` at the same points. Read on a point where the sleeve reads nothing
+        else, it books a fill there and not at the sleeve's next read, as `balance` read there
+        would, and the same fills booked in another order can leave the cash a unit in its last
+        place apart: measured on 2026-10-31 on the suite's kept-reads tick sleeve, booking a
+        fill a print made on that print rather than after the next quote's own fills left the
+        next 65 balances the sleeve read one unit in the last place apart, and moved no fill,
+        period end or return.
 
         What marks a position besides its quote — its name, quantity and multiplier — is kept
         until anything it reads changes (`_forget_kept`), as `held` keeps its read, so a read
@@ -1074,14 +1074,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
         self._kept_settle()
-        worth = sum((self._at_quote(*marked) for marked in self._kept_marks()), 0.0)
+        worth = sum(
+            (self._balance_at_quote_worth(*marked) for marked in self._balance_at_quote_marks()),
+            0.0,
+        )
         return self._cash + worth
 
-    def _kept_marks(self) -> list[tuple[str, float, float, Any]]:
+    def _balance_at_quote_marks(self) -> list[tuple[str, float, float, Any]]:
         """Each open position as `balance_at_quote` marks it — its name, its signed quantity,
         its multiplier and the position itself — in the order the cache lists them, kept
         until anything it reads could change (`_forget_kept`)."""
-        kept = self._kept_marked
+        kept = self._balance_at_quote_kept
         if kept is not None and not self._recheck_kept:
             return kept
         read: list[tuple[str, float, float, Any]] = []
@@ -1101,13 +1104,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         ):
             raise AssertionError(
-                f"_kept_marks kept {kept!r} where the positions read {read!r} now: something "
-                "it reads changed and did not forget the reads kept (KansoStrategy._forget_kept)"
+                f"_balance_at_quote_marks kept {kept!r} where the positions read {read!r} now: "
+                "something it reads changed and did not forget the reads kept "
+                "(KansoStrategy._forget_kept)"
             )
-        self._kept_marked = read
+        self._balance_at_quote_kept = read
         return read
 
-    def _at_quote(self, key: str, qty: float, multiplier: float, position: Any) -> float:
+    def _balance_at_quote_worth(
+        self, key: str, qty: float, multiplier: float, position: Any
+    ) -> float:
         """One open position's market value at the mid of its name's quote in force, quoted in
         the shares held now; with no valid quote, its value as `balance` marks it (`_worth`)."""
         quote = self._last_quote.get(key)
@@ -2305,7 +2311,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _forget_kept(self) -> None:
         """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`), the
         open positions the balance marks (`_kept_positions`) and what `balance_at_quote` marks
-        each with (`_kept_marks`), and that the balance has folded in every order
+        each with (`_balance_at_quote_marks`), and that the balance has folded in every order
         (`_kept_settle`).
 
         A tick sleeve asks them of every name on every point — every tk_* seed walks its
@@ -2345,14 +2351,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         bit for bit, and a difference raises; the suite sets it for every test
         (`tests/conftest.py`), and a card does not.
 
-        `_kept_marks` reads each position's instrument besides, for its multiplier, which no
-        point of a run changes. No quote moves a kept read: `balance_at_quote` reads the quote
-        of each name afresh.
+        `_balance_at_quote_marks` reads each position's instrument besides, for its multiplier,
+        which no point of a run changes. No quote moves a kept read: `balance_at_quote` reads the
+        quote of each name afresh.
         """
         self._kept_filled.clear()
         self._kept_intended.clear()
         self._kept_open = None
-        self._kept_marked = None
+        self._balance_at_quote_kept = None
         self._kept_settled = False
 
     def _kept_positions(self) -> list[Any]:
