@@ -1528,8 +1528,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._show_top(instrument_id, book, ts_event, int(deltas.ts_init))
         self._data_time = ts_event
         if self.is_running and not self._warming():
-            if self._command_deferred or self._rate_owed:
-                self._pay_rated()
+            self._pay_rated()
             self._send_behind_modify()
             self._pay_owed()
 
@@ -1710,8 +1709,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self._is_extra_bar(bar):
             self._overlay_due = (instrument_id, bar, float(bar.close))
             return
-        if self._command_deferred or self._rate_owed:
-            self._pay_rated()
+        self._pay_rated()
         self._send_behind_modify()
         super().handle_bar(bar, False)
         self._pay_owed()
@@ -1724,8 +1722,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> None:
         """Hand a quote to the author, then ask for the exits owed and the exit rules, with the
         id its handler read and its name, or `None` for the name to be read when it is asked
-        for. What the rate held back (`_pay_rated`) and the cancels held behind a modify are
-        sent and the owed exits asked for only when there are any, which is what
+        for. What the rate held back and the cancels held behind a modify are sent and the owed
+        exits asked for only when there are any, which is what `_pay_rated`,
         `_send_behind_modify` and `_pay_owed` ask first."""
         self._data_time = int(tick.ts_event)
         if self._command_deferred or self._rate_owed:
@@ -1759,8 +1757,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instrument_id = getattr(data, "instrument_id", None)
         key = None if instrument_id is None else str(instrument_id)
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
-        if self._command_deferred or self._rate_owed:
-            self._pay_rated()
+        self._pay_rated()
         self._send_behind_modify()
         super().handle_data(data)
         self._pay_owed()
@@ -2766,6 +2763,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         waited goes on a later point, after the venue has matched it."""
         if self._command_deferred:
             self._send_deferred()
+        if not self._rate_owed:
+            return
         held, self._rate_owed = self._rate_owed, {}
         for name in held:
             if name in self._owed:
