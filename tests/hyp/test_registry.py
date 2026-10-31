@@ -109,6 +109,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
         "hypothesis_sha": record(ws, store).hypothesis_sha,
         "universe": ["DEMO"],
         "resolution": "1m",
+        "bar_resolution": None,
         "data_requirements": ["bar"],
         "data_by_instrument": None,
         "session_scope": None,
@@ -522,6 +523,43 @@ def test_a_change_of_depth_clears_the_best(ws: Workspace, store: StateStore) -> 
     assert [event.detail["reason"] for event in cleared] == [
         "depth changed from {'every_ms': 100, 'levels': 3} to {'every_ms': 1000, 'levels': 3}"
     ]
+
+
+TICK_BARS: dict[str, Any] = {
+    "universe": ["DEMO", "EURO"],
+    "resolution": "tick",
+    "data_requirements": ["bar", "trade"],
+    "data_by_instrument": {"DEMO": ["trade"], "EURO": ["bar"]},
+    "costs": {**DOCUMENT["costs"], "latency_ms": 20},
+}
+"""One name's prints beside another's bars, at tick resolution: bars read at a size the file
+states."""
+
+
+def test_a_change_of_bar_resolution_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    """A rule that read its signal's bars a minute at a time and one that read them five
+    minutes at a time measured different runs over the same days."""
+    register(ws, store, document(**TICK_BARS, bar_resolution="1m"))
+    set_best(store)
+
+    register(ws, store, document(**TICK_BARS, bar_resolution="5m"))
+
+    assert record(ws, store).best_sha is None
+    assert cleared_reasons(store) == ["bar_resolution changed from '1m' to '5m'"]
+
+
+def test_a_row_pinned_before_bar_resolution_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """No file could state the key before it existed, so a pin without it reads as none."""
+    register(ws, store)
+    set_best(store)
+    pin_before(store, "bar_resolution")
+
+    register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert cleared_reasons(store) == []
 
 
 def test_a_row_pinned_before_depth_joined_the_scope_keeps_the_best(

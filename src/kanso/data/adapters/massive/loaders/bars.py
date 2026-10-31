@@ -42,10 +42,20 @@ dataset's span to the floor it measured, and the manifest records the span the p
 actually covered, so the difference between asked and served is visible rather than
 smoothed away.
 
-**A futures year may be one digit.** `ESZ4` names a contract in some decade, and which
-decade is only decidable against the range being asked for — resolving it against today
-would read a 2014 contract as a 2024 one the moment the calendar rolled. The year is
-resolved against the requested window and rendered in the vendor's two-digit form.
+**A futures contract is asked for exactly as its instrument id spells it, at
+`/futures/v1/aggs`.** The vendor serves futures aggregates there and nowhere else — the
+generic aggregates path serves no contract — under its own spelling of each contract, which
+differs by product: measured on 2026-10-29, `ESZ4` served the December 2024 E-mini's minutes
+from 2024-10-29 while `ESZ24` answered HTTP 200 with nothing, the shape an absent history
+takes, and `CLZ30` served the December 2030 crude's from 2024-11-04 under two year digits. So
+no year is read out of a symbol and none is respelled: a symbol that is not the vendor's
+spelling asks for a history the vendor does not hold, and the probe says so (`entitlement`),
+where respelling it would have loaded another decade's contract under its id. A row there
+carries `window_start` in nanoseconds and `open`, `high`, `low`, `close` and `volume` in full,
+and is asked by date bounds in the parameters (`entitlement.futures_aggregates`). Only bar
+sizes under a day are asked for: the vendor's session bar opens the day before the session
+it settles and states no instant it closed at, and a bar is stamped at its close. The
+futures endpoints carry a quota of their own, which the client holds them to.
 
 Entitlement is never concluded from the vendor's message, which is byte-identical for
 four different conditions. `discover` asks `Entitlements`, which probes; a `load` that
@@ -79,6 +89,7 @@ from kanso.data.adapters.massive.entitlement import (
     Endpoint,
     Entitlements,
     Probe,
+    futures_aggregates,
     probe,
     raise_if_blocked,
     settled_end,
@@ -114,7 +125,7 @@ __all__ = [
     "bars_endpoint",
     "build_bar",
     "built",
-    "futures_year",
+    "futures_resolution",
     "instant",
     "numbers",
     "shift",
@@ -181,13 +192,15 @@ spelled with a delivery month and a year instead."""
 FUTURES_MONTHS: Final = "FGHJKMNQUVXZ"
 """The delivery-month codes, January through December, in the industry's own order."""
 
-CENTURY: Final = 100
-"""Years per century, for rendering a contract year in the vendor's two-digit form."""
+FUTURES: Final = "futures"
 
-PIVOT: Final = 70
-"""Where a two-digit contract year is read as the last century rather than this one."""
+FUTURES_SPANS: Final[dict[str, str]] = {"s": "sec", "m": "min", "h": "hour"}
+"""kanso's sub-day duration units as the futures aggregates' resolution units. `1min` and
+`1hour` were measured served on 2026-10-29; the vendor documents `sec` beside them and a
+minute's multiplier up to 59."""
 
 OHLC: Final = ("o", "h", "l", "c")
+FUTURES_OHLC: Final = ("open", "high", "low", "close")
 
 _FUTURES: Final = re.compile(rf"^([A-Z0-9]{{1,4}}?)([{FUTURES_MONTHS}])([0-9]{{1,4}})$")
 
@@ -201,38 +214,14 @@ a class and a dataset that do not meet is refused before a request is made."""
 # --- the vendor's spellings ---------------------------------------------------
 
 
-def futures_year(digits: str, on: date) -> int:
-    """The four-digit delivery year `digits` names, read against the range being asked for.
-
-    A contract code carries one, two or four year digits and only the four-digit form is
-    unambiguous. Two digits pivot at 1970, the convention every exchange's own listings
-    use. One digit names a year in some decade, and the decade is decided by the window
-    the operator asked for rather than by today: the same code means a different contract
-    every ten years, so resolving it against the calendar would silently re-point a 2014
-    backfill at 2024 the moment the decade turned.
-    """
-    if len(digits) == 4:
-        return int(digits)
-    if len(digits) == 3:
-        raise MalformedRequestError(
-            f"massive: {digits!r} is not a contract year; a futures code carries one, two "
-            "or four year digits",
-            remedy="write the contract as ESZ4, ESZ24 or ESZ2024",
-        )
-    value = int(digits)
-    if len(digits) == 2:
-        return 2000 + value if value < PIVOT else 1900 + value
-    base = on.year - 5
-    return base + (value - base) % 10
-
-
-def vendor_ticker(symbol: str, asset_class: str, on: date) -> str:
-    """The vendor's key for a workspace symbol in `asset_class`, on the range's own year.
+def vendor_ticker(symbol: str, asset_class: str) -> str:
+    """The vendor's key for a workspace symbol in `asset_class`.
 
     Every class but futures is the symbol behind a fixed prefix, and a symbol that already
-    carries its prefix is left alone so an operator may write either. Futures are the
-    exception: their key is a root, a delivery month and a year the vendor spells with two
-    digits, and `on` is what decides which decade a one-digit year names.
+    carries its prefix is left alone so an operator may write either. A futures symbol
+    carries no prefix and is the key as written, once it is shaped as a contract — a root, a
+    delivery month and a year — rather than a product: the vendor spells each contract its
+    own way, so the instrument id carries the vendor's spelling and nothing respells it.
     """
     prefix = PREFIXES.get(asset_class)
     if prefix is None:
@@ -242,15 +231,14 @@ def vendor_ticker(symbol: str, asset_class: str, on: date) -> str:
         )
     if asset_class != "futures":
         return symbol if not prefix or symbol.startswith(prefix) else f"{prefix}{symbol}"
-    found = _FUTURES.match(symbol.upper())
-    if found is None:
+    if _FUTURES.match(symbol) is None:
         raise MalformedRequestError(
             f"massive: {symbol!r} is not a futures contract; expected a root, a delivery "
             f"month from {FUTURES_MONTHS} and a year, as in ESZ4",
-            remedy="name the contract, not the product; a continuous series is not a contract",
+            remedy="name the contract as the vendor's listing spells it; a product or a "
+            "continuous series is not a contract",
         )
-    root, month, digits = found.groups()
-    return f"{root}{month}{futures_year(digits, on) % CENTURY:02d}"
+    return symbol
 
 
 def aggregate(resolution: str) -> tuple[int, str]:
@@ -267,6 +255,24 @@ def aggregate(resolution: str) -> tuple[int, str]:
             f"timespans are {', '.join(TIMESPANS.values())}"
         )
     return step, TIMESPANS[unit]
+
+
+def futures_resolution(resolution: str) -> str:
+    """A kanso bar size as the futures aggregates' resolution: `1m` as `1min`, `1h` as `1hour`.
+
+    A day or a week is refused rather than asked for as a session: the vendor's session bar
+    opens the day before the session it settles and states no instant it closed at, so it
+    could be stamped at no close without inventing one.
+    """
+    step, unit = int(resolution[:-1]), resolution[-1]
+    span = FUTURES_SPANS.get(unit)
+    if step <= 0 or span is None:
+        raise MalformedRequestError(
+            f"massive: {resolution!r} is not a bar size this vendor's futures aggregates are "
+            "loaded at; they are loaded at sizes under a day, whose close is their window's end",
+            remedy="load futures bars at 1m or 1h, and aggregate them in the strategy",
+        )
+    return f"{step}{span}"
 
 
 def shift(resolution: str | None) -> timedelta:
@@ -575,9 +581,7 @@ class RequestLoader:
         found: list[DatasetRef] = []
         blocked: list[Probe] = []
         for symbol in parsed.instruments:
-            ticker = parsed.tickers.get(symbol) or vendor_ticker(
-                symbol, parsed.asset_class, window[1]
-            )
+            ticker = parsed.tickers.get(symbol) or vendor_ticker(symbol, parsed.asset_class)
             request = self._request(parsed, symbol, ticker, entitlements.as_of)
             endpoint = self.kind.endpoint(request)
             answer = entitlements.check(ticker, parsed.asset_class, dataset=endpoint, window=asked)
@@ -660,6 +664,8 @@ class RequestLoader:
                 f"bar size {spec.resolution!r}",
                 remedy="drop `resolution`, or load bars instead",
             )
+        if self.kind.aggregated and spec.asset_class == FUTURES:
+            futures_resolution(str(spec.resolution))
 
     def _open(self) -> MassiveClient:
         """The rate-limited client this loader reads through, built once and kept."""
@@ -771,8 +777,14 @@ def bars_endpoint(request: Request) -> Endpoint:
 
     The multiplier decides whether a limit is sent at all, which is the whole reason the
     two are read together: a limit above a multiplier of one caps the base aggregates the
-    vendor rolls up, and the rolled-up answer comes back empty.
+    vendor rolls up, and the rolled-up answer comes back empty. A futures contract is asked at
+    `/futures/v1/aggs` instead, at the largest page it serves, since its quota is a few
+    requests a minute and a page is a request.
     """
+    if request.asset_class == FUTURES:
+        return futures_aggregates(
+            futures_resolution(str(request.resolution)), limit=AGGREGATE_LIMIT
+        )
     step, span = aggregate(str(request.resolution))
     params = [("adjusted", "true" if request.adjusted else "false"), ("sort", "asc")]
     if step == 1:
@@ -789,15 +801,18 @@ def bars_endpoint(request: Request) -> Endpoint:
 def build_bar(request: Request, row: Mapping[str, Any]) -> Any:
     """One aggregate row as a bar timestamped at the close of its own window.
 
-    The row's `t` is the millisecond instant the window opened, so the resolution is added
-    to it: a bar is known at its close and at no earlier instant, and `ts_init` equals that
-    close because a real-time aggregate is public as soon as it is complete.
+    The row's `t` is the millisecond instant the window opened — a futures row's
+    `window_start`, in nanoseconds, its prices and volume under their full names — so the
+    resolution is added to it: a bar is known at its close and at no earlier instant, and
+    `ts_init` equals that close because a real-time aggregate is public as soon as it is
+    complete.
     """
-    opened = instant(row, "t", "ms")
-    prices = numbers(row, OHLC)
+    futures = request.asset_class == FUTURES
+    opened = instant(row, "window_start", "ns") if futures else instant(row, "t", "ms")
+    prices = numbers(row, FUTURES_OHLC if futures else OHLC)
     if opened is None or prices is None:
         return None
-    volume = numbers(row, ("v",)) or [0.0]
+    volume = numbers(row, ("volume" if futures else "v",)) or [0.0]
     step = parse_duration(str(request.resolution), "resolution")
     ts_event = opened + int(step.total_seconds()) * 1_000_000_000
     quoted = [ticks(price, request.price_precision) for price in prices]

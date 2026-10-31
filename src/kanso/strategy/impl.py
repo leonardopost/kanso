@@ -343,13 +343,22 @@ def _write_source(
     strategy_sha: str,
     config: dict[str, Any],
 ) -> Component:
-    """Copy one certified source in, import it, and describe the classes it defines."""
+    """Copy one certified source in, import it, and describe the classes it defines.
+
+    A sleeve whose configuration class gives `bar_resolution` a default of its own is refused
+    here, so no manifest names one: the manifest carries the field only where the file states
+    one, and the default would stand on a stage where its card was passed the file's.
+    """
+    from kanso.nautilus.strategy import refuse_own_bar_resolution
+
     module = module_name(slot, hyp_id, source)
     (directory / f"{module}.py").write_bytes(source)
     invalidate_caches()
     entrypoint = SLEEVE_ENTRY if slot == SLEEVE else MODIFIER_ENTRY
     loaded = _import(module)
     cls = _entry(loaded, entrypoint, slot)
+    if slot == SLEEVE:
+        refuse_own_bar_resolution(cls.config_cls, f"{module}.py", hyp_id, certified=True)
     return Component(
         hyp_id=hyp_id,
         strategy_sha=strategy_sha,
@@ -370,11 +379,15 @@ def _sleeve_config(
 ) -> dict[str, Any]:
     """What the hypothesis and the pinned venue model inject into the sleeve.
 
-    Exactly the fields the runner injects when it builds a card, so a version deployed to
-    a stage is configured as the card that earned it was, with the version's own `config`
+    The fields the runner injects when it builds a card, so a version deployed to a stage is
+    configured as the card that earned it was — but for `data_by_instrument` and
+    `session_scope`, which are not written here, so a stage sleeve subscribes every required
+    type of every name (`docs/backlog.md` row 229) — with the version's own `config`
     layered on top for the fields an operator or a later construct set. `sizing_budget` is
     the sleeve hypothesis's rule, and `extra_resolutions` the grains its attached overlays
-    keep their own clock on, so a stage node runs both as a card did.
+    keep their own clock on, so a stage node runs both as a card did; `bar_resolution` is
+    written only where the hypothesis states one, so a version on bars alone, or on ticks
+    alone, is configured with exactly the fields it was before the key existed.
     """
     return {
         "hyp_id": hyp.id,
@@ -389,6 +402,7 @@ def _sleeve_config(
         "sizing_budget": 0.0 if hyp.sizing is None else hyp.sizing.budget,
         "venue_model": version.pins.venue_model.model_dump(mode="json"),
         **({} if hyp.depth is None else {"depth": [hyp.depth.every_ns, hyp.depth.levels]}),
+        **({} if hyp.bar_resolution is None else {"bar_resolution": hyp.bar_resolution}),
         **dict(version.config),
     }
 
@@ -487,10 +501,21 @@ def _named(module: ModuleType, config_cls: type, entrypoint: str) -> str:
 
 
 def _build(component: Component) -> Built:
-    """One component as its class and a configuration object built from the manifest."""
+    """One component as its class and a configuration object built from the manifest.
+
+    A sleeve's configuration class that gives `bar_resolution` a default of its own is refused
+    before it is built, as `_write_source` refuses it, so a manifest an earlier kanso wrote for
+    one is not loaded onto a stage to read bars at a size its card never did.
+    """
+    from kanso.nautilus.strategy import refuse_own_bar_resolution
+
     module = _import(component.module)
     cls = getattr(module, component.path.split(":", 1)[1])
     config_cls = getattr(module, component.config_path.split(":", 1)[1])
+    if component.construct == SLEEVE:
+        refuse_own_bar_resolution(
+            config_cls, f"{component.module}.py", component.hyp_id, certified=True
+        )
     return Built(
         construct=component.construct,
         hyp_id=component.hyp_id,

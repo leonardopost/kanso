@@ -24,9 +24,11 @@ fixture here answers as the source was measured answering, so the case bites.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -38,6 +40,9 @@ from kanso.data.adapters.massive.entitlement import (
     CONTROLS,
     EARLIEST,
     FIRST_ROW,
+    FUTURES_BARS,
+    FUTURES_CONTRACTS,
+    FUTURES_REFERENCE,
     OPTION_CONTRACTS,
     OPTION_REFERENCE,
     PER_TICKER,
@@ -53,6 +58,7 @@ from kanso.data.adapters.massive.entitlement import (
     Probe,
     Step,
     control_for,
+    futures_aggregates,
     grain,
     history_floor,
     key,
@@ -679,13 +685,13 @@ def test_option_ticks_the_plan_excludes_are_the_plan_and_never_the_prefix() -> N
 
 @pytest.mark.parametrize(
     ("ticker", "asset_class"),
-    [("AAPL", "stocks"), ("C:EURUSD", "forex"), ("I:SPX", "indices"), ("ESZ6", "futures")],
+    [("AAPL", "stocks"), ("C:EURUSD", "forex"), ("I:SPX", "indices")],
 )
 def test_every_other_class_is_checked_against_the_generic_reference(
     ticker: str, asset_class: str
 ) -> None:
-    """`AAPL` and `C:EURUSD` were both measured answering there; only options are keyed
-    elsewhere, and moving the rest with them would break four classes to fix one."""
+    """`AAPL` and `C:EURUSD` were both measured answering there; options and futures are
+    keyed elsewhere, and moving the rest with them would break three classes to fix two."""
     client, _ = reader(Vendor(entitled=False))
 
     found = probe(client, ticker, asset_class, as_of=TODAY)
@@ -696,10 +702,74 @@ def test_every_other_class_is_checked_against_the_generic_reference(
 
 def test_the_control_endpoint_is_chosen_by_asset_class() -> None:
     assert control_for("options") is OPTION_REFERENCE
+    assert control_for("futures") is FUTURES_REFERENCE
     assert control_for("stocks") is REFERENCE
     assert control_for("indices") is REFERENCE
-    assert set(CONTROLS) == {"options"}
+    assert set(CONTROLS) == {"options", "futures"}
     assert OPTION_REFERENCE.request("O:X") == (f"{OPTION_CONTRACTS}/O:X", {})
+    assert FUTURES_REFERENCE.request("ESZ6") == (
+        FUTURES_CONTRACTS,
+        {"ticker": "ESZ6", "limit": "1"},
+    )
+
+
+FUTURES = Path(__file__).parent / "fixtures" / "futures"
+"""Futures answers recorded from the live source on 2026-10-29 (`provenance.json` there)."""
+
+
+def futures_answer(name: str) -> Response:
+    files = json.loads((FUTURES / "provenance.json").read_text("utf-8"))["files"]
+    return Response(status=int(files[name]["status"]), body=(FUTURES / name).read_bytes())
+
+
+def test_a_futures_refusal_is_put_to_the_futures_reference_which_knows_the_key() -> None:
+    """The generic reference answers a futures key with a 404, recorded, so a futures refusal
+    asked there would read as a key the vendor never carried. Asked of the futures listing,
+    which lists the contract, it is the plan."""
+
+    def vendor(url: str, params: Mapping[str, str]) -> Response:
+        if FUTURES_CONTRACTS in url:
+            return futures_answer("contracts_ESZ5_undated.json")
+        if GENERIC_REFERENCE in url:
+            return futures_answer("reference_tickers_ESZ5.json")
+        return refused()
+
+    client, _ = reader_of(vendor)
+
+    found = probe(client, "ESZ5", "futures", dataset=FUTURES_BARS, as_of=date(2026, 10, 29))
+
+    assert found.outcome is Outcome.NOT_ENTITLED
+    assert found.steps[1].path == FUTURES_CONTRACTS
+
+
+def test_an_expired_contract_is_floored_off_the_recorded_answers() -> None:
+    """ESH5 as the source answered a load's own three questions on 2026-10-29: its fortnight
+    held nothing, the question with no window served its oldest minutes, and the range from
+    1970 came back from the plan's floor, truncated. The plan includes it; the floor is the
+    first row."""
+
+    def vendor(url: str, params: Mapping[str, str]) -> Response:
+        if "window_start.gte" not in params:
+            return futures_answer("aggs_ESH5_1min_unwindowed.json")
+        if params["window_start.gte"] == "1970-01-01":
+            return futures_answer("aggs_ESH5_1min_from_1970.json")
+        return futures_answer("aggs_ESH5_1min_fortnight.json")
+
+    client, replay = reader_of(vendor)
+    memo = Entitlements(client, as_of=date(2026, 10, 29))
+    loaded = futures_aggregates("1min", limit=50_000)
+
+    checked = memo.check("ESH5", "futures", dataset=loaded)
+    floor = memo.floor("ESH5", "futures", dataset=loaded)
+
+    assert checked.ok
+    assert (floor.floor, floor.method) == (date(2024, 10, 29), FIRST_ROW)
+    page = {"resolution": "1min", "sort": "window_start.asc", "limit": "50000"}
+    assert [dict(item.params) for item in replay.asked] == [
+        {**page, "window_start.gte": "2026-10-14", "window_start.lte": "2026-10-28"},
+        page,
+        {**page, "window_start.gte": "1970-01-01", "window_start.lte": "2026-10-28"},
+    ]
 
 
 def test_a_control_named_explicitly_wins_over_the_class_default() -> None:

@@ -163,7 +163,7 @@ from kanso.nautilus.costs import (
 from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.venue import venue_configs
-from kanso.schemas import Hypothesis, VenueModel, parse_duration
+from kanso.schemas import Hypothesis, VenueModel, is_duration, parse_duration
 
 __all__ = [
     "ALLOWED_ENV",
@@ -441,6 +441,12 @@ class RunRequest:
     gap between them: every stage window ends flat, so nothing was held while the version
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
+
+    `version_source` is the file a composed version's implementation holds the sleeve's bytes
+    in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a
+    version's expectation (`kanso.strategy.composition`), so that a `Config` giving
+    `bar_resolution` a default of its own is refused there naming that file, with the remedy of
+    a version, whose certified bytes no edit of `strategy.py` changes; None elsewhere.
     """
 
     hyp: Hypothesis
@@ -460,6 +466,7 @@ class RunRequest:
     cushion: float = 0.0
     settled_ns: int | None = None
     resumes_ns: int | None = None
+    version_source: str | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -602,8 +609,24 @@ def grains_of(hyp: Hypothesis, host_resolution: str | None) -> tuple[str, ...]:
 
 
 def _bar_grains(request: RunRequest) -> tuple[str, ...]:
-    """The bar sizes this request loads, the sleeve's first."""
+    """The grains this request is clocked on, the sleeve's first."""
     return request.grains or (request.hyp.resolution,)
+
+
+def _bar_sizes(request: RunRequest) -> tuple[str, ...]:
+    """The bar sizes this request reads `bar` at, the sleeve's first: each grain that is one,
+    and in place of a grain that is not — a sleeve clocked on quotes, prints or a book — the
+    `bar_resolution` its hypothesis states. A stage node and a replay are handed the grains a
+    version's manifest records, the sleeve's resolution among them, and read through here
+    with the hypothesis they deploy, so every path reads bars at the sizes a card read them
+    at."""
+    stated = request.hyp.bar_resolution
+    return tuple(
+        dict.fromkeys(
+            stated if stated is not None and not is_duration(grain) else grain
+            for grain in _bar_grains(request)
+        )
+    )
 
 
 LOOKBACK_DOUBLINGS: Final = 5
@@ -634,6 +657,7 @@ def benchmark(request: RunRequest) -> RunRequest:
         overrides={},
         budget_s=None,
         mem_cap_gb=None,
+        version_source=None,
     )
 
 
@@ -808,10 +832,12 @@ def _primary_days(
     """The UTC days the series a session is counted on holds a point in, `start <= ts_init
     <= end`: the sleeve's own grain of its first market type.
 
-    Bars at the sleeve's grain when the hypothesis requires bars, else its quotes, else its
-    trades — one of the three is always required, because a resolution is a bar size or
-    one of the unaggregated grains and the schema requires the type it names. The names
-    are taken together, so a day any of them printed is a session.
+    Bars at the sleeve's grain when it is a bar size and the hypothesis requires bars, else
+    its quotes, else its trades — one of the three is always required, because a resolution
+    is a bar size or one of the unaggregated grains and the schema requires the type it
+    names; a sleeve clocked on quotes or prints counts its sessions on them, whatever bars
+    its signals carry beside them, and reads bars, at its `bar_resolution`, only where it
+    holds neither. The names are taken together, so a day any of them printed is a session.
 
     Bars are read as the window reads them (`market_points`), a bar an instant. Quotes and
     prints are not: only their days are wanted, and a name's quotes over twice the sessions
@@ -824,11 +850,13 @@ def _primary_days(
     """
     from kanso.nautilus.strategy import BAR, QUOTE, TRADE
 
-    requirement = next(kind for kind in (BAR, QUOTE, TRADE) if kind in hyp.data_requirements)
+    order = (BAR, QUOTE, TRADE) if is_duration(grain) else (QUOTE, TRADE, BAR)
+    requirement = next(kind for kind in order if kind in hyp.data_requirements)
+    size = grain if is_duration(grain) else hyp.bar_size
     days: set[date] = set()
     for name in sorted(hyp.universe):
         if requirement == BAR:
-            points = market_points(catalog, requirement, held[name], grain, start, end)
+            points = market_points(catalog, requirement, held[name], size, start, end)
             days.update(day_of(int(point.ts_init)) for point in points)  # type: ignore[attr-defined]
         else:
             days.update(_days_filed(catalog, requirement, held[name], hyp.resolution, start, end))
@@ -906,7 +934,7 @@ def _window_points(
     from kanso.data.types import resolve_type
 
     groups: list[tuple[object, ...]] = []
-    loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
+    loaded: dict[str, int] = {grain: 0 for grain in _bar_sizes(request)}
     for requirement, name, resolution in _series(request):
         if name is None:
             custom = _custom_points(
@@ -928,7 +956,10 @@ def _series(request: RunRequest) -> Iterator[tuple[str, str | None, str]]:
     """Every series a span of the window is read as, in the order its groups are handed on:
     each requirement in turn, a custom type once for the universe and the market together
     (its name `None`), and a market type once for each name it is required of, at every
-    grain the request names for bars and at the hypothesis's resolution otherwise."""
+    bar size the request reads for bars (`_bar_sizes`) and at the hypothesis's resolution
+    otherwise. The groups are merged by `ts_init` with a stable sort, so a bar, stamped at
+    its close, reaches the sleeve among the ticks at the instant its period ended, and ahead
+    of a quote or a print of that same instant, since `bar` sorts first."""
     from kanso.data.types import BUILTIN_TYPES
 
     hyp = request.hyp
@@ -936,7 +967,7 @@ def _series(request: RunRequest) -> Iterator[tuple[str, str | None, str]]:
         if requirement not in BUILTIN_TYPES:
             yield requirement, None, ""
             continue
-        for resolution in _bar_grains(request) if requirement == "bar" else (hyp.resolution,):
+        for resolution in _bar_sizes(request) if requirement == "bar" else (hyp.resolution,):
             for name in sorted(hyp.universe):
                 if requirement in hyp.required_of(name):
                     yield requirement, name, resolution
@@ -1132,11 +1163,24 @@ def _entry(module: ModuleType, entrypoint: str, base: Any, what: str) -> Any:
 
 
 def _sleeve(request: RunRequest) -> tuple[Any, Any]:
-    """The sleeve class and the configuration the hypothesis injects into it."""
-    from kanso.nautilus.strategy import KansoStrategy
+    """The sleeve class and the configuration the hypothesis injects into it.
+
+    `bar_resolution` is passed whatever the file states, `None` where it states none, and a
+    configuration class that gives the field a default of its own is refused before anything
+    is built (`kanso.nautilus.strategy.refuse_own_bar_resolution`): a stage builds the sleeve
+    from a version's manifest, which carries the field only where the file states one, so
+    that default would stand there and not here. The refusal names the request's
+    `version_source`, with a version's remedy, where it carries one, and `strategy.py`, with a
+    card's, where it does not.
+    """
+    from kanso.nautilus.strategy import KansoStrategy, refuse_own_bar_resolution
 
     module = _module(request.strategy_source, "sleeve")
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+    certified = request.version_source
+    refuse_own_bar_resolution(
+        cls.config_cls, certified or "strategy.py", request.hyp.id, certified=certified is not None
+    )
     hyp = request.hyp
     grains = _bar_grains(request)
     extra: tuple[str, ...] = ()
@@ -1149,6 +1193,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             universe=tuple(hyp.universe),
             resolution=grains[0],
             extra_resolutions=extra,
+            bar_resolution=hyp.bar_resolution,
             data_requirements=tuple(hyp.data_requirements),
             data_by_instrument=tuple(
                 (name, tuple(kinds)) for name, kinds in sorted(hyp.data_by_instrument.items())
@@ -2969,7 +3014,7 @@ def _chunked(
     opens, closes = request.delivered
     step = READ_TICK_NS if TICK_KINDS.intersection(request.hyp.data_requirements) else NS_PER_DAY
     cap = READ_POINTS if coincident(request.hyp) else 0
-    loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
+    loaded: dict[str, int] = {grain: 0 for grain in _bar_sizes(request)}
     first = midnight_ns(day_of(opens))
     edge = first + (opens - first) // step * step
     counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1), edge, step)

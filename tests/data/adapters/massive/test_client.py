@@ -33,10 +33,13 @@ from kanso.data.adapters.massive import (
 )
 from kanso.data.adapters.massive.client import (
     API_HOST,
+    DEFAULT_FUTURES_PER_MINUTE,
     DEFAULT_REQUESTS_PER_SECOND,
+    FUTURES_BUCKET,
     MassiveClient,
     Response,
     Signal,
+    _http_client,
     _method,
     pyo3_transport,
     signal_of,
@@ -469,9 +472,10 @@ class FakeResponse:
 class FakeEngineClient:
     """The engine's client, minus the socket: the coroutine and the arguments are real."""
 
-    def __init__(self, requests_per_second: int, timeout_s: int) -> None:
+    def __init__(self, requests_per_second: int, timeout_s: int, futures_per_minute: int) -> None:
         self.requests_per_second = requests_per_second
         self.timeout_s = timeout_s
+        self.futures_per_minute = futures_per_minute
         self.calls: list[dict[str, Any]] = []
         self.answer = FakeResponse(200, b'{"status":"OK","results":[]}', {"x-request-id": "1"})
 
@@ -494,15 +498,18 @@ def test_the_engine_transport_drives_the_coroutine_and_passes_the_request_throug
     """The coroutine is built inside the loop, which is the one way the engine accepts it."""
     built: list[FakeEngineClient] = []
 
-    def factory(requests_per_second: int, timeout_s: int) -> FakeEngineClient:
-        made = FakeEngineClient(requests_per_second, timeout_s)
+    def factory(requests_per_second: int, timeout_s: int, futures: int) -> FakeEngineClient:
+        made = FakeEngineClient(requests_per_second, timeout_s, futures)
         built.append(made)
         return made
 
-    transport = pyo3_transport(requests_per_second=7, timeout_s=11, factory=factory)
+    transport = pyo3_transport(
+        requests_per_second=7, timeout_s=11, futures_per_minute=2, factory=factory
+    )
     answer = transport("GET", "https://api/x", {"a": "b"}, {"Authorization": "Bearer k"}, ["v2"])
 
     assert (built[0].requests_per_second, built[0].timeout_s) == (7, 11)
+    assert built[0].futures_per_minute == 2
     assert built[0].calls[0]["params"] == {"a": "b"}
     assert built[0].calls[0]["keys"] == ["v2"]
     assert str(built[0].calls[0]["method"]) == "HttpMethod.GET"
@@ -510,8 +517,8 @@ def test_the_engine_transport_drives_the_coroutine_and_passes_the_request_throug
 
 
 def test_the_engine_transport_survives_an_answer_with_no_body_and_no_headers() -> None:
-    def factory(requests_per_second: int, timeout_s: int) -> FakeEngineClient:
-        made = FakeEngineClient(requests_per_second, timeout_s)
+    def factory(requests_per_second: int, timeout_s: int, futures: int) -> FakeEngineClient:
+        made = FakeEngineClient(requests_per_second, timeout_s, futures)
         made.answer = FakeResponse(204, None, None)
         return made
 
@@ -524,8 +531,8 @@ def test_one_client_is_built_once_so_the_quota_is_one_quota() -> None:
     """A client per request would be a rate limit per request, which is no rate limit."""
     built: list[FakeEngineClient] = []
 
-    def factory(requests_per_second: int, timeout_s: int) -> FakeEngineClient:
-        built.append(FakeEngineClient(requests_per_second, timeout_s))
+    def factory(requests_per_second: int, timeout_s: int, futures: int) -> FakeEngineClient:
+        built.append(FakeEngineClient(requests_per_second, timeout_s, futures))
         return built[-1]
 
     transport = pyo3_transport(factory=factory)
@@ -539,6 +546,42 @@ def test_one_client_is_built_once_so_the_quota_is_one_quota() -> None:
 def test_the_engine_s_own_client_builds_with_the_quota_and_never_leaves_the_host() -> None:
     """Building the rate-limited client is offline; only a request would not be."""
     assert callable(pyo3_transport(requests_per_second=3, timeout_s=1))
+
+
+def test_a_futures_request_counts_against_the_futures_bucket_and_a_cursor_does_too() -> None:
+    """The futures endpoints were measured throttling past a few requests a minute, so each
+    request under `/futures/` names the bucket the futures quota is keyed by, and a page
+    asked by its cursor names the same one as the page before it."""
+    reader, replay = client(lambda url, params: served([]))
+
+    reader.call("/futures/v1/aggs/ESZ5", {"resolution": "1min"})
+    reader.call("https://api.massive.com/futures/v1/aggs/ESZ5?cursor=abc")
+    reader.call("/v2/aggs/ticker/SPY/range/1/minute/2025-06-02/2025-06-02")
+
+    assert [asked.keys for asked in replay.asked] == [
+        ("futures/v1", FUTURES_BUCKET),
+        ("futures/v1", FUTURES_BUCKET),
+        ("v2/aggs", "v2"),
+    ]
+
+
+def test_the_engine_s_client_is_handed_the_futures_quota_under_its_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nautilus_trader.core import nautilus_pyo3
+
+    handed: dict[str, Any] = {}
+
+    def spy(**kwargs: Any) -> object:
+        handed.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(nautilus_pyo3, "HttpClient", spy)
+    _http_client(90, 120, 3)
+
+    ((bucket, quota),) = handed["keyed_quotas"]
+    assert bucket == FUTURES_BUCKET == "futures"
+    assert isinstance(quota, nautilus_pyo3.Quota)
 
 
 def test_a_method_the_engine_does_not_send_is_refused_before_a_socket_is_opened() -> None:
@@ -564,6 +607,12 @@ def test_the_table_defaults_to_the_vendor_s_host_and_a_quota() -> None:
 
     assert settings.base_url == API_HOST
     assert settings.requests_per_second == DEFAULT_REQUESTS_PER_SECOND
+    assert settings.futures_requests_per_minute == DEFAULT_FUTURES_PER_MINUTE == 3
+
+
+def test_a_futures_quota_of_zero_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        MassiveConfig(futures_requests_per_minute=0)
 
 
 def test_a_quota_of_zero_is_refused() -> None:
@@ -659,9 +708,13 @@ def test_a_resolved_key_builds_a_client_at_the_configured_host(
 
 
 def test_the_quota_is_reportable_without_opening_a_client(ws: Workspace) -> None:
-    """`data adapters` describes an adapter whose credential may not be set at all."""
-    assert ADAPTER.quota(ws) == f"{DEFAULT_REQUESTS_PER_SECOND}/s"
-    assert ADAPTER.quota(configured(ws, requests_per_second=12)) == "12/s"
+    """`data adapters` describes an adapter whose credential may not be set at all, with the
+    futures endpoints' own bucket beside the one every request counts against."""
+    assert ADAPTER.quota(ws) == (
+        f"{DEFAULT_REQUESTS_PER_SECOND}/s; futures {DEFAULT_FUTURES_PER_MINUTE}/min"
+    )
+    stated = configured(ws, requests_per_second=12, futures_requests_per_minute=2)
+    assert ADAPTER.quota(stated) == "12/s; futures 2/min"
 
 
 def test_the_table_is_validated_by_the_adapter_s_own_model(ws: Workspace) -> None:

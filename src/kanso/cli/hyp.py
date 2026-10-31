@@ -223,6 +223,7 @@ def _summary(hypothesis: Hypothesis, path: Path) -> dict[str, Any]:
         "mechanism": hypothesis.mechanism,
         "universe": list(hypothesis.universe),
         "resolution": hypothesis.resolution,
+        "bar_resolution": hypothesis.bar_resolution,
         "data_requirements": list(hypothesis.data_requirements),
         "windows": {
             "research": [str(windows.research.start), str(windows.research.end)],
@@ -240,7 +241,7 @@ def _summary_lines(hypothesis: Hypothesis, path: Path, verdict: str) -> tuple[st
     return (
         field(verdict, f"{hypothesis.id} · {path}"),
         field("universe", ", ".join(hypothesis.universe)),
-        field("grain", f"{hypothesis.resolution} · {', '.join(hypothesis.data_requirements)}"),
+        field("grain", f"{hypothesis.grain} · {', '.join(hypothesis.data_requirements)}"),
         indent(f"research      {windows.research.start}..{windows.research.end}"),
         indent(f"certification {windows.certification.start}..{windows.certification.end}"),
         indent(f"forward       {windows.forward.start}.."),

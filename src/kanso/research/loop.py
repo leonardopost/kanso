@@ -1228,7 +1228,7 @@ def begin(
         ws,
         hyp.universe,
         hyp.data_requirements,
-        hyp.resolution,
+        hyp.bar_size,
         hyp.windows,
         prefixes,
         hyp.data_by_instrument,
@@ -1237,7 +1237,7 @@ def begin(
         warmed = " and the warmup sessions before each" if prefixes else ""
         raise PreconditionError(
             f"no snapshot covers {', '.join(hyp.universe)} over the research and certification "
-            f"windows{warmed} at {hyp.resolution}",
+            f"windows{warmed} at {hyp.grain}",
             remedy="load the data and run `kanso data snapshot`",
         )
     program = hypothesis_dir(ws, hyp_id) / PROGRAM_FILE

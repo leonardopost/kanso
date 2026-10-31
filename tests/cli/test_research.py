@@ -25,12 +25,14 @@ from kanso.research import records
 from kanso.schemas import Card, ObjectiveParams, ObjectiveRef, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
+from tests.own_bar_size import card_remedy
 
 from .conftest import (
     BETTER,
     FIRST,
     FLAT,
     HYP_ID,
+    HYPOTHESIS,
     INSTRUMENT,
     RAISING,
     READING,
@@ -43,6 +45,7 @@ from .conftest import (
     payload,
     schedule_split,
     write_hypothesis,
+    write_spec,
     write_split,
 )
 
@@ -126,6 +129,37 @@ def test_a_run_needs_a_snapshot_covering_its_windows(runner: CliRunner, loaded: 
 
     assert result.exit_code == Exit.PRECONDITION
     assert "kanso data snapshot" in payload(result)["remedy"]
+
+
+def test_a_tick_run_whose_bars_are_held_at_no_snapshot_s_size_names_the_size(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """DEMO's prints are held and its bars at an hour; a tick file reading the bars two minutes
+    at a time is refused naming that size, which is the one thing missing, and not only the
+    tick grain the prints are held at."""
+    from kanso.data.snapshot import covering
+    from kanso.schemas import Hypothesis, load_yaml
+
+    prints = write_spec(loaded, name="prints.yaml", types=["trade"])
+    loaded_prints = at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", prints)
+    assert loaded_prints.exit_code == Exit.OK, loaded_prints.stdout
+    assert at(runner, loaded, "data", "snapshot").exit_code == Exit.OK
+    costs = {**HYPOTHESIS["costs"], "latency_ms": 20}
+    tick = {"resolution": "tick", "data_requirements": ["trade", "bar"], "costs": costs}
+    path = write_hypothesis(loaded, **tick, bar_resolution="2m")
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+
+    result = at(runner, loaded, "research", "begin", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert payload(result)["error"] == (
+        "no snapshot covers DEMO.SIM over the research and certification windows at tick, bars "
+        "at 2m"
+    )
+    hyp = load_yaml(Hypothesis, path)
+    held = covering(find(loaded), hyp.universe, hyp.data_requirements, "1h", hyp.windows)
+    assert held is not None, "the prints and the hourly bars are held"
 
 
 def test_a_run_begins_across_the_weekends_at_its_chunk_edges(
@@ -509,6 +543,45 @@ def test_from_workspace_starts_from_the_workspace_file(runner: CliRunner, regist
 
     assert (lane(registered) / "strategy.py").read_text() == FLAT
     assert payload(at(runner, registered, "hyp", "show", HYP_ID, "--json"))["best_sha"] is None
+
+
+SIZED_IN_AN_IF = FLAT.replace(
+    "class Config(KansoConfig):\n    pass\n",
+    "if True:\n\n"
+    "    class Config(KansoConfig):\n"
+    '        bar_resolution: str | None = "5m"\n'
+    "        every: int = 6\n",
+)
+"""FLAT with a `Config` under an `if`, which `strategy_integrity` does not read, giving
+`bar_resolution` a default of its own: a best card an earlier kanso kept."""
+
+
+def test_a_best_giving_bar_resolution_a_default_is_begun_again_from_the_file_its_remedy_names(
+    runner: CliRunner, registered: Path
+) -> None:
+    """Without `--from-workspace` this run starts from its best card's bytes, so once that best's
+    `Config` gives the field a default of its own, beginning again is refused in the baseline's
+    child however the workspace file has been fixed. The remedy names the flag that begins from
+    that file, and the command it names, run as worded, begins the run."""
+    begin(runner, registered)
+    assert at(runner, registered, "research", "end", HYP_ID).exit_code == Exit.OK
+    with StateStore(registered / "state.db") as store:
+        run = records.runs_of(store, HYP_ID)[-1]
+        records.set_best(store, run, store.put_blob(SIZED_IN_AN_IF.encode()), 1.0)
+    fixed = SIZED_IN_AN_IF.replace('        bar_resolution: str | None = "5m"\n', "")
+    (registered / "hypotheses" / HYP_ID / "strategy.py").write_text(fixed, encoding="utf-8")
+
+    refused = at(runner, registered, "research", "begin", HYP_ID, "--json")
+    remedy = str(payload(refused)["remedy"])
+    named = remedy.split("`")[1].split()
+    followed = at(runner, registered, *named[1:], "--json")
+
+    assert refused.exit_code == Exit.PRECONDITION
+    assert "Config gives bar_resolution a default of '5m'" in str(payload(refused)["error"])
+    assert remedy == card_remedy(HYP_ID)
+    assert named == ["kanso", "research", "begin", HYP_ID, "--from-workspace"]
+    assert followed.exit_code == Exit.OK, followed.stdout
+    assert (lane(registered) / "strategy.py").read_text() == fixed
 
 
 def test_show_prints_the_best_card_s_strategy(runner: CliRunner, registered: Path) -> None:

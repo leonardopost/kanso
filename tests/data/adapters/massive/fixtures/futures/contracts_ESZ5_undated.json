@@ -1,0 +1,28 @@
+{
+ "status": "OK",
+ "request_id": "a07ebb42db6f485eb17756ea6c314972",
+ "results": [
+  {
+   "active": true,
+   "date": "2025-03-12",
+   "days_to_maturity": 281,
+   "first_trade_date": "2021-06-07",
+   "last_trade_date": "2025-12-19",
+   "max_order_quantity": 3000,
+   "min_order_quantity": 1,
+   "name": "ESZ5 Future",
+   "product_code": "ES",
+   "settlement_date": "2025-12-19",
+   "settlement_tick_size": 0.25,
+   "spread_tick_size": 0.01,
+   "ticker": "ESZ5",
+   "trade_tick_size": 0.25,
+   "trading_venue": "XCME",
+   "type": "single",
+   "group_code": "ES",
+   "provider_id": "EFWGXJNMZQX3",
+   "provider_product_id": "VGQ4V6NVXLBW"
+  }
+ ],
+ "next_url": "https://api.massive.com/futures/v1/contracts?cursor=ARgPBEVTWjUECAABDAABDwABAQABAQUABAEPAkVTAQ8ERVNaNQEPBnNpbmdsZQEJ-4ad"
+}

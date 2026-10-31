@@ -9,8 +9,10 @@ a credential that has to be rotated.
 
 **One quota, enforced in the transport.** The rate limit belongs to the connection rather
 than to any caller, so it lives in the `nautilus_pyo3.HttpClient` that every request goes
-through, and a loader cannot forget it. A throttle is never retried: it means the quota is
-set wrong, and a client that quietly retried would hide that.
+through, and a loader cannot forget it. The futures endpoints carry a quota of their own,
+far below the rest, so every request under `/futures/` also counts against a bucket keyed
+`futures` at `futures_requests_per_minute`. A throttle is never retried: it means the quota
+is set wrong, and a client that quietly retried would hide that.
 
 **A page that did not answer is asked for again; nothing else is.** Inside a cursor walk, a
 page that timed out, lost its connection, met a server error or came back unreadable is
@@ -57,11 +59,14 @@ coroutine and must be created inside a running loop — building it outside one 
 `RuntimeError: no running event loop` — so the coroutine is constructed within the
 function `asyncio.run` drives. It resolves to an `HttpResponse` carrying `status`,
 `headers` and `body` (bytes), and raises `nautilus_pyo3.HttpError` when no response
-arrives. `Quota.rate_per_second(n)` is the per-second quota; `keys` names the rate-limit
-buckets a request counts against, so a keyed quota can be added later without touching
-call sites. `params` are appended to the query a URL already carries and an empty mapping
-leaves it as it was — verified against a loopback server — which is what lets a cursor URL
-go through the same `call` as a first page with its cursor intact.
+arrives. `Quota.rate_per_second(n)` is the per-second quota and `Quota.rate_per_minute(n)`
+the per-minute one, each a burst of `n` that refills evenly; `keys` names the rate-limit
+buckets a request counts against, and a request is held until every bucket it names admits
+it — a key listed in `keyed_quotas` at that key's quota, any other at the default one
+(re-checked by `kanso.nautilus.facts`). `params` are appended to the query a URL already
+carries and an empty mapping leaves it as it was — verified against a loopback server —
+which is what lets a cursor URL go through the same `call` as a first page with its cursor
+intact.
 """
 
 from __future__ import annotations
@@ -111,6 +116,19 @@ DEFAULT_TIMEOUT_S: Final = 120
 measured on 2026-10-05, two walks of ETHA quotes failed at a 30 s timeout, and pages averaged
 9 s on TQQQ quotes. A page that stalls is asked for again (`MassiveClient.pages`)."""
 
+DEFAULT_FUTURES_PER_MINUTE: Final = 3
+"""The futures endpoints' quota: three requests a minute, a burst of three and one every
+twenty seconds after, so no minute holds more than five. Measured on 2026-10-29 with the
+operator's key: after eight futures requests in the minute before, three asked back to back
+were answered and the next five throttled (HTTP 429), while six asked fifteen seconds apart
+and twenty-one asked twenty-one seconds apart were all answered, and so were the thirteen a
+resolution, a load and a survey then made under this quota. The vendor's plan page states no
+number. A plan that serves more says so under `futures_requests_per_minute`."""
+
+FUTURES_BUCKET: Final = "futures"
+"""The rate-limit bucket every request under `/futures/` counts against beside the default:
+the first segment of its path, as `MassiveClient._keys` names buckets."""
+
 PAGE_BACKOFF_S: Final = (2.0, 8.0)
 """The pauses before a page that did not answer is asked for the second and the third time."""
 
@@ -158,6 +176,7 @@ class MassiveConfig(KansoModel):
 
     base_url: NonEmpty = API_HOST
     requests_per_second: int = Field(default=DEFAULT_REQUESTS_PER_SECOND, ge=1, le=10_000)
+    futures_requests_per_minute: int = Field(default=DEFAULT_FUTURES_PER_MINUTE, ge=1, le=10_000)
     timeout_s: int = Field(default=DEFAULT_TIMEOUT_S, ge=1, le=600)
 
 
@@ -191,6 +210,7 @@ def pyo3_transport(
     *,
     requests_per_second: int = DEFAULT_REQUESTS_PER_SECOND,
     timeout_s: int = DEFAULT_TIMEOUT_S,
+    futures_per_minute: int = DEFAULT_FUTURES_PER_MINUTE,
     factory: Any = None,
 ) -> Transport:
     """A transport over one rate-limited `nautilus_pyo3.HttpClient`.
@@ -200,7 +220,7 @@ def pyo3_transport(
     all. `factory` exists so a test can drive the same coroutine plumbing without a
     socket; production passes nothing.
     """
-    client = (factory or _http_client)(requests_per_second, timeout_s)
+    client = (factory or _http_client)(requests_per_second, timeout_s, futures_per_minute)
 
     def send(
         method: str,
@@ -229,13 +249,13 @@ def pyo3_transport(
     return send
 
 
-def _http_client(requests_per_second: int, timeout_s: int) -> Any:
+def _http_client(requests_per_second: int, timeout_s: int, futures_per_minute: int) -> Any:
     from nautilus_trader.core import nautilus_pyo3
 
     return nautilus_pyo3.HttpClient(
         default_headers={"User-Agent": USER_AGENT},
         header_keys=[],
-        keyed_quotas=[],
+        keyed_quotas=[(FUTURES_BUCKET, nautilus_pyo3.Quota.rate_per_minute(futures_per_minute))],
         default_quota=nautilus_pyo3.Quota.rate_per_second(requests_per_second),
         timeout_secs=timeout_s,
     )
@@ -360,7 +380,8 @@ class MassiveClient:
 
     @property
     def quota(self) -> str:
-        """The rate limit, as `data adapters` and `doctor` report it."""
+        """The rate limit every request counts against. The futures endpoints' own bucket is
+        the transport's; `data adapters` and `doctor` report both, from the configuration."""
         return f"{self.requests_per_second}/s"
 
     @property
@@ -470,7 +491,8 @@ class MassiveClient:
         """The rate-limit buckets a request counts against, coarsest last.
 
         `/v2/aggs/ticker/…` counts against `v2/aggs` and `v2`, which is the shape the
-        engine's limiter expects and what a per-endpoint quota would later be keyed by.
+        engine's limiter expects; `/futures/v1/aggs/…` against `futures/v1` and `futures`,
+        the bucket the futures quota is keyed by (`FUTURES_BUCKET`).
         A cursor arrives as an absolute URL and must land in the same buckets as the page
         before it, so the host is stripped rather than counted as an endpoint of its own.
         """

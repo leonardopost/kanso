@@ -38,6 +38,7 @@ from kanso.nautilus.book import (
 )
 from kanso.nautilus.sizing import BOOK_ENTRY, SizingError
 from kanso.schemas import Hypothesis, NetPerTrade, SharedBook
+from tests.own_bar_size import hidden_after_its_body
 
 from .conftest import (
     CAPITAL,
@@ -241,6 +242,20 @@ def test_a_book_of_one_member_is_that_member_run_alone() -> None:
     assert booked.intents == (solo.intents,)
     assert booked.equity == solo.run.equity and booked.period_ends_ns == solo.run.period_ends_ns
     assert all(not any(counts.values()) for counts in booked.counts.values())
+
+
+def test_a_member_whose_config_hides_bar_resolution_trades_the_book_as_it_trades_alone() -> None:
+    """A book rebuilds each member's config with its order tag, from the fields as attributes. An
+    attribute the file sets on its `Config` once the class is made hides `bar_resolution` from
+    that read; the rebuild carries the size kanso set, so the member reads the file's daily bars
+    in the book as it does alone, where the attribute's 5m would have it subscribe none of them."""
+    alone = request(hypothesis(), hidden_after_its_body(SLEEVE))
+
+    solo = execute(alone, [instrument()], daily("DEMO"))
+    booked = execute_book(block(), [member("demo", alone, 3.0)], [instrument()], [daily("DEMO")])
+
+    assert solo.intents, "alone, the member trades the daily bars"
+    assert booked.intents == (solo.intents,)
 
 
 def test_two_members_on_disjoint_names_with_room_to_spare_each_run_as_alone() -> None:

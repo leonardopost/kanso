@@ -159,7 +159,7 @@ from datetime import date
 from decimal import ROUND_FLOOR, Decimal
 from functools import cache
 from math import fsum, prod
-from typing import Any, ClassVar, Final, NoReturn
+from typing import Any, ClassVar, Final, NoReturn, cast
 
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ActorConfig, StrategyConfig
@@ -314,6 +314,10 @@ class KansoConfig(StrategyConfig, frozen=True):
     extra_resolutions: tuple[str, ...] = ()
     """Bar grains subscribed in addition to `resolution`, so an overlay can have its own
     clock without the host's `on_bar` running on that grain."""
+    bar_resolution: str | None = None
+    """The bar size a `bar` requirement is subscribed at when `resolution` is no bar size —
+    the hypothesis's `bar_resolution`, beside a sleeve clocked on quotes, prints or a book.
+    Its bars reach `on_bar` as a bar-size sleeve's do. None subscribes them at `resolution`."""
 
     data_requirements: tuple[str, ...] = (BAR,)
     data_by_instrument: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -352,6 +356,89 @@ class KansoConfig(StrategyConfig, frozen=True):
                 f"fixed_params: {', '.join(unknown)} is not a numeric field of "
                 f"{type(self).__name__}, so there is nothing to hold fixed"
             )
+
+
+_BAR_RESOLUTION: Final[Any] = KansoConfig.__dict__["bar_resolution"]
+"""`KansoConfig`'s own `bar_resolution` slot, which a card and a stage set from the hypothesis.
+
+The engine's configs are `msgspec.Struct`s (nautilus_trader 1.231.0, msgspec 0.21.1), whose
+fields are slots on the class that declares them, so the size is read through this one: an
+attribute of that name the strategy's file sets on its `Config` — in the body, after it, by a
+decorator, or in a class `type()` builds — hides the field from the strategy's own reads and
+never from the subscription, nor from a configuration a stage or a book rebuilds with other
+fields replaced, which carries this slot (`kanso.nautilus.node._reconfigured`). A `Config`
+that declares the field again keeps this slot and changes only its default, which is refused
+wherever the class is built (`refuse_own_bar_resolution`)."""
+
+
+def _bar_resolution_of(config: KansoConfig) -> str | None:
+    """The bar size kanso set on `config`: its `bar_resolution`, read from `_BAR_RESOLUTION`."""
+    return cast("str | None", _BAR_RESOLUTION.__get__(config, type(config)))
+
+
+def refuse_own_bar_resolution(
+    config_cls: object, where: str, hyp_id: str, *, certified: bool = False
+) -> None:
+    """Refuse a `KansoConfig` class whose `bar_resolution` default is not `None`.
+
+    kanso sets the field from the hypothesis: on a card always, `None` where the file states
+    none, and on a stage from the version's manifest, which carries it only where the file
+    states one. So a default of the class's own would stand on a stage and not on its card. It
+    is refused where the class is built — in the card's child (`kanso.nautilus.backtest._sleeve`,
+    which a replay's node path builds through too, and which a replay of a version and a
+    version's expectation hand the file its implementation holds the bytes in), where a
+    version's manifest is written and where a stage node loads one (`kanso.strategy.impl`) —
+    since whatever spelling made the class, the class holds the default: `strategy_integrity`
+    reads only the body of a top-level class of the file that names `KansoConfig` among its
+    bases, and not a class in an `if`, one deriving from a base held under another name or read
+    off `KansoStrategy.config_cls`, nor one `type()` builds.
+
+    The default is read off the class's own struct metadata, which resolves no annotation, so a
+    class annotating a field with a name that exists only for a type checker is read as any
+    other: an engine configuration class is a `msgspec.Struct` (nautilus_trader 1.231.0, msgspec
+    0.21.1), which carries its fields' names in `__struct_fields__` and, in `__struct_defaults__`,
+    the defaults of the trailing ones — a field before them has none, and msgspec's `NODEFAULT`,
+    whose repr is its name, stands for a keyword-only field declared with none. A field the class
+    declares again carries the default it declares. An attribute that hides the field without
+    declaring it — set on the class after its body, say — leaves the default `None` and is read
+    past (`_BAR_RESOLUTION`). A `config_cls` that is no `KansoConfig` is left to its constructor,
+    which refuses the fields kanso passes it.
+
+    The remedy deletes the field from `hyp_id`'s `strategy.py` and begins research from that file
+    (`kanso research begin --from-workspace`), since without the flag a run may start from bytes
+    a card already ran — the best card's, or a re-seed's — which no edit of the file changes.
+    `certified` says the bytes are a version's: a version runs the bytes it was certified with, so
+    its remedy goes on to certify what that research finds.
+    """
+    if not (isinstance(config_cls, type) and issubclass(config_cls, KansoConfig)):
+        return
+    fields, defaults = config_cls.__struct_fields__, config_cls.__struct_defaults__
+    at = fields.index("bar_resolution") - len(fields) + len(defaults)
+    if at >= 0 and defaults[at] is None:
+        return
+    name = config_cls.__qualname__
+    given = (
+        "no default"
+        if at < 0 or repr(defaults[at]) == "NODEFAULT"
+        else f"a default of {defaults[at]!r}"
+    )
+    raise ValidationError(
+        f"{where}: {name} gives bar_resolution {given}, where KansoConfig gives None; kanso sets "
+        "the field from the hypothesis — on a card always, None where the file states none, and "
+        "on a stage from the version's manifest, which carries it only where the file states "
+        "one — so a stage's sleeve would not be configured as its card's was",
+        remedy=(
+            f"delete bar_resolution from {name} in hypotheses/{hyp_id}/strategy.py, research "
+            f"from that file with `kanso research begin {hyp_id} --from-workspace` and certify "
+            f"the best it finds with `kanso cert run {hyp_id}`: a version runs the bytes it was "
+            "certified with"
+            if certified
+            else f"delete bar_resolution from {name} in hypotheses/{hyp_id}/strategy.py and begin "
+            f"from that file with `kanso research begin {hyp_id} --from-workspace`: kanso sets the "
+            "field, and a file reading bars beside ticks states their size as bar_resolution in "
+            "hypothesis.yaml"
+        ),
+    )
 
 
 class KansoModifierConfig(ActorConfig, frozen=True):
@@ -1205,8 +1292,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Subscribe every instrument of the universe to every data requirement.
 
         Called before `on_start`, so an author's `on_start` need not call anything. `bar`,
-        `quote`, `trade` and `book` are subscribed per instrument — the book as level-two
-        deltas, which the venue keeps a book from and the author need not handle. A
+        `quote`, `trade` and `book` are subscribed per instrument — bars at `bar_resolution`
+        where the sleeve's resolution is no bar size, read from the slot kanso sets, past any
+        attribute of that name over it (`_BAR_RESOLUTION`), the book as level-two deltas, which
+        the venue keeps a book from and the author need not handle. A
         requirement naming a registered
         custom type is subscribed once, by its class, and its points — every instrument's
         and the market-wide ones the runner loaded — reach the author's `on_data` as that
@@ -1223,12 +1312,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         from kanso.nautilus.backtest import CLIENT_ID
 
         own = dict(self._cfg.data_by_instrument)
+        size = _bar_resolution_of(self._cfg) or self._cfg.resolution
         for instrument_id in self.universe:
             for requirement in own.get(str(instrument_id), self._cfg.data_requirements):
                 if requirement == BAR:
-                    self.subscribe_bars(_bar_type(instrument_id, self._cfg.resolution))
+                    self.subscribe_bars(_bar_type(instrument_id, size))
                     for extra in self._cfg.extra_resolutions:
-                        if extra != self._cfg.resolution:
+                        if extra != size:
                             self.subscribe_bars(_bar_type(instrument_id, extra))
                 elif requirement == QUOTE:
                     self.subscribe_quote_ticks(instrument_id)

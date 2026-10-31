@@ -125,6 +125,9 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
+| attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution` |
+| attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same, requiring the host's kind too over a host at `quote` or `trade` |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -564,7 +567,33 @@ class Config(KansoConfig):
 
 A name that is not a numeric field of the class is refused when the strategy is built
 (`strategy.py: Config: fixed_params: … is not a numeric field`), so a typo cannot quietly
-fix nothing.
+fix nothing. `bar_resolution` is kanso's: it is set from the hypothesis — on a card always,
+`None` where the file states none, and on a stage from the version's manifest, which carries
+it only where the file states one — so a `Config` that gave it a default of its own would give
+a stage one bar size and its card another. The runner refuses such a class wherever it builds
+it, whatever made it — a class body annotating the field with a value, a class defined under an
+`if`, one deriving from `KansoConfig` held under another name or read off
+`KansoStrategy.config_cls`, one `type()` builds with the field in its `__annotations__`: in a
+card's child, where the card fails with `strategy.py: Config gives bar_resolution a default of
+'5m', …` and the remedy to delete the field from `hypotheses/ID/strategy.py` and begin from
+that file with `kanso research begin ID --from-workspace`; where `strat compose` writes a
+version's manifest; where `portfolio deploy` loads a manifest an earlier kanso wrote; and where
+such a version is replayed, on either path, or its expectation struck again at another capital —
+those three naming the generated module, with the remedy to research from that file the same way
+and certify the best it finds.
+Before any card runs, `strategy_integrity` reads the body of a top-level class of the file that
+names `KansoConfig` among its bases — as itself, through an import alias or as a module's
+attribute — or names a top-level class of the file that does, and discards the file where that
+body binds `bar_resolution`, however it does it — annotated or assigned, as a tuple's target or
+in a nested block, as a property or an import — though a method's locals are its own, with the
+line and the remedy to rename the field; it reads no other class. A binding that hides the
+field without declaring it — one the gate reads, or one it does not: set on the class after its
+body, by a decorator, or in a class `type()` builds with no annotation — is no default, and
+hands the strategy's own reads of the field a size the file does not state, but not its bars:
+the sleeve subscribes them at the size kanso set, on a card, in a book and on a stage alike,
+through the config a book or a stage node rebuilds with other fields replaced. A binding that
+hides another field kanso sets — `resolution` as a tuple's target, say — is read in kanso's
+place (`docs/backlog.md` row 235).
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;
@@ -626,6 +655,65 @@ or removing an entry that narrows an instrument clears `best` with a `best_clear
 naming `data_by_instrument`, and a certificate earned under another refuses to compose.
 Listing an instrument with every required type, or reordering a list, changes nothing an
 instrument is shown and clears nothing.
+
+**`bar_resolution` is the size a tick sleeve reads its bars at, and it is scope.** A future,
+an index or a currency pair carries bars where the equity it leads carries quotes and prints.
+At `resolution` `tick`, `quote` or `trade` a sleeve has no bar size of its own, so a file that
+requires `bar` there names the size its bar instruments are read at:
+
+```yaml
+resolution: tick
+bar_resolution: 1m                 # scope: changing it clears `best`
+data_requirements: [quote, trade, bar]
+data_by_instrument:
+  SPY.ARCX: [quote, trade]         # the traded name: its tape
+  ESZ5.XCME: [bar]                 # the signals: a minute at a time
+  NDX.IDX: [bar]
+```
+
+The runner reads every `bar` instrument at that size, the sleeve subscribes them at it and its
+`on_bar` is handed them, and a snapshot must cover them at it; a card, a certificate and a
+replay read them so, and `kanso replay parity` holds. A version's manifest records
+`bar_resolution` where the file states one, so a stage node's sleeve reads bars at the size its
+card did — though not only the series its card did: the manifest carries neither
+`data_by_instrument` nor `session_scope`, so a stage sleeve subscribes every required type of
+every name — the signal's quotes and prints, the traded name's bars — as it does for any file
+that narrows what an instrument is asked for (`docs/backlog.md` row 229). A bar is stamped at
+its close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches
+the sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
+same instant. The sleeve's sessions — what `warmup` counts — are still the days its quotes or
+prints were printed, not the days a signal's bars were. A signal that trades round the clock —
+a future's twenty-three hours, a coin's twenty-four — moves the sleeve outside the traded
+name's session too: an order sent then is filled at that name's last quote or print, since the
+simulated venue keeps no market hours, and every UTC day that holds a point, a weekend's
+included, is a session of the run's digest and its period ends (`docs/backlog.md` row 231).
+`kanso hyp validate` refuses (exit 3) a tick file that requires `bar` and states no
+`bar_resolution` — before the key existed such a file passed `hyp validate` and `hyp add`, and
+`research begin` refused it for want of a snapshot at `tick` (exit 2), so no card ran — a
+`bar_resolution` beside a resolution that is itself a bar size, and one with no `bar` to read.
+An attached construct states its host's `bar_resolution`, as it states its host's `warmup`,
+because its cards run the host underneath it; so an overlay with a bar clock of its own is
+refused (exit 3) over a host that reads bars beside ticks — a file at a bar-size resolution
+states no size for the host's bars — with the host's resolution and `bar_resolution` as the
+remedy (`docs/backlog.md` row 230), and a filter or an exit rule off such a host's grain is
+given that remedy alone — attached as an overlay instead, it is refused with a bar clock and
+raises while subscribing with any other (row 234). A construct that states a `bar_resolution`
+its host does not is refused (exit 3) naming what the host reads: over a tick host that reads
+no bars the remedy drops the bars with the key — and a name it asked for bars alone, from
+`data_by_instrument` and the universe, since a name left asking for nothing is refused too — and
+over a host at a bar size, which only an overlay reaches, it takes the host's resolution, since
+dropping the key alone leaves `bar` required at no size, and whatever size the overlay states
+its card would hand the host the overlay's own clock as a bar grain, at which no bar can be
+subscribed. A filter or an exit rule that states one off its host's grain is refused on that
+grain first, naming `resolution`, with the one remedy that takes the host's resolution and does
+the same — and, over a host at `quote` or `trade`, requires that kind in `data_requirements` and
+in every `data_by_instrument` entry left, since a file at either resolution requires it and
+asks some instrument for it. Adopting,
+changing or dropping the key re-pins the hypothesis and clears `best` with a `best_cleared`
+naming `bar_resolution`; a row pinned before it existed reads as stating none. A tick file
+that requires `bar` and was registered before the key existed fails `kanso doctor`'s
+`instruments` check (exit 2), naming `bar_resolution` and the remedy, until it states one and
+`kanso hyp add` re-pins it.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
@@ -1005,7 +1093,7 @@ such name, what it is asked for and why, and each way off the warning: ask every
 `quote` and `trade` and none for `bar` under `data_by_instrument`, each keeping every other
 type it is asked for, since a type no name is asked for is refused — the `funding` a perpetual
 requires, the series a `session_scope` reads — and drop `bar` from `data_requirements` where it
-is there, which resolves to `print_through`; state `print_through`, offered only where no name
+is there, and `bar_resolution` with it, which resolves to `print_through`; state `print_through`, offered only where no name
 is asked for `bar` beside `quote` and fit only when each name short of a feed is a signal the
 strategy never trades; or state `touch`, which keeps the rule. A `screen draft` of a cell
 whose trigger and follower are read as different feeds of different names writes that shape.
@@ -1355,7 +1443,7 @@ comparable to each other; re-pinning underneath it would silently change the que
 cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
-`universe`, the `resolution`, the `data_requirements`, `data_by_instrument` (an entry that
+`universe`, the `resolution`, `bar_resolution`, the `data_requirements`, `data_by_instrument` (an entry that
 narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
 `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
 counts, since a draft has no construct and the best was earned as one — and the event log

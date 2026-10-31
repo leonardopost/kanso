@@ -693,7 +693,12 @@ own event loop, share it. Measured with `default_quota` at
 answered in 0.6 s: naming no key, all twelve arrived within 0.6 s; naming one key,
 two arrived at once and then one every half second; naming `a` and `b` in turn,
 two buckets let through two a second each. So a caller whose default quota is to
-hold names one key on every request.
+hold names one key on every request. A key `keyed_quotas` lists is held at its own
+quota instead: measured on 2026-10-29, five requests naming `slow/v1` and `slow`, with
+`slow` keyed at `rate_per_second(2)` beside a default of `rate_per_second(100)`, took
+1.56 s — two at once, then one every half second — and five naming two unlisted keys
+took 0.14 s. That is what lets one connection hold a vendor's slow endpoints to their
+quota without slowing the rest.
 
 Corporate actions
 -----------------
@@ -5388,6 +5393,42 @@ def _check_http_client_meters_named_keys() -> tuple[bool, str]:
     )
 
 
+def _check_http_client_meters_keyed_quotas() -> tuple[bool, str]:
+    import asyncio
+    import time
+
+    from nautilus_trader.core import nautilus_pyo3
+
+    client = nautilus_pyo3.HttpClient(
+        keyed_quotas=[("slow", nautilus_pyo3.Quota.rate_per_second(4))],
+        default_quota=nautilus_pyo3.Quota.rate_per_second(100),
+    )
+
+    def timed(keys: list[str]) -> tuple[float, set[str]]:
+        async def once() -> str:
+            try:
+                await client.request(nautilus_pyo3.HttpMethod.GET, _NOT_A_URL, keys=keys)
+            except Exception as exc:  # the only outcome: the string is no URL
+                return type(exc).__name__
+            return "answered"  # pragma: no cover - nothing can answer it
+
+        start = time.monotonic()
+        outcomes = {asyncio.run(once()) for _ in range(6)}
+        return time.monotonic() - start, outcomes
+
+    slow, outcomes = timed(["slow/v1", "slow"])
+    fast, _ = timed(["fast/v1", "fast"])
+    # Load only adds time: it can lengthen either run, so the two are never compared, and
+    # only the keyed run's lower bound is read.
+    holds = slow >= 0.45 and "answered" not in outcomes
+    return holds, (
+        f"six requests naming a key with its own quota of four a second beside a default of a "
+        f"hundred took {slow:.2f}s (four at once, then one each 250 ms: 0.5 s of waiting), six "
+        f"naming two keys with none {fast:.2f}s; each ended {sorted(outcomes)} at "
+        f"{_NOT_A_URL!r}"
+    )
+
+
 def _check_http_download() -> tuple[bool, str]:
     import inspect
 
@@ -5824,6 +5865,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "nautilus_pyo3.HttpClient holds a request that names a key to its default quota, and "
         "one key's quota is shared by every thread that sends under it",
         _check_http_client_meters_named_keys,
+    ),
+    (
+        "nautilus_pyo3.HttpClient holds a request that names a key listed in keyed_quotas to "
+        "that key's quota",
+        _check_http_client_meters_keyed_quotas,
     ),
     (
         "nautilus_pyo3.http_download streams a URL to a file path",

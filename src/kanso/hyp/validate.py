@@ -124,7 +124,7 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
-from kanso.schemas.duration import TICK_RESOLUTIONS
+from kanso.schemas.duration import TICK_RESOLUTIONS, is_duration
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
     DEFAULT_CURRENCY,
@@ -629,8 +629,13 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
             "book the venue judges a taker marketable from past that quote",
             remedy="ask each instrument that carries quotes for quote and trade alone under "
             "data_by_instrument, keeping bar for an instrument asked for bar alone; with none "
-            "left, drop bar from data_requirements and research at resolution: tick, since a "
-            "bar size requires bar; or state limit_fill: touch or through",
+            + (
+                "left, drop bar from data_requirements, and bar_resolution with it; "
+                if hyp.bar_resolution
+                else "left, drop bar from data_requirements and research at resolution: tick, "
+                "since a bar size requires bar; "
+            )
+            + "or state limit_fill: touch or through",
         )
 
 
@@ -642,16 +647,17 @@ def _barred(hyp: Hypothesis) -> list[str]:
 def _both_feeds(hyp: Hypothesis) -> str:
     """The way off `touch` the names leave open: every name asked for both feeds and none for
     `bar`, each keeping every other type it is asked for, and `bar` dropped from
-    `data_requirements` where it is there. A type no name is asked for is refused, so the
-    `funding` a perpetual requires, the series a session scope reads and any other type stay
-    asked of the names that were asked for them, and `bar`, which no name is left asking for,
-    goes. Keyed on `bar` being required, not on a name asked for it beside quote: a signal
-    asked for bars alone leaves it required as well."""
+    `data_requirements` where it is there, and `bar_resolution` with it. A type no name is
+    asked for is refused, so the `funding` a perpetual requires, the series a session scope
+    reads and any other type stay asked of the names that were asked for them, and `bar`,
+    which no name is left asking for, goes — with the bar size a tick resolution reads it at,
+    which no bar is left to be read at. Keyed on `bar` being required, not on a name asked for
+    it beside quote: a signal asked for bars alone leaves it required as well."""
     if BAR_TYPE in hyp.data_requirements:
         return (
             "ask every name, traded or not, for quote and trade and not for bar under "
             "data_by_instrument, keeping every other type it is asked for, and drop bar from "
-            "data_requirements"
+            "data_requirements, and bar_resolution with it"
         )
     return (
         "ask every name, traded or not, for quote and trade under data_by_instrument, keeping "
@@ -1075,14 +1081,20 @@ def _check_host_pairing(
     ws: Workspace, hyp: Hypothesis, construct_id: str, host: str, strategy: StrategyFile
 ) -> None:
     """What an attached construct must agree with its host on: the grain, the warmup, the
-    book policy and the sizing rule.
+    book policy, the size the host's bars are read at and the sizing rule.
 
     A filter or an exit rule is consulted on the host's grain and has no clock of its own,
-    so its resolution is the host's. A card of an attached construct runs the host sleeve
+    so its resolution is the host's — and, over a host that reads bars beside ticks, its
+    `bar_resolution` with it. A card of an attached construct runs the host sleeve
     underneath it, warmed as this file says, so the warmup has to be the host's own or the
     host is measured cold — or warm — under a construct that never asked for that; the
     book policy likewise, since a construct's cards run under this file's policy and its
-    version is deployed under the sleeve's. A
+    version is deployed under the sleeve's; and `bar_resolution` too, since the host's bars
+    are read at the size this file states, and a host certified on one size would be
+    handed another, bars of no size, or bars it never read (`_host_bars`). So an overlay
+    with a bar clock of its own is refused over a host that reads bars beside ticks: a file
+    at a bar-size resolution states no `bar_resolution`, so its cards would hand the host
+    bars of no size, and the one way off is the host's own resolution and size. A
     budgeted overlay attaches to a budgeted host and an unbudgeted one to an unbudgeted
     host, because the overlay's book is the host's budget and its own together; and that
     book has to fit the ceilings the overlay's own file declares, since an overlay card
@@ -1124,8 +1136,27 @@ def _check_host_pairing(
             f"resolution: {hyp.resolution} is not the host's {host_hyp.resolution}; a "
             f"{construct_id} is consulted on the host's grain, and only an overlay has a "
             "clock of its own",
-            remedy=f"set resolution to {host_hyp.resolution}, or attach as an overlay",
+            remedy=(
+                f"set resolution to {host_hyp.resolution} and bar_resolution to "
+                f"{host_hyp.bar_resolution}, requiring bar"
+                if host_hyp.bar_resolution is not None
+                else f"set resolution to {host_hyp.resolution}, or attach as an overlay"
+                if hyp.bar_resolution is None
+                else _host_bars(host_hyp, hyp, path, regrain=True)[1]
+            ),
         )
+    if host_hyp.bar_resolution is not None and is_duration(hyp.resolution):
+        raise ValidationError(
+            f"resolution: {hyp.resolution} is a bar clock of this {construct_id}'s own, and "
+            f"{label} reads its bars beside its {host_hyp.resolution} grain at "
+            f"{host_hyp.bar_resolution}; a construct's cards run its host reading bars at the "
+            "size this file states, and a file at a bar-size resolution states none",
+            remedy=f"set resolution to {host_hyp.resolution} and bar_resolution to "
+            f"{host_hyp.bar_resolution}, requiring bar, to match {path}",
+        )
+    if hyp.bar_resolution != host_hyp.bar_resolution:
+        reason, remedy = _host_bars(host_hyp, hyp, path)
+        raise ValidationError(f"bar_resolution: {label} {reason}", remedy=remedy)
     if construct_id != OVERLAY:
         return
     if hyp.sizing is not None and host_hyp.sizing is None:
@@ -1163,6 +1194,61 @@ def _check_host_pairing(
             remedy=f"set max_position_pct to at least "
             f"{host_hyp.sizing.budget / capital * PERCENT:g}",
         )
+
+
+def _host_bars(
+    host_hyp: Hypothesis, hyp: Hypothesis, path: Path, *, regrain: bool = False
+) -> tuple[str, str]:
+    """Why this file's `bar_resolution` does not pair it with its host, and the remedy that does.
+
+    A host that states `bar_resolution` reads its bars at that size, and a construct's cards run
+    it reading them at the size the construct's own file states. One that states none reads
+    them at its own resolution where that is a bar size, and, at `tick`, `quote` or `trade`,
+    reads no bars at all, since the schema requires the key wherever `bar` is required there.
+    A construct that states one is at such a resolution and requires `bar`, and dropping the
+    key alone would leave that requirement at no size, which the schema refuses. So over a
+    host reading none it drops the bars with the size — and a name it asked for bars alone,
+    since a name left asking for nothing is refused too, and with no remedy — and over a
+    bar-size host it takes the host's resolution and drops the key, reading bars at the
+    host's size on the host's own clock. Only an overlay states a size over a bar-size host
+    here, since a filter or an exit stating one is off the host's grain and refused on it first,
+    and the overlay's card would hand the host the overlay's own tick, quote or trade clock as a
+    bar grain beside the host's, at which no bar can be subscribed (`docs/backlog.md` row 234),
+    whatever size it states. `regrain` is that grain refusal's: its one remedy takes the host's
+    resolution as well — and, at `quote` or `trade`, requires that kind, since a file at either
+    resolution requires it and asks some instrument for it, which a file off that grain need
+    not have done.
+    """
+    stated = hyp.bar_resolution or "none"
+    size = host_hyp.bar_resolution
+    runs = (
+        f"and this file declares {stated}; a construct runs its host underneath it, and the host "
+        "reads its bars at the size the construct's own file states"
+    )
+    if size is not None:
+        return f"reads its bars at {size} {runs}", (
+            f"set bar_resolution to {size} to match {path}, requiring bar at resolution "
+            f"{host_hyp.resolution}"
+        )
+    if is_duration(host_hyp.resolution):
+        return (
+            f"states none, reading its bars at its own resolution, {host_hyp.resolution}, and "
+            f"this file declares {stated}; an overlay's card hands its host this file's "
+            f"{hyp.resolution} clock as a bar grain beside its own, at which no bar can be "
+            "subscribed"
+        ), f"set resolution to {host_hyp.resolution} and drop bar_resolution, to match {path}"
+    grain = f"set resolution to {host_hyp.resolution}, " if regrain else ""
+    kind = (
+        f", and require {host_hyp.resolution} in data_requirements and in every "
+        "data_by_instrument entry left"
+        if regrain and host_hyp.resolution != "tick"
+        else ""
+    )
+    return f"reads no bars beside its {host_hyp.resolution} grain {runs}", (
+        f"{grain}drop bar_resolution, and bar from data_requirements and from every "
+        "data_by_instrument entry, an entry that asked for bar alone dropped with its name from "
+        f"the universe{kind}, to match {path}"
+    )
 
 
 def _book_text(book: Book) -> str:

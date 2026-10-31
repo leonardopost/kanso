@@ -416,7 +416,7 @@ def test_an_unconfigured_adapter_is_registered_reported_and_green(
     assert status(result, "adapters") == "ok"
     assert "2 registered · 0 configured" in str(checks(result)["adapters"]["detail"])
     listed = items(result, "adapters")
-    assert any(item.startswith("massive: data · 90/s") for item in listed)
+    assert any(item.startswith("massive: data · 90/s; futures 3/min · ") for item in listed)
     assert any("KANSO_MASSIVE_API_KEY=unset" in item for item in listed)
 
 

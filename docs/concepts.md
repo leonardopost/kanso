@@ -937,7 +937,7 @@ already over. There are eleven.
 
 | gate | what it refuses |
 |---|---|
-| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, binds a name its base class owns, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand |
+| `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand; or one whose top-level class reaching a harness base binds in its body a name that base owns, or `bar_resolution` in a `Config`'s — a `Config` that gives `bar_resolution` a default of its own any other way is refused where the runner builds the class |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits, read at the period ends |
 | `intraday_drawdown` | a run that fell further than the hypothesis permits between the period ends: the same limit read on the path through every fill — cash after each fill, every open position at the price it last traded at — re-anchored at each period end to the equity the runner struck there, so a book flat at its ends is judged on the fall it took inside them. Carries no parameter; its evidence carries the period-end reading beside it and the instant of the trough |

@@ -20,9 +20,11 @@ import yaml
 from kanso.classify import catalogue
 from kanso.config import Config, ResearchConfig, render_config
 from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
+from kanso.errors import ValidationError
 from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
+from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
 from kanso.schemas import CostsOverride
 from tests.cli.test_doctor import CHECKS
@@ -452,6 +454,37 @@ def test_the_pages_state_the_venue_model_s_precedence_and_its_five_origins() -> 
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp validate")
     )
     assert "an account currency the engine registers" in validate
+
+
+def test_the_workspace_page_says_which_refuses_a_config_s_own_bar_size_and_where() -> None:
+    """The page said `strategy_integrity` discards a `Config` binding `bar_resolution` however it
+    does it, while the scan reads a top-level class's body alone: a class under an `if`, one off
+    a base under another name or off `KansoStrategy.config_cls`, and one `type()` builds passed
+    it, and the default stood on a stage. The runner refuses the default where it builds the
+    class, and the page says which refuses what and where, with the card's refusal as raised."""
+    text = prose(page("workspace.md"))
+    sized = type(
+        "Config",
+        (KansoConfig,),
+        {"__annotations__": {"bar_resolution": "str | None"}, "bar_resolution": "5m"},
+    )
+    with pytest.raises(ValidationError) as refused:
+        refuse_own_bar_resolution(sized, "strategy.py", "demo_mr")
+
+    assert "The runner refuses such a class wherever it builds it, whatever made it" in text
+    shown = "`strategy.py: Config gives bar_resolution a default of '5m', …`"
+    assert f"in a card's child, where the card fails with {shown}" in text
+    assert refused.value.message.startswith(shown.strip("`…"))
+    begun = "`kanso research begin ID --from-workspace`"
+    assert f"and begin from that file with {begun}" in text
+    assert begun.replace("ID", "demo_mr") in (refused.value.remedy or "")
+    assert (
+        "where `strat compose` writes a version's manifest; where `portfolio deploy` loads a "
+        "manifest an earlier kanso wrote; and where such a version is replayed, on either path, "
+        "or its expectation struck again at another capital — those three naming the generated "
+        "module" in text
+    )
+    assert "with the line and the remedy to rename the field; it reads no other class" in text
 
 
 def test_the_workspace_page_states_the_fixed_spread_a_bar_only_hypothesis_needs() -> None:

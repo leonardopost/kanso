@@ -1,0 +1,43 @@
+{
+ "results": [
+  {
+   "ticker": "ESH5",
+   "window_start": 1730162580000000000,
+   "session_end_date": "2024-10-29",
+   "open": 5922.25,
+   "high": 5922.25,
+   "low": 5922.25,
+   "close": 5922.25,
+   "transactions": 1,
+   "volume": 1,
+   "dollar_volume": 5922.25
+  },
+  {
+   "ticker": "ESH5",
+   "window_start": 1730162880000000000,
+   "session_end_date": "2024-10-29",
+   "open": 5922.75,
+   "high": 5922.75,
+   "low": 5922.75,
+   "close": 5922.75,
+   "transactions": 1,
+   "volume": 1,
+   "dollar_volume": 5922.75
+  },
+  {
+   "ticker": "ESH5",
+   "window_start": 1730164560000000000,
+   "session_end_date": "2024-10-29",
+   "open": 5918.75,
+   "high": 5918.75,
+   "low": 5918.25,
+   "close": 5918.25,
+   "transactions": 2,
+   "volume": 2,
+   "dollar_volume": 11837
+  }
+ ],
+ "status": "OK",
+ "request_id": "3915eead26b055458646b94b94127fb4",
+ "next_url": "https://api.massive.com/futures/v1/aggs/ESH5?cursor=YXA9MTczNzQ0ODkyMDAwMDAwMDAwMCZhcz0yMDI1LTAxLTIxJmxpbWl0PTUwMDAwJnJlc29sdXRpb249MW1pbiZzb3J0PXdpbmRvd19zdGFydC5hc2Mmd2luZG93X3N0YXJ0Lmx0PTIwMjYtMTAtMzAmd2luZG93X3N0YXJ0Lmx0ZT0yMDI2LTEwLTMw"
+}
