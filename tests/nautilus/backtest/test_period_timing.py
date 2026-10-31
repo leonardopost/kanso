@@ -107,11 +107,12 @@ def test_a_sleeve_that_trades_only_the_first_seconds_of_each_session_reads_so_in
 ) -> None:
     """It buys a second after its session's first point and sells two seconds after that,
     every session, and the session prints for the rest of the UTC day. The parent notes each
-    period's first point as it streams the window, the after-hours print opening a period of
-    its own; the digest reads the first fill 1 s into each period filled in and the last 3 s,
-    2 s between them, in the winter half and the summer half alike, and does not count the
-    period that held a point and no fill. Each period's return is minus the cost of the fills
-    the digest read in it, so the runner booked every fill to that period."""
+    period's first point as it streams the window, and the runner ends each period at its UTC
+    day's last point, the after-hours print opening and ending a period of its own; the digest
+    reads the first fill 1 s into each period filled in and the last 3 s, 2 s between them, in
+    the winter half and the summer half alike, and does not count the period that held a point
+    and no fill. Each period's return is minus the cost of the fills the digest read in it, so
+    the runner booked every fill to that period."""
     hyp = hypothesis(resolution="1s").model_copy(update={"windows": WINDOWS})
     research = (WINDOWS.research.start, WINDOWS.research.end)
     points = [*(point for day in SESSIONS for point in session(day)), bar(AFTER_HOURS)]
@@ -127,7 +128,8 @@ def test_a_sleeve_that_trades_only_the_first_seconds_of_each_session_reads_so_in
     firsts = (*(opening(day) + NS_PER_SECOND for day in SESSIONS), AFTER_HOURS)
     assert result.firsts_ns == firsts, "each period's first point, as the parent handed it"
     assert run.period_ns == request.period_ns, "the length the runner cut the window into"
-    assert len(run.period_ends_ns) == len(firsts), "the periods the runner struck"
+    lasts = (*(int(session(day)[-1].ts_init) for day in SESSIONS), AFTER_HOURS)
+    assert run.period_ends_ns == lasts, "each UTC day's last point: cut from the midnight"
     made = digest(run, result.intents, result.firsts_ns)
     assert made.fills == 2 * len(SESSIONS)
     assert (made.period, made.filled_periods) == ("1d", len(SESSIONS))
