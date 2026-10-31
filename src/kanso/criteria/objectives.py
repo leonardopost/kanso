@@ -21,9 +21,9 @@ period's trades moved it, so the trades of one session that one regime moves tog
 priced as one session's worth and not as so many independent draws. Each is widened — never
 narrowed — for serial correlation across periods (`quantities.long_run_factor`). A fold
 whose value is the constant zero by construction contributes nothing. That one number
-is what a card's `metric_se`, the redundancy floor, a certificate's `±`, every deflation
-gate and the power a certification is stated at read; none of them computes an error of its
-own.
+is what a card's `metric_se`, the keep floor, the redundancy floor, a certificate's `±`,
+every deflation gate and the power a certification is stated at read; none of them
+computes an error of its own.
 
 A relative or benchmark objective's error is the paired one wherever the two runs share
 their periods, because the host's own variation is in both and is not what a marginal

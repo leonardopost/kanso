@@ -6,17 +6,22 @@ Three ideas, and the whole of the loop's defence against fitting noise.
 research window's contiguous folds; the metric is their mean and `metric_se` the error of
 that mean, read off the window's per-period returns or per-trade edges and widened for
 serial correlation (`kanso.criteria.objectives`). A candidate is compared with the run's
-best by their difference, whose error is read the same way off the two cards' runs period
-by period (`records.Measurement.against`): two cards measured on the same sessions share
-most of their day-to-day noise, so a local change has a difference far better known than
-either number, and two unrelated strategies one less well known than either. An
-improvement counts only when the difference clears `max(min_delta, k_se x se)` on that
-error — `min_delta` the operator's smallest interesting difference, `k_se` how many errors
-of the difference it must clear. Both parameters come from the hypothesis's own
-`objective.params`, chosen at classification, so the bar is set before any result is seen.
-Where the best card kept nothing to pair with — one recorded before cards kept their
-measurement — or the two do not pair, the error is the candidate's own, which is how the
-rule read before it paired, and the comparison says so (`Against`).
+best by their difference, which counts as an improvement only when it clears
+`max(min_delta, k_se x se)` — `min_delta` the operator's smallest interesting difference,
+`k_se` how many errors it must clear — with `se` the larger of two errors: the candidate's
+own, which is the error of the number it would replace the best with, and the error of the
+difference, read the same way off the two cards' runs period by period
+(`records.Measurement.against`). Two cards measured on the same sessions share most of their
+day-to-day noise. So a local change has a difference far better known than either number,
+and it is held to its own error as it was before the rule paired: on the difference's error
+alone, a change that improved nothing would be kept about `1 − Φ(k_se)` of the time, where a
+bar on its own error keeps almost none, and no bar on the difference keeps more true
+refinements without keeping more of those. Two unrelated strategies have a difference known
+less well than either, and they are held to that. Both parameters come from the hypothesis's
+own `objective.params`, chosen at classification, so the bar is set before any result is
+seen. Where the best card kept nothing to pair with — one recorded before cards kept their
+measurement — or the two do not pair, the error is the candidate's own alone, and the
+comparison says so (`Against`).
 
 **The comparison is strict.** Equal is not better. A loop that kept ties would drift
 across a plateau of indistinguishable strategies and call the drift progress.
@@ -57,16 +62,22 @@ COMPLEXITY_FACTOR: Final = 2.0
 @dataclass(frozen=True)
 class Against:
     """What a candidate is compared with the run's best on: the best's sha, the candidate's
-    metric less the best's, and the error of that difference.
+    metric less the best's, the error of that difference, and the candidate's own error.
 
-    `unpaired` is `None` when the error was read off both cards' runs period by period, and
-    otherwise why it is the candidate's own error instead.
+    `unpaired` is `None` when the difference's error was read off both cards' runs period by
+    period, and otherwise why it is the candidate's own error instead.
     """
 
     best: str
     difference: float
     se: float
+    own: float
     unpaired: str | None = None
+
+    @property
+    def error(self) -> float:
+        """The error the bar is struck on: the larger of the difference's and the card's own."""
+        return max(self.se, self.own)
 
     def payload(self) -> dict[str, object]:
         """The comparison as the `card` event records it."""
@@ -104,8 +115,8 @@ def noise_floor(se: float, params: Mapping[str, float] | ObjectiveParams) -> flo
     is the *same* number as one already measured, on the candidate's own error, which is
     two-sided and has nothing to do with how the file was written, so it takes this floor
     undoubled; the keep rule asks whether a candidate is *better* than the best, on the
-    error of their difference where the two pair, and doubles the `k_se` term when the file
-    grew (`threshold`).
+    larger of that error and the error of their difference, and doubles the `k_se` term when
+    the file grew (`threshold`).
     """
     min_delta, k_se = _params(params)
     return max(min_delta, k_se * se)
@@ -137,4 +148,4 @@ def keep(
     """
     if against is None:
         return True
-    return against.difference > threshold(against.se, params, grew, max_lines)
+    return against.difference > threshold(against.error, params, grew, max_lines)

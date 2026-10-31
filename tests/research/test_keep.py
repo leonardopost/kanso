@@ -24,9 +24,10 @@ from kanso.schemas import ObjectiveParams, ObjectiveRef
 PARAMS = {"min_delta": 0.0, "k_se": 1.0}
 
 
-def by(difference: float, se: float) -> Against:
-    """A comparison with a best, by its difference and that difference's error."""
-    return Against("b" * 64, difference, se)
+def by(difference: float, se: float, own: float | None = None) -> Against:
+    """A comparison with a best, by its difference, that difference's error and the card's
+    own error, which is the difference's unless it is given."""
+    return Against("b" * 64, difference, se, se if own is None else own)
 
 
 def test_the_first_keep_has_nothing_to_beat() -> None:
@@ -74,7 +75,7 @@ def test_a_comparison_says_whether_it_was_paired_and_why_not() -> None:
         "se": 0.5,
         "paired": True,
     }
-    unpaired = Against("c" * 64, 1.0, 2.0, "the best card kept no measurement")
+    unpaired = Against("c" * 64, 1.0, 2.0, 2.0, "the best card kept no measurement")
     assert unpaired.payload() == {
         "best": "ccccccc",
         "difference": 1.0,
@@ -84,21 +85,33 @@ def test_a_comparison_says_whether_it_was_paired_and_why_not() -> None:
     }
 
 
+def test_the_bar_is_struck_on_the_larger_of_the_card_s_own_error_and_its_difference_s() -> None:
+    """A difference known to a tenth is still held to the card's own error, and one known
+    less well than the card is held to its own."""
+    assert not keep(by(1.5, se=0.1, own=2.0), PARAMS, grew=0, max_lines=40)
+    assert keep(by(2.5, se=0.1, own=2.0), PARAMS, grew=0, max_lines=40)
+    assert not keep(by(1.5, se=2.0, own=1.0), PARAMS, grew=0, max_lines=40)
+    assert keep(by(2.5, se=2.0, own=1.0), PARAMS, grew=0, max_lines=40)
+    assert by(1.0, se=0.1, own=2.0).error == by(1.0, se=2.0, own=0.1).error == 2.0
+
+
 @given(
     difference=st.floats(-1e6, 1e6),
     se=st.floats(0.0, 1e3),
+    own=st.floats(0.0, 1e3),
     min_delta=st.floats(0.0, 1e3),
     k_se=st.floats(0.5, 3.0),
     grew=st.integers(-100, 100),
 )
-def test_a_keep_always_strictly_beats_its_own_threshold(
-    difference: float, se: float, min_delta: float, k_se: float, grew: int
+def test_a_keep_strictly_beats_its_threshold_and_is_never_one_its_own_error_refuses(
+    difference: float, se: float, own: float, min_delta: float, k_se: float, grew: int
 ) -> None:
     params = {"min_delta": min_delta, "k_se": k_se}
-    kept = keep(by(difference, se), params, grew, max_lines=40)
-    margin = threshold(se, params, grew, max_lines=40)
+    kept = keep(by(difference, se, own), params, grew, max_lines=40)
+    margin = threshold(max(se, own), params, grew, max_lines=40)
     assert kept == (difference > margin)
     assert margin >= 0.0
+    assert kept <= keep(by(difference, own), params, grew, max_lines=40)
 
 
 SESSIONS = tuple(
@@ -126,23 +139,23 @@ def planted(bps: np.ndarray) -> Measurement:
     return Measurement(CONTRIBUTION, 4, run, criteria_version="planted")
 
 
+RULES = ("own", "paired", "alone")
+
+
 @cache
 def planted_rates() -> dict[tuple[str, str], tuple[float, float]]:
     """How often each rule keeps three candidates against a best, at `k_se` 0.5 and 1.
 
     On kanso's own arithmetic, a lane earning 15 bp a day at 120 bp of spread over 250
-    sessions. `refined` is the best plus a true +3 bp a day
-    and an edit's own noise, known to about 1.5 bp a day in the difference; `nothing` is the
-    same edit with nothing in it; `unrelated` an independent strategy as good as the best.
-    `own` strikes the bar on the candidate's own error, as the rule did until it paired, and
-    `paired` on the error of the difference."""
+    sessions. `refined` is the best plus a true +3 bp a day and an edit's own noise, known to
+    about 1.5 bp a day in the difference; `nothing` is the same edit with nothing in it;
+    `unrelated` an independent strategy as good as the best. `own` strikes the bar on the
+    candidate's own error alone, as the rule did until it paired; `paired` is the rule, on
+    the larger of that error and the error of the difference; `alone` is a bar on the
+    difference's error alone."""
     rng = np.random.default_rng(20261031)
     draws = 200
-    kept = {
-        (name, rule): [0, 0]
-        for name in ("refined", "nothing", "unrelated")
-        for rule in ("own", "paired")
-    }
+    kept = {(name, rule): [0, 0] for name in ("refined", "nothing", "unrelated") for rule in RULES}
     for _ in range(draws):
         noise = 120.0 * rng.standard_normal(250)
         edit = 1.5 * 250**0.5 * rng.standard_normal(250)
@@ -157,34 +170,42 @@ def planted_rates() -> dict[tuple[str, str], tuple[float, float]]:
             metric, own = card.compute()
             paired = card.against(best)
             assert paired is not None
+            difference, error = paired
             for slot, k_se in enumerate((0.5, 1.0)):
                 params = {"min_delta": 0.0, "k_se": k_se}
-                kept[name, "own"][slot] += keep(
-                    Against("b", metric - best_metric, own), params, 0, 40
-                )
-                kept[name, "paired"][slot] += keep(Against("b", *paired), params, 0, 40)
+                kept[name, "own"][slot] += keep(by(metric - best_metric, own), params, 0, 40)
+                kept[name, "paired"][slot] += keep(by(difference, error, own), params, 0, 40)
+                kept[name, "alone"][slot] += keep(by(difference, error), params, 0, 40)
     return {key: (counts[0] / draws, counts[1] / draws) for key, counts in kept.items()}
 
 
-def test_a_planted_refinement_is_kept_on_its_difference_where_its_own_error_kept_little() -> None:
-    """Kept about a quarter of the time at `k_se` 0.5 and almost never at 1 on its own
-    error, and most of the time on the difference's."""
+def test_a_planted_edit_is_kept_as_its_own_error_kept_it_whether_or_not_it_improved() -> None:
+    """A refinement truly worth +3 bp a day is kept about a quarter of the time at `k_se` 0.5
+    and almost never at 1, and the same edit with nothing in it almost never: its own error,
+    five times its difference's, is the larger, so pairing changes neither rate."""
     rates = planted_rates()
+    for name in ("refined", "nothing"):
+        assert rates[name, "paired"] == rates[name, "own"]
     assert rates["refined", "own"][0] < 0.40 and rates["refined", "own"][1] < 0.02
-    assert rates["refined", "paired"][0] > 0.85 and rates["refined", "paired"][1] > 0.75
+    assert rates["nothing", "own"][0] < 0.03 and rates["nothing", "own"][1] < 0.01
 
 
-def test_a_planted_equal_is_kept_no_more_often_unrelated_and_at_the_k_se_rate_as_an_edit() -> None:
-    """An unrelated strategy no better than the best is kept no more often than it was, its
-    difference being known less well than either card. The refinement with nothing in it is
-    kept at about the rate `k_se` states, where the candidate's own error, five times the
-    difference's, kept almost none: no bar on that difference keeps more of the refinement
-    without more of it."""
+def test_on_its_difference_s_error_alone_an_empty_edit_is_kept_at_the_rate_k_se_states() -> None:
+    """Struck on the difference's error alone, the bar keeps the refinement most of the time,
+    and the edit with nothing in it about `1 − Φ(k_se)` of the time: no bar on that difference
+    keeps more of the one without more of the other."""
     rates = planted_rates()
+    assert rates["refined", "alone"][0] > 0.85 and rates["refined", "alone"][1] > 0.75
+    assert 0.20 < rates["nothing", "alone"][0] < 0.42
+    assert 0.08 < rates["nothing", "alone"][1] < 0.26
+
+
+def test_a_planted_unrelated_equal_is_kept_no_more_often_than_on_its_own_error() -> None:
+    """An unrelated strategy no better than the best has a difference known less well than
+    either card, and is held to that: kept less often than its own error kept it."""
+    rates = planted_rates()
+    assert rates["unrelated", "paired"] == rates["unrelated", "alone"]
     assert all(
-        paired <= own
+        paired < own
         for paired, own in zip(rates["unrelated", "paired"], rates["unrelated", "own"], strict=True)
     )
-    assert rates["nothing", "own"][0] < 0.03 and rates["nothing", "own"][1] < 0.01
-    assert 0.20 < rates["nothing", "paired"][0] < 0.42
-    assert 0.08 < rates["nothing", "paired"][1] < 0.26

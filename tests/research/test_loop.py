@@ -467,16 +467,18 @@ def compared(store: StateStore, hyp_id: str) -> list[dict[str, object]]:
     return [event.detail["keep"] for event in events if "keep" in event.detail]  # type: ignore[misc]
 
 
-def test_a_refinement_inside_the_card_s_own_error_is_kept_on_the_error_of_its_difference(
+def test_a_refinement_inside_the_card_s_own_error_is_not_kept_however_well_its_difference_is_known(
     ws: Workspace, store: StateStore
 ) -> None:
     """Two cards over the same sessions share their day-to-day noise, so the difference
-    between them is known far better than either.
+    between them is known far better than either, and the bar is still struck on the larger
+    of the two errors: the card's own.
 
     A tenth more on every trade earns about a tenth more each session the trough rule
-    trades, so the gain is real and small against the card's own error — kept on it at
-    `k_se` 0.5, a candidate this size would need a t of five — and the two cards' sessions
-    move together, so the difference's own error is about a tenth of either card's."""
+    trades, so the gain is real and small against the card's own error, and the two cards'
+    sessions move together, so the difference's own error is about a tenth of either card's.
+    A bar on that error alone would keep it; the rule does not, and it is then the same book
+    inside the same floor, a repeat."""
     hyp_id = classify(ws, store, PAIRED)
     run = loop.begin(ws, store, hyp_id)
     edit(ws, run, REVERTING)
@@ -484,9 +486,11 @@ def test_a_refinement_inside_the_card_s_own_error_is_kept_on_the_error_of_its_di
     assert best.status == "keep" and compared(store, hyp_id) == [], "nothing to beat yet"
     edit(ws, run, LARGER)
 
-    made = loop.card(ws, store, hyp_id, "a tenth more of the same trade")
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, hyp_id, "a tenth more of the same trade")
 
-    assert made.status == "keep"
+    made = records.cards_of(store, hyp_id)[-1]
+    assert made.status == "redundant"
     gain = made.metric - best.metric
     assert 0.0 < gain < 0.5 * made.metric_se, "inside the card's own floor"
     (against,) = compared(store, hyp_id)
@@ -495,10 +499,10 @@ def test_a_refinement_inside_the_card_s_own_error_is_kept_on_the_error_of_its_di
     assert against["difference"] == pytest.approx(gain)
     assert 0.5 * float(against["se"]) < gain  # type: ignore[arg-type]
     assert float(against["se"]) < 0.2 * made.metric_se  # type: ignore[arg-type]
-    assert records.best_of(store, hyp_id) == (made.strategy_sha, made.metric)
+    assert records.best_of(store, hyp_id) == (best.strategy_sha, best.metric)
 
 
-def test_a_best_that_kept_no_measurement_is_beaten_on_the_card_s_own_error_and_says_so(
+def test_a_best_that_kept_no_measurement_is_compared_on_the_card_s_own_error_and_says_so(
     ws: Workspace, store: StateStore
 ) -> None:
     """A card recorded before cards kept what they were measured from has nothing to pair

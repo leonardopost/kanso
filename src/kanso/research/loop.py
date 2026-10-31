@@ -880,7 +880,8 @@ def _grew_by(store: StateStore, run: RunRecord, source: bytes) -> int:
 
 UNMEASURED: Final = "the best card kept no measurement"
 UNPAIRED: Final = "the two cards' measurements do not pair"
-"""Why a comparison with the run's best is struck on the candidate's own error: `Against`."""
+"""Why a comparison with the run's best reads the candidate's own error and no error of the
+difference: `Against`."""
 
 
 def _against(
@@ -893,10 +894,11 @@ def _against(
     """What a card is compared with the run's best on, or `None` before the run's first keep.
 
     The difference and its error are read off both cards' measurements period by period
-    (`records.Measurement.against`). A best that kept none — a card recorded before cards
-    kept their measurement — or a pair whose runs do not pair, under a reading changed
-    between the two, leaves the card's metric less the best's on the card's own error,
-    which is how the rule read before it paired, and `unpaired` says which.
+    (`records.Measurement.against`), and the card's own error `se` is carried beside them,
+    since the bar is struck on the larger of the two. A best that kept none — a card
+    recorded before cards kept their measurement — or a pair whose runs do not pair, under a
+    reading changed between the two, leaves the card's metric less the best's on the card's
+    own error alone, and `unpaired` says which.
     """
     if run.best_sha is None or run.best_metric is None:
         return None
@@ -904,8 +906,9 @@ def _against(
     paired = None if best is None else measured.against(best)
     if paired is None:
         why = UNMEASURED if best is None else UNPAIRED
-        return Against(run.best_sha, metric - run.best_metric, se, why)
-    return Against(run.best_sha, *paired)
+        return Against(run.best_sha, metric - run.best_metric, se, se, why)
+    difference, error = paired
+    return Against(run.best_sha, difference, error, se)
 
 
 def _keeps(

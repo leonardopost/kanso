@@ -1238,10 +1238,11 @@ research window's contiguous folds; the metric is their mean, and `metric_se` is
 of that mean read off the series it is a mean of — the per-period returns for a contribution
 or a Sharpe, the per-trade edges taken period by period for a per-trade objective. A
 candidate is compared with the run's best by their difference, and an improvement counts
-only when that difference clears `max(min_delta, k_se × se)`, where `se` is the error of the
-difference: `min_delta` is the operator's smallest interesting difference, in the
-objective's units, and `k_se` how many errors of the difference it must clear. Both
-parameters are fixed at classification, before any result is seen.
+only when that difference clears `max(min_delta, k_se × se)`, where `se` is the larger of
+two errors: the candidate's own `metric_se` — the error of the number that would become the
+best — and the error of the difference. `min_delta` is the operator's smallest interesting
+difference, in the objective's units, and `k_se` how many of that larger error it must
+clear. Both parameters are fixed at classification, before any result is seen.
 
 The error was once the spread of the fold means over the root of their count: four numbers,
 three degrees of freedom, scattering from half to one and a half times the true error card
@@ -1271,23 +1272,26 @@ paired one that objective would read — the per-period differences of two contr
 Memmel's for two Sharpes, two per-trade edges' linearisations differenced period by period —
 widened for serial correlation like any other. Two cards over the same sessions share most
 of their day-to-day noise, so a refinement has a difference far better known than either
-number, and two unrelated strategies one less well known than either; the candidate's own
-error, which the rule read until it paired, sits between. Measured over 4,000 synthetic
-draws of a lane earning 15 bp a day at 120 bp of spread over 250 sessions, at `k_se` 0.5 and
-1: a refinement truly worth +3 bp a day, its difference known to 1.5 bp a day, was kept 0.26
-and 0.001 of the time on its own error and is kept 0.93 and 0.82 on the difference's; an
-unrelated strategy no better than the best, 0.36 and 0.24 before and 0.31 and 0.16 now; and
-the refinement with nothing in it, 0.004 and none before, and 0.30 and 0.16 now — the rate
-`k_se` states, `1 − Φ(k_se)`. Its own error, five times the difference's, kept almost none
-of those, and no bar on that difference keeps more of the refinement without keeping more of
-them. `edge_per_trade`'s margin, which grows with the search, is not part of the comparison:
-it holds the card's own trades to their own error before the keep rule is asked, as it
-always has. Where the best card kept no measurement — one recorded before cards kept theirs
-— or the two do not pair, because what they were measured under moved between them, the
-difference is struck on the candidate's own error, as it was before. The `card` event of
-every card the rule compared with a best carries the comparison as `keep`: the best's sha7,
-the `difference`, its `se`, whether it was `paired`, and when it was not, `unpaired`, saying
-why.
+number, and two unrelated strategies one less well known than either. The bar takes the
+larger error, so it is never lower than the one the candidate's own error struck before the
+rule paired: an unrelated strategy is held to the error of its difference, and a refinement
+to its own error, as it was. Measured over 4,000 synthetic draws of a lane earning 15 bp a
+day at 120 bp of spread over 250 sessions, at `k_se` 0.5 and 1: an unrelated strategy no
+better than the best was kept 0.36 and 0.24 of the time on its own error and is kept 0.31
+and 0.16, the rate `k_se` states, `1 − Φ(k_se)`; a refinement truly worth +3 bp a day, its
+difference known to 1.5 bp a day, is kept 0.26 and 0.001 of the time, and the same edit with
+nothing in it 0.004 and in none of the draws, the rule deciding every draw of the two as its
+own error did. Struck on the difference's error alone, the bar kept that refinement 0.93 and
+0.82 of the time and the edit with nothing in it 0.30 and 0.16: on a difference known that
+well, no bar keeps more of the one without keeping more of the other. `edge_per_trade`'s
+margin, which grows with the search, is not part of the comparison: it holds the card's own
+trades to their own error before the keep rule is asked, as it always has. Where the best
+card kept no measurement — one recorded before cards kept theirs — or the two do not pair,
+because what they were measured under moved between them, the bar is struck on the
+candidate's own error alone. The `card` event of every card the rule compared with a best
+carries the comparison as `keep`: the best's sha7, the `difference`, its `se`, whether it
+was `paired`, and when it was not, `unpaired`, saying why; the card's own error is its
+`metric_se`.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
