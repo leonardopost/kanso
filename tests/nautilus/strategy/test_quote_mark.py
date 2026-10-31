@@ -1,7 +1,7 @@
-"""`balance_at_quote` on the engine: a quote or a print from before a split the venue has applied
-is restated as `balance` restates a print, a sleeve no engine holds reads its capital, what it
-keeps is read again and compared under the suite's check, and a read of it books what a read of
-`balance` at the same point books and changes nothing else."""
+"""`balance_at_quote` on the engine: a quote, a print or a cost from before a split the venue has
+applied is restated as `balance` restates a print, a sleeve no engine holds reads its capital,
+what it keeps is read again and compared under the suite's check, and a read of it books what a
+read of `balance` at the same point books and changes nothing else."""
 
 from __future__ import annotations
 
@@ -117,25 +117,50 @@ def test_a_quote_from_before_a_split_is_restated_as_the_balance_restates_a_print
     assert at_quote - cash == pytest.approx(100 * 100.05, rel=1e-12)
 
 
+@pytest.mark.parametrize(
+    ("published_s", "locked", "quoted_s"),
+    [(-119, 10.05, -30), (30, 100.50, 40)],
+    ids=["published before it", "after it"],
+)
 def test_a_print_from_before_a_split_is_restated_where_no_valid_quote_is_in_force(
-    backtest,
+    backtest, published_s: int, locked: float, quoted_s: int
 ) -> None:
-    """HEDGE's last print of the eve is a bar closing at 10.00 and its last quote a locked one
-    at 10.05, which is not valid: `balance_at_quote` marks the 100 shares the split leaves at
-    that close in the new count, 100.00, where `balance` marks them at the locked quote's mid,
-    100.50. A close left in the old count would mark them at a tenth of that."""
+    """HEDGE's last print is a bar of the eve closing at 10.00, stamped two minutes before the
+    split's instant and published before it or after DEMO's first bar has applied the split,
+    and its last quote a locked one, which is not valid: of the eve at 10.05, or of the
+    ex-date at 100.50 after the bar. `balance_at_quote` marks the 100 shares the split leaves
+    at that close in the new count, 100.00, where `balance` marks them at the locked quote's
+    mid, 100.50. A close left in the old count would mark them at a tenth of that, and so
+    would the close published after the split restated by the instant it was published or by
+    the instant of the quote after it."""
     midnight = midnight_ns(EX)
+    quoted = midnight + quoted_s * SECOND_NS
     balance, at_quote, cash = held_through(
         backtest,
         [
-            _stamped(HEDGE, 10.0, midnight - 120 * SECOND_NS, midnight - 119 * SECOND_NS),
-            _hedge_quote(
-                10.05, 10.05, 5_000, 5_000, midnight - 30 * SECOND_NS, midnight - 30 * SECOND_NS
-            ),
+            _stamped(HEDGE, 10.0, midnight - 120 * SECOND_NS, midnight + published_s * SECOND_NS),
+            _hedge_quote(locked, locked, 5_000, 5_000, quoted, quoted),
         ],
     )
 
     assert at_quote - cash == pytest.approx(100 * 100.00, rel=1e-12)
+    assert balance - cash == pytest.approx(100 * 100.50, rel=1e-12)
+
+
+def test_a_cost_from_before_a_split_is_restated_where_no_print_or_valid_quote_is_in_force(
+    backtest,
+) -> None:
+    """HEDGE is handed quotes alone, never a trade or a bar, and its last is a locked one of the
+    eve at 10.05: `balance_at_quote` marks the 100 shares the split leaves at what they cost in
+    the new count, 100.10 — the 1,005 were bought at 10.01 — where `balance` marks them at the
+    locked quote's mid, 100.50."""
+    midnight = midnight_ns(EX)
+    eve = midnight - 30 * SECOND_NS
+    balance, at_quote, cash = held_through(
+        backtest, [_hedge_quote(10.05, 10.05, 5_000, 5_000, eve, eve)]
+    )
+
+    assert at_quote - cash == pytest.approx(100 * 100.10, rel=1e-12)
     assert balance - cash == pytest.approx(100 * 100.50, rel=1e-12)
 
 
