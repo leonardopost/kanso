@@ -405,10 +405,10 @@ def refuse_own_bar_resolution(
     which refuses the fields kanso passes it.
 
     The remedy deletes the field from `hyp_id`'s `strategy.py` and begins research from that file
-    (`kanso research begin --from-workspace`), since a run starts from the best card's bytes where
-    there is one, which no edit of the file changes. `certified` says the bytes are a version's: a
-    version runs the bytes it was certified with, so its remedy goes on to certify what that
-    research finds.
+    (`kanso research begin --from-workspace`), since without the flag a run may start from bytes
+    a card already ran — the best card's, or a re-seed's — which no edit of the file changes.
+    `certified` says the bytes are a version's: a version runs the bytes it was certified with, so
+    its remedy goes on to certify what that research finds.
     """
     if not (isinstance(config_cls, type) and issubclass(config_cls, KansoConfig)):
         return
@@ -434,9 +434,9 @@ def refuse_own_bar_resolution(
             "certified with"
             if certified
             else f"delete bar_resolution from {name} in hypotheses/{hyp_id}/strategy.py and begin "
-            f"from that file with `kanso research begin {hyp_id} --from-workspace`, since a run "
-            "starts from the best card's bytes where there is one: kanso sets the field, and a "
-            "file reading bars beside ticks states their size as bar_resolution in hypothesis.yaml"
+            f"from that file with `kanso research begin {hyp_id} --from-workspace`: kanso sets the "
+            "field, and a file reading bars beside ticks states their size as bar_resolution in "
+            "hypothesis.yaml"
         ),
     )
 

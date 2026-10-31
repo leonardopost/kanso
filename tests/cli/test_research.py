@@ -559,10 +559,10 @@ SIZED_IN_AN_IF = FLAT.replace(
 def test_a_best_giving_bar_resolution_a_default_is_begun_again_from_the_file_its_remedy_names(
     runner: CliRunner, registered: Path
 ) -> None:
-    """A run starts from the best card's bytes, so once that best's `Config` gives the field a
-    default of its own, beginning again is refused in the baseline's child however the workspace
-    file has been fixed. The remedy names the flag that begins from that file, and the command
-    it names, run as worded, begins the run."""
+    """Without `--from-workspace` this run starts from its best card's bytes, so once that best's
+    `Config` gives the field a default of its own, beginning again is refused in the baseline's
+    child however the workspace file has been fixed. The remedy names the flag that begins from
+    that file, and the command it names, run as worded, begins the run."""
     begin(runner, registered)
     assert at(runner, registered, "research", "end", HYP_ID).exit_code == Exit.OK
     with StateStore(registered / "state.db") as store:

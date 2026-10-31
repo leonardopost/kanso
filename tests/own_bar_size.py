@@ -67,12 +67,12 @@ REFUSED: Final = (
 
 def card_remedy(hyp_id: str) -> str:
     """The remedy on a card: the field deleted from the hypothesis's file, and research begun
-    from that file, since a run starts from the best card's bytes where there is one."""
+    from that file."""
     return (
         f"delete bar_resolution from Config in hypotheses/{hyp_id}/strategy.py and begin from "
-        f"that file with `kanso research begin {hyp_id} --from-workspace`, since a run starts "
-        "from the best card's bytes where there is one: kanso sets the field, and a file reading "
-        "bars beside ticks states their size as bar_resolution in hypothesis.yaml"
+        f"that file with `kanso research begin {hyp_id} --from-workspace`: kanso sets the field, "
+        "and a file reading bars beside ticks states their size as bar_resolution in "
+        "hypothesis.yaml"
     )
 
 
