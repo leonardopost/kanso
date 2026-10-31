@@ -48,7 +48,11 @@ Modifiers = tuple[tuple[str, bytes, Mapping[str, Any]], ...]
 
 @dataclass(frozen=True)
 class Target:
-    """One runnable subject, with the money, the model and the data it is judged under."""
+    """One runnable subject, with the money, the model and the data it is judged under.
+
+    `version_source` is the file a strategy version's implementation holds its sleeve's bytes
+    in, which a refusal of those bytes names (`RunRequest.version_source`); None for a card.
+    """
 
     label: str
     hyp: Hypothesis
@@ -64,6 +68,7 @@ class Target:
     version: int | None = None
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    version_source: str | None = None
 
     @property
     def universe(self) -> tuple[str, ...]:
@@ -89,6 +94,7 @@ class Target:
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
             prefix=warmup_prefix(self.hyp, window, self.catalog, self.grains),
+            version_source=self.version_source,
         )
 
 
@@ -169,6 +175,7 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
         version=chosen,
         grains=_manifest_grains(manifest.sleeve.config),
         sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
+        version_source=manifest.sleeve.source,
     )
 
 

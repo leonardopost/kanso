@@ -441,6 +441,12 @@ class RunRequest:
     gap between them: every stage window ends flat, so nothing was held while the version
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
+
+    `version_source` is the file a composed version's implementation holds the sleeve's bytes
+    in (`kanso.strategy.impl`), set where they are a version's — a replay of a version, and its
+    expectation measured (`kanso.strategy.composition`) — so that a `Config` giving
+    `bar_resolution` a default of its own is refused naming that file, with the remedy of a
+    version, whose certified bytes no edit of `strategy.py` changes. None for a card's bytes.
     """
 
     hyp: Hypothesis
@@ -460,6 +466,7 @@ class RunRequest:
     cushion: float = 0.0
     settled_ns: int | None = None
     resumes_ns: int | None = None
+    version_source: str | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -650,6 +657,7 @@ def benchmark(request: RunRequest) -> RunRequest:
         overrides={},
         budget_s=None,
         mem_cap_gb=None,
+        version_source=None,
     )
 
 
@@ -1161,13 +1169,18 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     configuration class that gives the field a default of its own is refused before anything
     is built (`kanso.nautilus.strategy.refuse_own_bar_resolution`): a stage builds the sleeve
     from a version's manifest, which carries the field only where the file states one, so
-    that default would stand there and not here.
+    that default would stand there and not here. The refusal names the request's
+    `version_source`, with a version's remedy, where it carries one, and `strategy.py`, with a
+    card's, where it does not.
     """
     from kanso.nautilus.strategy import KansoStrategy, refuse_own_bar_resolution
 
     module = _module(request.strategy_source, "sleeve")
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
-    refuse_own_bar_resolution(cls.config_cls, "strategy.py", request.hyp.id)
+    certified = request.version_source
+    refuse_own_bar_resolution(
+        cls.config_cls, certified or "strategy.py", request.hyp.id, certified=certified is not None
+    )
     hyp = request.hyp
     grains = _bar_grains(request)
     extra: tuple[str, ...] = ()

@@ -385,12 +385,13 @@ def refuse_own_bar_resolution(
     none, and on a stage from the version's manifest, which carries it only where the file
     states one. So a default of the class's own would stand on a stage and not on its card. It
     is refused where the class is built — in the card's child (`kanso.nautilus.backtest._sleeve`,
-    which a replay's node path builds through too), where a version's manifest is written and
-    where a stage node loads one (`kanso.strategy.impl`) — since whatever spelling made the
-    class, the class holds the default: `strategy_integrity` reads only the body of a top-level
-    class of the file that names `KansoConfig` among its bases, and not a class in an `if`, one
-    deriving from a base held under another name or read off `KansoStrategy.config_cls`, nor one
-    `type()` builds.
+    which a replay's node path builds through too, and which a replay of a version and a
+    version's expectation hand the file its implementation holds the bytes in), where a
+    version's manifest is written and where a stage node loads one (`kanso.strategy.impl`) —
+    since whatever spelling made the class, the class holds the default: `strategy_integrity`
+    reads only the body of a top-level class of the file that names `KansoConfig` among its
+    bases, and not a class in an `if`, one deriving from a base held under another name or read
+    off `KansoStrategy.config_cls`, nor one `type()` builds.
 
     The default is read off the class's own struct metadata, which resolves no annotation, so a
     class annotating a field with a name that exists only for a type checker is read as any

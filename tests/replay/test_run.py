@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import pkgutil
 from datetime import date
+from typing import Any
 
 import pytest
 
@@ -17,13 +18,16 @@ from kanso.replay import record
 from kanso.replay.record import Point
 from kanso.replay.run import REPLAYED
 from kanso.state import StateStore
+from kanso.strategy import impl, require, restruck
 from kanso.workspace import Workspace
+from tests.own_bar_size import REFUSED, version_remedy
 from tests.replay.conftest import (
     FLAT,
     FORWARD,
     FORWARD_START,
     INSTRUMENT,
     RAISING,
+    REVERTING,
     bars,
     carded,
     composed,
@@ -212,6 +216,43 @@ def test_a_strategy_version_is_replayed_from_its_pins(
 
     assert session.target == f"{carded_hyp}@1"
     assert session.intents > 0
+
+
+SIZED = REVERTING.replace(
+    b"class Config(KansoConfig):\n",
+    b'class Config(KansoConfig):\n    bar_resolution: str | None = "5m"\n',
+)
+"""The reverting sleeve with a `Config` giving `bar_resolution` a default of its own."""
+
+
+@pytest.mark.parametrize(
+    "rerun",
+    [
+        lambda ws, store, hyp_id: replay.run(ws, store, strategy=hyp_id, mode="engine"),
+        lambda ws, store, hyp_id: replay.run(ws, store, strategy=hyp_id, mode="node"),
+        lambda ws, store, hyp_id: restruck(
+            ws, store, hyp_id, require(ws, hyp_id).latest(), 20_000.0
+        ),
+    ],
+    ids=["replayed on the engine path", "replayed on the node path", "struck again"],
+)
+def test_a_version_whose_config_gives_bar_resolution_a_default_is_refused_as_the_version_it_is(
+    ws: Workspace, store: StateStore, carded_hyp: str, monkeypatch: pytest.MonkeyPatch, rerun: Any
+) -> None:
+    """A version an earlier kanso composed from such a `Config` runs the bytes its
+    implementation holds, so the refusal names that module and gives a version's remedy, which
+    researches from the workspace file and certifies again, rather than a card's naming
+    `strategy.py`: no edit of that file changes certified bytes."""
+    with monkeypatch.context() as earlier:
+        earlier.setattr("kanso.nautilus.strategy.refuse_own_bar_resolution", lambda *_, **__: None)
+        composed(ws, store, carded_hyp, sleeve=SIZED)
+
+    with pytest.raises(ValidationError) as refused:
+        rerun(ws, store, carded_hyp)
+
+    module = impl.module_name(impl.SLEEVE, carded_hyp, SIZED)
+    assert refused.value.message == f"{module}.py: {REFUSED}"
+    assert refused.value.remedy == version_remedy(carded_hyp)
 
 
 def test_a_session_is_recorded_in_the_state_store(
