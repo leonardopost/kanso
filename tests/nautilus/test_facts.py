@@ -148,6 +148,9 @@ BINDINGS = {
     "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
     "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
     "which a NETTING flip or reopen appends to and nothing else changes",
+    "the portfolio hands every closed position to the record_trade it finds on its "
+    "analyzer instance, and a run whose record_trade records nothing leaves the same "
+    "positions, orders and balances",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -373,3 +376,24 @@ def test_a_change_no_event_handed_or_a_list_read_anew_fails_its_claim(
     assert not holds
     assert "P-1: 1 -> 1" in evidence
     assert facts._check_every_change_reaches_its_strategy_before_its_next_handler()[0]
+
+
+def test_a_close_kept_unasked_or_a_run_that_moved_fails_the_analyzer_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What `kanso.nautilus.backtest.engine_for` rests on fails when the analyzer kept what
+    was set to record nothing, or when the two runs left different things, and says which."""
+    clean = {
+        recorded: facts._probe_recorded_closes(recorded=recorded) for recorded in (True, False)
+    }
+    trades, handed, _, left = clean[False]
+    found = {True: clean[True], False: (trades, handed, trades, left)}
+    monkeypatch.setattr(facts, "_probe_recorded_closes", lambda *, recorded: found[recorded])
+    holds, evidence = facts._check_the_portfolio_records_a_close_through_its_analyzer_instance()
+    assert not holds
+    assert f"set on the analyzer instance, was handed {handed} and kept {trades};" in evidence
+
+    found[False] = (trades, handed, 0, "another run")
+    holds, evidence = facts._check_the_portfolio_records_a_close_through_its_analyzer_instance()
+    assert not holds
+    assert "against another run" in evidence

@@ -115,9 +115,16 @@ def start_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
 
 
 @app.command("stop")
-def stop_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
+def stop_command(
+    ctx: typer.Context,
+    drain: Annotated[
+        bool,
+        typer.Option("--drain", help="Let each lane's card in flight land first; kill nothing."),
+    ] = False,
+    as_json: JsonOption = False,
+) -> None:
     """Stop the daemon. Active runs and their lane directories stay exactly as they are."""
-    emit(as_json or global_json(ctx), lambda: _stop(open_workspace(ctx)))
+    emit(as_json or global_json(ctx), lambda: _stop(open_workspace(ctx), drain))
 
 
 @app.command("status")
@@ -211,13 +218,17 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
         "n_trials": trials,
         "best_sha": run.best_sha,
         "best_metric": run.best_metric,
+        "card_budget_s": run.card_budget_s,
+        "budget_sha": run.budget_sha,
         "results": str(research.results_file(ws, hyp_id)),
     }
+    struck = "the baseline's" if run.budget_sha is None else f"struck by {run.budget_sha[:7]}"
     lines = [
         field("card", f"{card.sha7} · {card.status} · {desc}"),
         field("metric", f"{card.metric:.6f} ± {card.metric_se:.6f} · {card.n_trades} trade(s)"),
         *_digest_lines(card.digest),
         field("cost", f"{card.wall_s:.1f}s · {card.peak_mem_gb:.2f} GB · trial {trials}"),
+        field("budget", f"{run.card_budget_s:.0f}s · {struck}"),
         field("best", "none yet" if run.best_sha is None else f"{run.best_sha[:7]}"),
     ]
     lines += [
@@ -339,10 +350,11 @@ def _start(ws: Workspace) -> Report:
     return Report(data=data, lines=lines)
 
 
-def _stop(ws: Workspace) -> Report:
-    stopped = daemon.stop(ws)
+def _stop(ws: Workspace, drain: bool = False) -> Report:
+    stopped = daemon.stop(ws, drain=drain)
     data: dict[str, Any] = stopped.payload()
-    lines = [field("daemon", "stopped" if stopped.pid is None else f"stopped · pid {stopped.pid}")]
+    how = "drained" if stopped.drain else "stopped"
+    lines = [field("daemon", how if stopped.pid is None else f"{how} · pid {stopped.pid}")]
     if stopped.orphans:
         orphans = ", ".join(child.label for child in stopped.orphans)
         lines.append(

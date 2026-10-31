@@ -180,6 +180,12 @@ commented out, header included, because its two keys — `reference`, naming the
 resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
 until a vendor is configured, and the table you then append is not declared twice.
 
+`[research] baseline_budget_s` is the wall a baseline card may take. A lane whose baseline was
+killed for it passes the hypothesis over until it, or another of what that baseline ran on,
+moves (`docs/cli.md`, The daemon and the queue), and a lane reads `kanso.toml` when it starts,
+so a budget raised under a running daemon reaches its lanes after `kanso research stop` and
+`kanso research start`.
+
 `[screen] draws` is how many session sign flips a screen's null is drawn from (`docs/concepts.md`,
 Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
@@ -2018,6 +2024,7 @@ The lane directories, and the only place research edits anything.
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
+runs/daemon.drains         the same pid, written by a supervisor that answers `research stop --drain`
 runs/<child>.<pid>.lock    held by a lane or the monitor, named for it and its pid, while it lives
 runs/<child>.<pid>.work    held by it and by every card it starts, until the last of them exits
 runs/daemon.log            whatever the daemon and its children write to a stream
@@ -2060,7 +2067,8 @@ ends lets it go: the card in flight is killed within a second and recorded nowhe
 lane takes the next hypothesis without recording a failure. `kanso research stop` removes
 neither: it signals the daemon, waits for it to go and leaves every active run and every lane
 directory exactly where they are, so the next `start` resumes them. Stopping is meant to be
-cheap.
+cheap. `kanso research stop --drain` removes neither as well, and kills nothing: each lane's
+card in flight runs to its end and is recorded before the lane stops.
 
 The pid file is also the lock:
 

@@ -204,6 +204,20 @@ it. Measured before that on an operator's workspace on 2026-10-01: lanes that ha
 certification's parity on a node did not exit within a minute of a `SIGTERM`, and only
 `SIGKILL` moved them.
 
+**A drain stops a lane after its card, not inside it.** `kanso research stop --drain` has the
+supervisor send its lanes `SIGUSR1` rather than `SIGTERM`: a lane told to drain begins nothing
+more — no proposal, card, alignment check, certification or exploration — and kills nothing it
+is running, so the card in flight runs to its own end, its budget included, and is recorded
+before the lane exits. The monitor is stopped as a stop stops it, and the supervisor and the
+command wait for every child however long its card takes. A stop meanwhile is a stop.
+
+**A baseline killed for its clock is not begun again on what it ran on.** The lane puts the
+hypothesis back in the queue and passes over it while a baseline begun now would run on the
+same strategy, `hypothesis.yaml`, `program.md`, snapshots, `[research] baseline_budget_s` and
+kanso version as the one killed — which its `baseline_failed` event records — and begins it
+once one of them has moved (`docs/cli.md`, The daemon and the queue). A run begun since ends
+the wait.
+
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned. The one
@@ -525,14 +539,17 @@ research window — and the warmup sessions before it, when the hypothesis decla
 out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
-memory and kills the process group on breach. The wall-time budget is three times what the
-run's baseline took and never under 60 s (the `budget` `research begin` prints), and a card
-killed for it is a `crash`. The baseline is the strategy the run starts from. A later run
-starts from the hypothesis's best, or from the card a re-seed names, so its baseline's wall
-already includes that strategy's fills. A hypothesis's first run starts from the workspace's
+memory and kills the process group on breach. The wall-time budget is three times the wall
+of the run's first card that traded and never under 60 s, and a card killed for it is a
+`crash`. The baseline is the strategy the run starts from, and the first card of the run: a
+later run starts from the hypothesis's best, or from the card a re-seed names, so its baseline
+trades and strikes the budget itself. A hypothesis's first run starts from the workspace's
 `strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
-nothing and a card that trades spends the headroom on its fills: in the sample above the keep
-and the discard took 2.4 and 2.2 times the baseline's wall (row 139 of `docs/backlog.md`).
+nothing: the budget is three times its wall (the `budget` `research begin` prints) until a
+card trades, and that card strikes it from its own. Struck once from a baseline that traded
+nothing, a card that traded spent the headroom on its fills and could be killed before it was
+scored (row 139 of `docs/backlog.md`). The run records which card struck its budget
+(`budget_sha`), and `research card` prints the budget after every card.
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog in steps of an hour when the
@@ -618,6 +635,18 @@ and 671.2 s of wall time (468.5 s and 485.3 s of the child's CPU) before and 412
 orders being the engine's to handle. Of what is left, about half is the engine's own dispatch,
 matching and identifiers, and half the Python the venue's modules, the harness and the sleeve
 run on every point and marker.
+
+**What a trade costs a card.** The engine's portfolio records each position it closes in its
+analyzer, which copies every record before it to append one, so a card's wall grew with the
+square of its trades; kanso reads nothing the analyzer keeps, and the engine a card runs in
+has it record nothing (`kanso.nautilus.facts`). Measured on 2026-10-31 on one name's 1 s quotes
+and prints over 27 sessions, the same cards before and after, byte for byte: 1,002 trades took
+20.1 s and take 19.1 s, 10,028 took 64.6 s and take 27.8 s, and 35,425 took 634.0 s and take
+118.5 s. Across names a close still costs more the more closes came before it: on a NETTING
+venue the portfolio re-reads the closing name's snapshots whenever a close in another name came
+between (`kanso.nautilus.facts`, a design constraint). Over the same tape of two names, 10,028
+trades in one of them took 46.2 s and the same count across both 512.4 s; over seven sessions
+of twenty names, 10,237 trades in one took 112.0 s and 9,805 across all twenty 141.5 s.
 
 **A replay streams its window as a card does.** `kanso replay run` and `parity` — and so the
 `parity_replay` certification gate — read the range through the reads and chunks a card's
@@ -833,11 +862,10 @@ lane's memory is divided by `cards_per_turn`, never below three times what the r
 baseline needed: a width whose part of the share falls under that is refused before the
 turn is proposed, naming the widest turn the share funds and the `[env] mem_per_lane_gb`
 the width needs. Each child runs on `cards_per_turn` times the run's card budget, because
-the children share the lane's cores and the budget was struck from a baseline that had
-them to itself. On 0.18.0 and 0.19.0 every child had one card's budget, so on a host whose
-lanes already fill its cores each child of a turn of eight had about an eighth of the core
-its baseline had and would run about eight times its baseline's wall against a budget of
-three: every one of them killed. A child killed for its share or its clock is a crash of
+the children share the lane's cores. On 0.18.0 and 0.19.0 every child had one card's budget,
+so on a host whose lanes already fill its cores each child of a turn of eight had about an
+eighth of the core its baseline had and would run about eight times its baseline's wall
+against a budget of three: every one of them killed. A child killed for its share or its clock is a crash of
 that slot alone.
 
 A crash is the one card whose idea was never judged, so the turn after it is a **repair**.

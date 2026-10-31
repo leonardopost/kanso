@@ -571,6 +571,53 @@ def test_the_reading_becomes_part_of_the_signature_key_and_the_rows_come_across(
         )
 
 
+def test_a_run_whose_baseline_traded_is_given_its_base_as_the_card_its_budget_was_struck_from(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0016 adds `runs.budget_sha` over runs that exist: the budget of one whose baseline
+    traded was struck from that baseline, which is its base; one whose baseline traded
+    nothing holds NULL, so its next card that trades strikes its budget."""
+    from kanso.research import records
+    from kanso.schemas import resolve_venue_model
+
+    venue = json.dumps(resolve_venue_model("XNAS", max_leverage=1.0).model_dump(mode="json"))
+    older = migrations()[:15]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        for hyp_id, base, trades in (("traded", "a" * 64, 7), ("idle", "b" * 64, 0)):
+            conn.execute(
+                "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+                " VALUES (?, 'researching', 't', 't')",
+                (hyp_id,),
+            )
+            conn.execute(
+                "INSERT INTO blobs (sha, data, size, created_at) VALUES (?, X'00', 1, 't')",
+                (base,),
+            )
+            conn.execute(
+                "INSERT INTO runs (run_id, hyp_id, tag, lane, dir, base_sha, hypothesis_sha,"
+                " program_sha, snapshot_id, criteria_version, card_budget_s, baseline_wall_s,"
+                " baseline_peak_mem_gb, started_at) VALUES (?, ?, '20260101-1', 'op', 'd',"
+                " ?, ?, ?, 's', '0.20.0', 60, 1, 1, '2026-01-01T00:00:00+00:00')",
+                (f"r-{hyp_id}", hyp_id, base, base, base),
+            )
+            conn.execute(
+                "INSERT INTO cards (run_id, hyp_id, seq, lane, strategy_sha, status, metric,"
+                " n_trials, n_trades, wall_s, venue_model, description, created_at) VALUES"
+                " (?, ?, 1, 'op', ?, 'discard', 0.0, 1, ?, 1.0, ?, 'baseline',"
+                " '2026-01-01T00:00:00+00:00')",
+                (f"r-{hyp_id}", hyp_id, base, trades, venue),
+            )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[15:]]
+        assert records.require_active(store, "traded").budget_sha == "a" * 64
+        assert records.require_active(store, "idle").budget_sha is None
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

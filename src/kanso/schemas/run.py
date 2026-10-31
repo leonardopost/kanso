@@ -232,6 +232,10 @@ class RunRecord(KansoModel):
     card_budget_s: float = Field(gt=0)
     baseline_wall_s: float = Field(ge=0)
     baseline_peak_mem_gb: float = Field(ge=0)
+    budget_sha: Sha256 | None = None
+    """The card `card_budget_s` was struck from: the run's first card that traded — the
+    baseline, when it did. `None` while no card of the run has traded, and the budget is the
+    baseline's."""
     best_sha: Sha256 | None = None
     best_metric: float | None = None
     started_at: datetime
