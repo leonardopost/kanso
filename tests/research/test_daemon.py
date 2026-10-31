@@ -1764,6 +1764,28 @@ def test_what_a_drain_did_not_start_is_neither_failed_nor_requeued(
     assert all(event.kind != daemon.LANE_FAILED for event in store.events(subject=hyp_id))
 
 
+def test_a_lane_told_to_drain_still_watches_its_supervisor_and_one_gone_is_a_stop() -> None:
+    """A drain kills nothing, but a supervisor gone mid-drain is a stop: the thread that
+    watches the supervisor keeps looking under a drain, and once the supervisor is no
+    longer the lane's parent the card in flight is interrupted."""
+    done = threading.Event()
+    daemon._answer_to(os.getppid())
+    daemon.request_drain()
+    watcher = threading.Thread(target=daemon._watch_supervisor, args=(done,), daemon=True)
+    watcher.start()
+    try:
+        time.sleep(3 * backtest.PARENT_POLL_S)
+        assert watcher.is_alive(), "it stopped looking once the drain was asked for"
+        assert not backtest._INTERRUPT.is_set()
+        daemon._answer_to(-1)  # a supervisor this process is no longer the child of
+        watcher.join(timeout=5 * backtest.PARENT_POLL_S)
+        assert not watcher.is_alive()
+        assert backtest._INTERRUPT.is_set(), "the card in flight is interrupted"
+    finally:
+        done.set()
+        watcher.join()
+
+
 class Signalled(FakeChild):
     """A child that records the signals it is sent."""
 
