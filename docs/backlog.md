@@ -11,7 +11,7 @@ records the same closures as user-visible changes.
 
 | # | milestone | item | what the build did | what it needs |
 |---|---|---|---|---|
-| 1 | M0 | ~~macOS 26 runner label unverified~~ **closed**: `macos-26` exists and both Python jobs passed on it in the first CI run. | — | Nothing. |
+| 1 | M0 | ~~macOS 26 runner label unverified~~ **closed**: `macos-26` exists and both Python jobs passed on it in the first CI run (run 33844606711), the py3.13 one on Python 3.12: until the job set `UV_PYTHON`, a py3.13 job's first `uv run` after its sync rebuilt the environment on the 3.12 that `.python-version` names. | — | Nothing. |
 | 2 | M1 | ~~A hypothesis cannot reach `classified` without `classify`~~ **closed**: `kanso classify` landed in M2 and moves the status itself. | — | Nothing. The override path — edit the three keys, `hyp add` — remains and needs no model. |
 | 3 | M1 | ~~The demo hypothesis named its universe by the short key while the catalog files datasets under the qualified id~~ **closed.** The demo names the qualified id in both places and `docs/workspace.md` states the rule. | — | Nothing. A hypothesis names universe ids as `<SYMBOL>.<VENUE>`; that is documented, not outstanding. |
 | 5 | M1 | ~~`parity_replay` and `param_plateau` ship as declared catalogue items whose implementations are stubs~~ **closed**: `param_plateau` landed in M3 and `parity_replay` in M4. Every gate the toolbox declares now resolves. | — | Nothing. |
