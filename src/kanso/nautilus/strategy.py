@@ -788,8 +788,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
         self._top_balance_at_quote: dict[str, QuoteTick] = {}
-        """Under `depth`, the level one each name was last handed, which `balance_at_quote`
-        marks it at, as it marks a name at its last quote without `depth` (`_show_top`)."""
+        """Under `depth`, each name's level one while both sides of its book hold a level,
+        which `balance_at_quote` marks it at as it marks a name at its last quote without
+        `depth` (`_show_top`)."""
         self._book_ledger: Any = None
         """The book this sleeve is a member of, when a runner put it in one
         (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
@@ -1031,8 +1032,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     @property
     def balance_at_quote(self) -> float:
         """`balance` with each open position marked at the mid of its name's quote in force —
-        the last quote the sleeve was handed, under `depth` the last level one — instead of at
-        its last print: the number for a strategy's own limits, a daily stop or a daily target.
+        the last quote the sleeve was handed, under `depth` level one of the harness's copy of
+        its book — instead of at its last print: the number for a strategy's own limits, a
+        daily stop or a daily target.
 
         `balance` marks a name at its last print, a quote's mid or a trade's price, whichever
         came last, as the card's equity does, and a trade can print well outside the quote.
@@ -1053,12 +1055,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         top of this, and what a limit read off it has not paid.
 
         A name with no valid quote in force — none yet, a name the sleeve is handed no quotes
-        of, or one whose last quote is locked, crossed or one-sided, so not `ask > bid > 0` —
-        is marked at its last trade or bar close, never at that quote's mid, and with neither
-        at its split-aware cost; for a name the sleeve is handed no quotes of that is the mark
-        `balance` reads. At those opens 48 of the 4,791 prints met such a quote. A quote or a
-        print stamped before a split the venue has since applied is restated by its ratio, as
-        `balance` restates a print.
+        of, or one whose last quote is locked, crossed or one-sided, so not `ask > bid > 0`, as
+        level one is under `depth` while a side of the book is empty — is marked at its last
+        trade or bar close, never at that quote's mid, and with neither at its split-aware
+        cost; for a name the sleeve is handed no quotes of that is the mark `balance` reads. At
+        those opens 48 of the 4,791 prints met such a quote. A quote or a print stamped before
+        a split the venue has since applied is restated by its ratio, as `balance` restates a
+        print.
 
         Nothing of the harness reads it — sizing and the room read `balance`, and a card is
         measured on the runner's equity, which `balance` mirrors — so a sleeve that neither
@@ -1592,20 +1595,25 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The quote is stamped with the instant of the change and is a signal: it moves no last
         price, no quoted spread and no mark `balance` or the card reads, as the book it is read
-        from moves none. `balance_at_quote` marks a name at the last one handed.
+        from moves none. The top is kept for `balance_at_quote` while both sides hold a level
+        and dropped while either is empty; a top that comes back as it was last shown is kept
+        again, and not handed again.
         """
         bids, asks = book
         bid, ask = bids.best(), asks.best()
-        if bid is None or ask is None:
-            return
         key = instrument_id.value
-        top = (bid[0], bid[1], ask[0], ask[1])
-        if top == self._top_shown.get(key):
+        if bid is None or ask is None:
+            self._top_balance_at_quote.pop(key, None)
             return
-        self._top_shown[key] = top
+        top = (bid[0], bid[1], ask[0], ask[1])
+        shown = top == self._top_shown.get(key)
+        if shown and key in self._top_balance_at_quote:
+            return
         quote = QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init)
         self._top_balance_at_quote[key] = quote
-        self._show_view(quote, ts_event)
+        if not shown:
+            self._top_shown[key] = top
+            self._show_view(quote, ts_event)
 
     def _show_depth(self, ts_init: int) -> None:
         """Hand the book as of the last grid instant before `ts_init`, once per grid instant.

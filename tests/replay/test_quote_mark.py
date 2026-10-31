@@ -1,7 +1,8 @@
 """`balance_at_quote` marks every open position at the mid of its name's quote in force, so a
 print outside the quote moves `balance` and not it; with no valid quote at the last trade, or
-at cost before any, never at that quote's mid; under `depth` at the last level one handed; and
-the two code paths read the same number on every point.
+at cost before any, never at that quote's mid; under `depth` at the last level one handed, and
+at the last trade while a side of the book is empty; and the two code paths read the same
+number on every point.
 
 The quote and print sleeve (`HOLDS`) buys 100 at market on its first point and holds them,
 writing down both readers on every quote and print it handles. Its instants are milliseconds
@@ -16,8 +17,8 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from nautilus_trader.model.data import QuoteTick, TradeTick
-from nautilus_trader.model.enums import AggressorSide
+from nautilus_trader.model.data import OrderBookDelta, QuoteTick, TradeTick
+from nautilus_trader.model.enums import AggressorSide, BookAction, OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
@@ -364,3 +365,83 @@ def test_under_depth_the_balance_at_quote_marks_at_the_last_level_one_handed(
     *_, before, under, after = rows
     assert under[0] == pytest.approx(before[0] - 49.0, abs=1e-9)
     assert under[1] == before[1] == after[1]
+
+
+def test_under_depth_with_a_side_of_the_book_empty_the_balance_at_quote_marks_at_the_last_trade(
+    tmp_path: Path,
+) -> None:
+    """Bought at the 10.02 offer, the sleeve holds 100. Every bid is deleted at 300 ms and the
+    book is cleared at 1,300 ms; with a side of the book empty no level one is valid, so on the
+    print after each, at 9.50 and at 9.10, `balance_at_quote` marks the 100 at that print, the
+    last trade, and not at the last level one handed. The bids put back as they stood at 500 ms
+    are not handed again, and mark the 100 at that level one's 10.01 mid again, so a print at
+    9.30 under them moves `balance` alone, as a print at 9.00 under the next book's 9.91 mid
+    does. Both paths read every point alike."""
+    from tests.nautilus.backtest.test_depth import _base, _delta, _id
+
+    day = FORWARD[0]
+    add, delete = BookAction.ADD, BookAction.DELETE
+    buy, sell = OrderSide.BUY, OrderSide.SELL
+    bids, asks = (1_000, 999, 998), (1_002, 1_003, 1_004)
+    cleared = _base(day) + 1_300 * MS
+    deltas = [
+        *(_delta(0, add, buy, ticks, 500, day) for ticks in bids),
+        *(_delta(0, add, sell, ticks, 500, day) for ticks in asks),
+        *(_delta(300, delete, buy, ticks, 0, day) for ticks in bids),
+        *(_delta(500, add, buy, ticks, 500, day) for ticks in bids),
+        OrderBookDelta.clear(_id(), 0, cleared, cleared),
+        *(_delta(1_600, add, buy, ticks, 500, day) for ticks in (990, 989, 988)),
+        *(_delta(1_600, add, sell, ticks, 500, day) for ticks in (992, 993, 994)),
+    ]
+
+    def printed(ms: int, px: float) -> TradeTick:
+        ns = _base(day) + ms * MS
+        return TradeTick(
+            _id(),
+            Price(px, 2),
+            Quantity.from_int(1),
+            AggressorSide.SELLER,
+            TradeId(f"E{ms}"),
+            ns,
+            ns,
+        )
+
+    prints = [
+        printed(100, 10.00),
+        printed(200, 10.00),
+        printed(350, 9.50),  # every bid gone
+        printed(600, 9.30),  # the bids back as they stood
+        printed(1_400, 9.10),  # the book cleared
+        printed(1_700, 9.00),  # the next book
+    ]
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        depth={"every_ms": 100, "levels": 3},
+    )
+    groups = [tuple(deltas), tuple(prints)]
+    read: dict[str, list[list[str]]] = {}
+    for path in ("engine", "node"):
+        written = tmp_path / f"{path}.txt"
+        request = request_for(source=(DEPTH % str(written)).encode(), hyp=hyp)
+        if path == "engine":
+            fills = backtest.execute(request, [instrument()], groups).run.fills
+        else:
+            fills = session.run_node(request, [instrument()], groups).result.run.fills
+        assert [(fill.qty, fill.px) for fill in fills] == [(100.0, 10.02)]
+        read[path] = [line.split() for line in written.read_text().splitlines()]
+
+    assert read["node"] == read["engine"]
+    assert [kind for kind, *_ in read["engine"]] == ["top"] + ["print"] * 5 + ["top", "print"]
+    booked = [
+        (float.fromhex(balance), float.fromhex(at_quote), float.fromhex(cash))
+        for _, balance, at_quote, cash, *_ in read["engine"][2:]
+    ]
+    assert all(cash < 100_000.0 for *_, cash in booked)
+    assert [at_quote - cash for _, at_quote, cash in booked] == pytest.approx(
+        [1_001.0, 950.0, 1_001.0, 910.0, 991.0, 991.0], abs=1e-9
+    )
+    assert [balance - cash for balance, _, cash in booked] == pytest.approx(
+        [1_000.0, 950.0, 930.0, 910.0, 910.0, 900.0], abs=1e-9
+    )
