@@ -46,6 +46,7 @@ from kanso.schemas.base import (
     NonEmpty,
     Sha256,
 )
+from kanso.schemas.duration import Duration
 from kanso.schemas.venue import VenueModel
 
 CardStatus = Literal["keep", "discard", "crash", "redundant", "runner_up"]
@@ -130,10 +131,11 @@ class CardDigest(KansoModel):
     periods it filled, and what each trade and each session earned before and after costs.
 
     Computed by `kanso.criteria.digest` from the run the card measured — its fills, its
-    closed trades, its return series — and the orders it submitted, once, in the lane, and
-    recorded with the card. Per trade is in basis points of the position opened, over the
-    closed trades with a notional, as the per-trade objective reads them; per session is in
-    basis points of the capital, over the UTC days the run struck a period end in. Gross is
+    closed trades, its return series — the orders it submitted and the first point it was
+    handed in each return period, once, in the lane, and recorded with the card. Per trade
+    is in basis points of the position opened, over the closed trades with a notional, as
+    the per-trade objective reads them; per session is in basis points of the capital, over
+    the UTC days the run struck a period end in. Gross is
     before fill costs and net after, so gross less cost is net in both; funding, which is a
     payment on what was held and not a fill cost, stays in gross. A number that has nothing
     to be read off — a rate with no trade, a share with no fill, the error of an edge whose
@@ -148,13 +150,14 @@ class CardDigest(KansoModel):
     median_hold_s: Positive | None = None
     maker_share: Share | None = None
     fill_ratio: Positive | None = None
+    period: Duration | None = None
     filled_periods: int | None = Field(default=None, ge=0)
-    """How many of the run's return periods it filled in — cut on the UTC clock from the
-    window's first midnight, at no venue's open (`kanso.criteria.digest`) — and over them the
-    lower median of the seconds from a period's opening to its first fill (`first_fill_s`) and
-    to its last (`last_fill_s`), and from its first fill to its last (`active_s`), which are
-    `None` when no period was filled in. All four are `None` on a digest recorded before they
-    were kept."""
+    """How many of the run's return periods it filled in — each `period` long, cut from the
+    window's first midnight (`kanso.criteria.digest`) — and over them the lower median of the
+    seconds from a period's first point to its first fill (`first_fill_s`) and to its last
+    (`last_fill_s`), and from its first fill to its last (`active_s`), which are `None` when
+    no period was filled in. All five are `None` on a digest recorded before they were kept,
+    and on one of a run whose first points nothing noted."""
     first_fill_s: Positive | None = None
     last_fill_s: Positive | None = None
     active_s: Positive | None = None
@@ -207,10 +210,16 @@ class CardDigest(KansoModel):
 
     def _timed(self) -> CardDigest:
         """When in its periods the run filled is read off the periods it filled in: stated
-        with their count or not at all, a period for each fill at most, the offsets exactly
-        when one was filled in, and a period's last fill neither before its first nor nearer
-        its opening than the span from its first fill — which their lower medians inherit,
-        since each is the same middle of a list that is no smaller element by element."""
+        with their count and their length or not at all, a period for each fill at most, the
+        offsets exactly when one was filled in, and a period's last fill neither before its
+        first nor nearer its first point than the span from its first fill — which their lower
+        medians inherit, since each is the same middle of a list that is no smaller element by
+        element."""
+        if (self.period is None) != (self.filled_periods is None):
+            raise ValueError(
+                "period: the periods a run filled in are counted and their length is stated, "
+                "both or neither"
+            )
         timing = (self.first_fill_s, self.last_fill_s, self.active_s)
         if self.filled_periods is None:
             if any(value is not None for value in timing):
@@ -239,7 +248,7 @@ class CardDigest(KansoModel):
         if active > last:
             raise ValueError(
                 f"active_s: {active} is longer than the last fill's offset {last}, and a "
-                "period's fills span no more than its opening to its last fill"
+                "period's fills span no more than its first point to its last fill"
             )
         return self
 

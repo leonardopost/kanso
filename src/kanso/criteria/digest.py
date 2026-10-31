@@ -11,9 +11,10 @@ trades all day. The digest is the rest of the story: how often the card traded, 
 trades and its orders filled, when in its periods it filled, and what each trade and each
 session earned before and after costs.
 
-Every number is read off what the card already holds — the `CardRun` the runner extracted
-and the order intents its strategy submitted — so nothing here runs anything, and nothing
-is a second definition of a quantity the toolbox already defines:
+Every number is read off what the card already holds — the `CardRun` the runner extracted,
+the order intents its strategy submitted and the first instant of each return period its
+parent handed it — so nothing here runs anything, and nothing is a second definition of a
+quantity the toolbox already defines:
 
 * a **trade** is a closed position with a notional, as `quantities.edge_series` reads one,
   and its edge is `pnl_net / notional` in basis points; the card's net edge per trade and its
@@ -40,15 +41,18 @@ is a second definition of a quantity the toolbox already defines:
   that raised a quantity is not in the intent's either, so the ratio is a reading, not an
   identity, and it can exceed one only through the second;
 * **when it filled** is read on the return periods the runner cut the window into, one after
-  another from the window's first midnight (`CardRun.period_ns`) — a UTC day each by default
-  — each fill in the one its instant falls in, which is the one the runner booked it to: over
-  the periods the run filled in, the median seconds from a period's opening to its first fill
-  and to its last, and from its first fill to its last. A period opens on the UTC clock and at
-  no venue's open, since no calendar is consulted, so at a daily period an offset is the UTC
-  time of day. Each median is the lower middle value over an even count, an offset some period
-  filled at: the mean of the two middle ones need be no such instant — on twelve tick cards of
-  44 winter and 44 summer sessions each it fell half an hour from every first fill, and on
-  eleven of them read 14:00 where the lower one reads 13:30.
+  another from the window's first midnight (`CardRun.period_ns`), each fill in the one its
+  instant falls in: over the periods the run filled in, the median seconds from a period's
+  first point — the first point the card was handed in it, which its parent noted as it
+  streamed the window (`kanso.nautilus.backtest.RunResult.firsts_ns`), or its first fill
+  where that came first or no point was noted, which a fill stamped at a data instant never
+  does — to its first fill and to its last, and from its first fill to its last, beside the
+  `period` they were read on. No calendar is consulted: an offset is from a point, so a card
+  handed a session that starts at the same local time every day, and trading it at the same
+  local times, reads the same either side of a change of clocks. Each median is the lower
+  middle value over an even count, an offset some period filled at. A run with no first
+  points noted, one run in process (`backtest.run`, `backtest.execute`) rather than as a
+  card, reads `None` for all five.
 
 Funding is a payment on what was held, not a fill cost, so it stays in gross and in net
 alike; a run with none of something reads `None` for what that something measures.
@@ -134,8 +138,9 @@ def session_edge(run: CardRun) -> tuple[float, float | None, int, int] | None:
     return edge, sqrt(variance), sessions, len(traded)
 
 
-def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
-    """Every number of the digest, read off `run` and the orders its strategy submitted."""
+def digest(run: CardRun, intents: Sequence[Intent] = (), firsts: Sequence[int] = ()) -> CardDigest:
+    """Every number of the digest, read off `run`, the orders its strategy submitted and the
+    first instant of each return period it was handed (`RunResult.firsts_ns`)."""
     traded = [t for t in run.trades if t.notional > 0]
     per_trade: dict[str, float | None] = dict.fromkeys(
         (
@@ -176,12 +181,13 @@ def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
             "cost_bps_per_session": cost_session,
             "net_bps_per_session": net_session,
         }
-    filled, first, last, active = _timing(run)
+    filled, first, last, active = _timing(run, firsts)
     return CardDigest(
         sessions=sessions,
         fills=len(run.fills),
         maker_share=_maker_share(run),
         fill_ratio=_fill_ratio(run, intents),
+        period=None if filled is None else run.period,
         filled_periods=filled,
         first_fill_s=first,
         last_fill_s=last,
@@ -208,12 +214,18 @@ def _fill_ratio(run: CardRun, intents: Sequence[Intent]) -> float | None:
     return fsum(abs(f.qty) for f in run.fills if f.limit is not None) / submitted
 
 
-def _timing(run: CardRun) -> tuple[int, float | None, float | None, float | None]:
+def _timing(
+    run: CardRun, firsts: Sequence[int]
+) -> tuple[int | None, float | None, float | None, float | None]:
     """When in its periods the run filled: how many periods it filled in and, over those,
-    the lower median of the nanoseconds from a period's opening to its first fill and to its
-    last, and from its first fill to its last, each in seconds (see the module)."""
+    the lower median of the nanoseconds from a period's first point to its first fill and to
+    its last, and from its first fill to its last, each in seconds (see the module); nothing
+    at all for a run handed no first points."""
+    if not firsts:
+        return None, None, None, None
     opens, _ = run.bounds
     length = run.period_ns
+    starts = {(ts - opens) // length: ts for ts in firsts}
     spans: dict[int, tuple[int, int]] = {}
     for fill in run.fills:
         index = (fill.ts_ns - opens) // length
@@ -221,10 +233,10 @@ def _timing(run: CardRun) -> tuple[int, float | None, float | None, float | None
         spans[index] = (min(first, fill.ts_ns), max(last, fill.ts_ns))
     if not spans:
         return 0, None, None, None
-    offsets = [
-        (first - opens - index * length, last - opens - index * length)
-        for index, (first, last) in spans.items()
-    ]
+    offsets = []
+    for index, (first, last) in spans.items():
+        start = min(starts.get(index, first), first)
+        offsets.append((first - start, last - start))
     return (
         len(spans),
         median_low(first for first, _ in offsets) / NS_PER_SECOND,

@@ -122,9 +122,10 @@ DIGEST: dict[str, Any] = {
     "gross_bps_per_session": 1.5,
     "cost_bps_per_session": 1.6,
     "net_bps_per_session": -0.1,
+    "period": "1d",
     "filled_periods": 19,
-    "first_fill_s": 52_200.25,
-    "last_fill_s": 52_276.0,
+    "first_fill_s": 0.25,
+    "last_fill_s": 76.0,
     "active_s": 75.5,
 }
 
@@ -148,8 +149,8 @@ def test_a_digest_fills_the_columns_after_the_description() -> None:
         "gross_bps_per_session": "1.5000",
         "cost_bps_per_session": "1.6000",
         "net_bps_per_session": "-0.1000",
-        "first_fill_s": "52200.2500",
-        "last_fill_s": "52276.0000",
+        "first_fill_s": "0.2500",
+        "last_fill_s": "76.0000",
         "active_s": "75.5000",
     }
 
@@ -203,13 +204,17 @@ def test_a_crashed_card_keeps_no_measurement_and_a_card_that_ran_names_one() -> 
         ({"net_bps_per_trade_se": -1.0}, "net_bps_per_trade_se"),
         ({"filled_periods": 0}, "filled_periods"),
         ({"filled_periods": 81}, "filled_periods"),
+        ({"filled_periods": -1}, "filled_periods"),
         ({"fills": 0, "maker_share": None}, "filled_periods"),
-        ({"filled_periods": None}, "filled_periods"),
+        ({"filled_periods": None}, "period"),
+        ({"period": None}, "period"),
+        ({"period": "a day"}, "period"),
+        ({"filled_periods": None, "period": None}, "filled_periods"),
         ({"first_fill_s": None}, "first_fill_s"),
         ({"active_s": None}, "first_fill_s"),
         ({"fills": 0, "maker_share": None, "filled_periods": 0}, "first_fill_s"),
-        ({"last_fill_s": 52_000.0}, "last_fill_s"),
-        ({"active_s": 52_300.0}, "active_s"),
+        ({"last_fill_s": 0.1}, "last_fill_s"),
+        ({"active_s": 76.5}, "active_s"),
         ({"first_fill_s": -1.0}, "first_fill_s"),
     ],
 )
@@ -274,12 +279,13 @@ def test_when_a_card_traded_is_appended_after_the_columns_a_reader_took_by_posit
 
 
 def test_a_digest_recorded_before_it_timed_its_fills_reads_back_with_no_timing() -> None:
-    """A card row written before the digest kept when its fills fell holds none of the four
+    """A card row written before the digest kept when its fills fell holds none of the five
     keys: it reads back with no timing and three empty cells, and every other cell as it
     was, rather than refused."""
-    before = CardDigest.model_validate({k: v for k, v in DIGEST.items() if k not in UNTIMED})
+    timing = {"period", *UNTIMED}
+    before = CardDigest.model_validate({k: v for k, v in DIGEST.items() if k not in timing})
 
-    assert before.filled_periods is None
+    assert (before.period, before.filled_periods) == (None, None)
     assert (before.first_fill_s, before.last_fill_s, before.active_s) == (None, None, None)
     assert before.cells() == (*CardDigest.model_validate(DIGEST).cells()[:-3], "", "", "")
 

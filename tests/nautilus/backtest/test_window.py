@@ -218,7 +218,7 @@ def test_prints_sharing_instants_are_read_in_file_order_however_the_window_is_re
 
     _, groups = window_data(request, store)
     whole = [str(point.trade_id) for group in groups for point in group]  # type: ignore[attr-defined]
-    records = [pickle.loads(record) for record in runner._payload(request, store, ())]
+    records = [pickle.loads(record) for record in runner._payload(request, store, (), {})]
     chunks = [record["groups"] for record in records if "groups" in record]
     streamed = [str(p.trade_id) for chunk in chunks for group in chunk for p in group]
 

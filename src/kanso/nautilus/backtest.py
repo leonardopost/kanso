@@ -135,6 +135,7 @@ from decimal import Decimal
 from functools import cache
 from itertools import accumulate, chain
 from math import fsum
+from operator import attrgetter
 from pathlib import Path
 from types import ModuleType
 from typing import IO, Any, Final
@@ -541,6 +542,10 @@ class RunResult:
     refused: Refusal | None = None
     """The order the sizing rule refused, when one was: the run stopped there, with no
     numbers, because the card can no longer validate and every bar after it is spend."""
+    firsts_ns: tuple[int, ...] = ()
+    """The instant of the first point a card was handed in each return period that held one,
+    in time order: noted by the parent as it streams the window (`_marked_chunks`), for the
+    digest to read offsets from. A run made in this process notes none."""
 
 
 def stage_of(hyp: Hypothesis, window: tuple[date, date]) -> str:
@@ -2614,6 +2619,8 @@ def run_subprocess(
     transfer directory, `<workdir>/.card/`, holds only what comes back — the child's report
     and its output — and is emptied before the card and removed after it, so a lane killed
     mid-card leaves at most those two small files behind, and its next card reclaims them.
+    The result carries each return period's first instant as the window passed
+    (`RunResult.firsts_ns`).
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -2626,12 +2633,14 @@ def run_subprocess(
         )
     _refuse_if_interrupted()
     room = _card_room(workdir)
+    firsts: dict[int, int] = {}
     try:
-        payload = _payload(request, catalog_path, extensions)
+        payload = _payload(request, catalog_path, extensions, firsts)
         gc.collect()
-        return _supervised(request, room, workdir, payload)
+        result = _supervised(request, room, workdir, payload)
     finally:
         shutil.rmtree(room, ignore_errors=True)
+    return replace(result, firsts_ns=_in_order(firsts))
 
 
 def run_subprocesses(
@@ -2643,7 +2652,8 @@ def run_subprocesses(
     """Run several cards of one window in children of their own, from one read of it.
 
     Each request is one slot: its own strategy bytes, its own budget and its own memory
-    cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once. The points are
+    cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once, and every result
+    carries the first instants that read noted (`RunResult.firsts_ns`). The points are
     written to every child that is still running, and a child killed for its own memory
     or its own clock is a crash of that slot alone. The parent holds the read a chunk is
     cut from and the newest chunk, never the window (`_fan`). An empty list runs nothing.
@@ -2669,34 +2679,65 @@ def run_subprocesses(
         room = root / str(index)
         room.mkdir(parents=True)
         rooms.append(room)
+    firsts: dict[int, int] = {}
     try:
         instruments, chunks = window_chunks(requests[0], catalog_path)
         gc.collect()
-        return _fan(
-            requests, instruments, _marked_chunks(requests[0], chunks), extensions, rooms, workdir
-        )
+        marked = _marked_chunks(requests[0], chunks, firsts)
+        results = _fan(requests, instruments, marked, extensions, rooms, workdir)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+    noted = _in_order(firsts)
+    return [replace(result, firsts_ns=noted) for result in results]
 
 
 def _marked_chunks(
-    request: RunRequest, chunks: Iterator[tuple[tuple[object, ...], ...]]
+    request: RunRequest,
+    chunks: Iterator[tuple[tuple[object, ...], ...]],
+    firsts: dict[int, int],
 ) -> Iterator[tuple[tuple[object, ...], ...]]:
-    """The chunks of `request`, refused when none of them falls inside the measured window."""
-    measured, _ = request.bounds
-    inside = False
+    """The chunks of `request` as they pass, each return period's first instant noted in
+    `firsts` under the period's index, the period cut as `Marks.fold` cuts it; refused when
+    none of them falls inside the measured window, which is when nothing was noted. A period
+    the child refuses, as one of no time, is its to refuse: the window is noted as one.
+
+    A chunk that lies inside one period notes its earliest instant alone, found in three passes
+    the interpreter makes in C: measured on 2026-10-31 on a chunk of 1,000,000 quotes inside
+    one period, under the lanes' load, 0.36 µs a point where reading each point in turn took
+    1.34 µs, beside the 20.7 µs a point the pickle of that chunk took."""
+    measured, closes = request.bounds
+    try:
+        length = request.period_ns
+    except ValidationError:
+        length = closes - measured
     for chunk in chunks:
-        inside = inside or any(
-            int(point.ts_init) >= measured  # type: ignore[attr-defined]
-            for point in chain.from_iterable(chunk)
-        )
+        stamps = list(map(_INSTANT, chain.from_iterable(chunk)))
+        if stamps:
+            low = min(stamps)
+            if low >= measured and (low - measured) // length == (max(stamps) - measured) // length:
+                stamps = [low]
+        for ts in stamps:
+            if ts >= measured:
+                index = (ts - measured) // length
+                held = firsts.get(index)
+                if held is None or ts < held:
+                    firsts[index] = int(ts)
         yield chunk
-    if not inside:
+    if not firsts:
         raise PreconditionError(
             f"data: the catalog holds nothing for {request.hyp.id} over "
             f"{request.window[0]}..{request.window[1]}",
             remedy="run `kanso data load` for the window, then take a snapshot",
         )
+
+
+_INSTANT: Final = attrgetter("ts_init")
+"""A point's `ts_init`, read without a call of the interpreter's own."""
+
+
+def _in_order(firsts: Mapping[int, int]) -> tuple[int, ...]:
+    """The first instants `_marked_chunks` noted, in the order of their periods."""
+    return tuple(firsts[index] for index in sorted(firsts))
 
 
 _NOTHING: Final = memoryview(b"")
@@ -3098,15 +3139,19 @@ def _row_groups(files: Iterable[str], edge: int, step: int) -> list[tuple[int, i
 
 
 def _payload(
-    request: RunRequest, catalog_path: Path, extensions: Sequence[tuple[str, str]]
+    request: RunRequest,
+    catalog_path: Path,
+    extensions: Sequence[tuple[str, str]],
+    firsts: dict[int, int],
 ) -> Iterator[bytes]:
     """What a card's child is handed, as the pickles it reads in turn: the stream itself is
     `_stream`, and `window_chunks` makes the refusals that come before the child exists, so
     a card refuses with a message an operator can read before any child is spawned. The
-    child re-checks every chunk it is handed.
+    child re-checks every chunk it is handed. Each return period's first instant is noted
+    in `firsts` as its chunk passes (`_marked_chunks`).
     """
     instruments, chunks = window_chunks(request, catalog_path)
-    return _stream(request, instruments, chunks, extensions)
+    return _stream(request, instruments, _marked_chunks(request, chunks, firsts), extensions)
 
 
 def _stream(
@@ -3127,26 +3172,15 @@ def _stream(
     4.8 GB in the parent, and a 45-day window of it 22.8 GB on disk before the card began.
 
     The refusals only the whole window can make are made once it has been read, before
-    `END`: an overlay grain the catalog does not hold, and a window it holds nothing for.
-    A refusal raised here — those, a `wanted` check before a catalog query — reaches the
-    watch on the child, which kills the child before it is raised (`_watch`).
+    `END`, by the chunks as they run out: an overlay grain the catalog does not hold
+    (`_chunked`), and a window it holds nothing for (`_marked_chunks`). A refusal raised
+    here — those, a `wanted` check before a catalog query — reaches the watch on the child,
+    which kills the child before it is raised (`_watch`).
     """
-    measured, _ = request.bounds
-    inside = False
     yield _pickled({"extensions": [list(source) for source in extensions]})
     yield _pickled({"request": request.plain(), "instruments": instruments})
     for chunk in chunks:
-        inside = inside or any(
-            int(point.ts_init) >= measured  # type: ignore[attr-defined]
-            for point in chain.from_iterable(chunk)
-        )
         yield _pickled({"groups": chunk})
-    if not inside:
-        raise PreconditionError(
-            f"data: the catalog holds nothing for {request.hyp.id} over "
-            f"{request.window[0]}..{request.window[1]}",
-            remedy="run `kanso data load` for the window, then take a snapshot",
-        )
     yield _pickled(END)
 
 

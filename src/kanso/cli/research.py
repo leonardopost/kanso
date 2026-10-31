@@ -275,9 +275,9 @@ def _seconds(value: float | None) -> str:
 
 def _timing_lines(digest: CardDigest | None) -> list[str]:
     """When in its return periods a card filled, in one line: how many it filled in, the
-    offsets of a period's first and last fill from its opening, and the span between them.
-    Nothing for a card that never ran to a result or was recorded before the digest timed
-    its fills."""
+    offsets of a period's first and last fill from its first point, and the span between
+    them. Nothing for a card that never ran to a result or was recorded before the digest
+    timed its fills."""
     if digest is None or digest.filled_periods is None:
         return []
     return [
@@ -291,8 +291,8 @@ def _timing_lines(digest: CardDigest | None) -> list[str]:
 
 
 def _offset(value: float | None) -> str:
-    """An offset into a period as `+H:MM:SS.ss`, which at a daily period is the UTC time of
-    day; rounded to the hundredth first, so it never reads 60 seconds."""
+    """An offset into a period as `+H:MM:SS.ss`; rounded to the hundredth first, so it never
+    reads 60 seconds."""
     if value is None:
         return "n/a"
     hours, rest = divmod(round(value * 100), 360_000)

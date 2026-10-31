@@ -421,8 +421,8 @@ restore. Three proposals into the demo:
 ```
 sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc	trades_per_session	hit_rate	median_hold_s	maker_share	fill_ratio	gross_bps_per_trade	cost_bps_per_trade	net_bps_per_trade	net_bps_per_trade_se	gross_bps_per_session	cost_bps_per_session	net_bps_per_session	first_fill_s	last_fill_s	active_s
 93510e2	0.000000	0.000000	1	0	6.168	0.185	discard	baseline	0.0000									0.0000	0.0000	0.0000			
-f729a53	9.986730	1.065174	2	1003	14.868	0.216	keep	fade a 2-sigma deviation from a 60-bar rolling mean	3.8429	0.7498	960.0000	0.0000		15.0843	5.0038	10.0805	1.0545	5.7693	1.9137	3.8556	52740.0000	70920.0000	17460.0000
-340620b	5.285159	0.838720	3	1164	13.608	0.214	discard	exit at 1 sigma rather than half a sigma	4.4598	0.7474	540.0000	0.0000		10.3818	5.0026	5.3792	0.8191	4.6091	2.2204	2.3887	52920.0000	70740.0000	17040.0000
+f729a53	9.986730	1.065174	2	1003	14.868	0.216	keep	fade a 2-sigma deviation from a 60-bar rolling mean	3.8429	0.7498	960.0000	0.0000		15.0843	5.0038	10.0805	1.0545	5.7693	1.9137	3.8556	2340.0000	21060.0000	17460.0000
+340620b	5.285159	0.838720	3	1164	13.608	0.214	discard	exit at 1 sigma rather than half a sigma	4.4598	0.7474	540.0000	0.0000		10.3818	5.0026	5.3792	0.8191	4.6091	2.2204	2.3887	2760.0000	20760.0000	17040.0000
 020aef2	0.000000	0.000000	4	0	1.588	0.196	crash	scale by a rolling sigma helper that does not exist (intentional crash)															
 ```
 
@@ -433,8 +433,9 @@ the book merely trades less. Shown only the number, a search scored on a contrib
 loses on every trade is rewarded for trading less and cannot see that it was; and a number
 struck over a whole window cannot say when in each day a card traded, so a card whose every
 fill lands in the first seconds of each session, its day ended there by a stop, reads like one
-that trades all day. So the lane reads, off the run the card was scored on and the orders its
-strategy submitted, the numbers below, and records them with the card:
+that trades all day. So the lane reads, off the run the card was scored on, the orders its
+strategy submitted and the first point it was handed in each return period, the numbers
+below, and records them with the card:
 
 | field | what it is |
 |---|---|
@@ -444,9 +445,9 @@ strategy submitted, the numbers below, and records them with the card:
 | `median_hold_s` | the median seconds from a trade's entry fill to its exit fill |
 | `maker_share` | the share of traded notional the venue reported as a maker's fill |
 | `fill_ratio` | the quantity filled on orders that carried a limit over the quantity submitted on such orders; `null` when the strategy sent none. An order the emulator released at market fills with no limit, and a modify that raised a quantity is not in the order as submitted, so it is a reading rather than an identity |
-| `filled_periods` | how many of its return periods the run filled in. The window is cut into them on the UTC clock, as the paragraph on return periods below says: each opens at the window's first midnight plus a whole number of `[research] return_period`s — a UTC day each by default — and a fill is in the one its instant falls in, the one the runner books it to. `first_fill_s`, `last_fill_s` and `active_s` are read over these periods; all four are `null` on a card recorded before the digest timed its fills |
-| `first_fill_s`, `last_fill_s` | the median, over those periods, of the seconds from a period's opening to its first fill and to its last. A period opens on the UTC clock and not at any venue's open, so at a daily period an offset is the UTC time of day: a fill a second after a New York session opens reads 52,201 in winter and 48,601 in summer. Over an even count of periods it is the lower of the two middle offsets, so it is one some period filled at — the mean of two is an instant none need have, and on a window that straddles a change of clocks it falls in the hour between the two opens |
-| `active_s` | the median, over the same periods, of the seconds from a period's first fill to its last: how long a period's trading lasted, whatever else the period held |
+| `period`, `filled_periods` | the run's `[research] return_period`, and how many of its return periods it filled in. The window is cut into them on the UTC clock, as the paragraph on return periods below says: each opens at the window's first midnight plus a whole number of periods, and a fill is in the one its instant falls in. `first_fill_s`, `last_fill_s` and `active_s` are read over the periods filled in; all five are `null` on a card recorded before the digest timed its fills |
+| `first_fill_s`, `last_fill_s` | the median, over those periods, of the seconds from a period's first point — the first point the card was handed in it — to its first fill and to its last. No calendar is consulted: an offset is from a point, so a card handed a session that starts at the same local time every day, and trading it at the same local times, reads the same either side of a change of clocks. Over an even count of periods it is the lower of the two middle offsets, so it is one some period filled at |
+| `active_s` | the median, over the same periods, of the seconds from a period's first fill to its last. A burst that straddles a period's boundary, as a hold across 00:00Z does on a 24 h name at a daily period, reads as the whole period |
 | `net_bps_per_trade`, `net_bps_per_trade_se` | the mean of `pnl_net / notional` over the closed trades, in basis points of the position opened, and its error: the per-trade objective over the whole window as one fold, the error read period by period. What `edge_per_trade` judges. Read that way an error has as many degrees of freedom as periods that closed a trade, less one, and on `p` such periods reads low by `√((p − 1)/p)` — 0.71 of the error on two, 0.94 on eight — which the gate's margin allows for and this number does not; it is zero by construction when one period closed them all, however far apart they landed, so with fewer than two the error is `null` |
 | `cost_bps_per_trade`, `gross_bps_per_trade` | the mean of `cost / notional` on the same trades, and the net plus it |
 | `net_bps_per_session`, `cost_bps_per_session`, `gross_bps_per_session` | in basis points of the capital, per session: the sum of the returns — what the book made, an open position's mark included — every fill's cost, and the net plus it |
@@ -468,9 +469,10 @@ three in four of them winners, held for a median of 16 minutes and netting 10.08
 the position — 15.08 gross less 5.00 of cost — and the discard after it traded more, 4.46 a
 session, for 5.38 net: its number fell because each trade earned less, not because it traded
 less. The demo sends market orders only, so `fill_ratio` is empty. The keep filled in all 261
-of its daily periods, its first fill a median 52,740 s and its last 70,920 s into the UTC day
-— 14:39 and 19:42 — with 17,460 s, nearly five hours, between them: a book that trades through
-the session, where one whose stop ended its day a second after the open would read a span of
+of its daily periods, its first fill a median 2,340 s and its last 21,060 s after its period's
+first point — the session's first bar, which closes at 09:31 in New York in winter and summer
+alike — with 17,460 s, nearly five hours, between them: a book that trades through the
+session, where one whose stop ended its day a second after the open would read a span of
 about a second.
 
 **A card that ran keeps what its number was computed from.** The metric is one reading of

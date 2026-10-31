@@ -35,10 +35,12 @@ INTENTS = (
     (at(START, 13), "DEMO", "SELL", 300.0, "MARKET", None),
 )
 RUN = build_run((100.0, -50.0, 30.0, 20.0), trades=TRADES, fills=FILLS)
+FIRSTS = tuple(at(START + timedelta(days=day), 9) for day in range(4))
+"""The first point each of the four days handed the card, at 09:00."""
 
 
 def test_every_number_of_the_digest_is_the_one_a_pencil_gets() -> None:
-    made = digest(RUN, INTENTS)
+    made = digest(RUN, INTENTS, FIRSTS)
 
     assert (made.sessions, made.fills) == (4, 2)
     assert made.trades_per_session == 1.0
@@ -52,9 +54,19 @@ def test_every_number_of_the_digest_is_the_one_a_pencil_gets() -> None:
     assert made.net_bps_per_session == pytest.approx(100.0 / 100_000 * 10_000 / 4)
     assert made.cost_bps_per_session == pytest.approx(4.0 / 100_000 * 10_000 / 4)
     assert made.gross_bps_per_session == pytest.approx(2.5 + 0.1)
-    assert made.filled_periods == 1, "both fills are on the first day"
-    assert (made.first_fill_s, made.last_fill_s) == (12 * 3600.0, 13 * 3600.0)
+    assert (made.period, made.filled_periods) == ("1d", 1), "both fills are on the first day"
+    assert (made.first_fill_s, made.last_fill_s) == (3 * 3600.0, 4 * 3600.0), "from 09:00"
     assert made.active_s == 3600.0, "from the noon fill to the one an hour after it"
+
+
+def test_a_run_whose_first_points_nothing_noted_is_not_timed() -> None:
+    """When a run filled is read from the first point of each period, so a run made in
+    process, which no parent streamed, states none of the five rather than a guess."""
+    made = digest(RUN, INTENTS)
+
+    assert made.fills == 2 and made.net_bps_per_trade is not None
+    assert (made.period, made.filled_periods) == (None, None)
+    assert (made.first_fill_s, made.last_fill_s, made.active_s) == (None, None, None)
 
 
 def test_the_net_edge_per_trade_and_its_error_are_the_per_trade_objective_over_one_fold() -> None:
@@ -87,7 +99,7 @@ def test_trades_one_session_moves_together_are_one_session_s_evidence() -> None:
 
 
 def test_a_run_that_traded_nothing_has_sessions_and_no_edge() -> None:
-    made = digest(build_run((0.0, 0.0, 0.0)))
+    made = digest(build_run((0.0, 0.0, 0.0)), (), FIRSTS[:3])
 
     assert (made.sessions, made.fills, made.trades_per_session) == (3, 0, 0.0)
     assert (made.net_bps_per_session, made.cost_bps_per_session) == (0.0, 0.0)
@@ -192,55 +204,75 @@ def fills_at(*instants: int) -> tuple[Fill, ...]:
     return tuple(Fill(ts, "DEMO", "BUY", 100.0, 100.0, cost=0.0) for ts in sorted(instants))
 
 
-def test_when_a_run_filled_is_read_from_the_opening_of_each_period_it_filled_in() -> None:
-    """Three days, each filled in its first seconds and never again: the first fills come
-    1, 1.5 and 0.5 s after the day opens and the last 3, 4 and 6 s after it, so the spans
-    are 2, 2.5 and 5.5 s; the digest states the middle of each, the periods it read them
-    off, and nothing of a period with no fill."""
+def test_when_a_run_filled_is_read_from_the_first_point_of_each_period_it_filled_in() -> None:
+    """Two sessions handed their first point at 14:30Z and two at 13:30Z, as New York's are
+    either side of a change of clocks. Three of them filled 1, 1.5 and 0.5 s after their first
+    point and last 3, 4 and 6 s after it, so the spans are 2, 2.5 and 5.5 s; the digest states
+    the middle of each, in seconds from the first point and not from the UTC midnight, and
+    counts the three periods it read them off and not the fourth, which held points and no
+    fill."""
+    opened = {day: instant(day, hours * 3600) for day, hours in enumerate((14.5, 14.5, 13.5, 13.5))}
     run = build_run(
         (0.0, 0.0, 0.0, 0.0),
         fills=fills_at(
-            *(instant(0, s) for s in (1.0, 2.0, 3.0)),
-            *(instant(1, s) for s in (1.5, 4.0)),
-            *(instant(3, s) for s in (0.5, 6.0)),
+            *(opened[0] + round(s * 1e9) for s in (1.0, 2.0, 3.0)),
+            *(opened[2] + round(s * 1e9) for s in (1.5, 4.0)),
+            *(opened[3] + round(s * 1e9) for s in (0.5, 6.0)),
         ),
     )
 
-    made = digest(run)
+    made = digest(run, (), tuple(opened.values()))
 
     assert (made.sessions, made.filled_periods) == (4, 3)
     assert (made.first_fill_s, made.last_fill_s, made.active_s) == (1.0, 4.0, 2.5)
 
 
+def test_a_period_that_filled_before_any_point_of_it_was_noted_reads_from_that_fill() -> None:
+    """A fill is stamped at a data instant, so it never precedes its period's first point; a
+    run that says otherwise — a fill a second before the first point noted, or a fill in a
+    period with none noted — reads that period from its first fill, so no offset is negative
+    and the digest still validates."""
+    noted = instant(0, 14.5 * 3600)
+    early = build_run((0.0,), fills=fills_at(noted - 1_000_000_000, noted + 1_000_000_000))
+    unnoted = build_run((0.0, 0.0), fills=fills_at(instant(1, 3600.0)))
+
+    made = digest(early, (), (noted,))
+    alone = digest(unnoted, (), (noted,))
+
+    assert (made.first_fill_s, made.last_fill_s, made.active_s) == (0.0, 2.0, 2.0)
+    assert (alone.filled_periods, alone.first_fill_s, alone.last_fill_s) == (1, 0.0, 0.0)
+
+
 def test_the_middle_of_an_even_count_of_periods_is_an_offset_one_of_them_filled_at() -> None:
-    """Two winter sessions open at 14:30Z and two summer ones at 13:30Z, each filled once,
-    20 ms in: the mean of the two middle offsets is 14:00:00.02, an instant no session
-    filled at, so the digest states the lower of the two."""
-    opens = (14.5, 14.5, 13.5, 13.5)
+    """Four periods, each filled once, 1, 2, 3 and 4 s after its first point: the mean of the
+    two middle offsets is 2.5 s, which no period filled at, so the digest states the lower."""
+    opened = tuple(instant(day, 14.5 * 3600) for day in range(4))
     run = build_run(
         (0.0,) * 4,
-        fills=fills_at(*(instant(day, hours * 3600 + 0.02) for day, hours in enumerate(opens))),
+        fills=fills_at(*(ts + seconds * 1_000_000_000 for seconds, ts in enumerate(opened, 1))),
     )
 
-    made = digest(run)
+    made = digest(run, (), opened)
 
     assert made.filled_periods == 4
-    assert made.first_fill_s == made.last_fill_s == 48_600.02, "13:30:00.02"
+    assert made.first_fill_s == made.last_fill_s == 2.0
     assert made.active_s == 0.0, "one fill a period spans no time"
 
 
-def test_a_period_opens_where_the_runner_cut_the_window_and_not_at_every_midnight() -> None:
-    """Return periods are cut from the window's first midnight, one period after another: at
-    two days the second midnight opens nothing, so a fill an hour into the second day is 25
-    hours into the period the first midnight opened, and at an hour each hour opens its own."""
+def test_the_digest_cuts_its_periods_from_the_window_s_first_midnight_at_the_run_s_period() -> None:
+    """The digest's own grid: periods cut from the window's first midnight, one period after
+    another. At two days the second midnight opens nothing, so a fill an hour into the second
+    day is in the period the first midnight opened, three hours after its first point at
+    22:00; at an hour each hour opens its own, and each fill is its hour's first point."""
     daily = build_run((0.0, 0.0), fills=fills_at(instant(0, 23 * 3600.0), instant(1, 3600.0)))
+    first = instant(0, 22 * 3600.0)
 
-    two_days = digest(replace(daily, period="2d"))
-    hourly = digest(replace(daily, period="1h"))
+    two_days = digest(replace(daily, period="2d"), (), (first,))
+    hourly = digest(replace(daily, period="1h"), (), (first, *(f.ts_ns for f in daily.fills)))
 
-    assert digest(daily).filled_periods == 2
-    assert two_days.filled_periods == 1
-    assert (two_days.first_fill_s, two_days.last_fill_s) == (23 * 3600.0, 25 * 3600.0)
+    assert digest(daily, (), (first, instant(1, 3600.0))).filled_periods == 2
+    assert (two_days.period, two_days.filled_periods) == ("2d", 1)
+    assert (two_days.first_fill_s, two_days.last_fill_s) == (3600.0, 3 * 3600.0)
     assert two_days.active_s == 2 * 3600.0
     assert hourly.filled_periods == 2
     assert (hourly.first_fill_s, hourly.last_fill_s, hourly.active_s) == (0.0, 0.0, 0.0)
