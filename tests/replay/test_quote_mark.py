@@ -1,6 +1,7 @@
 """`balance_at_quote` marks every open position at the mid of its name's quote in force, so a
-print outside the quote moves `balance` and not it; with no valid quote it is `balance`; and
-the two code paths read the same number on every point.
+print outside the quote moves `balance` and not it; with no valid quote at the last trade, or
+at cost before any, never at that quote's mid; and the two code paths read the same number on
+every point.
 
 The tick sleeve buys 100 at market on its first point and holds them, writing down both readers
 on every quote and print it handles. Instants are milliseconds after 15:00 UTC on 2024-03-04, a
@@ -171,12 +172,16 @@ def test_a_print_outside_the_quote_moves_the_balance_and_not_the_balance_at_quot
     assert back[2] == ten[2]
 
 
-def test_with_no_valid_quote_in_force_the_balance_at_quote_is_the_balance(tmp_path: Path) -> None:
-    """A locked quote, a crossed one and one that shows no bid are not `ask > bid > 0`: on each,
-    and on the print after each — where both the last valid quote's mid, 10.00, and the
-    invalid one's would mark otherwise — `balance_at_quote` is `balance`, marked at the last
-    print. The next valid quote is marked at its mid again, and a print outside it moves
-    `balance` alone."""
+def test_with_no_valid_quote_in_force_the_balance_at_quote_marks_at_the_last_trade(
+    tmp_path: Path,
+) -> None:
+    """A locked quote, a crossed one and one that shows no bid are not `ask > bid > 0`, so on
+    each `balance_at_quote` marks the 100 held at the last trade, where `balance` marks them at
+    that quote's own mid: on the locked quote, before any trade, at the 10.02 they cost against
+    its 10.00; on the crossed one at the 9.60 printed before it against its 10.00; on the
+    one-sided one at 9.70 against its 5.01, half the offer. On the print after each the two
+    are one number. The next valid quote is marked at its mid again, and a print outside it
+    moves `balance` alone."""
     read = both_paths(
         [
             q(9.98, 10.02, 10),
@@ -196,11 +201,18 @@ def test_with_no_valid_quote_in_force_the_balance_at_quote_is_the_balance(tmp_pa
     assert read["node"] == read["engine"]
     _, ten, *invalid, valid, stray = read["engine"]
     assert [kind for kind, *_ in invalid] == ["quote", "print"] * 3
-    for kind, balance, at_quote, held in invalid:
-        assert held == 100.0
-        assert balance.hex() == at_quote.hex(), kind
-    printed = [balance for kind, balance, _, _ in invalid if kind == "print"]
-    assert printed == pytest.approx([ten[1] - 40.0, ten[1] - 30.0, ten[1] - 20.0], abs=1e-9)
+    assert all(held == 100.0 for *_, held in invalid)
+    quoted, printed = invalid[0::2], invalid[1::2]
+    assert [balance for _, balance, _, _ in quoted] == pytest.approx(
+        [ten[1], ten[1], ten[1] - 499.0], abs=1e-9
+    )
+    assert [at_quote for _, _, at_quote, _ in quoted] == pytest.approx(
+        [ten[2] + 2.0, ten[2] - 40.0, ten[2] - 30.0], abs=1e-9
+    )
+    assert all(balance.hex() == at_quote.hex() for _, balance, at_quote, _ in printed)
+    assert [balance for _, balance, _, _ in printed] == pytest.approx(
+        [ten[1] - 40.0, ten[1] - 30.0, ten[1] - 20.0], abs=1e-9
+    )
     assert valid[1] == valid[2] == ten[1]
     assert stray[2] == valid[2]
     assert stray[1] == pytest.approx(ten[1] - 60.0, abs=1e-9)

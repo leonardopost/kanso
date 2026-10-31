@@ -1127,12 +1127,13 @@ and IWM on 2025-01-02, 2025-01-03 and 2025-02-03 — 1,744 of 4,791 prints lay o
 in force at them, a median of 0.68 bp and at most 13.7 bp of the price from its mid, and one
 NVDA print of a single share took a scalping card's balance from -0.9 bp of its book to -54 bp
 and ended its day at its -40 bp stop. The mark is the mid because `balance` and the card mark
-a quote at its mid, so the two readers differ only by what prints moved; the side a close would
-take — the bid for a long, the ask for a short — would also move every limit by half the spread
-of every position open, at those opens a median of 0.23 bp and at most 1.13 bp of the price,
-which a flatten at market pays past the limit. A name with no valid quote in
-force — none yet, or a last quote that is not `ask > bid > 0`, as a locked or crossed one is,
-which 48 of those 4,791 prints met — is marked as `balance` marks it, at its last print.
+a quote at its mid, so where the last point of each name held is a valid quote the two readers
+are one number; the side a close would take — the bid for a long, the ask for a short — would
+also move every limit by half the spread of every position open, at those opens a median of
+0.23 bp and at most 1.13 bp of the price, which a flatten at market pays past the limit. A name
+with no valid quote in force — none yet, or a last quote that is not `ask > bid > 0`, as a
+locked or crossed one is, which 48 of those 4,791 prints met — is marked at its last trade or
+bar close, never at that quote's mid, and with neither at its cost.
 Nothing kanso sizes, reserves or measures reads it: the room reads `balance`, and a card is
 measured on the runner's equity, which `balance` mirrors.
 

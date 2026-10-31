@@ -530,12 +530,14 @@ does not save memory either, since the engine keeps every order's events for the
 (`docs/concepts.md`).
 `self.balance_at_quote` is that balance with each open position marked at the mid of its
 name's last quote instead of its last print: the number to hold a strategy's own daily stop or
-target to, since a print outside the quote moves `balance` and not it. Where every name held
+target to, since a print outside a valid quote moves `balance` and not it. Where every name held
 last had a valid quote it is `balance` exactly; a name whose last quote is not `ask > bid > 0`
-— locked, crossed or one-sided — or that has none, a bar sleeve's among them, is marked as
-`balance` marks it, at its last print. It is the mid, not the bid of a long or the ask of a
-short, so a flatten at market still pays half the spread past it; nothing kanso sizes or
-measures reads it, and a read costs one quote for each position open. A read books the fills
+— locked, crossed or one-sided — or that has none, a bar sleeve's among them, is marked at its
+last trade or bar close and never at an invalid quote's mid, with neither at its cost, so a
+name the sleeve is handed no quotes of is marked as `balance` marks it. It is the mid, not the
+bid of a long or the ask of a short, so a flatten at market still pays half the spread past
+it; nothing kanso sizes or measures reads it, and a read looks at no more than a quote and a
+print of each position open. A read books the fills
 the venue has made since the last read, as a read of `balance` does, and nothing else: read
 where a sleeve reads `balance` it changes nothing the sleeve books, and read on a point where
 it reads nothing else it books them there rather than at the next read, as `balance` read there

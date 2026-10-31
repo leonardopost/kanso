@@ -1,7 +1,7 @@
-"""`balance_at_quote` on the engine: a quote from before a split the venue has applied is restated
-as `balance` restates a print, a sleeve no engine holds reads its capital, what it keeps is read
-again and compared under the suite's check, and a read of it books what a read of `balance` at
-the same point books and changes nothing else."""
+"""`balance_at_quote` on the engine: a quote or a print from before a split the venue has applied
+is restated as `balance` restates a print, a sleeve no engine holds reads its capital, what it
+keeps is read again and compared under the suite's check, and a read of it books what a read of
+`balance` at the same point books and changes nothing else."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ SECOND_NS = 1_000_000_000
 
 class ReadsThrough(KansoStrategy):
     """Buys 1,005 HEDGE at market on HEDGE's first quote and holds them through HEDGE's split,
-    and writes down both balances on every bar of DEMO's it is handed."""
+    and writes down both balances and its cash on every bar it is handed."""
 
     config_cls = KansoConfig
 
@@ -56,13 +56,10 @@ class ReadsThrough(KansoStrategy):
         self.read.append((self.balance, self.balance_at_quote, self._cash))
 
 
-def test_a_quote_from_before_a_split_is_restated_as_the_balance_restates_a_print(
-    backtest,
-) -> None:
-    """HEDGE's last point when DEMO's first bar of the ex-date applies its one-for-ten reverse
-    split to the 1,005 held is its quote of the eve, 9.98/10.03: both balances mark the 100
-    shares the split leaves at that quote's mid in the new count, 100.05, and are one number. A
-    mid left in the old count would mark them at a tenth of that."""
+def held_through(backtest, hedge: list[object]) -> tuple[float, float, float]:
+    """What `ReadsThrough` read on DEMO's second bar of the ex-date: HEDGE quoted at 9.99/10.01
+    two hours before it and then handed `hedge`, and DEMO's first bar, closed ten seconds past
+    midnight, applying HEDGE's one-for-ten reverse split to the 1,005 held, which leaves 100."""
     midnight = midnight_ns(EX)
     sleeve = ReadsThrough(
         config(universe=(DEMO.value, HEDGE.value), data_requirements=("bar", "quote"))
@@ -79,18 +76,57 @@ def test_a_quote_from_before_a_split_is_restated_as_the_balance_restates_a_print
                 midnight - 7_200 * SECOND_NS,
                 midnight - 7_200 * SECOND_NS,
             ),
+            *hedge,
+            _stamped(DEMO, 10.0, midnight + 10 * SECOND_NS, midnight + 11 * SECOND_NS),
+            _stamped(DEMO, 10.0, midnight + 70 * SECOND_NS, midnight + 71 * SECOND_NS),
+        ],
+    )
+    (position,) = run.engine.cache.positions(instrument_id=HEDGE)
+    assert float(position.quantity) == 100.0
+    return sleeve.read[-1]
+
+
+def test_a_quote_from_before_a_split_is_restated_as_the_balance_restates_a_print(
+    backtest,
+) -> None:
+    """HEDGE's last point when DEMO's bars of the ex-date read is its quote of the eve,
+    9.98/10.03: both balances mark the 100 shares the split leaves at that quote's mid in the
+    new count, 100.05, and are one number. A mid left in the old count would mark them at a
+    tenth of that."""
+    midnight = midnight_ns(EX)
+    balance, at_quote, cash = held_through(
+        backtest,
+        [
             _hedge_quote(
                 9.98, 10.03, 5_000, 5_000, midnight - 90 * SECOND_NS, midnight - 30 * SECOND_NS
-            ),
-            _stamped(DEMO, 10.0, midnight + 10 * SECOND_NS, midnight + 11 * SECOND_NS),
+            )
         ],
     )
 
-    (position,) = run.engine.cache.positions(instrument_id=HEDGE)
-    assert float(position.quantity) == 100.0
-    ((balance, at_quote, cash),) = sleeve.read
     assert at_quote.hex() == balance.hex()
     assert at_quote - cash == pytest.approx(100 * 100.05, rel=1e-12)
+
+
+def test_a_print_from_before_a_split_is_restated_where_no_valid_quote_is_in_force(
+    backtest,
+) -> None:
+    """HEDGE's last print of the eve is a bar closing at 10.00 and its last quote a locked one
+    at 10.05, which is not valid: `balance_at_quote` marks the 100 shares the split leaves at
+    that close in the new count, 100.00, where `balance` marks them at the locked quote's mid,
+    100.50. A close left in the old count would mark them at a tenth of that."""
+    midnight = midnight_ns(EX)
+    balance, at_quote, cash = held_through(
+        backtest,
+        [
+            _stamped(HEDGE, 10.0, midnight - 120 * SECOND_NS, midnight - 119 * SECOND_NS),
+            _hedge_quote(
+                10.05, 10.05, 5_000, 5_000, midnight - 30 * SECOND_NS, midnight - 30 * SECOND_NS
+            ),
+        ],
+    )
+
+    assert at_quote - cash == pytest.approx(100 * 100.00, rel=1e-12)
+    assert balance - cash == pytest.approx(100 * 100.50, rel=1e-12)
 
 
 def test_a_sleeve_no_engine_holds_reads_its_capital_at_the_quote() -> None:

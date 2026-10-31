@@ -760,6 +760,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._cash = resolved.capital
         self._ledger: dict[object, _Tracked] = {}
         self._print_ns: dict[str, int] = {}
+        self._balance_at_quote_traded: dict[str, tuple[float, int]] = {}
+        """Each name's last trade or bar close and its `ts_event`, which a quote's mid never
+        replaces: what `balance_at_quote` marks a name with no valid quote at (`_printed`)."""
         self._scope_days: dict[str, set[date]] = {}
         self._scope_cls: type | None = None
         self._price_ns: dict[str, int] = {}
@@ -1026,8 +1029,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def balance_at_quote(self) -> float:
         """`balance` with each open position marked at the mid of its name's quote in force —
         the last quote the sleeve was handed — instead of at its last print: the number for a
-        strategy's own limits, a daily stop or a daily target, which a print outside the quote
-        moves no further than the quote moves.
+        strategy's own limits, a daily stop or a daily target.
 
         `balance` marks a name at its last print, a quote's mid or a trade's price, whichever
         came last, as the card's equity does, and a trade can print well outside the quote.
@@ -1040,17 +1042,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The mark is the mid and not the side a close would take, because `balance` and the card
         mark a quote at its mid: wherever the last point of every name held was a valid quote
-        this is `balance`, bit for bit, and elsewhere it differs from it only by what prints
-        moved. The side a close would take — the bid for a long, the ask for a short, where an
-        exit at market fills — would also move every limit by half the spread of every position
-        open, at those opens a median of 0.23 bp and at most 1.13 bp of the price: what a
-        flatten pays on top of this, and what a limit read off it has not paid.
+        this is `balance`, bit for bit. The side a close would take — the bid for a long, the
+        ask for a short, where an exit at market fills — would also move every limit by half the
+        spread of every position open, at those opens a median of 0.23 bp and at most 1.13 bp
+        of the price: what a flatten pays on top of this, and what a limit read off it has not
+        paid.
 
         A name with no valid quote in force — none yet, a name the sleeve is handed no quotes
         of, or one whose last quote is locked, crossed or one-sided, so not `ask > bid > 0` —
-        is marked as `balance` marks it: at its last print, and with none at its split-aware
-        cost. At those opens 48 of the 4,791 prints met such a quote. A quote from before a
-        split the venue has since applied is restated by its ratio, as a print is.
+        is marked at its last trade or bar close, never at that quote's mid, and with neither
+        at its split-aware cost; for a name the sleeve is handed no quotes of that is the mark
+        `balance` reads. At those opens 48 of the 4,791 prints met such a quote. A quote or a
+        print stamped before a split the venue has since applied is restated by its ratio, as
+        `balance` restates a print.
 
         Nothing of the harness reads it — sizing and the room read `balance`, and a card is
         measured on the runner's equity, which `balance` mirrors — so a sleeve that neither
@@ -1067,7 +1071,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         What marks a position besides its quote — its name, quantity and multiplier — is kept
         until anything it reads changes (`_forget_kept`), as `held` keeps its read, so a read
-        costs one quote read for each position open: measured on 2026-10-30 on the suite's
+        looks at no more than a quote and a print of each position open: measured on
+        2026-10-30 on the suite's
         kept-reads tick sleeve over 20,000 points, a median 1.6 µs a read holding one position
         and 2.2 µs holding two, where a read of `balance` took 1.8 µs and 2.6 µs.
         """
@@ -1115,7 +1120,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self, key: str, qty: float, multiplier: float, position: Any
     ) -> float:
         """One open position's market value at the mid of its name's quote in force, quoted in
-        the shares held now; with no valid quote, its value as `balance` marks it (`_worth`)."""
+        the shares held now; with no valid quote, at its last trade or bar close, and with
+        neither at its own split-aware cost. Never at the mid of a quote that is not
+        `ask > bid > 0`, which `handle_quote_tick` makes the last print `balance` marks at."""
         quote = self._last_quote.get(key)
         if quote is not None:
             bid, ask = float(quote.bid_price), float(quote.ask_price)
@@ -1124,7 +1131,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 if key in self._restated:
                     mid /= self._restating(key, int(quote.ts_event))
                 return qty * mid * multiplier
-        return self._worth(position)
+        traded = self._balance_at_quote_traded.get(key)
+        if traded is None:
+            applied = tuple(self._restated.get(key, ()))
+            return qty * splits.ledger(splits.moves_of(position, applied)).basis * multiplier
+        price, printed_ns = traded
+        if key in self._restated:
+            price /= self._restating(key, printed_ns)
+        return qty * price * multiplier
 
     # --- the book policy: the runner's period ends, mirrored -------------------
 
@@ -1787,6 +1801,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         latest by availability, and of one instant's, the greatest."""
         self._last_print[key] = price
         self._print_ns[key] = ts_event
+        self._balance_at_quote_traded[key] = (price, ts_event)
         held = self._mark_at.get(key)
         if held is None or ts_init > held[0] or (ts_init == held[0] and price > held[1]):
             self._mark_at[key] = (ts_init, price)

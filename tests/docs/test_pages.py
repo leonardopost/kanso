@@ -474,15 +474,17 @@ def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> Non
 
 
 def test_the_pages_say_the_balance_at_quote_is_the_mid_and_read_by_no_part_of_kanso() -> None:
-    """`balance_at_quote` marks at the quote's mid, as `balance` would without a valid quote,
-    only a strategy reads it, and a read of it books what a read of `balance` books
+    """`balance_at_quote` marks at the quote's mid and, without a valid quote, at the last trade
+    or bar close; only a strategy reads it; a read of it books what a read of `balance` books
     (`tests/replay/test_quote_mark.py`, `tests/nautilus/strategy/test_quote_mark.py`)."""
     workspace = prose(page("workspace.md"))
     assert (
         "`self.balance_at_quote` is that balance with each open position marked at the mid of"
         " its name's last quote instead of its last print"
     ) in workspace
-    assert "is marked as `balance` marks it, at its last print" in workspace
+    assert (
+        "is marked at its last trade or bar close and never at an invalid quote's mid"
+    ) in workspace
     assert "nothing kanso sizes or measures reads it" in workspace
     assert (
         "A read books the fills the venue has made since the last read, as a read of `balance`"
@@ -490,7 +492,7 @@ def test_the_pages_say_the_balance_at_quote_is_the_mid_and_read_by_no_part_of_ka
     ) in workspace
     concepts = prose(page("concepts.md"))
     assert "**A strategy's own limits can be read at the quote.**" in concepts
-    assert "is marked as `balance` marks it, at its last print" in concepts
+    assert "is marked at its last trade or bar close, never at that quote's mid" in concepts
     assert "Nothing kanso sizes, reserves or measures reads it" in concepts
 
 
