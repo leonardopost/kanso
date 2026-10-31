@@ -2709,10 +2709,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         Either stands for the market order the rate held back, which goes once the rate lets
         it through, so an order built by hand behind it reads it as an exit at market in
-        flight (`_opens`): a flip behind it is the entry it is, dropped and counted, as no
-        token is available to it either — the bucket holding too few, or the cancel waiting —
-        rather than refused as an exit kanso did not size. With no rate stated nothing is owed
-        so."""
+        flight (`_opens`): a flip behind it is the entry it is, dropped and counted when no
+        token is available to it, rather than refused as an exit kanso did not size. With no
+        rate stated nothing is owed so."""
         if not held:
             return held
         name = (key, OrderSide.SELL if held > 0 else OrderSide.BUY)
