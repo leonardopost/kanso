@@ -443,10 +443,10 @@ class RunRequest:
     either way.
 
     `version_source` is the file a composed version's implementation holds the sleeve's bytes
-    in (`kanso.strategy.impl`), set where they are a version's — a replay of a version, and its
-    expectation measured (`kanso.strategy.composition`) — so that a `Config` giving
-    `bar_resolution` a default of its own is refused naming that file, with the remedy of a
-    version, whose certified bytes no edit of `strategy.py` changes. None for a card's bytes.
+    in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a
+    version's expectation (`kanso.strategy.composition`), so that a `Config` giving
+    `bar_resolution` a default of its own is refused there naming that file, with the remedy of
+    a version, whose certified bytes no edit of `strategy.py` changes; None elsewhere.
     """
 
     hyp: Hypothesis
