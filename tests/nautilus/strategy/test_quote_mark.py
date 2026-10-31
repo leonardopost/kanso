@@ -147,7 +147,7 @@ def test_a_sleeve_no_engine_holds_reads_its_capital_at_the_quote() -> None:
 def test_no_part_of_kanso_reads_the_balance_at_quote() -> None:
     """Sizing and the room read `balance`, and a card is measured on the runner's equity: the
     reader is a strategy's alone. The one module of the package that names it is the one that
-    defines it, and no expression of that module reads it."""
+    defines it, and no attribute named `balance_at_quote` is read in it."""
     root = Path(kanso.__file__).parent
     naming = sorted(
         path.relative_to(root).as_posix()
