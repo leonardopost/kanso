@@ -1215,7 +1215,9 @@ def _host_bars(
     and the overlay's card would hand the host the overlay's own tick, quote or trade clock as a
     bar grain beside the host's, at which no bar can be subscribed (`docs/backlog.md` row 234),
     whatever size it states. `regrain` is that grain refusal's: its one remedy takes the host's
-    resolution as well.
+    resolution as well — and, at `quote` or `trade`, requires that kind, since a file at either
+    resolution requires it and asks some instrument for it, which a file off that grain need
+    not have done.
     """
     stated = hyp.bar_resolution or "none"
     size = host_hyp.bar_resolution
@@ -1236,10 +1238,16 @@ def _host_bars(
             "subscribed"
         ), f"set resolution to {host_hyp.resolution} and drop bar_resolution, to match {path}"
     grain = f"set resolution to {host_hyp.resolution}, " if regrain else ""
+    kind = (
+        f", and require {host_hyp.resolution} in data_requirements and in every "
+        "data_by_instrument entry left"
+        if regrain and host_hyp.resolution != "tick"
+        else ""
+    )
     return f"reads no bars beside its {host_hyp.resolution} grain {runs}", (
         f"{grain}drop bar_resolution, and bar from data_requirements and from every "
         "data_by_instrument entry, an entry that asked for bar alone dropped with its name from "
-        f"the universe, to match {path}"
+        f"the universe{kind}, to match {path}"
     )
 
 

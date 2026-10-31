@@ -127,7 +127,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
 | require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
 | attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution` |
-| attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same |
+| attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same, requiring the host's kind too over a host at `quote` or `trade` |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
@@ -707,7 +707,9 @@ dropping the key alone leaves `bar` required at no size, and whatever size the o
 its card would hand the host the overlay's own clock as a bar grain, at which no bar can be
 subscribed. A filter or an exit rule that states one off its host's grain is refused on that
 grain first, naming `resolution`, with the one remedy that takes the host's resolution and does
-the same. Adopting,
+the same — and, over a host at `quote` or `trade`, requires that kind in `data_requirements` and
+in every `data_by_instrument` entry left, since a file at either resolution requires it and
+asks some instrument for it. Adopting,
 changing or dropping the key re-pins the hypothesis and clears `best` with a `best_cleared`
 naming `bar_resolution`; a row pinned before it existed reads as stating none. A tick file
 that requires `bar` and was registered before the key existed fails `kanso doctor`'s

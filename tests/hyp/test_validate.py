@@ -2460,6 +2460,61 @@ def test_a_rule_stating_a_bar_size_off_a_tick_host_reading_none_takes_its_grain_
     )
 
 
+def requiring(doc: dict[str, Any], kind: str) -> dict[str, Any]:
+    """`doc` with `kind` required as the grain remedy over a quote or a trade host words it: in
+    `data_requirements` and in every `data_by_instrument` entry left."""
+    return {
+        **doc,
+        "data_requirements": [*doc["data_requirements"], kind],
+        "data_by_instrument": {
+            name: [*kinds, kind] for name, kinds in doc["data_by_instrument"].items()
+        },
+    }
+
+
+@pytest.mark.parametrize("construct", ["filter", "exit"])
+@pytest.mark.parametrize(
+    ("host", "grain", "kinds"),
+    [("quote", "tick", ["bar", "trade"]), ("trade", "quote", ["bar", "quote"])],
+    ids=["over a quote host", "over a trade host"],
+)
+def test_a_rule_stating_a_bar_size_off_a_quote_or_trade_host_reading_none_requires_its_kind(
+    ws: Workspace, construct: str, host: str, grain: str, kinds: list[str]
+) -> None:
+    """A file at `quote` or `trade` requires that kind and asks some instrument for it, which a
+    rule at another grain need not have done; over such a host reading no bars the grain
+    refusal's one remedy requires the host's kind as well as taking its resolution and dropping
+    the bars, and the file that follows it as worded is admitted."""
+    host_with(ws, **{**READING_NO_BARS, "resolution": host, "data_requirements": [host]})
+    classification = {**FILTER_CLASSIFICATION, "construct": {"id": construct, "host": HOST_ID}}
+    own = [kind for kind in kinds if kind != "bar"]
+    stating = document(
+        **{
+            **TICK_BARS,
+            "resolution": grain,
+            "data_requirements": kinds,
+            "data_by_instrument": {"DEMO": own, "EURO": ["bar"]},
+        },
+        bar_resolution="1m",
+        **classification,
+    )
+
+    failure = refused(ws, stating)
+    followed = accepted(ws, requiring({**without_bars(stating), "resolution": host}, host))
+
+    assert f"resolution: {grain} is not the host's {host}" in failure.message
+    assert (failure.remedy or "").startswith(
+        f"set resolution to {host}, {DROP_THE_BARS.removesuffix(', to match ')}, and require "
+        f"{host} in data_requirements and in every data_by_instrument entry left, to match "
+    )
+    assert (followed.resolution, followed.universe, followed.data_requirements) == (
+        host,
+        ["DEMO"],
+        [*own, host],
+    )
+    assert followed.data_by_instrument == {"DEMO": [*own, host]}
+
+
 def test_a_filter_off_a_host_reading_bars_beside_ticks_is_given_its_grain_and_size(
     ws: Workspace,
 ) -> None:
