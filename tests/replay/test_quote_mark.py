@@ -1,7 +1,7 @@
 """`balance_at_quote` marks every open position at the mid of its name's quote in force, so a
 print outside the quote moves `balance` and not it; with no valid quote at the last trade, or
-at cost before any, never at that quote's mid; and the two code paths read the same number on
-every point.
+at cost before any, never at that quote's mid; under `depth` at the last level one handed; and
+the two code paths read the same number on every point.
 
 The tick sleeve buys 100 at market on its first point and holds them, writing down both readers
 on every quote and print it handles. Instants are milliseconds after 15:00 UTC on 2024-03-04, a
@@ -270,3 +270,96 @@ def test_a_sleeve_handed_no_quotes_reads_its_balance_at_quote_as_its_balance(
     rows = [line.split() for line in read["engine"]]
     assert sum(float(held) > 0.0 for _, _, held in rows) >= 5
     assert all(balance == at_quote for balance, at_quote, _ in rows)
+
+
+DEPTH = """
+from pathlib import Path
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+RECORD = Path(%r)
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Buys 100 at market on its first point and holds them, and writes down, on every level
+    one and print it is handed, both balances, its cash, what it holds and the last level one.\"\"\"
+
+    config_cls = KansoConfig
+
+    def on_start(self):
+        self.bought = False
+        self.top = (0.0, 0.0)
+
+    def _point(self, kind, tick):
+        if not self.bought:
+            self.bought = self.submit_entry(tick.instrument_id, "BUY", qty=100) is not None
+        with RECORD.open("a") as out:
+            out.write(
+                f"{kind} {self.balance.hex()} {self.balance_at_quote.hex()} "
+                f"{self._cash.hex()} {self.held(tick.instrument_id)} "
+                f"{self.top[0]} {self.top[1]}\\n"
+            )
+
+    def on_quote_tick(self, tick):
+        self.top = (float(tick.bid_price), float(tick.ask_price))
+        self._point("top", tick)
+
+    def on_trade_tick(self, tick):
+        self._point("print", tick)
+"""
+
+
+def test_under_depth_the_balance_at_quote_marks_at_the_last_level_one_handed(
+    tmp_path: Path,
+) -> None:
+    """Under `depth` level one is the harness's, read off its own copy of the book, and moves no
+    last print. Bought at the 10.02 offer, the 100 held are marked on every point at the mid of
+    the last level one the sleeve was handed, on both paths alike, so a one-share print at 9.50
+    under the 9.99 bid moves `balance` 49.00 down and leaves `balance_at_quote` where it was."""
+    from tests.nautilus.backtest.test_depth import _base, _id, book, prints
+
+    day = FORWARD[0]
+    ns = _base(day) + 1_300 * MS
+    stray = TradeTick(
+        _id(), Price(9.50, 2), Quantity.from_int(1), AggressorSide.SELLER, TradeId("S1"), ns, ns
+    )
+    hyp = hypothesis(
+        resolution="tick",
+        horizon="1d",
+        data_requirements=["book", "trade"],
+        depth={"every_ms": 100, "levels": 3},
+    )
+    groups = [
+        tuple(book(day)),
+        tuple(sorted([*prints(day), stray], key=lambda tick: int(tick.ts_init))),
+    ]
+    read: dict[str, list[list[str]]] = {}
+    for path in ("engine", "node"):
+        written = tmp_path / f"{path}.txt"
+        request = request_for(source=(DEPTH % str(written)).encode(), hyp=hyp)
+        if path == "engine":
+            fills = backtest.execute(request, [instrument()], groups).run.fills
+        else:
+            fills = session.run_node(request, [instrument()], groups).result.run.fills
+        assert [(fill.qty, fill.px) for fill in fills] == [(100.0, 10.02)]
+        read[path] = [line.split() for line in written.read_text().splitlines()]
+
+    assert read["node"] == read["engine"]
+    rows = [
+        (
+            float.fromhex(balance),
+            float.fromhex(at_quote),
+            float.fromhex(cash),
+            float(held),
+            bid,
+            ask,
+        )
+        for _, balance, at_quote, cash, held, bid, ask in read["engine"]
+    ]
+    booked = [row for row in rows if row[2] < 100_000.0]
+    assert len(booked) >= 10
+    for _, at_quote, cash, held, bid, ask in booked:
+        assert at_quote == pytest.approx(cash + held * (float(bid) + float(ask)) / 2.0, abs=1e-9)
+    *_, before, under, after = rows
+    assert under[0] == pytest.approx(before[0] - 49.0, abs=1e-9)
+    assert under[1] == before[1] == after[1]

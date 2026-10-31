@@ -530,14 +530,15 @@ does not save memory either, since the engine keeps every order's events for the
 (`docs/concepts.md`).
 `self.balance_at_quote` is that balance with each open position marked at the mid of its
 name's last quote instead of its last print: the number to hold a strategy's own daily stop or
-target to, since a print outside a valid quote moves `balance` and not it. Where every name held
-last had a valid quote it is `balance` exactly; a name whose last quote is not `ask > bid > 0`
-— locked, crossed or one-sided — or that has none, a bar sleeve's among them, is marked at its
-last trade or bar close and never at an invalid quote's mid, with neither at its cost, so a
-name the sleeve is handed no quotes of is marked as `balance` marks it. It is the mid, not the
-bid of a long or the ask of a short, so a flatten at market still pays half the spread past
-it; nothing kanso sizes or measures reads it, and a read looks at no more than a quote and a
-print of each position open. A read books the fills
+target to, since a print outside a valid quote moves `balance` and not it. Under `depth` a
+name's last quote is the last level one the sleeve was handed, which `balance` never marks
+at; otherwise, where every name held last had a valid quote it is `balance` exactly. A name
+whose last quote is not `ask > bid > 0` — locked, crossed or one-sided — or that has none, a
+bar sleeve's among them, is marked at its last trade or bar close and never at an invalid
+quote's mid, with neither at its cost, so a name the sleeve is handed no quotes of is marked
+as `balance` marks it. It is the mid, not the bid of a long or the ask of a short, so a flatten
+at market still pays half the spread past it; nothing kanso sizes or measures reads it, and a
+read looks at no more than a quote and a print of each position open. A read books the fills
 the venue has made since the last read, as a read of `balance` does, and nothing else: read
 where a sleeve reads `balance` it changes nothing the sleeve books, and read on a point where
 it reads nothing else it books them there rather than at the next read, as `balance` read there
@@ -792,7 +793,8 @@ an instant and never later than it: at the change itself, stamped with it, befor
 point of the feed. Neither is delayed again: an order sent from either reaches the venue
 `costs.latency_ms` after the point that carried the call, as every order does, because the
 latency is the whole round trip, feed and order together. The quote is a signal and moves
-nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
+nothing but `balance_at_quote`, which marks a name at the last one handed: `last_quote` and
+`last_price` do not read it, `balance` and the card mark no position at it, and
 `spread: quotes` has no quote series to read. What else the strategy may not touch under the
 key — the engine's own book subscriptions, beside the message bus, which no strategy may
 touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book

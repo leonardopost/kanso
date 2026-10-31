@@ -787,6 +787,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
+        self._top_marked: dict[str, QuoteTick] = {}
+        """Under `depth`, the level one each name was last handed, which `balance_at_quote`
+        marks it at, as it marks a name at its last quote without `depth` (`_show_top`)."""
         self._book_ledger: Any = None
         """The book this sleeve is a member of, when a runner put it in one
         (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
@@ -1028,8 +1031,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     @property
     def balance_at_quote(self) -> float:
         """`balance` with each open position marked at the mid of its name's quote in force —
-        the last quote the sleeve was handed — instead of at its last print: the number for a
-        strategy's own limits, a daily stop or a daily target.
+        the last quote the sleeve was handed, under `depth` the last level one — instead of at
+        its last print: the number for a strategy's own limits, a daily stop or a daily target.
 
         `balance` marks a name at its last print, a quote's mid or a trade's price, whichever
         came last, as the card's equity does, and a trade can print well outside the quote.
@@ -1041,12 +1044,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         -40 bp stop.
 
         The mark is the mid and not the side a close would take, because `balance` and the card
-        mark a quote at its mid: wherever the last point of every name held was a valid quote
-        this is `balance`, bit for bit. The side a close would take — the bid for a long, the
-        ask for a short, where an exit at market fills — would also move every limit by half the
-        spread of every position open, at those opens a median of 0.23 bp and at most 1.13 bp
-        of the price: what a flatten pays on top of this, and what a limit read off it has not
-        paid.
+        mark a quote at its mid: without `depth`, wherever the last point of every name held was
+        a valid quote this is `balance`, bit for bit. Under `depth` level one is the harness's,
+        read off its own copy of the book, and `balance` marks nothing at it (`_show_top`). The
+        side a close would take — the bid for a long, the ask for a short, where an exit at
+        market fills — would also move every limit by half the spread of every position open, at
+        those opens a median of 0.23 bp and at most 1.13 bp of the price: what a flatten pays on
+        top of this, and what a limit read off it has not paid.
 
         A name with no valid quote in force — none yet, a name the sleeve is handed no quotes
         of, or one whose last quote is locked, crossed or one-sided, so not `ask > bid > 0` —
@@ -1124,6 +1128,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         neither at its own split-aware cost. Never at the mid of a quote that is not
         `ask > bid > 0`, which `handle_quote_tick` makes the last print `balance` marks at."""
         quote = self._last_quote.get(key)
+        if quote is None:
+            quote = self._top_marked.get(key)
         if quote is not None:
             bid, ask = float(quote.bid_price), float(quote.ask_price)
             if ask > bid > 0.0:
@@ -1585,8 +1591,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Hand level one of a book just changed, when both sides hold a level and the top
         is unlike the one last shown.
 
-        The quote is stamped with the instant of the change and is a signal only: it moves
-        no last price, no mark and no quoted spread, as the book it is read from moves none.
+        The quote is stamped with the instant of the change and is a signal: it moves no last
+        price, no quoted spread and no mark `balance` or the card reads, as the book it is read
+        from moves none. `balance_at_quote` marks a name at the last one handed.
         """
         bids, asks = book
         bid, ask = bids.best(), asks.best()
@@ -1597,9 +1604,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if top == self._top_shown.get(key):
             return
         self._top_shown[key] = top
-        self._show_view(
-            QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init), ts_event
-        )
+        quote = QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init)
+        self._top_marked[key] = quote
+        self._show_view(quote, ts_event)
 
     def _show_depth(self, ts_init: int) -> None:
         """Hand the book as of the last grid instant before `ts_init`, once per grid instant.
