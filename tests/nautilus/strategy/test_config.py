@@ -43,6 +43,17 @@ class Required(KansoConfig, kw_only=True):
     bar_resolution: str | None
 
 
+class Positional(KansoConfig):
+    """Requires the field ahead of every field that has a default, so the struct holds no
+    default for it at all, where a keyword-only class holds msgspec's `NODEFAULT`."""
+
+    hyp_id: str
+    universe: tuple[str, ...]
+    resolution: str
+    extra_resolutions: tuple[str, ...]
+    bar_resolution: str | None
+
+
 class Gate(KansoModifier):
     construct = "filter"
     config_cls = Attached
@@ -129,17 +140,23 @@ def test_a_sleeve_refuses_a_config_that_is_not_a_kanso_config() -> None:
     assert "KansoConfig" in raised.value.message
 
 
-def test_a_bar_resolution_default_is_read_off_the_constructor_and_none_is_kanso_s_own() -> None:
+def test_a_bar_resolution_default_is_read_off_the_class_s_struct_and_none_is_kanso_s_own() -> None:
     """`None` is `KansoConfig`'s own default, so a class restating it is built as any other; one
-    that requires the field would leave a stage that is not handed it unable to build the sleeve
-    at all, and is refused with the rest; and a configuration that is no `KansoConfig` is left to
-    its constructor, which refuses the fields kanso passes it."""
+    that requires the field, keyword-only or ahead of the fields with defaults, would leave a
+    stage that is not handed it unable to build the sleeve at all, and is refused with the rest;
+    and a configuration that is no `KansoConfig` is left to its constructor, which refuses the
+    fields kanso passes it."""
     for admitted in (KansoConfig, Params, Restated, StrategyConfig, object()):
         refuse_own_bar_resolution(admitted, "strategy.py")
 
+    with pytest.raises(ValidationError) as positional:
+        refuse_own_bar_resolution(Positional, "strategy.py")
     with pytest.raises(ValidationError) as raised:
         refuse_own_bar_resolution(Required, "strategy.py", certified=True)
 
+    assert positional.value.message.startswith(
+        "strategy.py: Positional gives bar_resolution no default, where KansoConfig gives None"
+    )
     assert raised.value.code == Exit.VALIDATION
     assert raised.value.message.startswith(
         "strategy.py: Required gives bar_resolution no default, where KansoConfig gives None"

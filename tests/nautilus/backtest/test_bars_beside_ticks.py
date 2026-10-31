@@ -41,7 +41,14 @@ from kanso.nautilus.cross_section import is_marker
 from kanso.nautilus.node import _reconfigured
 from kanso.schemas import Hypothesis, VenueModel, Warmup
 from kanso.strategy import impl
-from tests.own_bar_size import CARD_REMEDY, DECLARING, REFUSED, hidden_after_its_body
+from tests.own_bar_size import (
+    CARD_REMEDY,
+    DECLARING,
+    REFUSED,
+    UNRESOLVED,
+    UNRESOLVED_DECLARING,
+    hidden_after_its_body,
+)
 
 from .conftest import INSTRUMENT, RESEARCH, SECOND_NS, bars, catalog, hypothesis, instrument
 
@@ -341,6 +348,35 @@ def test_a_config_hiding_bar_resolution_after_its_body_is_no_default_and_runs_at
     assert not card.crashed, card.reason
     assert expected, "the strategy without the attribute trades the daily bars"
     assert card.intents == node.intents == expected
+
+
+def test_a_config_annotated_with_a_type_only_a_type_checker_imports_is_read_without_resolving_it(
+    request_for,
+) -> None:
+    """The class's default is read off its struct, which resolves no annotation, so a field
+    annotated with a type imported under `if TYPE_CHECKING:` — a file `strategy_integrity`
+    admits, whose cards main runs — is built as main builds it: over a file at `1d` its card and
+    its node path trade every daily bar, as the same strategy without the field does. Beside a
+    `bar_resolution` default of the class's own it is refused on both paths, naming the class."""
+    plain = request_for(source=ON_BARS, hypothesis_=hypothesis())
+    unresolved = request_for(source=ON_BARS.replace(UNHIDDEN, UNRESOLVED), hypothesis_=hypothesis())
+    declaring = request_for(
+        source=ON_BARS.replace(UNHIDDEN, UNRESOLVED_DECLARING), hypothesis_=hypothesis()
+    )
+    groups = [tuple(bars(RESEARCH))]
+
+    expected = execute(plain, [instrument()], groups).intents
+    card = execute(unresolved, [instrument()], groups)
+    node = session.run_node(unresolved, [instrument()], groups).result
+    with pytest.raises(ValidationError) as card_refused:
+        execute(declaring, [instrument()], groups)
+    with pytest.raises(ValidationError) as node_refused:
+        session.run_node(declaring, [instrument()], groups)
+
+    assert not card.crashed, card.reason
+    assert expected, "the strategy without the field trades the daily bars"
+    assert card.intents == node.intents == expected
+    assert card_refused.value.message == node_refused.value.message == f"strategy.py: {REFUSED}"
 
 
 def test_a_tick_sleeve_counts_its_warmup_sessions_on_its_ticks(tmp_path: Path) -> None:

@@ -390,24 +390,30 @@ def refuse_own_bar_resolution(config_cls: object, where: str, *, certified: bool
     deriving from a base held under another name or read off `KansoStrategy.config_cls`, nor one
     `type()` builds.
 
-    The default is the one the class's constructor takes, read with `inspect.signature`, which
-    for an engine configuration class is msgspec's, derived from the struct's own fields
-    (nautilus_trader 1.231.0, msgspec 0.21.1): a field the class declares again carries the
-    default it declares, and `Parameter.empty` where it declares none. An attribute that hides
-    the field without declaring it — set on the class after its body, say — leaves the default
-    `None` and is read past (`_BAR_RESOLUTION`). A `config_cls` that is no `KansoConfig` is left
-    to its constructor, which refuses the fields kanso passes it. `certified` names the remedy:
-    a version's bytes are certified, so it is researched again rather than edited.
+    The default is read off the class's own struct metadata, which resolves no annotation, so a
+    class annotating a field with a name that exists only for a type checker is read as any
+    other: an engine configuration class is a `msgspec.Struct` (nautilus_trader 1.231.0, msgspec
+    0.21.1), which carries its fields' names in `__struct_fields__` and, in `__struct_defaults__`,
+    the defaults of the trailing ones — a field before them has none, and msgspec's `NODEFAULT`,
+    whose repr is its name, stands for a keyword-only field declared with none. A field the class
+    declares again carries the default it declares. An attribute that hides the field without
+    declaring it — set on the class after its body, say — leaves the default `None` and is read
+    past (`_BAR_RESOLUTION`). A `config_cls` that is no `KansoConfig` is left to its constructor,
+    which refuses the fields kanso passes it. `certified` names the remedy: a version's bytes are
+    certified, so it is researched again rather than edited.
     """
-    from inspect import Parameter, signature
-
     if not (isinstance(config_cls, type) and issubclass(config_cls, KansoConfig)):
         return
-    default = signature(config_cls).parameters["bar_resolution"].default
-    if default is None:
+    fields, defaults = config_cls.__struct_fields__, config_cls.__struct_defaults__
+    at = fields.index("bar_resolution") - len(fields) + len(defaults)
+    if at >= 0 and defaults[at] is None:
         return
     name = config_cls.__qualname__
-    given = "no default" if default is Parameter.empty else f"a default of {default!r}"
+    given = (
+        "no default"
+        if at < 0 or repr(defaults[at]) == "NODEFAULT"
+        else f"a default of {defaults[at]!r}"
+    )
     raise ValidationError(
         f"{where}: {name} gives bar_resolution {given}, where KansoConfig gives None; kanso sets "
         "the field from the hypothesis — on a card always, None where the file states none, and "

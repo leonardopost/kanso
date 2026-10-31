@@ -6,7 +6,8 @@ one — so a class's own default would stand on a stage and not on its card, and
 refuses one wherever it builds the class: in a card's child, where a version's manifest is
 written and where a node loads one. `strategy_integrity` reads the first spelling, a top-level
 class body; each of the other four makes the same class by a spelling its scan does not follow.
-Each block defines `Config` at module level, in place of a test source's own.
+Each block defines `Config` at module level, in place of a test source's own; so do the two whose
+annotation resolves nowhere at run time, one giving the field a default of its own.
 """
 
 from __future__ import annotations
@@ -41,6 +42,19 @@ DECLARING: Final = pytest.mark.parametrize(
         "built by type() with its annotation",
     ],
 )
+
+UNRESOLVED: Final = (
+    b"from typing import TYPE_CHECKING\n\n"
+    b"if TYPE_CHECKING:\n"
+    b"    from decimal import Decimal\n\n\n"
+    b"class Config(KansoConfig):\n"
+    b'    cap: "Decimal | None" = None\n'
+)
+"""A `Config` annotating a field with a type imported for a type checker alone, a name that
+resolves nowhere at run time; `strategy_integrity` admits the file."""
+
+UNRESOLVED_DECLARING: Final = UNRESOLVED + b'    bar_resolution: str | None = "5m"\n'
+"""The same class giving `bar_resolution` a default of its own."""
 
 REFUSED: Final = (
     "Config gives bar_resolution a default of '5m', where KansoConfig gives None; kanso sets the "

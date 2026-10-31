@@ -17,7 +17,13 @@ from kanso.state import StateStore
 from kanso.strategy import files, impl
 from kanso.strategy.composition import compose
 from kanso.workspace import Workspace
-from tests.own_bar_size import DECLARING, REFUSED, VERSION_REMEDY
+from tests.own_bar_size import (
+    DECLARING,
+    REFUSED,
+    UNRESOLVED,
+    UNRESOLVED_DECLARING,
+    VERSION_REMEDY,
+)
 from tests.research.conftest import DOCUMENT, HYP_ID
 
 from .conftest import ALLOWING, BLOCKING, FILTER_ID, VARYING, certified_filter, pinned
@@ -333,6 +339,35 @@ def test_a_sleeve_whose_config_gives_bar_resolution_a_default_of_its_own_writes_
         impl.generate(ws, store, "demo_sized", version, hyp, 1.0)
 
     module = impl.module_name(impl.SLEEVE, "demo_sized", source)
+    assert refused.value.message == f"{module}.py: {REFUSED}"
+    assert refused.value.remedy == VERSION_REMEDY
+    assert not impl.manifest_file(ws, "demo_sized", 1).exists()
+
+
+def test_a_config_annotated_with_a_type_only_a_type_checker_imports_is_composed_as_any_other(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Composition reads the class's default off its struct, which resolves no annotation, so a
+    field annotated with a type imported under `if TYPE_CHECKING:` has its manifest written, as
+    on main; the same class giving `bar_resolution` a default of its own is refused naming the
+    class, with the remedy for certified bytes, and leaves no manifest."""
+    from .conftest import draft_hypothesis, draft_version
+
+    hyp = draft_hypothesis(ws, store, "demo_sized")
+    plain = VARYING.replace(VARYING_CONFIG, UNRESOLVED)
+    sized = VARYING.replace(VARYING_CONFIG, UNRESOLVED_DECLARING)
+    version = draft_version(store, "demo_sized")
+
+    written = impl.generate(
+        ws, store, "demo_sized", _with_sleeve(version, store.put_blob(plain)), hyp, 1.0
+    )
+    with pytest.raises(ValidationError) as refused:
+        impl.generate(
+            ws, store, "demo_sized", _with_sleeve(version, store.put_blob(sized)), hyp, 1.0
+        )
+
+    assert written.sleeve.source == f"{impl.module_name(impl.SLEEVE, 'demo_sized', plain)}.py"
+    module = impl.module_name(impl.SLEEVE, "demo_sized", sized)
     assert refused.value.message == f"{module}.py: {REFUSED}"
     assert refused.value.remedy == VERSION_REMEDY
     assert not impl.manifest_file(ws, "demo_sized", 1).exists()
