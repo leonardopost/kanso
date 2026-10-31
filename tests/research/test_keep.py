@@ -167,8 +167,8 @@ def planted_rates() -> dict[tuple[str, str], tuple[float, float]]:
 
 
 def test_a_planted_refinement_is_kept_on_its_difference_where_its_own_error_kept_little() -> None:
-    """Kept 0.30 of the time at `k_se` 0.5 and almost never at 1 on its own error, and most
-    of the time on the difference's."""
+    """Kept about a quarter of the time at `k_se` 0.5 and almost never at 1 on its own
+    error, and most of the time on the difference's."""
     rates = planted_rates()
     assert rates["refined", "own"][0] < 0.40 and rates["refined", "own"][1] < 0.02
     assert rates["refined", "paired"][0] > 0.85 and rates["refined", "paired"][1] > 0.75

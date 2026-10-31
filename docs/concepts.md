@@ -771,9 +771,9 @@ to say which book it matched, so it appends a `same_book` event carrying what th
 `redundant` event carries. The next proposals are shown both kinds in one list, each saying
 which it is — a proposer told to hold a measured book and move its number cannot apply that
 rule from the refusals alone, and each admitted candidate stores its own book, so a
-hypothesis whose spread is wide against its floor re-treads a book about `ceil(spread / 2 x
-floor)` times before matching resumes. What it may never be is a keep: the keep rule is
-asked first, so a candidate that beats the best is a keep whatever it resembles. The
+hypothesis whose spread is wide against its floor re-treads a book about
+`ceil(spread / 2 x floor)` times before matching resumes. What it may never be is a keep:
+the keep rule is asked first, so a candidate that beats the best is a keep whatever it resembles. The
 baseline is exempt, since it is the last run's best and its signature is already stored; and
 signatures are stored for every judged run, redundant ones included, so the third spelling
 of an idea is refused against the second as well as the first.
@@ -1272,21 +1272,22 @@ Memmel's for two Sharpes, two per-trade edges' linearisations differenced period
 widened for serial correlation like any other. Two cards over the same sessions share most
 of their day-to-day noise, so a refinement has a difference far better known than either
 number, and two unrelated strategies one less well known than either; the candidate's own
-error, which the rule read until it paired, sits between. Measured on synthetic cards of a
-lane earning 15 bp a day at 120 bp of spread over 250 sessions: a refinement truly worth +3
-bp a day, its difference known to about 1.5 bp a day, was kept 0.30 of the time at `k_se`
-0.5 and almost never at 1 on its own error, and is kept most of the time on the
-difference's; an unrelated strategy no better than the best is kept no more often than it
-was; and the refinement with nothing in it is kept at about the rate `k_se` states, `1 −
-Φ(k_se)`, where its own error, five times the difference's, kept almost none — no bar on
-that difference keeps more of the refinement without keeping more of it. `edge_per_trade`'s
-margin, which grows with the search, is not part of the comparison: it holds the card's own
-trades to their own error before the keep rule is asked, as it always has. Where the best
-card kept no measurement — one recorded before cards kept theirs — or the two do not pair,
-because what they were measured under moved between them, the difference is struck on the
-candidate's own error, as it was before. The `card` event of every card the rule compared
-with a best carries the comparison as `keep`: the best's sha7, the `difference`, its `se`,
-whether it was `paired`, and when it was not, `unpaired`, saying why.
+error, which the rule read until it paired, sits between. Measured over 4,000 synthetic
+draws of a lane earning 15 bp a day at 120 bp of spread over 250 sessions, at `k_se` 0.5 and
+1: a refinement truly worth +3 bp a day, its difference known to 1.5 bp a day, was kept 0.26
+and 0.001 of the time on its own error and is kept 0.93 and 0.82 on the difference's; an
+unrelated strategy no better than the best, 0.36 and 0.24 before and 0.31 and 0.16 now; and
+the refinement with nothing in it, 0.004 and none before, and 0.30 and 0.16 now — the rate
+`k_se` states, `1 − Φ(k_se)`. Its own error, five times the difference's, kept almost none
+of those, and no bar on that difference keeps more of the refinement without keeping more of
+them. `edge_per_trade`'s margin, which grows with the search, is not part of the comparison:
+it holds the card's own trades to their own error before the keep rule is asked, as it
+always has. Where the best card kept no measurement — one recorded before cards kept theirs
+— or the two do not pair, because what they were measured under moved between them, the
+difference is struck on the candidate's own error, as it was before. The `card` event of
+every card the rule compared with a best carries the comparison as `keep`: the best's sha7,
+the `difference`, its `se`, whether it was `paired`, and when it was not, `unpaired`, saying
+why.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
