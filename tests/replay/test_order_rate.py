@@ -386,6 +386,45 @@ def test_lifting_the_rate_sends_what_was_deferred_and_holds_back_nothing_more() 
     assert stamps(held)[-1] == (at(5), "SELL", "MARKET")
 
 
+def cancelling_both(then: str) -> bytes:
+    """Buys 100 at market, rests two exits of half of it each, at 20.00 and 21.00, on its second
+    quote, cancels both on its third, and does `then` on its fifth."""
+    return sleeve(
+        f"""        elif self.seen == 3:
+            self.cancel_orders([self.first, self.second])
+        elif self.seen == 5:
+            {then}
+""",
+        second="self.first = self.submit_exit(name, qty=50, price=20.0)\n"
+        "            self.second = self.submit_exit(name, qty=50, price=21.0)",
+    )
+
+
+def test_lifting_the_rate_sends_every_deferred_cancel_at_once() -> None:
+    """At three a minute the entry and the two resting exits leave a twentieth of a token, so
+    both cancels the sleeve asks for on its third quote are deferred. It lifts the rate on its
+    fifth, as a stage's flatten does, and both go there: when the bid jumps to 21.50 on the
+    sixth, neither exit is left to fill."""
+    held = both(
+        rated(cancelling_both("self._lift_rate()"), 3), [tuple(quoted(8, {6: (21.5, 21.52)}))]
+    )
+
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0)]
+    assert held.commands is not None and held.commands.cancels == 2
+
+
+def test_every_deferred_cancel_the_bucket_holds_tokens_for_goes_on_one_point() -> None:
+    """At three a minute both cancels the sleeve asks for on its third quote are deferred. The
+    fourth quote comes a minute later, the bucket full, and both go before its handler, as many
+    as the bucket holds tokens for: when the bid jumps to 21.50 on the fifth, neither exit is
+    left to fill."""
+    later = quoted(2, {2: (21.5, 21.52)}, first=at(3) + 60 * SECOND_NS)
+    held = both(rated(cancelling_both("pass"), 3), [(*quoted(3), *later)])
+
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0)]
+    assert held.commands is not None and held.commands.cancels == 2
+
+
 def test_a_deferred_cancel_of_an_order_that_filled_meanwhile_is_dropped_for_nothing() -> None:
     """The resting exit at 10.05 fills when the bid reaches it on the tenth quote, while its
     cancel waits for a token; the cancel is dropped then, and pays none."""
