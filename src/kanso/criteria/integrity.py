@@ -163,12 +163,13 @@ what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211
   `numpy.lib.npyio.DataSource` opens a path, or downloads a URL and opens that,
   `numpy.lib.format.open_memmap` maps a file, and `numpy.ctypeslib.load_library` loads a
   shared library;
-* a class that is no top-level statement of the file — one under an `if` or a `try`, or made
-  in a function — and a base the scan does not resolve to a harness class: one held under an
-  assigned name (`Base = KansoStrategy`), read off an attribute other than its own name
-  (`KansoStrategy.config_cls`), or a class `type()` builds. The rules on the base's names and
-  on `bar_resolution` read no such class (`docs/backlog.md` row 236); a `Config` default of
-  `bar_resolution` is refused where the runner builds the class, whatever its spelling.
+* a class that is no top-level `class` statement of the file — one under an `if` or a `try`,
+  one made in a function, one `type()` builds — and a class whose base the scan does not
+  resolve to a harness class: one held under an assigned name (`Base = KansoStrategy`) or read
+  off an attribute other than its own name (`KansoStrategy.config_cls`). The rules on the
+  base's names and on `bar_resolution` read no such class (`docs/backlog.md` row 236); a
+  `Config` default of `bar_resolution` is refused where the runner builds the class, whatever
+  its spelling.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -1113,10 +1114,10 @@ def _harness_classes(
     A class reaches a base by naming it among its bases — as itself, through an import
     alias or as a module's attribute — or by naming a top-level class of the file that reaches
     one; every top-level class of the file in that line, a mixin included, is held to the same
-    base. A class nested in a block or a function, a base held under an assigned name or read
-    off another attribute, and a class `type()` builds are not reached (`docs/backlog.md` row
-    236). The bases are the strategy's and the modifier's (`_bases`) unless `roots` names
-    others.
+    base. A class nested in a block or a function, one `type()` builds and one whose base is
+    held under an assigned name or read off another attribute are not reached
+    (`docs/backlog.md` row 236). The bases are the strategy's and the modifier's (`_bases`)
+    unless `roots` names others.
     """
     harness = {base.__name__: base for base in roots or _bases()}
     aliases = {
