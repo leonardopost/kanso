@@ -15,11 +15,13 @@ from kanso.criteria import applicable_objectives, catalogue, objectives
 from kanso.criteria.objectives import (
     ABSOLUTE,
     BENCHMARK,
+    REGISTRY,
     RELATIVE,
     SHARPE_FAMILY,
     STATISTICS,
     applies_to,
     benchmark_level,
+    difference,
     history_days,
     marginal_net_edge_bps,
     marginal_wf_contribution_bps,
@@ -531,6 +533,38 @@ def test_a_benchmark_sharpe_is_paired_against_the_hold_as_a_marginal_one_is_agai
     assert wf_sharpe_vs_hold.compute(candidate, 4, benchmark=hold)[1] == pytest.approx(
         marginal_wf_sharpe.compute(candidate, 4, host=hold)[1]
     )
+
+
+def test_one_card_less_another_is_scored_as_a_marginal_improvement_on_it() -> None:
+    """The keep rule's difference: every objective's, in every mode, is its statistic's
+    relative objective with the other card in the host's place, its error paired period by
+    period — for an absolute objective, the difference of the two metrics — and a card less
+    itself is known exactly."""
+    days = [date(2024, 1, 1 + i) for i in range(8)]
+    one = build_run(
+        (1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0),
+        trades=tuple(
+            trade(day, pnl=p) for day, p in zip(days, (5, -3, 8, 1, -2, 9, 4, 7), strict=True)
+        ),
+    )
+    two = build_run(
+        (1.0, 2.0, 1.0, 2.0, 3.0, 1.0, 3.0, 1.0),
+        trades=tuple(
+            trade(day, pnl=p) for day, p in zip(days, (2, 6, -1, 3, 5, -4, 8, 2), strict=True)
+        ),
+    )
+    assert {objective.statistic for objective in REGISTRY.values()} == set(STATISTICS)
+    for objective in REGISTRY.values():
+        (relative,) = (
+            found
+            for found in REGISTRY.values()
+            if found.mode == RELATIVE and found.statistic == objective.statistic
+        )
+        assert difference(objective, one, two, 4) == relative.compute(one, 4, host=two)
+        assert difference(objective, one, one, 4) == pytest.approx((0.0, 0.0), abs=1e-9)
+        if objective.mode == ABSOLUTE:
+            gap = objective.compute(one, 4)[0] - objective.compute(two, 4)[0]
+            assert difference(objective, one, two, 4)[0] == pytest.approx(gap)
 
 
 @given(st.lists(st.floats(-1_000.0, 1_000.0, allow_nan=False), min_size=1, max_size=40))

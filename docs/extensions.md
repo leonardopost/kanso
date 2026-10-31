@@ -260,15 +260,18 @@ class _MinTrades:
 An objective's YAML carries `applies` and `priority` instead of `stage` and `required` —
 which hypotheses it is meaningful for, and which wins when several are — and its
 implementation returns `compute(run, folds) -> (metric, standard error)`. The standard error
-is not decoration: the keep rule compares a candidate against `max(min_delta, k_se × se)`,
-so an objective that returns a confident-looking zero there makes every card a keep. It is
-the error of the metric read off the series the metric is a mean of — the shipped objectives
-read it off the per-period returns, or the per-trade edges taken period by period so that
-trades one session moves together count once, widened for serial correlation by
-`kanso.criteria.quantities.long_run_factor` — and every deflation gate and the power a
-certification states read it too. A new objective is claimed by exactly one gate's
-`deflates` list: `tests/criteria/test_library.py` fails until it is, and a plan is held to
-include that gate only for an objective some gate claims.
+is not decoration: the redundancy rule's floor is `max(min_delta, k_se × se)` on it, and the
+keep rule's is the same bar on the error of a candidate's difference from the best, read by
+the relative objective of the same statistic with the best in the host's place — so a new
+statistic ships with a relative objective too, and `tests/criteria/test_objectives.py` fails
+until it does. An objective that returns a confident-looking zero there makes every card a
+keep. It is the error of the metric read off the series the metric is a mean of — the
+shipped objectives read it off the per-period returns, or the per-trade edges taken period
+by period so that trades one session moves together count once, widened for serial
+correlation by `kanso.criteria.quantities.long_run_factor` — and every deflation gate and
+the power a certification states read it too. A new objective is claimed by exactly one
+gate's `deflates` list: `tests/criteria/test_library.py` fails until it is, and a plan is
+held to include that gate only for an objective some gate claims.
 
 ## Writing one
 

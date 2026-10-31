@@ -447,6 +447,118 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert f"{event.detail['floor']:.6g}" in str(refused.value.remedy)
 
 
+PAIRED = document(
+    id="demo_paired",
+    objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    constraints=[
+        {"id": "strategy_integrity"},
+        {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.5}},
+    ],
+)
+"""The demo sleeve scored on its contribution, the keep rule at half an error."""
+
+LARGER = REVERTING.replace(b"notional: float = 5_000.0", b"notional: float = 5_500.0")
+"""The trough rule with a tenth more on every trade: the same bets, a tenth more of each."""
+
+
+def compared(store: StateStore, hyp_id: str) -> list[dict[str, object]]:
+    """What the keep rule compared each card with, for the cards it compared with a best."""
+    events = store.events(kind=loop.CARDED, subject=hyp_id)
+    return [event.detail["keep"] for event in events if "keep" in event.detail]  # type: ignore[misc]
+
+
+def test_a_refinement_inside_the_card_s_own_error_is_kept_on_the_error_of_its_difference(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Two cards over the same sessions share their day-to-day noise, so the difference
+    between them is known far better than either.
+
+    A tenth more on every trade earns about a tenth more each session the trough rule
+    trades, so the gain is real and small against the card's own error — kept on it at
+    `k_se` 0.5, a candidate this size would need a t of five — and the two cards' sessions
+    move together, so the difference's own error is about a tenth of either card's."""
+    hyp_id = classify(ws, store, PAIRED)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    best = loop.card(ws, store, hyp_id, "the trough rule")
+    assert best.status == "keep" and compared(store, hyp_id) == [], "nothing to beat yet"
+    edit(ws, run, LARGER)
+
+    made = loop.card(ws, store, hyp_id, "a tenth more of the same trade")
+
+    assert made.status == "keep"
+    gain = made.metric - best.metric
+    assert 0.0 < gain < 0.5 * made.metric_se, "inside the card's own floor"
+    (against,) = compared(store, hyp_id)
+    assert against["best"] == best.sha7
+    assert against["paired"] is True and "unpaired" not in against
+    assert against["difference"] == pytest.approx(gain)
+    assert 0.5 * float(against["se"]) < gain  # type: ignore[arg-type]
+    assert float(against["se"]) < 0.2 * made.metric_se  # type: ignore[arg-type]
+    assert records.best_of(store, hyp_id) == (made.strategy_sha, made.metric)
+
+
+def test_a_best_that_kept_no_measurement_is_beaten_on_the_card_s_own_error_and_says_so(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A card recorded before cards kept what they were measured from has nothing to pair
+    with, so the rule reads as it did before it paired — on the candidate's own error — and
+    the record of the comparison says that is what it did, and why."""
+    hyp_id = classify(ws, store, PAIRED)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    best = loop.card(ws, store, hyp_id, "the trough rule")
+    store.connection.execute(
+        "UPDATE cards SET measured_sha = NULL WHERE strategy_sha = ?", (best.strategy_sha,)
+    )
+    edit(ws, run, LARGER)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, hyp_id, "a tenth more of the same trade")
+
+    made = records.cards_of(store, hyp_id)[-1]
+    assert made.status == "redundant", "not kept, then the same book inside the same floor"
+    (against,) = compared(store, hyp_id)
+    assert against == {
+        "best": best.sha7,
+        "difference": made.metric - best.metric,
+        "se": made.metric_se,
+        "paired": False,
+        "unpaired": loop.UNMEASURED,
+    }
+    assert records.best_of(store, hyp_id) == (best.strategy_sha, best.metric)
+
+
+def test_a_hypothesis_held_under_a_day_signs_by_the_hour_and_the_same_bytes_still_repeat(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Read by the hour, a span marks the day with the hours it was open in, and a
+    byte-identical card is still the repeat it was."""
+    hourly = document(
+        id="demo_hourly",
+        horizon="4h",
+        objective={"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    )
+    hyp_id = classify(ws, store, hourly)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, hyp_id, "the trough rule")
+    assert kept.status == "keep"
+
+    with pytest.raises(loop.RedundantError, match="result is already known"):
+        loop.card(ws, store, hyp_id, "the very same file")
+
+    assert statuses(store, hyp_id) == ["keep", "keep", "redundant"]
+    (event,) = store.events(kind=loop.REDUNDANT, subject=hyp_id)
+    assert (event.detail["like"], event.detail["pct"]) == (kept.sha7, 100.0)
+    (row,) = store.connection.execute(
+        "SELECT signature FROM signatures WHERE strategy_sha = ?", (kept.strategy_sha,)
+    ).fetchall()
+    stored = json.loads(str(row["signature"]))
+    held = measured_as_scored(store, kept).run
+    assert stored == records.signature(held, hourly=True) != records.signature(held)
+
+
 def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restored(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:

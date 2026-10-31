@@ -311,7 +311,8 @@ already moved past it would stamp its own older version over the newer one and l
 `state.db` whose schema no `kanso migrate` could reach again.
 
 **What grows, and the one thing kanso gives back.** Every judged card stores its book — what
-it held, session by session, and the number it earned — so the redundancy rule can refuse
+it held, session by session and, under a horizon shorter than a day, hour by hour within
+each, and the number it earned — so the redundancy rule can refuse
 the next spelling of the same bets (`docs/concepts.md`). A book is read only under the pins
 of the run asking, and nothing deletes one as research moves on, so the books stored under a
 file since re-pinned, an earlier kanso, a snapshot a newer run moved past or a retired

@@ -712,27 +712,38 @@ prompt, the system turn a provider caches by its exact bytes, and not beside the
 cards in the user turn, where they would be the same bytes resent on every call. An edit to
 `context_cards` or `cards_per_turn` during a run moves that half once.
 
-A card that ran and did not keep is then compared by what it **held**: its signature,
-which is, for each session of the research window, the instruments and sides it held and
-whether each was still open at the session's end. Both of a run's own records of a
-position are read — what it held at each period end, and the spans of the positions it
-opened and closed — because a period end is a sample, and a hypothesis whose positions
-close before the session does is flat at every sample by construction. Signed from the
-ends alone, such a hypothesis matched every candidate against every other at 100 percent
-and never made an experiment again: measured in a live workspace, 192 of one's 201 stored
-signatures held nothing on any of their 834 sampled days. The two are marked apart rather
-than merged into "something was held", so the reading is strictly finer than sampling the
-ends alone and never coarser: two strategies that differed under the old reading differ
-under this one, and carrying a position over the close is not the same book as closing it
-before. Two strategies with the same signature on nearly every shared session made the
-same bets, however differently they were written — a threshold moved, a helper renamed, a
+A card that ran and did not keep is then compared by what it **held**: its signature, which
+is, for each session of the research window, the instruments and sides it held and whether
+each was still open at the session's end — and, for a hypothesis held under a day, in which
+hours of the session it held them. Both of a run's own records of a position are read — what
+it held at each period end, and the spans of the positions it opened and closed — because a
+period end is a sample, and a hypothesis whose positions close before the session does is
+flat at every sample by construction. Signed from the ends alone, such a hypothesis matched
+every candidate against every other at 100 percent and never made an experiment again:
+measured in a live workspace, 192 of one's 201 stored signatures held nothing on any of
+their 834 sampled days. The two are marked apart rather than merged into "something was
+held", so the reading is strictly finer than sampling the ends alone and never coarser: two
+strategies that differed under the old reading differ under this one, and carrying a
+position over the close is not the same book as closing it before. A hypothesis whose
+`horizon` is under a day is read by the hour as well, because a lane that holds one name on
+one side every session gives every candidate the same sessions: read by the day, two
+strategies holding it from 10:00 to 11:00 and from 13:00 to 14:00, or trading one clip a day
+and twenty spread through it, held the same book on every session, so a candidate that
+changed only when it traded was a repeat whenever its number stayed inside the floor. Read
+by the hour, a position held during a session marks it with each UTC hour it was open in,
+and those are three books. The sessions stay what `redundant_pct` is a share of: counted in
+hours, the hours a scalper was flat in would outvote the one it traded in. A book an earlier
+kanso stored by the day carries no hours, so under the pins of a run begun before the
+upgrade it matches a candidate read by the hour only on the sessions neither held a position
+inside. Two strategies with the same signature on nearly every shared session made the same
+bets, however differently they were written — a threshold moved, a helper renamed, a
 condition spelt the other way. Whether they also earned the same number is the rest of that
 sentence, and it is read rather than assumed: a signature is stored with the metric its card
 earned, and a candidate is **redundant** when it matches a strategy judged under the run's
 pins on at least `[research] redundant_pct` percent of their shared sessions *and* its own
-metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)`, the floor
-the keep rule is struck from too — of what that strategy earned. Then it is a card of that
-status carrying the metric it measured, the lane restored as any non-keep restores it, a
+metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)` on the
+candidate's own error — of what that strategy earned. Then it is a card of that status
+carrying the metric it measured, the lane restored as any non-keep restores it, a
 `redundant` event carrying the card it repeats and both numbers, the command that asked for
 it refused, and the proposer shown that card by name on its next turn.
 
@@ -750,26 +761,22 @@ matches of one book scored -18.780 to 9.179 around that book's -4.5452, a median
 against a floor of 10.116, with 74 of its 325 refusals beyond it. The same book read by
 session, and not the same result.
 
-A redundant card is a card because the backtest ran and a real number came back — the
-trial it counts as, the corner it fills in on the coverage table and the record the next
-run reads are all things the search actually did, and dropping them was measured deflating
-a certificate by a search more than a hundred times narrower than the one that ran. The
-same argument is owed to the 106, and it is paid in the only currency they lack: a card
-that matched a measured book and moved the number is an ordinary discard, with nothing in
-`cards` to say which book it matched, so it appends a `same_book` event carrying what the
-`redundant` event carries. The next proposals are shown both kinds in one list, each
-saying which it is — a proposer told to hold a measured book and move its number cannot
-apply that rule from the refusals alone, and each admitted candidate stores its own book,
-so a hypothesis whose spread is wide against its floor re-treads a book about
-`ceil(spread / 2 x floor)` times before matching resumes. What
-it may never be is a keep: the keep rule is asked first, so a candidate that beats the
-best is a keep whatever it resembles. Nor is there a gap between the two rules for a card
-to fall into unjudged — they are struck from one floor, which the keep rule doubles only
-when the file grew past its line budget, so a candidate that cleared the floor upward and
-not the doubled bar is neither a keep nor a repeat, which is what a discard is. The
-baseline is exempt, since it is the last run's best and its signature is already stored;
-and signatures are stored for every judged run, redundant ones included, so the third
-spelling of an idea is refused against the second as well as the first.
+A redundant card is a card because the backtest ran and a real number came back — the trial
+it counts as, the corner it fills in on the coverage table and the record the next run reads
+are all things the search actually did, and dropping them was measured deflating a
+certificate by a search more than a hundred times narrower than the one that ran. The same
+argument is owed to the 106, and it is paid in the only currency they lack: a card that
+matched a measured book and moved the number is an ordinary discard, with nothing in `cards`
+to say which book it matched, so it appends a `same_book` event carrying what the
+`redundant` event carries. The next proposals are shown both kinds in one list, each saying
+which it is — a proposer told to hold a measured book and move its number cannot apply that
+rule from the refusals alone, and each admitted candidate stores its own book, so a
+hypothesis whose spread is wide against its floor re-treads a book about
+`ceil(spread / 2 x floor)` times before matching resumes. What it may never be is a keep:
+the keep rule is asked first, so a candidate that beats the best is a keep whatever it resembles. The
+baseline is exempt, since it is the last run's best and its signature is already stored; and
+signatures are stored for every judged run, redundant ones included, so the third spelling
+of an idea is refused against the second as well as the first.
 
 The rule is in the proposer's instruction, with what a signature is and what to do with
 the refusals it is shown, for the same reason the phase is: a refusal the proposer was
@@ -1229,9 +1236,11 @@ they are the loop's whole defence against fitting noise.
 **A metric arrives with its own noise floor.** The objective is computed on each of the
 research window's contiguous folds; the metric is their mean, and `metric_se` is the error
 of that mean read off the series it is a mean of — the per-period returns for a contribution
-or a Sharpe, the per-trade edges taken period by period for a per-trade objective. An
-improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the operator's
-smallest interesting difference and the error of the number that would become the best. Both
+or a Sharpe, the per-trade edges taken period by period for a per-trade objective. A
+candidate is compared with the run's best by their difference, and an improvement counts
+only when that difference clears `max(min_delta, k_se × se)`, where `se` is the error of the
+difference: `min_delta` is the operator's smallest interesting difference, in the
+objective's units, and `k_se` how many errors of the difference it must clear. Both
 parameters are fixed at classification, before any result is seen.
 
 The error was once the spread of the fold means over the root of their count: four numbers,
@@ -1252,8 +1261,33 @@ and this is what keeps that robustness. How well that holds, and where it falls 
 `docs/backlog.md` row 171. A relative or benchmark objective's error is the paired one
 wherever the two runs share their periods: a contribution's per-period differences, a
 difference of Sharpes by Memmel's correction of Jobson–Korkie, a per-trade edge's difference
-linearised period by period. That one number is the card's, the keep floor's, the redundancy
-floor's, a certificate's `±` and every deflation gate's.
+linearised period by period. That one number is the card's, the redundancy floor's, a
+certificate's `±` and every deflation gate's.
+
+The keep rule reads the same pairing between two cards. Each card keeps what it was measured
+from (Card, above), and the best stands where a relative objective's host stands: the
+difference is the candidate's statistic less the best's, fold by fold, and its error is the
+paired one that objective would read — the per-period differences of two contributions,
+Memmel's for two Sharpes, two per-trade edges' linearisations differenced period by period —
+widened for serial correlation like any other. Two cards over the same sessions share most
+of their day-to-day noise, so a refinement has a difference far better known than either
+number, and two unrelated strategies one less well known than either; the candidate's own
+error, which the rule read until it paired, sits between. Measured over 4,000 synthetic
+draws of a lane earning 15 bp a day at 120 bp of spread over 250 sessions, at `k_se` 0.5 and
+1: a refinement truly worth +3 bp a day, its difference known to 1.5 bp a day, was kept 0.26
+and 0.001 of the time on its own error and is kept 0.93 and 0.82 on the difference's; an
+unrelated strategy no better than the best, 0.36 and 0.24 before and 0.31 and 0.16 now; and
+the refinement with nothing in it, 0.004 and none before, and 0.30 and 0.16 now — the rate
+`k_se` states, `1 − Φ(k_se)`. Its own error, five times the difference's, kept almost none
+of those, and no bar on that difference keeps more of the refinement without keeping more of
+them. `edge_per_trade`'s margin, which grows with the search, is not part of the comparison:
+it holds the card's own trades to their own error before the keep rule is asked, as it
+always has. Where the best card kept no measurement — one recorded before cards kept theirs
+— or the two do not pair, because what they were measured under moved between them, the
+difference is struck on the candidate's own error, as it was before. The `card` event of
+every card the rule compared with a best carries the comparison as `keep`: the best's sha7,
+the `difference`, its `se`, whether it was `paired`, and when it was not, `unpaired`, saying
+why.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
@@ -1263,20 +1297,8 @@ folds hold nearly as many sessions each and the two means nearly agree; over a w
 few sessions they need not, and that is the window a certificate measures (below).
 
 Here is the rule on the filter. The hypothesis carries `min_delta: 0.0` and `k_se: 1.0`;
-the neutral baseline above scored `0.000000`:
-
-```
-$ kanso research card demo_filter --desc "withhold entries in the first ten minutes of each hour"
-error: 4d00282 held the same book as 2c6529e on 257 of 261 sessions (98%) and scored 0.273688 against its 0, inside the 0.461477 that separates two results here, so its result is already known and it is not an experiment; it is recorded as a redundant card and the lane copy has been restored
-remedy: move the result further than 0.461477 — a different instrument, side, set of sessions or holding over a session's end, or a size that changes the number and not only the book; `kanso research show demo_filter --sha 2c6529e` prints the card it repeats
-```
-
-Every constraint passed and the metric went up, and it was not kept: `0.273688 − 0.0` is less
-than `max(0.0, 1.0 × 0.461477)`, the error of a difference of per-trade edges over 844 trades
-paired session by session with the host's, so the improvement is not yet distinguishable
-from the noise it was measured in. Declined by the keep rule, it was then a repeat — the same
-book as the baseline on 98% of sessions, a number within the same floor — and is recorded
-`redundant` (Card, above). Withholding the first half of each hour moves further:
+the neutral baseline above scored `0.000000`, and withholding entries in the first half of
+each hour beat it:
 
 ```
 $ kanso research card demo_filter --desc "withhold entries in the first half of each hour"
@@ -1288,7 +1310,10 @@ best       9ea5a0b
            max_drawdown: pass — limit_pct=15.0, max_drawdown_pct=0.20953873499999465
 ```
 
-`1.436577 − 0.0` clears `max(0.0, 1.0 × 0.882818)`, and the card is the run's best.
+`1.436577 − 0.0` clears `max(0.0, 1.0 × 0.882818)`, and the card is the run's best. The best
+it was compared with is the baseline, a filter that withholds nothing, whose run is the
+host's own, so the error of their difference is the card's own: a difference of per-trade
+edges paired session by session with the host's.
 
 **The comparison is strict.** Equal is not better. A loop that kept ties drifts across a
 plateau of indistinguishable strategies and calls the drift progress.
