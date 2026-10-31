@@ -291,20 +291,24 @@ def _timing_lines(digest: CardDigest | None) -> list[str]:
 
 
 def _offset(value: float | None) -> str:
-    """An offset into a period as `+H:MM:SS.ss`; rounded to the hundredth first, so it never
-    reads 60 seconds."""
+    """An offset into a period as `+H:MM:SS.ss`, cut to the hundredth of a second rather than
+    rounded, so an offset short of a minute, or of a period's length, never reads as it."""
     if value is None:
         return "n/a"
-    hours, rest = divmod(round(value * 100), 360_000)
+    hours, rest = divmod(round(value * 1e9) // 10_000_000, 360_000)
     minutes, rest = divmod(rest, 6_000)
     return f"+{hours}:{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}"
 
 
 def _span(value: float | None) -> str:
-    """A span to the hundredth of a second under two minutes, and as a hold reads above."""
-    if value is None or value >= 120:
-        return _seconds(value)
-    return f"{value:.2f}s"
+    """A span to the hundredth of a second when that rounds below two minutes, and as a hold
+    reads from there."""
+    if value is None:
+        return "n/a"
+    hundredths = round(value, 2)
+    if hundredths >= 120:
+        return _seconds(hundredths)
+    return f"{hundredths:.2f}s"
 
 
 def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
