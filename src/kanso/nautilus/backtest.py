@@ -1223,12 +1223,22 @@ def _modifier(
 
 
 def engine_for() -> Any:
-    """The backtest engine every run is built in: no logging, no analysis, and an order rate
-    no replay or backtest reaches (`SUBMIT_RATE`)."""
+    """The backtest engine every run is built in: no logging, no analysis, an order rate no
+    replay or backtest reaches (`SUBMIT_RATE`), and a portfolio analyzer that records no
+    closed position.
+
+    The engine's portfolio hands every position it closes to its analyzer's `record_trade`,
+    which copies the whole series of its currency to append one row, so a card's time grew
+    with the square of the trades it closed; `run_analysis=False` turns off only the report
+    the engine reads it back for at the end. kanso reads nothing the analyzer holds — the
+    extraction reads the cache (`_extract`) — so this analyzer's own `record_trade` is one
+    that records nothing (`kanso.nautilus.facts`, where `doctor` re-checks what this rests
+    on).
+    """
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
 
-    return BacktestEngine(
+    engine = BacktestEngine(
         config=BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
             risk_engine=RiskEngineConfig(
@@ -1238,6 +1248,13 @@ def engine_for() -> Any:
             run_analysis=False,
         )
     )
+    engine.portfolio.analyzer.record_trade = _unrecorded
+    return engine
+
+
+def _unrecorded(*_: object, **__: object) -> None:
+    """What `engine_for`'s portfolio analyzer does with a position the portfolio closed:
+    nothing."""
 
 
 def add_venue(engine: Any, venue: Any) -> None:
