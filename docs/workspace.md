@@ -2024,6 +2024,7 @@ The lane directories, and the only place research edits anything.
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
+runs/daemon.drains         the same pid, written by a supervisor that answers `research stop --drain`
 runs/<child>.<pid>.lock    held by a lane or the monitor, named for it and its pid, while it lives
 runs/<child>.<pid>.work    held by it and by every card it starts, until the last of them exits
 runs/daemon.log            whatever the daemon and its children write to a stream

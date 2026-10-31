@@ -25,7 +25,11 @@ busy when the one grace the supervisor gives them all runs out — waiting on a
 model, say — is killed, and that costs the call and nothing else: the run, its blobs and
 its `best` are all in state. Nothing is ended and nothing is cleaned up, so the next
 `start` picks the runs up where they were left — which is why stopping the daemon is a
-cheap act an operator can perform without thinking about what it costs.
+cheap act an operator can perform without thinking about what it costs. **A drain costs not
+even the card.** `stop --drain` sends `DRAIN` instead: the supervisor hands it to its lanes
+and stops the monitor, and a lane told to drain begins nothing more and kills nothing, so
+its card in flight runs to its end and is recorded before the lane exits; the supervisor
+goes once every child has.
 
 **Nothing the daemon starts outlives it.** The lanes and the monitor run in the supervisor's
 process group, and a supervisor that does not answer `stop` is killed with that whole
@@ -97,6 +101,7 @@ __all__ = [
     "CAFFEINATE",
     "CARDS_PER_TURN",
     "DRAIN",
+    "DRAINS_NAME",
     "ChildPid",
     "GRACE_S",
     "LANE_DIED",
@@ -152,6 +157,11 @@ LOG_NAME: Final = "daemon.log"
 also the lock: the supervisor holds it open under `flock` for as long as it runs, so a
 daemon that died releases it the moment the kernel closed the file and the leftover pid
 inside it blocks nothing."""
+
+DRAINS_NAME: Final = "daemon.drains"
+"""Also under `runs/`: the pid of a supervisor that answers `DRAIN`, written once it holds
+its lock and removed when it exits. A supervisor started by a kanso that cannot drain writes
+none, and to it `SIGUSR1` is an order to exit at once, so a drain is refused without it."""
 
 LOCK_SUFFIX: Final = ".lock"
 """A lane or the monitor holds `runs/<name>.<pid>.lock` under `flock` for as long as it
@@ -573,6 +583,13 @@ def stop(ws: Workspace, *, drain: bool = False) -> Stopped:
                 remedy="run `kanso research status` to see what is still running, and "
                 "`kanso research stop` to end it",
             )
+        drains = ws.path(LANE_ROOT, DRAINS_NAME)
+        if not drains.is_file() or drains.read_text(encoding="utf-8").strip() != str(pid):
+            raise PreconditionError(
+                f"the daemon running here (pid {pid}) was started by a kanso that cannot "
+                "drain, and the drain signal would end it at once, cards and all",
+                remedy="run `kanso research stop`; a daemon this kanso starts can be drained",
+            )
         _signal(pid, DRAIN)
         while _held(pid_path(ws)):  # the supervisor's lock goes when it does, reaped or not
             time.sleep(_TICK)
@@ -677,9 +694,10 @@ def serve(ws: Workspace) -> int:
     `start` does, while a lane or the monitor of a daemon that is gone still runs — this is
     what a service unit runs, and what a hand starts, without `start`'s look first — and
     before any child starts, the locks children killed outright left are removed (`_sweep`).
+    Told to drain, it waits for every child to exit before it goes (`_drain`).
     """
+    _listen()  # before the lock, so a drain sent once `daemon.drains` names this is heard
     lock = _acquire(ws)
-    _listen()
     _sweep(ws)
     recover(ws)
     children = [_Child(LANE, name) for name in lane_names(ws)]
@@ -695,6 +713,7 @@ def serve(ws: Workspace) -> int:
         if _DRAINING and not _STOPPING:
             _drain(children)
         _terminate([child.process for child in children if child.process is not None])
+        ws.path(LANE_ROOT, DRAINS_NAME).unlink(missing_ok=True)
         pid_path(ws).unlink(missing_ok=True)
         lock.close()
     return 0
@@ -1081,6 +1100,7 @@ def _acquire(ws: Workspace) -> IO[bytes]:
     handle.truncate()
     handle.write(f"{os.getpid()}\n".encode())
     handle.flush()
+    ws.path(LANE_ROOT, DRAINS_NAME).write_text(f"{os.getpid()}\n", encoding="utf-8")
     return handle
 
 

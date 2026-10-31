@@ -1700,6 +1700,32 @@ def test_a_baseline_killed_for_its_clock_is_not_parked_once_a_run_has_begun_or_i
     assert not daemon.parked(ws, store, hyp_id)
 
 
+def test_a_drain_of_a_supervisor_that_cannot_answer_one_is_refused_and_sends_it_nothing(
+    ws: Workspace,
+) -> None:
+    """A supervisor of a kanso without the drain writes no `daemon.drains`, and to it
+    `SIGUSR1` is an order to exit at once, its lanes' cards with it. So is one whose
+    `daemon.drains` names another pid, which a supervisor killed outright leaves behind."""
+    code = "import sys, time\nsys.stdout.write('ready\\n'); sys.stdout.flush()\ntime.sleep(60)\n"
+    older = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE)
+    assert older.stdout is not None and older.stdout.readline() == b"ready\n"
+    daemon.pid_path(ws).parent.mkdir(parents=True, exist_ok=True)
+    daemon.pid_path(ws).write_text(f"{older.pid}\n", encoding="utf-8")
+    try:
+        for marker in (None, f"{older.pid + 1}\n"):
+            if marker is not None:
+                ws.path("runs", daemon.DRAINS_NAME).write_text(marker, encoding="utf-8")
+            with pytest.raises(
+                PreconditionError, match="started by a kanso that cannot drain"
+            ) as said:
+                daemon.stop(ws, drain=True)
+            assert "`kanso research stop`" in (said.value.remedy or "")
+            assert older.poll() is None, "it was sent nothing"
+    finally:
+        older.kill()
+        older.wait()
+
+
 def test_a_drain_request_kills_no_card_starts_no_other_and_is_taken_back_with_it(
     tmp_path: Path,
 ) -> None:
