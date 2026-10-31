@@ -57,7 +57,8 @@ supervision rather than by `setrlimit`, which does not bound RSS on Linux and is
 for address space on macOS. The peak comes from the reaped child's own resource usage.
 The child watches back: it ends itself when the process that started it is gone, so a lane
 killed outright never leaves a card running with nobody supervising it, and a process told
-to stop starts no card at all. A caller can also say what the work is for (`wanted`): a
+to stop starts no card at all — nor one told to drain, which lets the cards it watches run to
+their end (`drain`). A caller can also say what the work is for (`wanted`): a
 check asked before every catalog query for points and every `WANTED_POLL_S` while a card
 runs, whose refusal ends the read and kills the card, so work nobody wants any more is
 dropped at the next query rather than after the window and the card have run to their end.

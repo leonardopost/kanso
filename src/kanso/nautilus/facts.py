@@ -304,7 +304,9 @@ the square of the trades a run has made (a quarter of it, measured), and a
 two-instrument sleeve that flips every bar never finishes. That is a design
 constraint kanso cannot repair from outside the engine; what it does is measure it
 here, record it, and tell a researcher that turnover — not per-bar work — is what a
-card's budget buys.
+card's budget buys. Measured once the analyzer below recorded nothing, on 27 sessions of
+two names' 1 s quotes and prints: 10,028 trades in one name took 46.2 s, and the same count
+across both 512.4 s.
 
 **The portfolio's analyzer records every position it closes, each record costing more than
 the last, and the engine a card runs in has it record nothing.** `Portfolio.update_position`

@@ -636,6 +636,18 @@ orders being the engine's to handle. Of what is left, about half is the engine's
 matching and identifiers, and half the Python the venue's modules, the harness and the sleeve
 run on every point and marker.
 
+**What a trade costs a card.** The engine's portfolio records each position it closes in its
+analyzer, which copies every record before it to append one, so a card's wall grew with the
+square of its trades; kanso reads nothing the analyzer keeps, and the engine a card runs in
+has it record nothing (`kanso.nautilus.facts`). Measured on 2026-10-31 on one name's 1 s quotes
+and prints over 27 sessions, the same cards before and after, byte for byte: 1,002 trades took
+20.1 s and take 19.1 s, 10,028 took 64.6 s and take 27.8 s, and 35,425 took 634.0 s and take
+118.5 s. Across names a close still costs more the more closes came before it: on a NETTING
+venue the portfolio re-reads the closing name's snapshots whenever a close in another name came
+between (`kanso.nautilus.facts`, a design constraint). Over the same tape of two names, 10,028
+trades in one of them took 46.2 s and the same count across both 512.4 s; over seven sessions
+of twenty names, 10,237 trades in one took 112.0 s and 9,805 across all twenty 141.5 s.
+
 **A replay streams its window as a card does.** `kanso replay run` and `parity` — and so the
 `parity_replay` certification gate — read the range through the reads and chunks a card's
 child is streamed, in the replaying process: the research path runs each chunk in the engine
