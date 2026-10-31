@@ -1872,11 +1872,12 @@ digest carries how many it dropped (`refused_submits`, `refused_modifies`), whic
 proposer beside its trades. An order built by hand opens when it opens or grows the position
 the sleeve's market orders in flight and the exits the rate owes it at market — for want of a
 token, or behind a cancel it deferred — leave, so the second leg of a flip — `submit_entry`'s,
-or one built by hand behind an exit at market sent or so owed — is an entry, held to the room
-that exit frees as behind one sent, dropped, and not owed as an exit; under a sizing rule an
-owed exit is in flight as a sent one is, so a flip or a rotation behind it is dropped too,
-never refused. An order the engine was never handed, dropped so, is nothing to cancel or to
-move, and its cancel or modify is no command. **An exit `submit_exit` sized is owed**, asked
+or one built by hand behind an exit at market sent or so owed — is an entry, dropped, and not
+owed as an exit. The bucket is asked for an entry `submit_entry` sizes, or one built by hand,
+before it is sized or funded, so one past the rate is dropped and counted unsized and unfunded,
+never refused, and the room and the funding are read only for one it lets through, as with no
+rate stated. An order the engine was never handed, dropped so, is nothing to cancel or to move,
+and its cancel or modify is no command. **An exit `submit_exit` sized is owed**, asked
 for again as it was asked until the bucket takes it, and **a cancel is deferred**. **Any other exit is refused** — one the strategy built itself, at market or at a
 limit in any time in force, a stop, an order of a list or a list that closes, an overlay's leg
 or clip — as `order_rate`, the same refusal a sizing rule makes, and the card is a `discard`

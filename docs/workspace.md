@@ -1337,14 +1337,11 @@ tokens (below). Then:
   the sleeve flat, and so is an order or a list built by hand on the other side behind an exit
   at market that went or that the rate owes; behind an exit at a price, one built by hand
   closes the position that limit may never close, and is an exit the strategy built itself
-  (below). An exit the rate owes at market frees room as one sent does — the room an entry is
-  sized to, and what the book can fund for an order built by hand — so a leg sized by the room
-  is sized, and dropped, whether its exit went or was owed, and an order or a list built by
-  hand behind it, in that name or another, is funded as it is behind an exit that went, and
-  dropped; behind an exit at a price, which frees no room until it fills, a leg is sized as it
-  would be with no rate stated, and dropped if it is sized at all. Under a sizing rule an exit
-  owed for want of a token is in flight as one sent is, so a flip or a rotation behind it is
-  dropped and counted for want of the same token, never refused as `one_position`;
+  (below). The bucket is asked first for an entry `submit_entry` sizes and for an order or a
+  list built by hand, before it is sized by the room or funded: one it would not send is
+  dropped and counted unsized and unfunded, never refused as `unfunded_order` or
+  `one_position`, and the room, what the book can fund and a sized entry's check of what is
+  held are read only for one it lets through, as with no rate stated;
 - **an exit `submit_exit` sized is owed** — the strategy's, an exit rule's, an owed exit's —
   as it was asked: the whole position when no quantity was given, at the price given, asked
   for again as `submit_exit` sends one (above, for what an owed exit is). It is the only exit

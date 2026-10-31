@@ -8,8 +8,9 @@ goes on; an exit `submit_exit` sized is owed and a cancel deferred, no entry or 
 a token while a cancel waits, where an exit takes one the bucket holds; an exit the strategy
 built itself is refused. The second leg of a flip is an entry there — `submit_entry`'s in every
 form, and one built by hand behind an exit at market the rate owes, for want of a token or
-behind a cancel it deferred, funded on what that exit frees — a deferred cancel whose order has
-closed waits for nothing, and a dropped order is nothing to cancel or to move.
+behind a cancel it deferred — the bucket is asked for an entry before it is sized or funded, a
+deferred cancel whose order has closed waits for nothing, and a dropped order is nothing to
+cancel or to move.
 Each scenario here runs on the research path (`backtest.execute`) and on the live one
 (`session.run_node`) and asserts both the behaviour and that the two agree on every intent,
 fill and count, the refused ones included. With neither key stated each path does what it did
@@ -695,8 +696,8 @@ FLIPS = {
 room leaves, or a bracket of three whose first order is one."""
 
 ROOM_CAPITAL = 1_001.0
-"""A capital the long of 100 at 10.01 fills the room of, so the leg sized by the room finds
-some only where the first leg reads as gone."""
+"""A capital the long of 100 at 10.01 fills the room of, so an entry sized by the room, or one
+built by hand, fits only once the long has gone."""
 
 
 @pytest.mark.parametrize(
@@ -706,7 +707,7 @@ some only where the first leg reads as gone."""
         ("market", "room", 3, 1),
         ("market", "list", 5, 3),
         ("priced", "entry", 3, 1),
-        ("priced", "room", 2, 0),
+        ("priced", "room", 2, 1),
     ],
 )
 @pytest.mark.parametrize(("per_minute", "exited_at"), [(2, 2), (1, 61)], ids=["sent", "owed"])
@@ -718,11 +719,10 @@ def test_the_second_leg_of_a_flip_past_the_rate_is_an_entry_dropped_and_counted(
     the sixty-first; either way the second leg finds no token and is the entry it is, dropped
     and counted — sized by a quantity or by the room, behind an exit at market or at a price,
     every order of a bracket — never owed as an exit and forgotten once the exit has left the
-    sleeve flat, and never refused. An exit owed at market frees the room as the market order
-    it holds back would, so the leg sized by the room is sized and dropped whether the exit
-    went or was owed; one at a price is a limit resting or owed, which frees no room, so the
-    leg finds none there unheld or held, and the rate counts nothing it would have sent. Unheld,
-    every leg that found room is sent, and the sleeve ends the other side."""
+    sleeve flat, and never refused. The bucket is asked before the leg is sized, so the leg
+    sized by the room is dropped and counted unsized behind either exit, though behind one at a
+    price, a limit that frees no room until it fills, it finds none unheld. Unheld, every leg
+    that found room is sent, and the sleeve ends the other side."""
     flipping = sleeve("", second=f"{FIRST_LEGS[first]}\n            {FLIPS[leg]}")
     groups: list[tuple[object, ...]] = [tuple(steady(70, rise_at=65))]
     capital = {"capital": ROOM_CAPITAL} if leg == "room" else {}
@@ -778,8 +778,8 @@ STOP_LIMIT_AT_5 = (
     "self.resting = self.order_factory.stop_limit(name, OrderSide.SELL, Quantity.from_int(100), "
     "price=Price(5.0, 2), trigger_price=Price(9.0, 2))\n            self.submit_order(self.resting)"
 )
-"""A stop-limit sale of the whole position, triggered at 9.00 and limited at 5.00: the room
-holds back what it would add at its limit, half the notional the long holds."""
+"""A stop-limit sale of the whole position, triggered at 9.00 and limited at 5.00, below the
+market."""
 
 BEHIND_A_DEFERRED_CANCEL = {
     "built_by_hand": (
@@ -818,9 +818,9 @@ def test_a_flip_s_second_leg_behind_an_exit_owed_behind_a_deferred_cancel_is_dro
     cancel has — on the sixty-first quote at two a minute, one request a cancel, and on the
     forty-first at three, two. The owed exit stands for the market order the rate held back,
     and no entry goes while the cancel waits, so the second leg of the flip behind it reads it
-    as gone: it opens the other side, and is the entry it is, dropped and counted — an
-    order or a list built by hand, an entry of a quantity given, an entry sized by the room the
-    owed exit frees — and never sent as the order that closes the position in the owed exit's
+    as gone: it opens the other side, and is the entry it is, dropped and counted before it is
+    sized — an order or a list built by hand, an entry of a quantity given, an entry of what the
+    room leaves — and never sent as the order that closes the position in the owed exit's
     place, nor refused as an exit the strategy built itself. Unheld, the flip goes whole."""
     rest, then, unheld, dropped = BEHIND_A_DEFERRED_CANCEL[leg]
     flipping = sleeve(
@@ -1032,11 +1032,11 @@ def test_a_sized_flip_or_rotation_past_the_rate_drops_its_entry_and_runs_on(
     into: str, side: str, per_minute: int, exited_at: int
 ) -> None:
     """Under a sizing rule the exit a flip or a rotation sends first is in flight when the entry
-    sizes, so the entry is legal; one owed for want of a token is in flight too, as the market
-    order the rate held back. At two a minute the exit takes the last
-    token and at one it is owed, going on the sixty-first quote; either way the entry behind it
-    finds no token and is dropped and counted, never refused as `one_position` nor owed as an
-    exit `submit_exit` would refuse to send, and both paths run to the end."""
+    sizes, so the entry is legal. At two a minute the exit takes the last token and at one it is
+    owed, going on the sixty-first quote; either way the bucket, asked before the entry is
+    checked or sized, holds no token for it, and it is dropped and counted, never refused as
+    `one_position` nor owed as an exit `submit_exit` would refuse to send, and both paths run to
+    the end."""
     source = SIZED_FLIP.replace(b"INTO", into.encode()).replace(b"SIDE", side.encode())
     request = replace(rated(source, per_minute), hyp=TWO_NAMES, sleeve_budget=10_000.0)
     other = quoted(70, first=T0 - 1, name=InstrumentId(Symbol(OTHER), Venue(VENUE)))
@@ -1084,12 +1084,14 @@ class Strategy(KansoStrategy):
             self.submit_entry(name, "BUY", qty=100)
         elif self.seen == 2:
             REST
-        elif self.seen == 3:
+        if self.seen == 3:
             self.submit_exit(name)
+        if self.seen == WHEN:
             THEN
 """
-"""Buys 100 of `DEMO` on its first quote of it and does `REST` on its second; on its third
-exits at market and does `THEN` in the same handler. It acts on no quote of `OTHR`."""
+"""Buys 100 of `DEMO` on its first quote of it and does `REST` on its second; exits at market on
+its third, and does `THEN` on its `WHEN`th, the third or a later one. It acts on no quote of
+`OTHR`."""
 
 BUILT_BEHIND_AN_EXIT = {
     "requote": "self.submit_order(self.order_factory.limit(name, OrderSide.BUY, "
@@ -1098,57 +1100,72 @@ BUILT_BEHIND_AN_EXIT = {
     "Quantity.from_int(10)))",
     "bracket": "self.submit_order_list(self.order_factory.bracket(other, OrderSide.BUY, "
     "Quantity.from_int(10), sl_trigger_price=Price(9.0, 2), tp_price=Price(11.0, 2)))",
+    "room": 'self.submit_entry(name, "SELL")',
+    "entry": 'self.submit_entry(other, "BUY", qty=10)',
 }
-"""What a sleeve builds by hand behind its exit: a buy of 50 resting at 9.00 in the name it
-left, a buy of 10 `OTHR` at market, and a bracket of 10 `OTHR` — each an entry, and the
+"""What a sleeve sends behind its exit: built by hand, a buy of 50 resting at 9.00 in the name it
+left, a buy of 10 `OTHR` at market and a bracket of 10 `OTHR`; and from `submit_entry`, a sale
+of what the room leaves in the name it left and a buy of 10 `OTHR` — each an entry, and the
 bracket three orders."""
 
+BEHIND_AN_OWED_EXIT_ON = {
+    "for_want_of_a_token": ("pass", 3, [(1, None, 61)]),
+    "behind_a_stop_limit_s_cancel": (STOP_LIMIT_AT_5, 3, [(2, 1, 61), (3, 2, 41)]),
+    "behind_a_take_profit_s_cancel": (RESTING_AT_20, 4, [(2, 1, 61), (3, 2, 41)]),
+    "where_a_cancel_of_two_goes_at_two": (STOP_LIMIT_AT_5, 61, [(2, 2, 91)]),
+    "where_a_cancel_of_two_goes_at_three": (STOP_LIMIT_AT_5, 21, [(3, 2, 41)]),
+    "where_a_cancel_of_one_goes_at_two": (STOP_LIMIT_AT_5, 31, [(2, 1, 61)]),
+}
+"""What rests on the closing side, the quote the entry is sent on, and each rate — a minute,
+requests a cancel — with the quote its owed exit goes on."""
 
-@pytest.mark.parametrize(
-    ("per_minute", "per_cancel", "rest", "exited_at"),
-    [(1, None, "pass", 61), (2, 1, STOP_LIMIT_AT_5, 61), (3, 2, STOP_LIMIT_AT_5, 41)],
-    ids=["for_want_of_a_token", "behind_a_cancel_of_one", "behind_a_cancel_of_two"],
-)
+
+@pytest.mark.parametrize("behind", sorted(BEHIND_AN_OWED_EXIT_ON))
 @pytest.mark.parametrize("built", sorted(BUILT_BEHIND_AN_EXIT))
-def test_an_order_built_by_hand_behind_an_owed_exit_is_funded_on_what_it_frees_and_dropped(
-    built: str, per_minute: int, per_cancel: int | None, rest: str, exited_at: int
+def test_an_entry_behind_an_owed_exit_is_dropped_and_counted_before_it_is_sized_or_funded(
+    built: str, behind: str
 ) -> None:
-    """On a capital of 1,001 the long of 100 at 10.01 fills the book, so an entry the sleeve
-    builds by hand behind its exit at market fits only where that exit reads as gone. At one a
-    minute the exit finds no token and is owed for want of one, going on the sixty-first quote;
-    at two a minute, one request a cancel, and at three, two, it must first cancel the
-    stop-limit sale resting on the closing side, the bucket holds too few tokens for that
-    cancel, and the exit is owed behind it, going on the sixty-first and the forty-first. Owed
-    either way, the exit stands for the market order the rate held back: the order or list
-    built behind it — a re-quote in the name it left, a rotation into another, a bracket there
-    — is funded on the room it frees, as behind an exit that went, and is the entry it is,
-    dropped and counted, every order of the bracket, the card running on; never refused as
-    `unfunded_order`. Unheld, each is sent."""
-    source = EXITED_THEN.replace(b"REST", rest.encode()).replace(
-        b"THEN", BUILT_BEHIND_AN_EXIT[built].encode()
+    """On a capital of 1,001 the long of 100 at 10.01 fills the book, so an entry fits only once
+    the long has gone. The exit at market on the third quote finds no token at one a minute,
+    and is owed for want of one; at two a minute, one request a cancel, and at three, two, it
+    must first cancel the sale resting on the closing side — a stop-limit at 5.00 or a
+    take-profit at 20.00 — the bucket holds too few tokens for that cancel, and the exit is owed
+    behind it. On the quote the cancel goes on the cancel takes the bucket's last tokens, and
+    the exit owed behind it is asked for after the handler. The bucket is asked first for an
+    entry sent behind such an exit — on the third quote, the fourth, or the quote the cancel
+    goes on — before it is sized by the room or funded: it holds no token for it, or a cancel
+    waits, so the entry is dropped and counted, every order of the bracket, the card running
+    on, and never refused as `unfunded_order` or sized to nothing. Unheld, the exit went on the
+    third quote, and each is sent."""
+    rest, when, rates = BEHIND_AN_OWED_EXIT_ON[behind]
+    source = (
+        EXITED_THEN.replace(b"REST", rest.encode())
+        .replace(b"WHEN", str(when).encode())
+        .replace(b"THEN", BUILT_BEHIND_AN_EXIT[built].encode())
     )
-    request = replace(
-        rated(source, per_minute, per_cancel=per_cancel), hyp=TWO_NAMES, capital=ROOM_CAPITAL
-    )
+    request = replace(rated(source, None), hyp=TWO_NAMES, capital=ROOM_CAPITAL)
     other = quoted(130, first=T0 - 1, name=InstrumentId(Symbol(OTHER), Venue(VENUE)))
     groups: list[tuple[object, ...]] = [tuple(steady(130)), tuple(other)]
-    unrated = both(
-        replace(request, venue_model=rated(source, None).venue_model), groups, (SYMBOL, OTHER)
-    )
-    held = both(request, groups, (SYMBOL, OTHER))
+    unrated = both(request, groups, (SYMBOL, OTHER))
 
     demo = f"{SYMBOL}.{VENUE}"
-    rested = [] if rest == "pass" else [(at(2), demo, "SELL", "STOP_LIMIT")]
+    resting = {"pass": [], STOP_LIMIT_AT_5: ["STOP_LIMIT"], RESTING_AT_20: ["LIMIT"]}[rest]
+    rested = [(at(2), demo, "SELL", kind) for kind in resting]
     dropped = 3 if built == "bracket" else 1
     assert len(unrated.intents) == 2 + len(rested) + dropped
-    assert [(ts, name, side, kind) for ts, name, side, _, kind, _ in held.intents] == [
-        (at(1), demo, "BUY", "MARKET"),
-        *rested,
-        (at(exited_at), demo, "SELL", "MARKET"),
-    ]
-    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
-    assert held.commands is not None
-    assert (held.commands.cancels, held.commands.refused_submits) == (len(rested), dropped)
+    for per_minute, per_cancel, exited_at in rates:
+        model = rated(source, per_minute, per_cancel=per_cancel).venue_model
+        held = both(replace(request, venue_model=model), groups, (SYMBOL, OTHER))
+
+        assert [(ts, name, side, kind) for ts, name, side, _, kind, _ in held.intents] == [
+            (at(1), demo, "BUY", "MARKET"),
+            *rested,
+            (at(exited_at), demo, "SELL", "MARKET"),
+        ], per_minute
+        fills = [(fill.side, fill.qty) for fill in held.run.fills]
+        assert fills == [("BUY", 100.0), ("SELL", 100.0)], per_minute
+        assert held.commands is not None
+        assert (held.commands.cancels, held.commands.refused_submits) == (len(rested), dropped)
 
 
 DROPPED_THEN = {

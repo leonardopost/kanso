@@ -269,8 +269,8 @@ def test_an_overlay_hedge_leg_is_placed_beside_the_entry(backtest) -> None:
 def test_an_entry_dropped_past_the_rate_places_no_hedge_leg(backtest) -> None:
     """At two a minute the host's first entry on its third bar and the hedge leg the overlay
     answers it with take both tokens, and its second entry in the same handler is dropped and
-    counted. The overlay answers the second with a hedge leg too, and none is placed: a leg is
-    part of the entry it hedges, so nothing of it is sent, and nothing more is counted."""
+    counted before it is sized, and no leg of it is placed: a leg is part of the entry it
+    hedges, so nothing of it is sent, and nothing more is counted."""
 
     class Twice(Host):
         def on_bar(self, bar_: object) -> None:
