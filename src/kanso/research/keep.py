@@ -5,13 +5,18 @@ Three ideas, and the whole of the loop's defence against fitting noise.
 **A metric arrives with its own noise floor.** The objective is computed on each of the
 research window's contiguous folds; the metric is their mean and `metric_se` the error of
 that mean, read off the window's per-period returns or per-trade edges and widened for
-serial correlation (`kanso.criteria.objectives`). An improvement counts only when it
-clears `max(min_delta, k_se x se)` — the operator's smallest interesting difference, and
-the error of the number it would replace the best with. Both parameters come from the
-hypothesis's own `objective.params`, chosen at classification, so the bar is set before any
-result is seen. That floor is the one scale on which this hypothesis calls two numbers
-different, so the redundancy rule reads it from here too rather than choosing a second one
-(`noise_floor`, `research/records.py`).
+serial correlation (`kanso.criteria.objectives`). A candidate is compared with the run's
+best by their difference, whose error is read the same way off the two cards' runs period
+by period (`records.Measurement.against`): two cards measured on the same sessions share
+most of their day-to-day noise, so a local change has a difference far better known than
+either number, and two unrelated strategies one less well known than either. An
+improvement counts only when the difference clears `max(min_delta, k_se x se)` on that
+error — `min_delta` the operator's smallest interesting difference, `k_se` how many errors
+of the difference it must clear. Both parameters come from the hypothesis's own
+`objective.params`, chosen at classification, so the bar is set before any result is seen.
+Where the best card kept nothing to pair with — one recorded before cards kept their
+measurement — or the two do not pair, the error is the candidate's own, which is how the
+rule read before it paired, and the comparison says so (`Against`).
 
 **The comparison is strict.** Equal is not better. A loop that kept ties would drift
 across a plateau of indistinguishable strategies and call the drift progress.
@@ -30,14 +35,50 @@ whole rule, and the complexity clause has no baseline to be a growth over.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 
 from kanso.schemas import ObjectiveParams
 
-__all__ = ["COMPLEXITY_FACTOR", "grew_by", "keep", "line_count", "noise_floor", "threshold"]
+__all__ = [
+    "COMPLEXITY_FACTOR",
+    "Against",
+    "grew_by",
+    "keep",
+    "line_count",
+    "noise_floor",
+    "threshold",
+]
 
 COMPLEXITY_FACTOR: Final = 2.0
 """What `k_se` is multiplied by when a keep grows the file past the line budget."""
+
+
+@dataclass(frozen=True)
+class Against:
+    """What a candidate is compared with the run's best on: the best's sha, the candidate's
+    metric less the best's, and the error of that difference.
+
+    `unpaired` is `None` when the error was read off both cards' runs period by period, and
+    otherwise why it is the candidate's own error instead.
+    """
+
+    best: str
+    difference: float
+    se: float
+    unpaired: str | None = None
+
+    def payload(self) -> dict[str, object]:
+        """The comparison as the `card` event records it."""
+        found: dict[str, object] = {
+            "best": self.best[:7],
+            "difference": self.difference,
+            "se": self.se,
+            "paired": self.unpaired is None,
+        }
+        if self.unpaired is not None:
+            found["unpaired"] = self.unpaired
+        return found
 
 
 def line_count(source: bytes) -> int:
@@ -59,13 +100,11 @@ def _params(params: Mapping[str, float] | ObjectiveParams) -> tuple[float, float
 def noise_floor(se: float, params: Mapping[str, float] | ObjectiveParams) -> float:
     """`max(min_delta, k_se x se)`: the smallest difference that is a difference at all.
 
-    The scale under every comparison this hypothesis makes, with no complexity clause in
-    it. The keep rule asks whether a candidate is *better* than the best by this much and
-    doubles the `k_se` term when the file grew, because added lines are added parameters
-    and an improvement bought with them must pay for them. The redundancy rule asks
-    whether a candidate's number is the *same* number as one already measured, which is
+    With no complexity clause in it. The redundancy rule asks whether a candidate's number
+    is the *same* number as one already measured, on the candidate's own error, which is
     two-sided and has nothing to do with how the file was written, so it takes this floor
-    undoubled.
+    undoubled; the keep rule asks whether a candidate is *better* than the best, on the
+    error of their difference, and doubles the `k_se` term when the file grew (`threshold`).
     """
     min_delta, k_se = _params(params)
     return max(min_delta, k_se * se)
@@ -84,18 +123,17 @@ def threshold(
 
 
 def keep(
-    metric: float,
-    se: float,
-    best_metric: float | None,
+    against: Against | None,
     params: Mapping[str, float] | ObjectiveParams,
     grew: int,
     max_lines: int,
 ) -> bool:
     """Whether this card, whose constraints already passed, becomes the new `best`.
 
-    `best_metric` is the run's current best, or `None` before its first keep; `grew` is
-    the lines this candidate adds to that best, and `max_lines` the run's line budget.
+    `against` is the comparison with the run's current best, or `None` before its first
+    keep; `grew` is the lines this candidate adds to that best, and `max_lines` the run's
+    line budget.
     """
-    if best_metric is None:
+    if against is None:
         return True
-    return metric - best_metric > threshold(se, params, grew, max_lines)
+    return against.difference > threshold(against.se, params, grew, max_lines)

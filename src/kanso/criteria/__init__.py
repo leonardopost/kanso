@@ -2,10 +2,11 @@
 
 Two kinds of thing live here. An **objective** is the one scalar a run optimises, chosen
 for a hypothesis by a deterministic predicate rather than by an agent, and computed
-fold-wise so that every metric arrives with the standard error the keep rule must clear. A
-**gate** is a test with a verdict and its evidence, carrying no default and no threshold:
-which gates run, and with which values inside the declared ranges, is decided at runtime —
-by the classifier for the card stage, by the planner for certification, paper and live.
+fold-wise so that every metric arrives with its standard error, and a card's difference
+from the run's best with the error the keep rule must clear. A **gate** is a test with a
+verdict and its evidence, carrying no default and no threshold: which gates run, and with
+which values inside the declared ranges, is decided at runtime — by the classifier for the
+card stage, by the planner for certification, paper and live.
 
 Both are declared as YAML in `library/`, and that catalogue is what the agents read. The
 framework's own opinions are only the structural invariants: the objective set is total,

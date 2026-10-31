@@ -69,8 +69,12 @@ cannot reach is still the only anchor a run under that reading has. Signatures a
 for every judged run, a redundant one included, so the third spelling of one idea is
 refused against the second as well as the first. The comparison is
 by day rather than by instant because it is a fact about sessions, and a day is what two
-runs over the same window share. A stored signature is only ever compared with one read
-the same way, so the change of reading came with the migration that emptied the table.
+runs over the same window share. For a hypothesis held under a day, what a day held is read
+by the hour, because one name held on one side every session is every such candidate's
+day: two strategies holding it from 10:00 to 11:00 and from 13:00 to 14:00, or trading one
+clip a day and twenty, sign alike on every session read by the day. A position held inside
+a day is marked differently under the two readings, so a book stored under the day reading
+meets one read by the hour only on the days neither held a position inside.
 
 Nothing deletes a signature as research goes on, so the table keeps every book stored under
 pins the workspace has since moved past — a re-pinned file, an upgraded kanso, a newer
@@ -104,14 +108,15 @@ import sqlite3
 import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import yaml
 
 from kanso.criteria.codec import decode_run, encode_run
 from kanso.criteria.library import objectives
-from kanso.criteria.run import CardRun, day_of
+from kanso.criteria.objectives import difference
+from kanso.criteria.run import NS_PER_DAY, CardRun, day_of
 from kanso.errors import PreconditionError
 from kanso.schemas import Card, CardDigest, GateResult, ObjectiveRef, RunRecord, VenueModel
 
@@ -124,6 +129,7 @@ __all__ = [
     "Signature",
     "Superseded",
     "active",
+    "best_measurement",
     "best_of",
     "candidates",
     "family",
@@ -156,10 +162,14 @@ Signature = dict[str, list[list[object]]]
 `[instrument_id, sign, at_an_end]` marks of that day. `at_an_end` is true for what the
 run held at one of the day's period ends and false for what it held during the day and
 at none of them, which is the difference between carrying a position over the close and
-closing it before. A day with nothing open maps to `[]`, because being flat is a position
+closing it before. Read by the hour, what was held during the day is marked once for each
+UTC hour of the day it was open in, `[instrument_id, sign, false, hour]`, whatever it held
+at an end. A day with nothing open maps to `[]`, because being flat is a position
 too, and no size enters, because a size is a parameter and a parameter is exactly what a
 signature exists to see through. What the size did to the number is not lost with it: the
 row carries the metric the book earned, and `matched_book` reads it."""
+
+NS_PER_HOUR: Final = NS_PER_DAY // 24
 
 _RUN_COLUMNS = (
     "run_id",
@@ -554,6 +564,27 @@ class Measurement:
         found = objectives()[self.objective.id]
         return found.compute(self.run, self.folds, self.host, self.benchmark)
 
+    def against(self, best: Measurement) -> tuple[float, float] | None:
+        """This metric less `best`'s, and the error of that difference read off the two runs
+        period by period, at this measurement's folds; `None` when the two do not pair.
+
+        They pair when they were scored on one objective, struck their returns at the same
+        instants and were differenced against the same host and benchmark runs, as every two
+        cards of one run under one reading are. The host's or the hold's part of each number
+        then cancels, and the difference is the installed objective's own arithmetic with the
+        best in the host's place (`objectives.difference`): a contribution's per-period
+        differences, two Sharpes by Memmel, two per-trade edges linearised and differenced
+        period by period, each widened for serial correlation as every metric's error is.
+        """
+        if (
+            self.objective.id != best.objective.id
+            or self.run.period_ends_ns != best.run.period_ends_ns
+            or self.host != best.host
+            or self.benchmark != best.benchmark
+        ):
+            return None
+        return difference(objectives()[self.objective.id], self.run, best.run, self.folds)
+
     def between(self, opens: int, closes: int) -> Measurement:
         """This measurement restricted to the half-open instant span `[opens, closes)`.
 
@@ -603,7 +634,24 @@ def measurement_of(store: StateStore, card: Card) -> Measurement | None:
     card refused before or during its backtest, one recorded before cards kept it."""
     if card.measured_sha is None:
         return None
-    return read_measurement(json.loads(zlib.decompress(store.get_blob(card.measured_sha))))
+    return _measurement(store, card.measured_sha)
+
+
+def best_measurement(store: StateStore, run: RunRecord) -> Measurement | None:
+    """What the run's best card was measured from: the newest keep of the run's best bytes,
+    or `None` before the first keep and when that card kept nothing."""
+    row = store.connection.execute(
+        "SELECT measured_sha FROM cards WHERE run_id = ? AND strategy_sha = ?"
+        " AND status = 'keep' ORDER BY seq DESC LIMIT 1",
+        (run.run_id, run.best_sha),
+    ).fetchone()
+    if row is None or row["measured_sha"] is None:
+        return None
+    return _measurement(store, str(row["measured_sha"]))
+
+
+def _measurement(store: StateStore, sha: str) -> Measurement:
+    return read_measurement(json.loads(zlib.decompress(store.get_blob(sha))))
 
 
 def read_measurement(payload: Mapping[str, Any]) -> Measurement:
@@ -619,8 +667,9 @@ def read_measurement(payload: Mapping[str, Any]) -> Measurement:
     )
 
 
-def signature(run: CardRun) -> Signature:
-    """What `run` held on each UTC day it measured a period end in, and whether at its end.
+def signature(run: CardRun, hourly: bool = False) -> Signature:
+    """What `run` held on each UTC day it measured a period end in, and whether at its end;
+    `hourly`, also in which hours of the day.
 
     The days are the run's period ends: the sessions two runs over the same window are
     both known to have measured. Each day is filled from both of the run's own records of
@@ -648,20 +697,35 @@ def signature(run: CardRun) -> Signature:
     `held` at the period ends and no other instant, so the widening is unreachable today,
     and seeding the two dicts from the same keys is what keeps it a widening rather than a
     `KeyError` if that ever stops being true.
+
+    `hourly` is the reading for a hypothesis held under a day (`loop.Setup.hourly`). A
+    position's spans then mark the day with each UTC hour it was open in, the first and the
+    last included, so the same name on the same side between 10:00 and 11:00 and between
+    13:00 and 14:00 are two books, and so are one clip a day and twenty spread through it —
+    and a span marks its hours on a day it was also held at an end of, since when it was
+    opened is news there too. The days stay the keys, so `[research] redundant_pct` is still a
+    share of sessions: keyed by the hour, the flat hours of a scalper's day would outvote the
+    one it traded in.
     """
     ends: dict[date, set[tuple[str, int]]] = {day_of(ts): set() for ts in run.period_ends_ns}
     for held in run.held:
         ends.setdefault(day_of(held.ts_ns), set()).add((held.instrument_id, _sign(held.qty)))
-    during: dict[date, set[tuple[str, int]]] = {day: set() for day in ends}
+    grain = NS_PER_HOUR if hourly else NS_PER_DAY
+    during: dict[date, set[tuple[str, int, int]]] = {day: set() for day in ends}
     for trade in run.trades:
-        mark = (trade.instrument_id, _sign(trade.qty))
-        for day in _spanned(trade.opened_ns, trade.closed_ns):
-            if day in during:
-                during[day].add(mark)
+        for step in range(trade.opened_ns // grain, trade.closed_ns // grain + 1):
+            at = step * grain
+            if day_of(at) in during:
+                hour = at % NS_PER_DAY // NS_PER_HOUR
+                during[day_of(at)].add((trade.instrument_id, _sign(trade.qty), hour))
     return {
         day.isoformat(): sorted(
             [[name, sign, True] for name, sign in held]
-            + [[name, sign, False] for name, sign in during[day] - held]
+            + [
+                [name, sign, False, hour] if hourly else [name, sign, False]
+                for name, sign, hour in during[day]
+                if hourly or (name, sign) not in held
+            ]
         )
         for day, held in sorted(ends.items())
     }
@@ -669,12 +733,6 @@ def signature(run: CardRun) -> Signature:
 
 def _sign(qty: float) -> int:
     return 1 if qty > 0 else -1
-
-
-def _spanned(opened_ns: int, closed_ns: int) -> list[date]:
-    """Every UTC day a position was open on, its first and its last included."""
-    first, last = day_of(opened_ns), day_of(closed_ns)
-    return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
 @dataclass(frozen=True)
@@ -813,10 +871,9 @@ def matched_book(
     it was called a repeat of.
 
     `floor` is struck from the candidate's own standard error, not the anchor's, which is
-    on record here and deliberately unread. The keep rule compares a candidate against
-    `best_metric` on the candidate's floor and never consults the best card's; one card,
-    one noise floor is the convention, and a second scale in the same loop would let two
-    rules disagree about whether one difference is a difference.
+    on record here and unread. A stored book carries its number and not what it was
+    measured from, so the pairing the keep rule reads between a candidate and the run's
+    best has nothing to read here.
 
     Every signature stored under the pins is a candidate, the best card's included: the
     caller applies the keep rule first, so what reaches here has already failed to beat

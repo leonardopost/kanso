@@ -52,26 +52,22 @@ against every strategy judged under the run's pins, and one that held the same b
 hypothesis's own noise floor of what that book earned is *redundant*: the card is recorded
 with that status and the metric it measured, the lane copy is restored as every non-keep
 restores it, a `redundant` event names the card it repeats and both numbers, and
-`RedundantError` reaches the caller. Both clauses, because "its result is already known"
-is a claim about the result: a candidate whose number differs from the book it repeats by
-more than the floor kanso already uses to say a difference is a difference has measured
-something the stored card did not, and refusing it as a repeat asserts what the two
-numbers deny. That candidate is an ordinary discard and it still appends a `same_book`
-event, because the book it matched is a fact about the search whichever way its number
-went, and the proposer that is told to move the number of a measured book cannot apply
-that rule unless it is shown the books that were measured. It is a card because the
-backtest ran: the engine time was spent, a real number came back, and the selection ranked
-that number and declined it. Refusing it without a record cost three things, all measured
-in a live workspace — the trial, so certificates deflated a Sharpe by a search fifty times
-narrower than the one that was run; the coverage entry, so a corner walked a thousand
-times read as unwalked to the proposer; and the idea itself, which the runs after this one
-could no longer see. What a redundant
-card may never be is a keep: the keep rule runs first, so a candidate that beats the best
-is a keep whatever it resembles, and the baseline is never redundant, since it is the best
-blob of the last run and its own signature is already stored. The two rules cannot both
-fire and cannot both miss what the other would catch — the keep bar is the same floor,
-doubled only when the file grew past its budget, so a candidate that cleared the floor
-upward and not the doubled bar is neither a keep nor a repeat, which is exactly what it is.
+`RedundantError` reaches the caller. Both clauses, because "its result is already known" is
+a claim about the result: a candidate whose number differs from the book it repeats by more
+than that floor has measured something the stored card did not, and refusing it as a repeat
+asserts what the two numbers deny. That candidate is an ordinary discard and it still
+appends a `same_book` event, because the book it matched is a fact about the search
+whichever way its number went, and the proposer that is told to move the number of a
+measured book cannot apply that rule unless it is shown the books that were measured. It is
+a card because the backtest ran: the engine time was spent, a real number came back, and
+the selection ranked that number and declined it. Refusing it without a record cost three
+things, all measured in a live workspace — the trial, so certificates deflated a Sharpe by
+a search fifty times narrower than the one that was run; the coverage entry, so a corner
+walked a thousand times read as unwalked to the proposer; and the idea itself, which the
+runs after this one could no longer see. What a redundant card may never be is a keep: the
+keep rule runs first, so a candidate that beats the best is a keep whatever it resembles,
+and the baseline is never redundant, since it is the best blob of the last run and its own
+signature is already stored.
 
 **A benchmark is run once per run.** A hypothesis whose objective is measured against a
 hold of its first leg has that hold produced by the runner — the card's own request with
@@ -88,7 +84,7 @@ import math
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
@@ -125,9 +121,9 @@ from kanso.hyp import (
 )
 from kanso.nautilus import backtest, sizing
 from kanso.research import lanes, records
+from kanso.research.keep import Against, noise_floor
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
-from kanso.research.keep import noise_floor
 from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
@@ -141,6 +137,7 @@ from kanso.schemas import (
     Tag,
     VenueModel,
     load_yaml,
+    parse_duration,
     parse_yaml,
 )
 
@@ -296,6 +293,14 @@ class Setup:
     @property
     def construct(self) -> str:
         return self.harness.construct
+
+    @property
+    def hourly(self) -> bool:
+        """Whether a card's signature reads what a day held by the hour: for a hypothesis
+        held under a day, whose candidates hold the same names on the same days and differ
+        in when (`records.signature`). The horizon is pinned with the file, so every book a
+        card is matched against under the pins was read the same way."""
+        return parse_duration(self.hyp.horizon, "horizon") < timedelta(days=1)
 
     @property
     def measured_under(self) -> str:
@@ -873,21 +878,48 @@ def _grew_by(store: StateStore, run: RunRecord, source: bytes) -> int:
     return lines_added(source, previous)
 
 
+UNMEASURED: Final = "the best card kept no measurement"
+UNPAIRED: Final = "the two cards' measurements do not pair"
+"""Why a comparison with the run's best is struck on the candidate's own error: `Against`."""
+
+
+def _against(
+    store: StateStore,
+    run: RunRecord,
+    measured: records.Measurement,
+    metric: float,
+    se: float,
+) -> Against | None:
+    """What a card is compared with the run's best on, or `None` before the run's first keep.
+
+    The difference and its error are read off both cards' measurements period by period
+    (`records.Measurement.against`). A best that kept none — a card recorded before cards
+    kept their measurement — or a pair whose runs do not pair, under a reading changed
+    between the two, leaves the card's metric less the best's on the card's own error,
+    which is how the rule read before it paired, and `unpaired` says which.
+    """
+    if run.best_sha is None or run.best_metric is None:
+        return None
+    best = records.best_measurement(store, run)
+    paired = None if best is None else measured.against(best)
+    if paired is None:
+        why = UNMEASURED if best is None else UNPAIRED
+        return Against(run.best_sha, metric - run.best_metric, se, why)
+    return Against(run.best_sha, *paired)
+
+
 def _keeps(
     setup: Setup,
     store: StateStore,
     run: RunRecord,
     source: bytes,
-    metric: float,
-    se: float,
+    against: Against | None,
 ) -> bool:
-    """Whether a card whose constraints all passed clears the run's noise floor."""
+    """Whether a card whose constraints all passed beats the run's best by the keep rule."""
     ref = setup.hyp.objective
     if ref is None:  # pragma: no cover - a classified hypothesis always carries one
         return False
-    return keep_rule(
-        metric, se, run.best_metric, ref.params, _grew_by(store, run, source), setup.max_lines
-    )
+    return keep_rule(against, ref.params, _grew_by(store, run, source), setup.max_lines)
 
 
 def _record(
@@ -913,12 +945,15 @@ def _record(
     restore_all: bool = False,
     digest: CardDigest | None = None,
     measured_sha: str | None = None,
+    against: Against | None = None,
 ) -> Card:
     """Write the card, then move `best` or restore the lane copy, then render the log.
 
     The workspace `strategy.py` is the hypothesis's champion, so a keep writes it only
     when the hypothesis's best is now these bytes: a keep that moved no more than its
     run's best — a re-seeded run's baseline, a lesser keep under new pins — leaves it.
+    `against` is what the keep rule compared the card with, which the `card` event carries
+    as `keep` for every card the rule was asked of with a best to beat.
     """
     made = Card(
         run_id=run.run_id,
@@ -952,11 +987,15 @@ def _record(
             restored[PROGRAM_FILE] = run.program_sha
         lanes.restore(store, directory, restored)
     write_results(ws, store, run.hyp_id)
-    store.event(
-        CARDED,
-        run.hyp_id,
-        {"run_id": run.run_id, "sha": strategy_sha[:7], "status": status, "metric": metric},
-    )
+    carded: dict[str, object] = {
+        "run_id": run.run_id,
+        "sha": strategy_sha[:7],
+        "status": status,
+        "metric": metric,
+    }
+    if against is not None:
+        carded["keep"] = against.payload()
+    store.event(CARDED, run.hyp_id, carded)
     return made
 
 
@@ -1045,8 +1084,9 @@ def _judge(
     metric, se = measured.compute()
     measured_sha = records.record_measurement(store, measured)
     passed = integrity.passed and all(gate.passed for gate in constraints)
-    kept = passed and _keeps(setup, store, run, source, metric, se)
-    held = records.signature(result.run)
+    against = _against(store, run, measured, metric, se) if passed else None
+    kept = passed and _keeps(setup, store, run, source, against)
+    held = records.signature(result.run, setup.hourly)
     floor = _noise_floor(setup, se)
     like = (
         None
@@ -1084,6 +1124,7 @@ def _judge(
         tags=tags,
         digest=digest_of(result.run, result.intents),
         measured_sha=measured_sha,
+        against=against,
     )
     if like is not None:
         _same_book(store, run, made.strategy_sha, desc, metric, floor, like)
@@ -1093,8 +1134,9 @@ def _judge(
 def _noise_floor(setup: Setup, se: float) -> float:
     """The scale on which two cards of this hypothesis are two results rather than one.
 
-    The keep rule's own floor, undoubled: `research/keep.py` says why a complexity clause
-    belongs to an improvement and not to a comparison.
+    The redundancy rule's floor, on the candidate's own error and never doubled:
+    `research/keep.py` says why a complexity clause belongs to an improvement and not to a
+    comparison.
     """
     ref = setup.hyp.objective
     if ref is None:  # pragma: no cover - a classified hypothesis always carries one
@@ -1554,6 +1596,7 @@ class _Decided:
     like: records.Match | None = None
     measured_sha: str | None = None
     digest: CardDigest | None = None
+    against: Against | None = None
 
 
 def run_batch(
@@ -1687,8 +1730,9 @@ def run_batch(
         metric, se = measured.compute()
         measured_sha = records.record_measurement(store, measured)
         passed = all(gate.passed for gate in constraints)
-        kept = passed and _keeps(setup, store, frozen, source, metric, se)
-        held = records.signature(result.run)
+        against = _against(store, frozen, measured, metric, se) if passed else None
+        kept = passed and _keeps(setup, store, frozen, source, against)
+        held = records.signature(result.run, setup.hourly)
         floor = _noise_floor(setup, se)
         like = (
             None
@@ -1723,6 +1767,7 @@ def run_batch(
                 like=like,
                 measured_sha=measured_sha,
                 digest=digest_of(result.run, result.intents),
+                against=against,
             )
         )
     best_at: int | None = None
@@ -1758,6 +1803,7 @@ def run_batch(
                 tags=item.tags,
                 digest=item.digest,
                 measured_sha=item.measured_sha,
+                against=item.against,
             )
         )
         if item.status == "keep":
