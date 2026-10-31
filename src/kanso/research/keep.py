@@ -104,7 +104,8 @@ def noise_floor(se: float, params: Mapping[str, float] | ObjectiveParams) -> flo
     is the *same* number as one already measured, on the candidate's own error, which is
     two-sided and has nothing to do with how the file was written, so it takes this floor
     undoubled; the keep rule asks whether a candidate is *better* than the best, on the
-    error of their difference, and doubles the `k_se` term when the file grew (`threshold`).
+    error of their difference where the two pair, and doubles the `k_se` term when the file
+    grew (`threshold`).
     """
     min_delta, k_se = _params(params)
     return max(min_delta, k_se * se)

@@ -298,8 +298,8 @@ class Setup:
     def hourly(self) -> bool:
         """Whether a card's signature reads what a day held by the hour: for a hypothesis
         held under a day, whose candidates hold the same names on the same days and differ
-        in when (`records.signature`). The horizon is pinned with the file, so every book a
-        card is matched against under the pins was read the same way."""
+        in when (`records.signature`). The horizon is pinned with the file, so the books this
+        kanso stores under one set of pins are all read one way."""
         return parse_duration(self.hyp.horizon, "horizon") < timedelta(days=1)
 
     @property

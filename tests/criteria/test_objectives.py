@@ -537,8 +537,9 @@ def test_a_benchmark_sharpe_is_paired_against_the_hold_as_a_marginal_one_is_agai
 
 def test_one_card_less_another_is_scored_as_a_marginal_improvement_on_it() -> None:
     """The keep rule's difference: every objective's, in every mode, is its statistic's
-    relative objective with the other card in the host's place — the difference of the two
-    metrics, its error paired period by period — and a card less itself is known exactly."""
+    relative objective with the other card in the host's place, its error paired period by
+    period — for an absolute objective, the difference of the two metrics — and a card less
+    itself is known exactly."""
     days = [date(2024, 1, 1 + i) for i in range(8)]
     one = build_run(
         (1.0, 3.0, 2.0, 4.0, 1.0, 5.0, 2.0, 6.0),

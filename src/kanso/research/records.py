@@ -70,11 +70,12 @@ for every judged run, a redundant one included, so the third spelling of one ide
 refused against the second as well as the first. The comparison is
 by day rather than by instant because it is a fact about sessions, and a day is what two
 runs over the same window share. For a hypothesis held under a day, what a day held is read
-by the hour, because one name held on one side every session is every such candidate's
-day: two strategies holding it from 10:00 to 11:00 and from 13:00 to 14:00, or trading one
-clip a day and twenty, sign alike on every session read by the day. A position held inside
-a day is marked differently under the two readings, so a book stored under the day reading
-meets one read by the hour only on the days neither held a position inside.
+by the hour, because a lane that holds one name on one side every session gives every
+candidate the same days: two strategies holding it from 10:00 to 11:00 and from 13:00 to
+14:00, or trading one clip a day and twenty, sign alike on every session read by the day. A
+position held inside a day is marked differently under the two readings, so a book stored
+under the day reading meets one read by the hour only on the days neither held a position
+inside.
 
 Nothing deletes a signature as research goes on, so the table keeps every book stored under
 pins the workspace has since moved past — a re-pinned file, an upgraded kanso, a newer

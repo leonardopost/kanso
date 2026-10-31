@@ -474,9 +474,9 @@ def test_a_refinement_inside_the_card_s_own_error_is_kept_on_the_error_of_its_di
     between them is known far better than either.
 
     A tenth more on every trade earns about a tenth more each session the trough rule
-    trades, so the gain is real and small against the card's own error — kept on it, a
-    candidate this size would need a t of ten — and the two cards' sessions move together,
-    so the difference's own error is about a tenth of either card's."""
+    trades, so the gain is real and small against the card's own error — kept on it at
+    `k_se` 0.5, a candidate this size would need a t of five — and the two cards' sessions
+    move together, so the difference's own error is about a tenth of either card's."""
     hyp_id = classify(ws, store, PAIRED)
     run = loop.begin(ws, store, hyp_id)
     edit(ws, run, REVERTING)

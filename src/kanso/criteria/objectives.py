@@ -33,7 +33,7 @@ two runs' linearisations period by period (trades of two runs pair nowhere else)
 whose periods differ are taken as independent and their variances summed, which can only
 overstate the error of two runs that share trades. The keep rule reads the same pairing
 between two cards (`difference`): a card against the run's best is a marginal improvement
-on it, and most of what varies is in both.
+on it, and what varies in both cancels.
 
 Which objectives can score a hypothesis is the `applies` predicate over its own attributes,
 with `min` inclusive and `max` exclusive: the set an objective is named from, by the

@@ -725,27 +725,27 @@ their 834 sampled days. The two are marked apart rather than merged into "someth
 held", so the reading is strictly finer than sampling the ends alone and never coarser: two
 strategies that differed under the old reading differ under this one, and carrying a
 position over the close is not the same book as closing it before. A hypothesis whose
-`horizon` is under a day is read by the hour as well, because one name held on one side
-every session is every intraday candidate's session: read by the day, two strategies holding
-it from 10:00 to 11:00 and from 13:00 to 14:00, or trading one clip a day and twenty spread
-through it, held the same book on every session, so a candidate that changed only when it
-traded was a repeat whenever its number stayed inside the floor. Read by the hour, a
-position held during a session marks it with each UTC hour it was open in, and those are
-three books. The sessions stay what `redundant_pct` is a share of: counted in hours, the
-hours a scalper was flat in would outvote the one it traded in. A book an earlier kanso
-stored by the day carries no hours, so under the pins of a run begun before the upgrade it
-matches a candidate read by the hour only on the sessions neither held a position inside.
-Two strategies with the same signature on nearly every shared session made the same bets,
-however differently they were written — a threshold moved, a helper renamed, a condition
-spelt the other way. Whether they also earned the same number is the rest of that sentence,
-and it is read rather than assumed: a signature is stored with the metric its card earned,
-and a candidate is **redundant** when it matches a strategy judged under the run's pins on
-at least `[research] redundant_pct` percent of their shared sessions *and* its own metric is
-within that hypothesis's noise floor — `max(min_delta, k_se x se)` on the candidate's own
-error — of what that strategy earned. Then it is a card of that status carrying the metric
-it measured, the lane restored as any non-keep restores it, a `redundant` event carrying the
-card it repeats and both numbers, the command that asked for it refused, and the proposer
-shown that card by name on its next turn.
+`horizon` is under a day is read by the hour as well, because a lane that holds one name on
+one side every session gives every candidate the same sessions: read by the day, two
+strategies holding it from 10:00 to 11:00 and from 13:00 to 14:00, or trading one clip a day
+and twenty spread through it, held the same book on every session, so a candidate that
+changed only when it traded was a repeat whenever its number stayed inside the floor. Read
+by the hour, a position held during a session marks it with each UTC hour it was open in,
+and those are three books. The sessions stay what `redundant_pct` is a share of: counted in
+hours, the hours a scalper was flat in would outvote the one it traded in. A book an earlier
+kanso stored by the day carries no hours, so under the pins of a run begun before the
+upgrade it matches a candidate read by the hour only on the sessions neither held a position
+inside. Two strategies with the same signature on nearly every shared session made the same
+bets, however differently they were written — a threshold moved, a helper renamed, a
+condition spelt the other way. Whether they also earned the same number is the rest of that
+sentence, and it is read rather than assumed: a signature is stored with the metric its card
+earned, and a candidate is **redundant** when it matches a strategy judged under the run's
+pins on at least `[research] redundant_pct` percent of their shared sessions *and* its own
+metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)` on the
+candidate's own error — of what that strategy earned. Then it is a card of that status
+carrying the metric it measured, the lane restored as any non-keep restores it, a
+`redundant` event carrying the card it repeats and both numbers, the command that asked for
+it refused, and the proposer shown that card by name on its next turn.
 
 Both clauses, because "its result is already known" is a claim about the result, and the
 result is in hand when the refusal is decided. Measured across the 3,092 candidates the
