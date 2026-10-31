@@ -538,13 +538,12 @@ whose last quote is not `ask > bid > 0` — locked, crossed or one-sided, as lev
 marked at its last trade or bar close and never at an invalid quote's mid, with neither at its
 cost, so a name the sleeve is handed no quotes of is marked
 as `balance` marks it. It is the mid, not the bid of a long or the ask of a short, so a flatten
-at market still pays half the spread past it; nothing kanso sizes or measures reads it, and a
-read looks at no more than a quote and a print of each position open. A read books the fills
-the venue has made since the last read, as a read of `balance` does, and nothing else: read
-where a sleeve reads `balance` it changes nothing the sleeve books, and read on a point where
-it reads nothing else it books them there rather than at the next read, as `balance` read there
-would, which can add the same sums in another order and leave the cash a unit in its last place
-apart.
+at market still pays half the spread past it; nothing kanso sizes or measures reads it. A
+read books the fills the venue has made since the last read, as a read of `balance` does, and
+nothing else: read where a sleeve reads `balance` it changes nothing the sleeve books, and read
+on a point where it reads nothing else it books them there rather than at the next read, as
+`balance` read there would, which can add the same sums in another order and leave the cash a
+unit in its last place apart.
 `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
