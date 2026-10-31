@@ -602,7 +602,7 @@ def test_what_the_rate_held_back_is_sent_from_the_change_and_stamped_with_it(req
     goes from the change it is due on, once that change's views have been handled, stamped with
     the change as an exit owed behind a cancel in flight is. So the exit is stamped with the
     change at 62 s, not with the grid instant 100 ms before it that the view on the same change
-    carries, and fills on the next change."""
+    carries, and with no latency fills on that change."""
     from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS
 
     changes, hyp = owed_exit(RESEARCH[0], shown=True, latency_ms=0.0)
@@ -617,7 +617,7 @@ def test_what_the_rate_held_back_is_sent_from_the_change_and_stamped_with_it(req
         (4_900, "SELL", "LIMIT"),
         (62_000, "SELL", "MARKET"),
     ]
-    assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [2_000, 63_000]
+    assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [2_000, 62_000]
     assert result.commands is not None and result.commands.cancels == 1
 
 
