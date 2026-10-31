@@ -204,6 +204,20 @@ it. Measured before that on an operator's workspace on 2026-10-01: lanes that ha
 certification's parity on a node did not exit within a minute of a `SIGTERM`, and only
 `SIGKILL` moved them.
 
+**A drain stops a lane after its card, not inside it.** `kanso research stop --drain` has the
+supervisor send its lanes `SIGUSR1` rather than `SIGTERM`: a lane told to drain begins nothing
+more — no proposal, card, alignment check, certification or exploration — and kills nothing it
+is running, so the card in flight runs to its own end, its budget included, and is recorded
+before the lane exits. The monitor is stopped as a stop stops it, and the supervisor and the
+command wait for every child however long its card takes. A stop meanwhile is a stop.
+
+**A baseline killed for its clock is not begun again on what it ran on.** The lane puts the
+hypothesis back in the queue and passes over it while a baseline begun now would run on the
+same strategy, `hypothesis.yaml`, `program.md`, snapshots, `[research] baseline_budget_s` and
+kanso version as the one killed — which its `baseline_failed` event records — and begins it
+once one of them has moved (`docs/cli.md`, The daemon and the queue). A run begun since ends
+the wait.
+
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned. The one

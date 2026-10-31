@@ -42,6 +42,7 @@ in a lane's hands has its claim closed, so resuming it later does not revive the
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, cast
@@ -337,12 +338,17 @@ def put_back(store: StateStore, hyp_id: str, lane: str | None = None) -> QueueIt
     return None
 
 
-def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
+def dequeue(
+    store: StateStore,
+    lane: str = DEFAULT_LANE,
+    parked: Callable[[str], bool] | None = None,
+) -> str | None:
     """The next hypothesis to research, removed from the queue, or `None`.
 
     A dead hypothesis is dropped on sight, and one already being researched — a run open,
     or a claim a lane holds with its run still to begin — is passed over and left where it
-    is, so the lane that finishes it finds its place unchanged. Measured before the second
+    is, so the lane that finishes it finds its place unchanged; so is one `parked` says a
+    lane is not to begin yet. Measured before the second
     reading: a lane claimed a hypothesis, the operator queued it again in the minutes its
     baseline card took, a second lane claimed it too, and the two runs collided on the
     one row a hypothesis may have open.
@@ -360,6 +366,8 @@ def dequeue(store: StateStore, lane: str = DEFAULT_LANE) -> str | None:
             drop(store, item.hyp_id)
             continue
         if active_run(store, item.hyp_id) is not None or claimed(store, item.hyp_id):
+            continue
+        if parked is not None and parked(item.hyp_id):
             continue
         with store.transaction():
             if not drop(store, item.hyp_id):

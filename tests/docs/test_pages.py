@@ -9,6 +9,7 @@ page that drifts is a defect and this is where it fails.
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
 import re
 import sys
@@ -107,10 +108,57 @@ def test_the_cli_page_says_the_daemon_starts_a_child_that_died_again() -> None:
     assert "started again under the same name" in start
     assert "`lane_died`" in start and "`monitor_died`" in start
     assert "doubling" in start and "five minutes" in start
-    stop = next(line for line in rows if line.startswith("| `kanso research stop`"))
+    stop = next(line for line in rows if line.startswith("| `kanso research stop"))
     assert "is not started again" in stop
     status = next(line for line in rows if line.startswith("| `kanso research status`"))
     assert "started again" in status
+
+
+def test_the_pages_say_a_drain_kills_nothing_and_name_its_signal() -> None:
+    """`stop --drain` was added so a card in flight is not the price of a stop; the pages name
+    the signal the supervisor is sent, which `daemon.DRAIN` is, and what a drain begins."""
+    import signal
+
+    from kanso.research import daemon
+
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop")
+    )
+    assert stop.startswith("| `kanso research stop [--drain]` |")
+    assert daemon.DRAIN == signal.SIGUSR1
+    assert "**`--drain` kills nothing:** the supervisor is sent `SIGUSR1` instead" in stop
+    assert (
+        "the card in flight runs to its own end — its time budget included — and is recorded"
+        in stop
+    )
+    assert "(`daemon     drained · pid N`; `--json`: `drain` is `true`)" in stop
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "**A drain stops a lane after its card, not inside it.**" in lanes
+    assert "`kanso research stop --drain` removes neither" in prose(page("workspace.md"))
+
+
+def test_the_pages_name_what_a_baseline_killed_for_its_clock_waits_on() -> None:
+    """A lane began such a baseline again `BACKOFF_S` later on the same inputs; the pages name
+    every input `loop.baseline_inputs` reads, so one added there and not here fails."""
+    from kanso.research import daemon, loop, scheduler
+
+    cli = prose(page("cli.md"))
+    assert "**A baseline killed for its clock waits until what it ran on moves.**" in cli
+    assert f"back in the queue at −{-scheduler.BASELINE_PRIORITY}," in cli
+    assert daemon.BACKOFF_S == 30.0 and "began it again thirty seconds later" in cli
+    named = {
+        "strategy": "the strategy the run would start from",
+        "hypothesis": "the workspace `hypothesis.yaml` and `program.md`",
+        "program": "the workspace `hypothesis.yaml` and `program.md`",
+        "snapshots": "the snapshots the workspace holds",
+        "budget_s": "`[research] baseline_budget_s` as the lane read `kanso.toml` when it started",
+        "kanso": "the kanso version",
+    }
+    assert set(re.findall(r'"(\w+)":', inspect.getsource(loop._inputs))) == set(named)
+    for phrase in named.values():
+        assert phrase in cli
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "**A baseline killed for its clock is not begun again on what it ran on.**" in lanes
 
 
 def test_the_pages_say_a_card_budget_is_struck_from_the_first_card_that_traded() -> None:
@@ -140,7 +188,7 @@ def test_the_cli_page_says_stop_sees_the_cards_it_left_end() -> None:
     found one still running when it returned. The page says what it waits on now, what it
     says when the wait runs out, and that it is silent until then."""
     rows = page("cli.md").splitlines()
-    stop = next(line for line in rows if line.startswith("| `kanso research stop`"))
+    stop = next(line for line in rows if line.startswith("| `kanso research stop"))
     assert "`stop` waits on those locks" in stop
     assert "is named under `ending`" in stop
     assert "`stop` prints nothing until it is done" in stop
@@ -908,7 +956,7 @@ def test_the_pages_say_a_stall_certifies_in_a_child_held_to_the_lane_s_share() -
     cli = prose(page("cli.md"))
     assert "The certification is made in a child of the lane, exactly as `cert run` makes it" in cli
     stop = next(
-        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop")
     )
     assert "a stall's certification in flight is killed the same way" in stop
     for number, opening in (
@@ -958,7 +1006,7 @@ def test_the_pages_say_the_monitor_demotes_in_a_child() -> None:
         "A pass demotes in a child of its own process, exactly as `kanso demote` does" in monitoring
     )
     stop = next(
-        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop")
     )
     assert "A demotion the monitor is making is not: it is left to finish" in stop
     rows = {

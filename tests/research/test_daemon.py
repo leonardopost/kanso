@@ -36,7 +36,7 @@ from kanso.workspace import Workspace
 from tests.certify.test_run import a_card, write_plan
 from tests.processes import CARDING, card_of, carding, children, ends, holding, running
 
-from .conftest import DOCUMENT, RESEARCH, REVERTING, classify, document
+from .conftest import DOCUMENT, FLAT, PROGRAM, RESEARCH, REVERTING, classify, document
 from .mocked import ALIGNED, SEED, proposal, scripted, write_script
 from .test_scheduler import open_run
 
@@ -44,7 +44,9 @@ from .test_scheduler import open_run
 @pytest.fixture(autouse=True)
 def quiet_signals() -> Iterator[None]:
     """The loops install handlers in whatever process runs them, including this one."""
-    saved = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT)}
+    saved = {
+        number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGINT, daemon.DRAIN)
+    }
     daemon.clear_stop()
     yield
     for number, handler in saved.items():
@@ -129,9 +131,9 @@ def test_a_lane_finishes_its_own_run_before_it_takes_anything_new(
     open_run(store, mine, lane="l1")
     scheduler.enqueue(store, queued, priority=9)
 
-    assert daemon.claim(store, "l1") == mine
-    assert daemon.claim(store, "l2") == queued
-    assert daemon.claim(store, "l2") is None
+    assert daemon.claim(ws, store, "l1") == mine
+    assert daemon.claim(ws, store, "l2") == queued
+    assert daemon.claim(ws, store, "l2") is None
 
 
 def test_the_interactive_lane_s_run_is_not_a_daemon_lane_s_work(
@@ -141,7 +143,7 @@ def test_the_interactive_lane_s_run_is_not_a_daemon_lane_s_work(
     open_run(store, hyp_id, lane="op")
     scheduler.enqueue(store, hyp_id)
 
-    assert daemon.claim(store, "l1") is None
+    assert daemon.claim(ws, store, "l1") is None
     assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
 
 
@@ -196,7 +198,7 @@ def test_a_worker_with_nothing_to_do_waits_rather_than_spinning(
 ) -> None:
     """It sleeps a slice at a time and notices the stop between slices. The stop lands on the
     first slice rather than on a timer, which could fire before the loop had begun."""
-    assert daemon.claim(store, "l1") is None
+    assert daemon.claim(ws, store, "l1") is None
     slept: list[float] = []
 
     def sleeping(seconds: float) -> None:
@@ -607,7 +609,7 @@ def test_a_dead_lane_s_open_run_is_left_to_the_lane_started_in_its_place(
     assert (died.detail["run"], died.detail["put_back"]) == (hyp_id, [])
     assert records.active(store, hyp_id) is not None
     assert scheduler.queued(store) == []
-    assert daemon.claim(store, "l1") == hyp_id, "the lane started in its place resumes it"
+    assert daemon.claim(ws, store, "l1") == hyp_id, "the lane started in its place resumes it"
 
 
 def test_what_a_dead_lane_held_with_no_run_goes_back_and_its_directory_with_it(
@@ -619,8 +621,8 @@ def test_what_a_dead_lane_held_with_no_run_goes_back_and_its_directory_with_it(
     elsewhere = classify(ws, store, document(id="demo_two"))
     scheduler.enqueue(store, beginning)
     scheduler.enqueue(store, elsewhere)
-    assert daemon.claim(store, "l1") == beginning
-    assert daemon.claim(store, "l2") == elsewhere
+    assert daemon.claim(ws, store, "l1") == beginning
+    assert daemon.claim(ws, store, "l2") == elsewhere
     left = lanes.prepare(lanes.lane_dir(ws, "l1", beginning))
     (left / ".card").mkdir()
     (left / ".card" / "stderr.txt").write_bytes(b"what a card said that nobody will read")
@@ -882,7 +884,7 @@ ws, hyp_id = find(Path(sys.argv[1])), sys.argv[2]
 turns = []
 
 
-def claim(store, lane):
+def claim(ws_, store, lane):
     """The first claim stalls a run and certifies its best, as the driver would; then idle."""
     turns.append(lane)
     if len(turns) == 1:
@@ -1249,6 +1251,7 @@ def test_a_child_that_outlived_its_daemon_is_reported_refused_past_and_ended(
         assert stopped_.payload() == {
             "running": False,
             "pid": None,
+            "drain": False,
             "orphans": [{"child": "l1", "pid": lane.pid}, {"child": "monitor", "pid": monitor.pid}],
             "ending": [],
         }
@@ -1607,7 +1610,236 @@ def test_the_supervisor_puts_back_what_a_dead_lane_dropped(
 ) -> None:
     hyp_id = classify(ws, store, DOCUMENT)
     scheduler.enqueue(store, hyp_id)
-    assert daemon.claim(store, "l1") == hyp_id
+    assert daemon.claim(ws, store, "l1") == hyp_id
 
     assert daemon.recover(ws) == [hyp_id]
     assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
+
+
+# --- a baseline killed for its clock, and a drain ------------------------------
+
+
+def killed_for_its_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Have every card, the baseline included, end killed for its clock, as one does that the
+    budget it is given cannot hold."""
+
+    def killed(request: backtest.RunRequest, *_: object, **__: object) -> backtest.RunResult:
+        return backtest.RunResult(
+            run=backtest._empty(request),
+            wall_s=float(request.budget_s or 0.0),
+            peak_mem_gb=0.1,
+            intents=(),
+            crashed=True,
+            reason=backtest.BUDGET,
+            traceback_tail=None,
+        )
+
+    monkeypatch.setattr(research_loop.backtest, "run_subprocess", killed)
+
+
+@pytest.mark.parametrize("moved", ["strategy.py", "program.md", "a snapshot"])
+def test_a_baseline_killed_for_its_clock_waits_in_the_queue_until_what_it_ran_on_moves(
+    moved: str, ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until this a lane put such a hypothesis back and began it again after `BACKOFF_S`, on
+    the same inputs, to be killed again a budget later (`docs/backlog.md` row 73)."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    killed_for_its_clock(monkeypatch)
+    begun: list[str] = []
+    beginning = research_loop.begin
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        begun.append(str(kwargs["lane"]))
+        return beginning(*args, **kwargs)
+
+    waited: list[float] = []
+
+    def wait(seconds: float) -> None:
+        waited.append(seconds)
+        if len(waited) == 2:
+            daemon.request_stop()
+
+    monkeypatch.setattr(research_loop, "begin", counted)
+    monkeypatch.setattr(daemon, "_wait", wait)
+
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
+    assert begun == ["l1"], "after its backoff the lane passed it over rather than begin it again"
+    assert waited == [daemon.BACKOFF_S, daemon.POLL_S]
+    assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
+    assert daemon.parked(ws, store, hyp_id)
+
+    if moved == "strategy.py":
+        ws.path("hypotheses", hyp_id, "strategy.py").write_bytes(FLAT + b"# lighter\n")
+    elif moved == "program.md":
+        ws.path("hypotheses", hyp_id, "program.md").write_bytes(PROGRAM + b"\nAnd faster.\n")
+    else:
+        ws.path("catalog", "snapshots", f"{'e' * 64}.yaml").write_text("{}\n", encoding="utf-8")
+
+    assert not daemon.parked(ws, store, hyp_id)
+    assert daemon.claim(ws, store, "l2") == hyp_id
+
+
+def test_a_baseline_killed_for_its_clock_is_not_parked_once_a_run_has_begun_or_it_cannot_be_read(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    with monkeypatch.context() as patched:
+        killed_for_its_clock(patched)
+        with pytest.raises(research_loop.OverBudgetError):
+            research_loop.begin(ws, store, hyp_id)
+    assert daemon.parked(ws, store, hyp_id)
+    program = ws.path("hypotheses", hyp_id, "program.md")
+    kept = program.read_bytes()
+    program.unlink()
+    assert not daemon.parked(ws, store, hyp_id), "the begin is left to say what is missing"
+    program.write_bytes(kept)
+
+    research_loop.begin(ws, store, hyp_id)
+
+    assert not daemon.parked(ws, store, hyp_id)
+
+
+def test_a_drain_request_kills_no_card_starts_no_other_and_is_taken_back_with_it(
+    tmp_path: Path,
+) -> None:
+    daemon.request_drain()
+
+    assert daemon.stopping()
+    assert not backtest._INTERRUPT.is_set(), "a card in flight runs on"
+    with pytest.raises(backtest.DrainedError):
+        backtest._refuse_if_interrupted()
+    with pytest.raises(backtest.DrainedError):
+        backtest.watched(
+            [sys.executable, "-c", "pass"],
+            cwd=tmp_path,
+            errors=tmp_path / "said",
+            env=None,
+            budget_s=None,
+            mem_cap_gb=None,
+        )
+    assert not (tmp_path / "said").exists(), "no child was started"
+    daemon.clear_stop()
+    assert not daemon.stopping() and not backtest._DRAIN.is_set()
+
+
+def test_a_lane_told_to_drain_takes_nothing_more_and_a_failure_meanwhile_is_still_one(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT)
+    scheduler.enqueue(store, hyp_id)
+    turns: list[str] = []
+
+    def drained_then_failed(_ws: Workspace, _store: StateStore, subject: str, **_: Any) -> Any:
+        turns.append(subject)
+        daemon.request_drain()
+        raise PreconditionError("the window is gone", remedy="load the window again")
+
+    monkeypatch.setattr(research_driver, "run", drained_then_failed)
+
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
+    assert turns == [hyp_id]
+    failed = [event for event in store.events(subject=hyp_id) if event.kind == daemon.LANE_FAILED]
+    assert [event.detail["because"] for event in failed] == ["load the window again"]
+    assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
+
+
+def test_what_a_drain_did_not_start_is_neither_failed_nor_requeued(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stall's certification, say, which the card that landed brought on: the run stays as
+    it was, and the next start takes it up."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    open_run(store, hyp_id, lane="l1")
+
+    def refused(*_: Any, **__: Any) -> Any:
+        daemon.request_drain()
+        backtest._refuse_if_interrupted()
+
+    monkeypatch.setattr(research_driver, "run", refused)
+
+    assert daemon.worker(ws, "l1", os.getppid()) == 0
+    assert scheduler.queued(store) == []
+    assert records.active(store, hyp_id) is not None
+    assert all(event.kind != daemon.LANE_FAILED for event in store.events(subject=hyp_id))
+
+
+class Signalled(FakeChild):
+    """A child that records the signals it is sent."""
+
+    def __init__(self, pid: int, sent: list[tuple[int, int]]) -> None:
+        super().__init__(pid=pid)
+        self.sent = sent
+
+    def send_signal(self, number: int) -> None:
+        self.sent.append((self.pid, number))
+
+
+@pytest.mark.parametrize("stopped_meanwhile", [False, True])
+def test_a_drain_tells_lanes_to_drain_and_the_monitor_to_stop_and_waits_for_every_one(
+    stopped_meanwhile: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """However long a card takes; a stop meanwhile ends the wait, for `_terminate` to answer."""
+    sent: list[tuple[int, int]] = []
+    lane, monitor = Signalled(1, sent), Signalled(2, sent)
+    children = [
+        daemon._Child(daemon.LANE, "l1", process=lane),  # type: ignore[arg-type]
+        daemon._Child(daemon.MONITOR, daemon.MONITOR, process=monitor),  # type: ignore[arg-type]
+        daemon._Child(daemon.LANE, "l2"),
+    ]
+    slept: list[float] = []
+
+    def sleeping(seconds: float) -> None:
+        slept.append(seconds)
+        if len(slept) == 1:
+            monitor.alive = False
+        elif stopped_meanwhile:
+            daemon.request_stop()
+        elif len(slept) == 3:
+            lane.alive = False
+
+    monkeypatch.setattr(daemon, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleeping))
+
+    daemon._drain(children)
+
+    assert sent == [(1, daemon.DRAIN), (2, signal.SIGTERM)]
+    assert lane.alive is stopped_meanwhile
+    assert len(slept) == (2 if stopped_meanwhile else 3)
+    assert not lane.terminated and not lane.killed
+
+
+def test_a_drain_lets_the_card_in_flight_land_and_the_daemon_go_once_it_has(
+    stopped: Workspace, store: StateStore
+) -> None:
+    """Measured with real processes: lane l1 is inside a card that never ends on its own when
+    the daemon is told to drain. The card runs on to its own end — its clock, set here to
+    `CARD_S` — and is recorded, the lane begins nothing after it, and the drain returns once
+    every child is gone. A stop kills that card and records nothing
+    (`test_a_lane_whose_supervisor_is_killed_mid_card_kills_the_card_and_records_nothing`)."""
+    ws = stopped
+    hyp_id = classify(ws, store, DOCUMENT, SLOW_SEED)
+    run = research_loop.begin(ws, store, hyp_id, lane="l1")
+    assert records.strike_budget(store, run, run.base_sha, CARD_S)
+    scripted(ws, propose=[proposal("slow")], align_check=[ALIGNED])
+    room = ws.root / run.dir / backtest.CARD_ROOM
+    supervisor = started_elsewhere(ws)
+    until(lambda: lane_process(supervisor, "l1"), "lane l1 to start")
+    until(lambda: (room / backtest.OUTPUT_FILE).is_file() or None, "l1's card output")
+    cards = len(records.cards_of(store, hyp_id))
+
+    drained = daemon.stop(ws, drain=True)
+
+    assert drained == daemon.Stopped(supervisor, (), (), drain=True)
+    assert daemon.pid_of(ws) is None and daemon.living(ws) == () and daemon.ending(ws) == ()
+    made = records.cards_of(store, hyp_id)
+    assert len(made) == cards + 1, "the card in flight landed, and nothing was begun after it"
+    landed = made[-1]
+    assert (landed.status, landed.desc) == ("crash", proposal("slow")["desc"])
+    (verdict,) = [gate for gate in landed.gate_results if gate.id == research_loop.RESOURCES]
+    assert (verdict.evidence["killed"], verdict.evidence["budget_s"]) == ("budget", CARD_S)
+    assert records.active(store, hyp_id) is not None, "the run stays open for the next start"
+    assert store.events(kind=daemon.LANE_FAILED) == []
+
+
+CARD_S: Final = 10.0
+"""The clock the drained card runs to: long enough that the drain lands while it runs."""

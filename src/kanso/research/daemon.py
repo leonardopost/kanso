@@ -86,6 +86,7 @@ from kanso.hyp import STRATEGY_FILE
 from kanso.nautilus import backtest
 from kanso.research import driver as research_driver
 from kanso.research import explore, lanes, records, scheduler
+from kanso.research import loop as research_loop
 from kanso.research.loop import TakenError
 from kanso.schemas import RunRecord, parse_duration
 from kanso.state import Event, StateStore, usable
@@ -95,6 +96,7 @@ __all__ = [
     "BACKOFF_S",
     "CAFFEINATE",
     "CARDS_PER_TURN",
+    "DRAIN",
     "ChildPid",
     "GRACE_S",
     "LANE_DIED",
@@ -124,8 +126,10 @@ __all__ = [
     "log_path",
     "main",
     "monitor",
+    "parked",
     "pid_of",
     "pid_path",
+    "request_drain",
     "request_stop",
     "restarts",
     "serve",
@@ -233,6 +237,13 @@ MONITOR_DIED: Final = "monitor_died"
 _STOPPING = False
 """Set by the signal handler; every loop in this process reads it between iterations."""
 
+DRAIN: Final = signal.SIGUSR1
+"""The signal `stop --drain` sends the supervisor, and the supervisor its lanes."""
+
+_DRAINING = False
+"""Set by the drain signal's handler: the loops begin nothing more, as on a stop, but what
+this process is running runs to its end."""
+
 _SUPERVISOR: int | None = None
 """The supervisor a lane or the monitor answers to, once it has taken it on (`_answer_to`).
 `None` in the supervisor itself, whose own parent is whatever started it — the `start`
@@ -251,10 +262,21 @@ def request_stop(*_: object) -> None:
     backtest.interrupt()
 
 
+def request_drain(*_: object) -> None:
+    """Ask this process's loops to begin nothing more and return once what they are running
+    has ended: a card in flight runs to its end and is recorded, and no child is started
+    after it (`backtest.drain`). A stop that arrives meanwhile is a stop."""
+    global _DRAINING
+    _DRAINING = True
+    backtest.drain()
+
+
 def clear_stop() -> None:
-    """Forget a stop request, and the supervisor. For a test that runs a loop more than once."""
-    global _STOPPING, _SUPERVISOR
+    """Forget a stop or drain request, and the supervisor. For a test that runs a loop more
+    than once."""
+    global _STOPPING, _DRAINING, _SUPERVISOR
     _STOPPING = False
+    _DRAINING = False
     _SUPERVISOR = None
     backtest.resume()
 
@@ -271,7 +293,7 @@ def stopping() -> bool:
     """
     if not _STOPPING and _SUPERVISOR is not None and os.getppid() != _SUPERVISOR:
         request_stop()
-    return _STOPPING
+    return _STOPPING or _DRAINING
 
 
 def _answer_to(supervisor: int) -> None:
@@ -387,18 +409,20 @@ class Status:
 @dataclass(frozen=True)
 class Stopped:
     """What `stop` did: the supervisor it stopped, when one was running; every lane or monitor
-    it found still running once no supervisor was left, and ended itself; and every lane or
+    it found still running once no supervisor was left, and ended itself; every lane or
     monitor whose card, certification or demotion was still running when it stopped waiting
-    (`ORPHAN_S`), which ends itself."""
+    (`ORPHAN_S`), which ends itself; and whether the supervisor was told to drain."""
 
     pid: int | None
     orphans: tuple[ChildPid, ...]
     ending: tuple[ChildPid, ...]
+    drain: bool = False
 
     def payload(self) -> dict[str, object]:
         return {
             "running": False,
             "pid": self.pid,
+            "drain": self.drain,
             "orphans": [child.payload() for child in self.orphans],
             "ending": [child.payload() for child in self.ending],
         }
@@ -513,9 +537,15 @@ def start(ws: Workspace) -> int:
     return _await_pid(ws, child)
 
 
-def stop(ws: Workspace) -> Stopped:
+def stop(ws: Workspace, *, drain: bool = False) -> Stopped:
     """Signal the daemon, wait for it to go, end any child of it still running, and wait for
     what those children started to end. Runs and lane directories stay.
+
+    With `drain` the supervisor is sent `DRAIN` instead: each lane runs the card it has in
+    flight to its end, records it and begins nothing more, the monitor stops as on a stop,
+    and the supervisor exits once they all have, however long that takes — and this waits
+    as long, killing nothing. A drain is refused when no supervisor runs: a lane of a daemon
+    that is gone has already stopped as though told to.
 
     The supervisor signals its children together and kills what is left after one shared
     grace, so a supervisor still here after `STOP_TIMEOUT_S` has not answered at all, and
@@ -536,6 +566,18 @@ def stop(ws: Workspace) -> Stopped:
     `ORPHAN_S` after the last lane went, names it rather than returning as though it had.
     """
     pid = pid_of(ws)
+    if drain:
+        if pid is None:
+            raise PreconditionError(
+                "no daemon is running in this workspace, so there is nothing to drain",
+                remedy="run `kanso research status` to see what is still running, and "
+                "`kanso research stop` to end it",
+            )
+        _signal(pid, DRAIN)
+        while _held(pid_path(ws)):  # the supervisor's lock goes when it does, reaped or not
+            time.sleep(_TICK)
+        pid_path(ws).unlink(missing_ok=True)
+        return Stopped(pid, _end(ws), _settle(ws), drain=True)
     if pid is None and not living(ws) and not ending(ws):
         raise PreconditionError(
             "no daemon is running in this workspace",
@@ -650,6 +692,8 @@ def serve(ws: Workspace) -> int:
             if not stopping():
                 _tend(ws, children, time.monotonic())
     finally:
+        if _DRAINING and not _STOPPING:
+            _drain(children)
         _terminate([child.process for child in children if child.process is not None])
         pid_path(ws).unlink(missing_ok=True)
         lock.close()
@@ -723,7 +767,7 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
     with _supervised(ws, lane, supervisor), StateStore(ws.path("state.db")) as store:
         usable(store, ws.path("state.db"))
         while not stopping():
-            subject = claim(store, lane)
+            subject = claim(ws, store, lane)
             if subject is None:
                 _wait(POLL_S)
                 continue
@@ -734,8 +778,8 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
             except TakenError:
                 continue  # the operator took it back, or ended its run; take the next
             except KansoError as exc:
-                if stopping():
-                    break  # the card was interrupted, not failed; the run resumes next start
+                if stopping() and (_STOPPING or isinstance(exc, backtest.DrainedError)):
+                    break  # interrupted, or not begun under a drain; the run resumes next start
                 store.event(
                     LANE_FAILED,
                     subject,
@@ -776,14 +820,40 @@ def monitor(ws: Workspace, supervisor: int) -> int:
     return 0
 
 
-def claim(store: StateStore, lane: str) -> str | None:
-    """What this lane works next: its own unfinished run, else the head of the queue.
+def claim(ws: Workspace, store: StateStore, lane: str) -> str | None:
+    """What this lane works next: its own unfinished run, else the head of the queue that is
+    not `parked`.
 
     Its own run comes first, which is what makes a lane started in a dead one's place
     resume the run the dead one left.
     """
     mine = _run_in(store, lane)
-    return mine if mine is not None else scheduler.dequeue(store, lane)
+    if mine is not None:
+        return mine
+    return scheduler.dequeue(store, lane, lambda hyp_id: parked(ws, store, hyp_id))
+
+
+def parked(ws: Workspace, store: StateStore, hyp_id: str) -> bool:
+    """Whether a lane leaves `hyp_id` in the queue rather than begin its run: its last
+    attempt to begin one ended on a baseline killed for its clock, no run has begun since,
+    and a baseline begun now would run on what that one ran on (`loop.baseline_inputs`).
+
+    Before this a baseline killed for its clock was put back and begun again `BACKOFF_S`
+    later on the same strategy, hypothesis, snapshot and budget, and killed again a budget
+    later (`docs/backlog.md` row 73). It stays where `put_back` put it, and the first lane
+    to look once one of what it ran on has moved begins it. When what a baseline would run
+    on cannot be read — a file gone — it is not parked, so the begin says why.
+    """
+    failed = store.events(kind=research_loop.BASELINE_FAILED, subject=hyp_id)
+    if not failed or research_loop.INPUTS not in failed[-1].detail:
+        return False
+    if any(run.started_at.isoformat() > failed[-1].ts for run in records.runs_of(store, hyp_id)):
+        return False
+    try:
+        now = research_loop.baseline_inputs(ws, store, hyp_id)
+    except (KansoError, OSError):
+        return False
+    return bool(failed[-1].detail[research_loop.INPUTS] == now)
 
 
 def _run_in(store: StateStore, lane: str) -> str | None:
@@ -950,6 +1020,22 @@ def _ended_by(code: int) -> dict[str, object]:
     return {"exit": None, "signal": name}
 
 
+def _drain(children: Sequence[_Child]) -> None:
+    """Tell every lane to drain and the monitor to stop, and wait for all of them to exit,
+    however long a lane's card in flight takes — unless a stop arrives meanwhile, when
+    `_terminate` stops whatever is left. The monitor is stopped as `stop` stops it, which
+    already lets a demotion it is making finish."""
+    running = [
+        (child.command, child.process)
+        for child in children
+        if child.process is not None and child.process.poll() is None
+    ]
+    for command, process in running:
+        process.send_signal(DRAIN if command == LANE else signal.SIGTERM)
+    while not _STOPPING and any(process.poll() is None for _, process in running):
+        time.sleep(_TICK)
+
+
 def _terminate(children: Sequence[subprocess.Popen[bytes]]) -> None:
     """Ask every child to stop at once, and kill whichever is left after one shared grace.
 
@@ -1092,9 +1178,12 @@ def _supervised(ws: Workspace, name: str, supervisor: int) -> Iterator[None]:
 
 
 def _watch_supervisor(done: threading.Event) -> None:
-    """Ask `stopping` every `backtest.PARENT_POLL_S` until it says so, or until `done`."""
+    """Ask `stopping` every `backtest.PARENT_POLL_S` until this process is told to stop, or
+    until `done`; a drain is no reason to stop looking, since a supervisor gone mid-drain is
+    a stop."""
     while not done.wait(backtest.PARENT_POLL_S):
-        if stopping():
+        stopping()
+        if _STOPPING:
             return
 
 
@@ -1232,9 +1321,11 @@ def _await_pid(ws: Workspace, child: subprocess.Popen[bytes]) -> int:
 
 
 def _listen() -> None:
-    """Answer a stop signal by asking this process's loops to finish."""
+    """Answer a stop signal by asking this process's loops to finish, and the drain signal by
+    asking them to begin nothing more."""
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
+    signal.signal(DRAIN, request_drain)
 
 
 def _wait(seconds: float) -> None:

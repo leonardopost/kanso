@@ -115,9 +115,16 @@ def start_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
 
 
 @app.command("stop")
-def stop_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
+def stop_command(
+    ctx: typer.Context,
+    drain: Annotated[
+        bool,
+        typer.Option("--drain", help="Let each lane's card in flight land first; kill nothing."),
+    ] = False,
+    as_json: JsonOption = False,
+) -> None:
     """Stop the daemon. Active runs and their lane directories stay exactly as they are."""
-    emit(as_json or global_json(ctx), lambda: _stop(open_workspace(ctx)))
+    emit(as_json or global_json(ctx), lambda: _stop(open_workspace(ctx), drain))
 
 
 @app.command("status")
@@ -343,10 +350,11 @@ def _start(ws: Workspace) -> Report:
     return Report(data=data, lines=lines)
 
 
-def _stop(ws: Workspace) -> Report:
-    stopped = daemon.stop(ws)
+def _stop(ws: Workspace, drain: bool = False) -> Report:
+    stopped = daemon.stop(ws, drain=drain)
     data: dict[str, Any] = stopped.payload()
-    lines = [field("daemon", "stopped" if stopped.pid is None else f"stopped · pid {stopped.pid}")]
+    how = "drained" if stopped.drain else "stopped"
+    lines = [field("daemon", how if stopped.pid is None else f"{how} · pid {stopped.pid}")]
     if stopped.orphans:
         orphans = ", ".join(child.label for child in stopped.orphans)
         lines.append(

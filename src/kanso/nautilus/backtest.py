@@ -170,6 +170,7 @@ __all__ = [
     "BUDGET",
     "DEFAULT_PERIOD",
     "DIED",
+    "DrainedError",
     "EXCEPTION",
     "INTERRUPTED",
     "MEMORY",
@@ -180,6 +181,7 @@ __all__ = [
     "checked_chunks",
     "child_env",
     "benchmark",
+    "drain",
     "end_with",
     "execute",
     "handed_down",
@@ -321,15 +323,31 @@ ORPHANED: Final = 3
 gone; nothing reads it, since whatever would have read it is what went."""
 
 
+_DRAIN = threading.Event()
+"""Set when the process supervising a card has been told to drain: every child it is
+watching runs to its end, and no other is started — `run_subprocess`, `run_subprocesses` and
+`watched` refuse with `DrainedError` instead."""
+
+
+class DrainedError(PreconditionError):
+    """A child not started because the process that would have watched it was told to drain."""
+
+
 def interrupt() -> None:
     """Have every card this process is watching killed at its next poll, and start no
     other."""
     _INTERRUPT.set()
 
 
+def drain() -> None:
+    """Have every child this process is watching run to its end, and start no other."""
+    _DRAIN.set()
+
+
 def resume() -> None:
-    """Forget an interrupt, so a later card in this process runs to its end."""
+    """Forget an interrupt and a drain, so a later card in this process runs to its end."""
     _INTERRUPT.clear()
+    _DRAIN.clear()
 
 
 _WANTED: list[Callable[[], object]] = []
@@ -3284,13 +3302,15 @@ def watched(
     Whatever it writes to a stream goes to `errors`. `env` is the environment it starts
     with, the parent's own when `None`. The watch is `_watch`'s: the wall-time and
     resident-memory bounds, this process's stop unless the child is not `stoppable`, and
-    the `wanted` checks it is inside. A card is one child watched this way, a stall's
-    certification another (`kanso.certify.child`), and a monitor's demotion a third that a
-    stop leaves to finish (`kanso.portfolio.child`). `feed`, when given, is written to the
-    child's standard input between the watch's polls (`_Feed`), and anything it raises kills
-    the child first; a child given none reads nothing. The child inherits the descriptors
-    this process hands down (`handed_down`) and no other.
+    the `wanted` checks it is inside; a process told to drain starts none (`DrainedError`).
+    A card is one child watched this way, a stall's certification another
+    (`kanso.certify.child`), and a monitor's demotion a third that a stop leaves to finish
+    (`kanso.portfolio.child`). `feed`, when given, is written to the child's standard input
+    between the watch's polls (`_Feed`), and anything it raises kills the child first; a
+    child given none reads nothing. The child inherits the descriptors this process hands
+    down (`handed_down`) and no other.
     """
+    _refuse_if_drained()
     started = time.monotonic()
     with errors.open("wb") as stream:
         child = subprocess.Popen(
@@ -3385,7 +3405,8 @@ def _interrupted() -> PreconditionError:
 
 
 def _refuse_if_interrupted() -> None:
-    """Start no card in a process that has been told to stop, or for work not wanted.
+    """Start no card in a process that has been told to stop or to drain, or for work not
+    wanted.
 
     Asked before the window is read and again before the child is spawned, because a stop
     that lands while a lane is reading a window, or waiting on a model, is still a stop: a
@@ -3394,7 +3415,18 @@ def _refuse_if_interrupted() -> None:
     """
     if _INTERRUPT.is_set():
         raise _interrupted()
+    _refuse_if_drained()
     _refuse_if_unwanted()
+
+
+def _refuse_if_drained() -> None:
+    """Start no child in a process that has been told to drain."""
+    if _DRAIN.is_set():
+        raise DrainedError(
+            "nothing more was started: the lane was told to drain, so it ran what it had in "
+            "flight to its end and stopped",
+            remedy="start the daemon again; the run resumes from its last card",
+        )
 
 
 def _refuse_if_unwanted() -> None:

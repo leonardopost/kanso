@@ -96,7 +96,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
-from kanso import ext
+from kanso import __version__, ext
 from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.criteria import CardRun, GateContext, criteria_version, gates
@@ -106,7 +106,7 @@ from kanso.criteria.gates import strategy_integrity
 from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
 from kanso.data.instruments import run_definitions
-from kanso.data.manifest import catalog_path
+from kanso.data.manifest import catalog_path, snapshots_path
 from kanso.data.snapshot import covering
 from kanso.env import read as read_envelope
 from kanso.errors import KansoError, PreconditionError, ValidationError
@@ -152,8 +152,11 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "BASELINE",
+    "BASELINE_FAILED",
     "HEADROOM",
+    "INPUTS",
     "MIN_CARD_BUDGET_S",
+    "OverBudgetError",
     "REDUNDANT",
     "RESEARCHABLE",
     "RESOURCES",
@@ -162,6 +165,7 @@ __all__ = [
     "RedundantError",
     "Setup",
     "TakenError",
+    "baseline_inputs",
     "begin",
     "card",
     "end",
@@ -241,8 +245,20 @@ class TakenError(PreconditionError):
     """
 
 
+class OverBudgetError(PreconditionError):
+    """The baseline was killed for its clock: it ran out of `[research] baseline_budget_s`.
+
+    A lane does not begin the run again until what that baseline ran on has moved
+    (`baseline_inputs`, `kanso.research.daemon.parked`).
+    """
+
+
 BASELINE_FAILED: Final = "baseline_failed"
 """The event kinds this module appends, all under the hypothesis id as subject."""
+
+INPUTS: Final = "inputs"
+"""The key a `baseline_failed` event of a baseline killed for its clock records what that
+baseline ran on under (`baseline_inputs`)."""
 
 RESEARCHING: Final = "researching"
 
@@ -1192,7 +1208,8 @@ def begin(
     catalog read of the warmup, the benchmark or the baseline's window, within
     `backtest.WANTED_POLL_S` of a removal while the hold or the baseline card runs — the
     child is killed — and once more before the run is recorded. It leaves no lane directory and no
-    `baseline_failed`, because the baseline did not fail.
+    `baseline_failed`, because the baseline did not fail; nor does a baseline a lane told to
+    drain did not start (`backtest.DrainedError`).
     """
     lane = lanes.check_lane(lane)
     registration = _registration(ws, store, hyp_id)
@@ -1277,14 +1294,19 @@ def begin(
                 ws, setup, snapshot.snapshot_id, directory, pins, from_best=from_best
             )
         held()  # the card's last poll may have come before a removal did
-    except TakenError:
+    except (TakenError, backtest.DrainedError):
         lanes.remove(directory)  # the operator's word, not a failure of the baseline
         raise
     except KansoError as exc:
         # Nothing a card could be judged against ran, so the run leaves no trace but the
         # event the scheduler reads to requeue the hypothesis at a lower priority.
         lanes.remove(directory)
-        store.event(BASELINE_FAILED, hyp_id, {"reason": exc.message})
+        failed: dict[str, object] = {"reason": exc.message}
+        if isinstance(exc, OverBudgetError):
+            failed[INPUTS] = _inputs(
+                ws, pins[STRATEGY_FILE], pins[HYPOTHESIS_FILE], pins[PROGRAM_FILE]
+            )
+        store.event(BASELINE_FAILED, hyp_id, failed)
         raise
     run = records.insert(
         store,
@@ -1329,6 +1351,33 @@ def begin(
         benchmark_run=benchmark_run,
     )
     return records.require_active(store, hyp_id)
+
+
+def baseline_inputs(ws: Workspace, store: StateStore, hyp_id: str) -> dict[str, object]:
+    """What a baseline a lane began now would run on: the strategy its run would start from,
+    the workspace `hypothesis.yaml` and `program.md`, the snapshots the workspace holds,
+    `[research] baseline_budget_s` and the kanso version — in the form `begin` records them
+    on a baseline killed for its clock (`INPUTS`)."""
+    base, _, _ = _base_source(
+        ws, store, hyp_id, from_workspace=False, reseed=reseed_of(store, hyp_id)
+    )
+    return _inputs(
+        ws,
+        sha256(base).hexdigest(),
+        sha256(read_source(hypothesis_file(ws, hyp_id))).hexdigest(),
+        sha256((hypothesis_dir(ws, hyp_id) / PROGRAM_FILE).read_bytes()).hexdigest(),
+    )
+
+
+def _inputs(ws: Workspace, strategy: str, hypothesis: str, program: str) -> dict[str, object]:
+    return {
+        "strategy": strategy,
+        "hypothesis": hypothesis,
+        "program": program,
+        "snapshots": sorted(path.stem for path in snapshots_path(ws).glob("*.yaml")),
+        "budget_s": float(ws.config.research.baseline_budget_s),
+        "kanso": __version__,
+    }
 
 
 def _budget(wall_s: float) -> float:
@@ -1422,12 +1471,18 @@ def _baseline(
             f"{result.reason}: {result.traceback_tail or 'no output'}",
             result.remedy,
             from_best=from_best,
+            over_budget=result.reason == backtest.BUDGET,
         )
     return result
 
 
 def _refuse_baseline(
-    hyp_id: str, why: str, remedy: str | None = None, *, from_best: bool = False
+    hyp_id: str,
+    why: str,
+    remedy: str | None = None,
+    *,
+    from_best: bool = False,
+    over_budget: bool = False,
 ) -> NoReturn:
     """Refuse the run, naming what the baseline did instead of running.
 
@@ -1446,7 +1501,8 @@ def _refuse_baseline(
                 f" with `kanso research begin {hyp_id} --from-workspace`, since a run "
                 "otherwise starts from the best card's strategy, which is what did not run"
             )
-    raise PreconditionError(f"the baseline card of {hyp_id} did not run: {why}", remedy=remedy)
+    refusal = OverBudgetError if over_budget else PreconditionError
+    raise refusal(f"the baseline card of {hyp_id} did not run: {why}", remedy=remedy)
 
 
 def card(

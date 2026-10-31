@@ -16,6 +16,7 @@ from typing import ClassVar, Final
 
 import pytest
 
+import kanso
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
 from kanso.criteria.objectives import wf_sharpe_net
@@ -210,6 +211,64 @@ def test_a_turn_s_first_card_that_trades_in_slot_order_strikes_the_card_budget(
         loop.HEADROOM * made[1].wall_s,
         made[1].strategy_sha,
     )
+
+
+def test_a_baseline_killed_for_its_clock_records_what_it_ran_on_and_one_that_raised_does_not(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a lane compares before it begins the run again (`daemon.parked`): the strategy, the
+    two files, the snapshots, the baseline budget and the kanso, as a begin now reads them."""
+
+    def killed(request: backtest.RunRequest, *_: object, **__: object) -> backtest.RunResult:
+        return backtest.RunResult(
+            run=backtest._empty(request),
+            wall_s=float(request.budget_s or 0.0),
+            peak_mem_gb=0.1,
+            intents=(),
+            crashed=True,
+            reason=backtest.BUDGET,
+            traceback_tail=None,
+        )
+
+    with monkeypatch.context() as patched:
+        patched.setattr(loop.backtest, "run_subprocess", killed)
+        with pytest.raises(loop.OverBudgetError, match="budget: no output"):
+            loop.begin(ws, store, registered)
+    ws.path("hypotheses", registered, "strategy.py").write_bytes(RAISING)
+    with pytest.raises(PreconditionError) as raised:
+        loop.begin(ws, store, registered)
+
+    over, crashed = store.events(kind=loop.BASELINE_FAILED, subject=registered)
+    assert over.detail[loop.INPUTS] == {
+        "strategy": sha256(FLAT).hexdigest(),
+        "hypothesis": sha256(
+            ws.path("hypotheses", registered, "hypothesis.yaml").read_bytes()
+        ).hexdigest(),
+        "program": sha256(PROGRAM).hexdigest(),
+        "snapshots": sorted(path.stem for path in ws.path("catalog", "snapshots").glob("*.yaml")),
+        "budget_s": float(ws.config.research.baseline_budget_s),
+        "kanso": kanso.__version__,
+    }
+    assert not isinstance(raised.value, loop.OverBudgetError)
+    assert loop.INPUTS not in crashed.detail
+    assert loop.baseline_inputs(ws, store, registered)["strategy"] == sha256(RAISING).hexdigest()
+
+
+def test_a_baseline_a_lane_told_to_drain_did_not_start_is_no_failure(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """It leaves what an operator's removal leaves: no run, no lane directory and no
+    `baseline_failed`, which `kanso status` would list until a run began."""
+    backtest.drain()
+    try:
+        with pytest.raises(backtest.DrainedError):
+            loop.begin(ws, store, registered)
+    finally:
+        backtest.resume()
+
+    assert store.events(kind=loop.BASELINE_FAILED, subject=registered) == []
+    assert records.active(store, registered) is None
+    assert not ws.path("runs", "op", registered).exists()
 
 
 def test_the_baseline_discards_when_a_card_gate_fails(ws: Workspace, store: StateStore) -> None:
