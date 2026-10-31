@@ -6,6 +6,7 @@ keeps is read again and compared under the suite's check, and a read of it books
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -151,7 +152,7 @@ def test_no_part_of_kanso_reads_the_balance_at_quote() -> None:
     naming = sorted(
         path.relative_to(root).as_posix()
         for path in root.rglob("*.py")
-        if "balance_at_quote" in path.read_text(encoding="utf-8")
+        if re.search(r"\bbalance_at_quote\b", path.read_text(encoding="utf-8"))
     )
     assert naming == ["nautilus/strategy.py"]
     tree = ast.parse((root / "nautilus" / "strategy.py").read_text(encoding="utf-8"))

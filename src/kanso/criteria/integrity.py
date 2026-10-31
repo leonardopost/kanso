@@ -366,7 +366,7 @@ DENIED_DEPTH: Final = frozenset(
         "_depth_shown",
         "_depth_seen_ns",
         "_top_shown",
-        "_top_marked",
+        "_top_balance_at_quote",
         "_take_depth",
         "_show_view",
         "_show_book",

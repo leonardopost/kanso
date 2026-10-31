@@ -787,7 +787,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
-        self._top_marked: dict[str, QuoteTick] = {}
+        self._top_balance_at_quote: dict[str, QuoteTick] = {}
         """Under `depth`, the level one each name was last handed, which `balance_at_quote`
         marks it at, as it marks a name at its last quote without `depth` (`_show_top`)."""
         self._book_ledger: Any = None
@@ -1128,7 +1128,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `ask > bid > 0`, which `handle_quote_tick` makes the last print `balance` marks at."""
         quote = self._last_quote.get(key)
         if quote is None:
-            quote = self._top_marked.get(key)
+            quote = self._top_balance_at_quote.get(key)
         if quote is not None:
             bid, ask = float(quote.bid_price), float(quote.ask_price)
             if ask > bid > 0.0:
@@ -1604,7 +1604,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._top_shown[key] = top
         quote = QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init)
-        self._top_marked[key] = quote
+        self._top_balance_at_quote[key] = quote
         self._show_view(quote, ts_event)
 
     def _show_depth(self, ts_init: int) -> None:
