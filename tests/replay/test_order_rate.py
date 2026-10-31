@@ -1730,7 +1730,7 @@ OWED_BEFORE_A_MODIFY = sleeve(
 third quote and moves the buy to 5.50 on its thirty-first."""
 
 
-def test_an_exit_owed_for_want_of_a_token_goes_before_a_modify_asked_after_it() -> None:
+def test_an_exit_owed_for_want_of_a_token_takes_the_token_before_the_handler_s_modify() -> None:
     """At two a minute the entry and the resting buy empty the bucket, and the exit at market
     asked for on the third quote — the buy is on the opening side, so there is nothing for it to
     cancel — finds no token and is owed for want of one. On the thirty-first a token is back: the

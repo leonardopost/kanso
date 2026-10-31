@@ -823,9 +823,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """The cancels the bucket held too few tokens for, by client order id, each with what it
         was sent with (`_defer_cancel`)."""
         self._rate_owed: dict[tuple[str, OrderSide], None] = {}
-        """The exits owed because no token was available to them, each asked for again before
-        the strategy's handler of every later point until it goes or is owed no longer
-        (`_pay_rated`)."""
+        """The exits owed because no token was available to them, which `_pay_rated` asks for
+        again."""
         self._command_closing: tuple[float | None, float | None] | None = None
         """What `_close` asked for, as the next `submit_order` sends it: the exit the rate
         owes rather than refuses (`_short_of_rate`)."""
@@ -2629,10 +2628,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         reads it as an exit (`submit_order`).
 
         An exit `submit_exit` sized — an author's, an exit rule's, one owed already — is owed,
-        as it was asked for (`_owe`), and asked for again until the bucket takes it. An entry —
-        `submit_entry`'s in every form, whatever it does to the position; an order built by
-        hand, an overlay's hedge leg or clip, that opens or grows the position its orders on
-        their way leave (`_opens`) — is dropped unsent and counted as refused (`_drop_rate`),
+        as it was asked for (`_owe`). An entry — `submit_entry`'s in every form, whatever it
+        does to the position; an order built by hand, an overlay's hedge leg or clip, that
+        opens or grows the position its orders on their way leave (`_opens`) — is dropped
+        unsent and counted as refused (`_drop_rate`),
         and the run goes on: the account would not have taken it then, so a strategy that
         sends past its rate trades the entries the rate lets through, and its card says how
         many it did not. A clip dropped so is forgotten as a clip, since it holds nothing. So
@@ -2745,9 +2744,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _owe(self, key: str, side: OrderSide, qty: float | None, price: float | None) -> None:
         """Owe the exit `submit_exit` sized that no token was available to, as `_close` owes
-        one a cancel in flight held back (`_pay_owed`), to be asked for again before the
-        strategy's handler of every later point (`_pay_rated`); an exit rule's owed exit is not
-        replaced by its host's."""
+        one a cancel in flight held back (`_pay_owed`), and mark it owed for want of a token
+        (`_rate_owed`); an exit rule's owed exit is not replaced by its host's."""
         held = self._owed.get((key, side))
         if held is None or not held[2] or self._exiting:
             self._owed[(key, side)] = (qty, price, self._exiting)

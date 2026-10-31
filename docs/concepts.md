@@ -1877,10 +1877,11 @@ owed as an exit. The bucket is asked for an entry `submit_entry` sizes, or one b
 before it is sized or funded, so one past the rate is dropped and counted unsized and unfunded,
 never refused, and the room and the funding are read only for one it lets through, as with no
 rate stated. An order the engine was never handed, dropped so, is nothing to cancel or to move,
-and its cancel or modify is no command. **An exit `submit_exit` sized is owed**, asked
-for again as it was asked until the bucket takes it, and **a cancel is deferred**. **Any other exit is refused** — one the strategy built itself, at market or at a
-limit in any time in force, a stop, an order of a list or a list that closes, an overlay's leg
-or clip — as `order_rate`, the same refusal a sizing rule makes, and the card is a `discard`
+and its cancel or modify is no command. **An exit `submit_exit` sized is owed**, asked for again
+as it was asked, and **a cancel is deferred**. **Any other exit is refused** — one the strategy
+built itself, at market or at a limit in any time in force, a stop, an order of a list or a list
+that closes, an overlay's leg or clip — as `order_rate`, the same refusal a sizing rule makes,
+and the card is a `discard`
 carrying a `sizing` gate with what was asked, when and what the bucket held: dropped, it would
 leave open what the strategy asked to close, and owed, it would go as an order kanso built in
 its place, which the strategy could neither cancel nor move. While a cancel waits for its

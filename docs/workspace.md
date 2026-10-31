@@ -1353,15 +1353,15 @@ tokens (below). Then:
   good till cancelled, for the day, immediate-or-cancel, fill-or-kill or good till a date, a
   stop, a post-only or part-displayed limit, an order sized in the quote's currency, an
   emulated order or one with an execution algorithm, an order of a list or a list whose first
-  order closes, the engine's own `close_position`, an order that crosses flat; and an
-  overlay's leg or clip that closes — inside the handler that sent it, as `order_rate`, when
-  the bucket holds fewer tokens than it needs. Owed, it would go as an order kanso built in
-  its place, which the strategy holds no handle to and so could neither cancel nor move, cut
-  at flat and sent at market or at a good-till-cancelled limit whatever was asked; dropped, it
-  would leave open what the strategy asked to close. The card is a `discard` whose `sizing`
-  gate carries the refusal: what was asked, when, what was held, and in `why` the bucket's
-  level and any cancel waiting for its tokens. A strategy that closes with `submit_exit` is
-  owed instead, and is never refused for the rate;
+  order closes, the engine's own `close_position`; and an overlay's leg or clip that closes —
+  inside the handler that sent it, as `order_rate`, when the bucket holds fewer tokens than it
+  needs. Owed, it would go as an order kanso built in its place, which the strategy holds no
+  handle to and so could neither cancel nor move, cut at flat and sent at market or at a
+  good-till-cancelled limit whatever was asked; dropped, it would leave open what the strategy
+  asked to close. The card is a `discard` whose `sizing` gate carries the refusal: what was
+  asked, when, what was held, and in `why` the bucket's level and any cancel waiting for its
+  tokens. A strategy that closes with `submit_exit` is owed instead, and is never refused for
+  the rate;
 - **a cancel is deferred**: the order is working until the cancel is sent and lands, so an
   exit is sized to what it can still fill and an exit at a price behind it is owed, as behind
   a cancel in flight. One whose order filled or was cancelled meanwhile, or whose cancel went

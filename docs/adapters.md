@@ -482,8 +482,7 @@ plan's figure. Past it a card drops the entries and modifies no request is avail
 fewer left than they cost, an entry's list one for each of its orders, all or none, or a cancel
 waiting for its two — and counts them on its `commands`, running on; it owes
 the exits `submit_exit` sized and defers its cancels, and while a cancel waits for its two
-requests no entry or modify takes one that comes back, so a sleeve that cancels and re-posts
-its entries cancels every one it sent but the last; and it is refused only for an exit kanso
+requests no entry or modify takes one that comes back; and it is refused only for an exit kanso
 did not size — one the strategy built itself, or an overlay's leg or clip — sent with no
 request left for it. An account on the Elite plan states, beside a
 `requests_per_minute` raised to match,
