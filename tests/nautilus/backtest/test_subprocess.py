@@ -99,15 +99,17 @@ def test_the_stream_is_a_header_the_request_one_pickle_per_chunk_and_its_end(
 ) -> None:
     """The points are pickled a chunk at a time as the stream is asked for them, and a read
     of one name's daily bars is a day: no process holds the window, and no copy of it is
-    held as bytes beside the objects, which for a window of ticks is gigabytes."""
+    held as bytes beside the objects, which for a window of ticks is gigabytes. As each chunk
+    passes, the first instant of each return period it holds is noted."""
     import pickle
 
     from kanso.nautilus import backtest as runner
 
     request = request_for()
+    firsts: dict[int, int] = {}
     records = [
         pickle.loads(record)
-        for record in runner._payload(request, store, (("/elsewhere", "an_extension"),))
+        for record in runner._payload(request, store, (("/elsewhere", "an_extension"),), firsts)
     ]
 
     header, body, *chunks, end = records
@@ -121,6 +123,37 @@ def test_the_stream_is_a_header_the_request_one_pickle_per_chunk_and_its_end(
     sessions = {day_of(ts) for ts in whole}
     assert len(chunks) == len(sessions), "one pickle per session that held a point"
     assert sorted(int(p.ts_init) for c in chunks for g in c["groups"] for p in g) == whole
+    opens, _ = request.bounds
+    noted = {(ts - opens) // request.period_ns: ts for ts in whole}
+    assert firsts == noted, "each session's one bar is the first point of its period"
+
+
+def test_each_period_s_first_instant_is_noted_however_a_chunk_falls_across_them(
+    request_for,
+) -> None:
+    """A chunk inside one period is noted by its earliest instant; one that holds points of
+    several periods, or of the warmup prefix before the window, is read point by point, each
+    period's earliest noted and the prefix's not at all, in whatever order a group holds them."""
+    from types import SimpleNamespace
+
+    from kanso.nautilus import backtest as runner
+
+    request = request_for()
+    opens, _ = request.bounds
+    day = request.period_ns
+
+    def points(*offsets: int) -> tuple[object, ...]:
+        return tuple(SimpleNamespace(ts_init=opens + offset) for offset in offsets)
+
+    chunks = [
+        (points(-5, 3 * day + 7), points(2 * day + 9, 2 * day + 4)),
+        (points(2 * day + 2, 2 * day + 1),),
+        (points(3 * day + 8),),
+    ]
+    firsts: dict[int, int] = {}
+
+    assert list(runner._marked_chunks(request, iter(chunks), firsts)) == chunks
+    assert firsts == {2: opens + 2 * day + 1, 3: opens + 3 * day + 7}
 
 
 def test_the_child_is_given_an_allow_list_and_no_catalog(
@@ -195,6 +228,17 @@ def test_a_card_that_raises_is_a_crash_with_its_traceback_tail(
     assert result.run.capital == request_for().capital
 
 
+def test_a_card_of_a_period_of_no_time_is_the_crash_it_was_when_the_child_alone_cut_periods(
+    store: Path, lane: Path, request_for
+) -> None:
+    """The parent notes each period's first instant as it streams the window, and a period of
+    no time cuts none: it leaves the refusal to the child, which makes it as it always has."""
+    result = run_subprocess(request_for(period="0d"), store, lane)
+
+    assert result.crashed is True and result.reason == "exception"
+    assert result.traceback_tail is not None and "is no time at all" in result.traceback_tail
+
+
 def test_a_refusal_the_child_raised_brings_its_remedy_back(
     store: Path, lane: Path, request_for
 ) -> None:
@@ -243,7 +287,10 @@ def test_a_card_that_outgrows_its_memory_is_killed(
 def test_several_children_read_one_window_and_a_memory_kill_spares_the_rest(
     store: Path, lane: Path, request_for, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One read feeds every slot. A child killed for its own memory does not take the others."""
+    """One read feeds every slot, and every slot's result carries the first instants that read
+    noted, as one card's does. A child killed for its own memory does not take the others."""
+    from .conftest import RESEARCH, bars
+
     monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
     alone = run_subprocess(request_for(), store, lane)
     together = run_subprocesses(
@@ -259,6 +306,8 @@ def test_several_children_read_one_window_and_a_memory_kill_spares_the_rest(
     assert [item.crashed for item in together] == [False, True, False]
     assert together[1].reason == "memory"
     assert together[0].run.trades == alone.run.trades == together[2].run.trades
+    assert alone.firsts_ns == tuple(int(bar.ts_init) for bar in bars(RESEARCH))
+    assert all(item.firsts_ns == alone.firsts_ns for item in together)
     assert not (lane / ".card").exists()
 
 
@@ -794,7 +843,7 @@ def test_a_card_whose_lane_is_killed_does_not_outlive_it(
 
     request = request_for(source=SLOW_SLEEVE)
     handed = tmp_path / "stream.pkl"
-    handed.write_bytes(b"".join(_payload(request, store, ())))
+    handed.write_bytes(b"".join(_payload(request, store, (), {})))
     starts_a_card = (
         "import os, subprocess, sys, time\n"
         f"card = subprocess.Popen([sys.executable, '-c', {_BOOTSTRAP!r},"
@@ -1389,7 +1438,7 @@ def test_a_stream_cut_before_its_end_is_not_a_card(
 
     from kanso.nautilus import backtest as runner
 
-    whole = list(runner._payload(request_for(), store, ()))
+    whole = list(runner._payload(request_for(), store, (), {}))
     assert pickle.loads(whole[-1]) == runner.END
     monkeypatch.setattr(runner, "end_with", lambda _parent: None)
     for cut in (b"".join(whole[:-1]), b"".join(whole[:-1])[:-10]):
