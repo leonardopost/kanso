@@ -9,7 +9,7 @@ import ast
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 import kanso
@@ -193,7 +193,29 @@ class Strategy(Strategy):
 """
 
 
+CI_TAPE: list[Step] = [
+    (0, 0, False, -2, 1, 0, -2),
+    (0, 0, False, -1, 1, 0, 0),
+    (0, 0, False, -1, 3, 0, -1),
+    (0, 0, False, 0, 2, 0, 2),
+    (0, 0, False, -1, 1, 0, 0),
+    (0, 0, False, -2, 1, 0, -2),
+    (40, 1, True, -1, 1, 0, 2),
+    (0, 0, False, -2, 4, 0, 1),
+    (0, 0, False, 2, 3, 0, 2),
+    (0, 0, False, 2, 3, 0, 0),
+    (0, 0, True, 0, 4, 0, 1),
+    (0, 0, False, -1, 3, 0, 2),
+    (40, 1, True, 0, 2, 0, 1),
+    (40, 0, False, -2, 1, 0, 1),
+]
+"""The tape CI failed on, with costs ('quotes', 'touch', 20.0) and the check off (run
+41020021146, the same 180 steps on all four jobs), cut to 14 of them on which a read of
+`balance_at_quote` that books nothing still parts from a read of `balance`."""
+
+
 @settings(max_examples=20, deadline=None)
+@example(script=CI_TAPE, costs=("quotes", "touch", 20.0), rechecked=False)
 @given(
     script=steps,
     costs=st.sampled_from(
@@ -213,7 +235,8 @@ def test_a_read_of_the_balance_at_quote_books_what_a_read_of_the_balance_books(
     answered as kept, as in a card, and read again and compared beside it. A read books the fills
     the venue made since the last, as a read of `balance` does, and moves nothing else. A sleeve
     that reads nothing on a print books a fill made there at its next read instead, and may add
-    the same sums in another order, so it is not the one compared (`balance_at_quote`)."""
+    the same sums in another order, so it is not the one compared (`balance_at_quote`). On
+    `CI_TAPE` a read that books nothing parts from a read of `balance`."""
     hyp = tick_hypothesis(*costs)
     groups = tape(script)
     root = tmp_path_factory.mktemp("at_quote")
