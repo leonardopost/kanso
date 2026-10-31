@@ -25,6 +25,7 @@ from kanso.research import records
 from kanso.schemas import Card, ObjectiveParams, ObjectiveRef, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
+from tests.own_bar_size import card_remedy
 
 from .conftest import (
     BETTER,
@@ -542,6 +543,45 @@ def test_from_workspace_starts_from_the_workspace_file(runner: CliRunner, regist
 
     assert (lane(registered) / "strategy.py").read_text() == FLAT
     assert payload(at(runner, registered, "hyp", "show", HYP_ID, "--json"))["best_sha"] is None
+
+
+SIZED_IN_AN_IF = FLAT.replace(
+    "class Config(KansoConfig):\n    pass\n",
+    "if True:\n\n"
+    "    class Config(KansoConfig):\n"
+    '        bar_resolution: str | None = "5m"\n'
+    "        every: int = 6\n",
+)
+"""FLAT with a `Config` under an `if`, which `strategy_integrity` does not read, giving
+`bar_resolution` a default of its own: a best card an earlier kanso kept."""
+
+
+def test_a_best_giving_bar_resolution_a_default_is_begun_again_from_the_file_its_remedy_names(
+    runner: CliRunner, registered: Path
+) -> None:
+    """A run starts from the best card's bytes, so once that best's `Config` gives the field a
+    default of its own, beginning again is refused in the baseline's child however the workspace
+    file has been fixed. The remedy names the flag that begins from that file, and the command
+    it names, run as worded, begins the run."""
+    begin(runner, registered)
+    assert at(runner, registered, "research", "end", HYP_ID).exit_code == Exit.OK
+    with StateStore(registered / "state.db") as store:
+        run = records.runs_of(store, HYP_ID)[-1]
+        records.set_best(store, run, store.put_blob(SIZED_IN_AN_IF.encode()), 1.0)
+    fixed = SIZED_IN_AN_IF.replace('        bar_resolution: str | None = "5m"\n', "")
+    (registered / "hypotheses" / HYP_ID / "strategy.py").write_text(fixed, encoding="utf-8")
+
+    refused = at(runner, registered, "research", "begin", HYP_ID, "--json")
+    remedy = str(payload(refused)["remedy"])
+    named = remedy.split("`")[1].split()
+    followed = at(runner, registered, *named[1:], "--json")
+
+    assert refused.exit_code == Exit.PRECONDITION
+    assert "Config gives bar_resolution a default of '5m'" in str(payload(refused)["error"])
+    assert remedy == card_remedy(HYP_ID)
+    assert named == ["kanso", "research", "begin", HYP_ID, "--from-workspace"]
+    assert followed.exit_code == Exit.OK, followed.stdout
+    assert (lane(registered) / "strategy.py").read_text() == fixed
 
 
 def test_show_prints_the_best_card_s_strategy(runner: CliRunner, registered: Path) -> None:

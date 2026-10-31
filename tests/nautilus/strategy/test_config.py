@@ -147,12 +147,12 @@ def test_a_bar_resolution_default_is_read_off_the_class_s_struct_and_none_is_kan
     and a configuration that is no `KansoConfig` is left to its constructor, which refuses the
     fields kanso passes it."""
     for admitted in (KansoConfig, Params, Restated, StrategyConfig, object()):
-        refuse_own_bar_resolution(admitted, "strategy.py")
+        refuse_own_bar_resolution(admitted, "strategy.py", "demo_mr")
 
     with pytest.raises(ValidationError) as positional:
-        refuse_own_bar_resolution(Positional, "strategy.py")
+        refuse_own_bar_resolution(Positional, "strategy.py", "demo_mr")
     with pytest.raises(ValidationError) as raised:
-        refuse_own_bar_resolution(Required, "strategy.py", certified=True)
+        refuse_own_bar_resolution(Required, "strategy.py", "demo_mr", certified=True)
 
     assert positional.value.message.startswith(
         "strategy.py: Positional gives bar_resolution no default, where KansoConfig gives None"
@@ -162,8 +162,9 @@ def test_a_bar_resolution_default_is_read_off_the_class_s_struct_and_none_is_kan
         "strategy.py: Required gives bar_resolution no default, where KansoConfig gives None"
     )
     assert raised.value.remedy == (
-        "research and certify the strategy again with bar_resolution deleted from Required; a "
-        "version runs the bytes it was certified with"
+        "delete bar_resolution from Required in hypotheses/demo_mr/strategy.py, research from "
+        "that file with `kanso research begin demo_mr --from-workspace` and certify the best it "
+        "finds with `kanso cert run demo_mr`: a version runs the bytes it was certified with"
     )
 
 

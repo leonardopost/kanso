@@ -17,7 +17,7 @@ from kanso.nautilus.backtest import (
     run_subprocess,
     run_subprocesses,
 )
-from tests.own_bar_size import CARD_REMEDY, IN_AN_IF, REFUSED
+from tests.own_bar_size import IN_AN_IF, REFUSED, card_remedy
 from tests.processes import ends, running
 
 from .conftest import (
@@ -225,7 +225,7 @@ def test_a_config_giving_bar_resolution_a_default_of_its_own_is_refused_in_the_c
     assert result.crashed is True
     assert result.reason == "exception"
     assert f"strategy.py: {REFUSED}" in (result.traceback_tail or "")
-    assert result.remedy == CARD_REMEDY
+    assert result.remedy == card_remedy("demo_mr")
     assert result.run.returns == ()
 
 

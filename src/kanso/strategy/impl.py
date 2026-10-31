@@ -358,7 +358,7 @@ def _write_source(
     loaded = _import(module)
     cls = _entry(loaded, entrypoint, slot)
     if slot == SLEEVE:
-        refuse_own_bar_resolution(cls.config_cls, f"{module}.py", certified=True)
+        refuse_own_bar_resolution(cls.config_cls, f"{module}.py", hyp_id, certified=True)
     return Component(
         hyp_id=hyp_id,
         strategy_sha=strategy_sha,
@@ -513,7 +513,9 @@ def _build(component: Component) -> Built:
     cls = getattr(module, component.path.split(":", 1)[1])
     config_cls = getattr(module, component.config_path.split(":", 1)[1])
     if component.construct == SLEEVE:
-        refuse_own_bar_resolution(config_cls, f"{component.module}.py", certified=True)
+        refuse_own_bar_resolution(
+            config_cls, f"{component.module}.py", component.hyp_id, certified=True
+        )
     return Built(
         construct=component.construct,
         hyp_id=component.hyp_id,

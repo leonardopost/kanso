@@ -469,12 +469,15 @@ def test_the_workspace_page_says_which_refuses_a_config_s_own_bar_size_and_where
         {"__annotations__": {"bar_resolution": "str | None"}, "bar_resolution": "5m"},
     )
     with pytest.raises(ValidationError) as refused:
-        refuse_own_bar_resolution(sized, "strategy.py")
+        refuse_own_bar_resolution(sized, "strategy.py", "demo_mr")
 
     assert "The runner refuses such a class wherever it builds it, whatever made it" in text
     shown = "`strategy.py: Config gives bar_resolution a default of '5m', …`"
     assert f"in a card's child, where the card fails with {shown}" in text
     assert refused.value.message.startswith(shown.strip("`…"))
+    begun = "`kanso research begin ID --from-workspace`"
+    assert f"and begin from that file with {begun}" in text
+    assert begun.replace("ID", "demo_mr") in (refused.value.remedy or "")
     assert (
         "where `strat compose` writes a version's manifest; and where `portfolio deploy` loads a "
         "manifest an earlier kanso wrote" in text

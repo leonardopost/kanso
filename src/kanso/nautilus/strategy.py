@@ -376,7 +376,9 @@ def _bar_resolution_of(config: KansoConfig) -> str | None:
     return cast("str | None", _BAR_RESOLUTION.__get__(config, type(config)))
 
 
-def refuse_own_bar_resolution(config_cls: object, where: str, *, certified: bool = False) -> None:
+def refuse_own_bar_resolution(
+    config_cls: object, where: str, hyp_id: str, *, certified: bool = False
+) -> None:
     """Refuse a `KansoConfig` class whose `bar_resolution` default is not `None`.
 
     kanso sets the field from the hypothesis: on a card always, `None` where the file states
@@ -399,8 +401,13 @@ def refuse_own_bar_resolution(config_cls: object, where: str, *, certified: bool
     declares again carries the default it declares. An attribute that hides the field without
     declaring it — set on the class after its body, say — leaves the default `None` and is read
     past (`_BAR_RESOLUTION`). A `config_cls` that is no `KansoConfig` is left to its constructor,
-    which refuses the fields kanso passes it. `certified` names the remedy: a version's bytes are
-    certified, so it is researched again rather than edited.
+    which refuses the fields kanso passes it.
+
+    The remedy deletes the field from `hyp_id`'s `strategy.py` and begins research from that file
+    (`kanso research begin --from-workspace`), since a run starts from the best card's bytes where
+    there is one, which no edit of the file changes. `certified` says the bytes are a version's: a
+    version runs the bytes it was certified with, so its remedy goes on to certify what that
+    research finds.
     """
     if not (isinstance(config_cls, type) and issubclass(config_cls, KansoConfig)):
         return
@@ -420,11 +427,15 @@ def refuse_own_bar_resolution(config_cls: object, where: str, *, certified: bool
         "on a stage from the version's manifest, which carries it only where the file states "
         "one — so a stage's sleeve would not be configured as its card's was",
         remedy=(
-            f"research and certify the strategy again with bar_resolution deleted from {name}; "
-            "a version runs the bytes it was certified with"
+            f"delete bar_resolution from {name} in hypotheses/{hyp_id}/strategy.py, research "
+            f"from that file with `kanso research begin {hyp_id} --from-workspace` and certify "
+            f"the best it finds with `kanso cert run {hyp_id}`: a version runs the bytes it was "
+            "certified with"
             if certified
-            else f"delete bar_resolution from {name}: kanso sets it, and a file reading bars "
-            "beside ticks states their size as bar_resolution in hypothesis.yaml"
+            else f"delete bar_resolution from {name} in hypotheses/{hyp_id}/strategy.py and begin "
+            f"from that file with `kanso research begin {hyp_id} --from-workspace`, since a run "
+            "starts from the best card's bytes where there is one: kanso sets the field, and a "
+            "file reading bars beside ticks states their size as bar_resolution in hypothesis.yaml"
         ),
     )
 

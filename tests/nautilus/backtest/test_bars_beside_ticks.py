@@ -42,11 +42,11 @@ from kanso.nautilus.node import _reconfigured
 from kanso.schemas import Hypothesis, VenueModel, Warmup
 from kanso.strategy import impl
 from tests.own_bar_size import (
-    CARD_REMEDY,
     DECLARING,
     REFUSED,
     UNRESOLVED,
     UNRESOLVED_DECLARING,
+    card_remedy,
     hidden_after_its_body,
 )
 
@@ -327,7 +327,7 @@ def test_a_config_giving_bar_resolution_a_default_of_its_own_is_refused_where_a_
         session.run_node(request, [instrument()], groups)
 
     assert card.value.message == node.value.message == f"strategy.py: {REFUSED}"
-    assert card.value.remedy == node.value.remedy == CARD_REMEDY
+    assert card.value.remedy == node.value.remedy == card_remedy("demo_mr")
 
 
 def test_a_config_hiding_bar_resolution_after_its_body_is_no_default_and_runs_at_the_file_s_size(

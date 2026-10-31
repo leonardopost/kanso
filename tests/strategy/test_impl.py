@@ -22,7 +22,7 @@ from tests.own_bar_size import (
     REFUSED,
     UNRESOLVED,
     UNRESOLVED_DECLARING,
-    VERSION_REMEDY,
+    version_remedy,
 )
 from tests.research.conftest import DOCUMENT, HYP_ID
 
@@ -340,7 +340,7 @@ def test_a_sleeve_whose_config_gives_bar_resolution_a_default_of_its_own_writes_
 
     module = impl.module_name(impl.SLEEVE, "demo_sized", source)
     assert refused.value.message == f"{module}.py: {REFUSED}"
-    assert refused.value.remedy == VERSION_REMEDY
+    assert refused.value.remedy == version_remedy("demo_sized")
     assert not impl.manifest_file(ws, "demo_sized", 1).exists()
 
 
@@ -369,7 +369,7 @@ def test_a_config_annotated_with_a_type_only_a_type_checker_imports_is_composed_
     assert written.sleeve.source == f"{impl.module_name(impl.SLEEVE, 'demo_sized', plain)}.py"
     module = impl.module_name(impl.SLEEVE, "demo_sized", sized)
     assert refused.value.message == f"{module}.py: {REFUSED}"
-    assert refused.value.remedy == VERSION_REMEDY
+    assert refused.value.remedy == version_remedy("demo_sized")
     assert not impl.manifest_file(ws, "demo_sized", 1).exists()
 
 
@@ -397,7 +397,7 @@ def test_a_manifest_an_earlier_kanso_wrote_for_such_a_sleeve_is_refused_where_a_
 
     module = impl.module_name(impl.SLEEVE, "demo_sized", source)
     assert refused.value.message == f"{module}.py: {REFUSED}"
-    assert refused.value.remedy == VERSION_REMEDY
+    assert refused.value.remedy == version_remedy("demo_sized")
 
 
 HIDDEN_CONFIG = b'''

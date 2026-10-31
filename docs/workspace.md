@@ -575,9 +575,11 @@ it, whatever made it — a class body annotating the field with a value, a class
 `if`, one deriving from `KansoConfig` held under another name or read off
 `KansoStrategy.config_cls`, one `type()` builds with the field in its `__annotations__`: in a
 card's child, where the card fails with `strategy.py: Config gives bar_resolution a default of
-'5m', …` and the remedy to delete the field; where `strat compose` writes a version's
-manifest; and where `portfolio deploy` loads a manifest an earlier kanso wrote — those two
-naming the generated module, with the remedy to research and certify the strategy again.
+'5m', …` and the remedy to delete the field from `hypotheses/ID/strategy.py` and begin from
+that file with `kanso research begin ID --from-workspace`, since a run starts from the best
+card's bytes where there is one; where `strat compose` writes a version's manifest; and where
+`portfolio deploy` loads a manifest an earlier kanso wrote — those two naming the generated
+module, with the remedy to research from that file the same way and certify the best it finds.
 Before any card runs, `strategy_integrity` reads the body of a top-level class of the file that
 names `KansoConfig` among its bases — as itself, through an import alias or as a module's
 attribute — or names a top-level class of the file that does, and discards the file where that

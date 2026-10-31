@@ -1167,7 +1167,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
 
     module = _module(request.strategy_source, "sleeve")
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
-    refuse_own_bar_resolution(cls.config_cls, "strategy.py")
+    refuse_own_bar_resolution(cls.config_cls, "strategy.py", request.hyp.id)
     hyp = request.hyp
     grains = _bar_grains(request)
     extra: tuple[str, ...] = ()
