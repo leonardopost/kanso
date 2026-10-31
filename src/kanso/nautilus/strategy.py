@@ -718,6 +718,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._kept_settled = False
         """Whether every order the balance reads has been folded in since anything it folds
         last changed (`_settle`)."""
+        self._balance_at_quote_kept: list[tuple[str, float, float, Any]] | None = None
+        """Each open position as `balance_at_quote` marks it, kept (`_balance_at_quote_marks`)."""
         self._data_time = 0
         self._intents: list[OrderIntent] = []
         self._last_bar: dict[str, Bar] = {}
@@ -758,6 +760,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._cash = resolved.capital
         self._ledger: dict[object, _Tracked] = {}
         self._print_ns: dict[str, int] = {}
+        self._balance_at_quote_traded: dict[str, tuple[float, int]] = {}
+        """Each name's last trade or bar close and its `ts_event`, which a quote's mid never
+        replaces: what `balance_at_quote` marks a name with no valid quote at (`_printed`)."""
         self._scope_days: dict[str, set[date]] = {}
         self._scope_cls: type | None = None
         self._price_ns: dict[str, int] = {}
@@ -782,6 +787,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._depth_shown: dict[str, tuple[dict[Price, Quantity], dict[Price, Quantity]]] = {}
         self._depth_seen_ns = -1
         self._top_shown: dict[str, tuple[Price, Quantity, Price, Quantity]] = {}
+        self._top_marked: dict[str, QuoteTick] = {}
+        """Under `depth`, the level one each name was last handed, which `balance_at_quote`
+        marks it at, as it marks a name at its last quote without `depth` (`_show_top`)."""
         self._book_ledger: Any = None
         """The book this sleeve is a member of, when a runner put it in one
         (`kanso.nautilus.book.BookLedger`); `None` for a sleeve run alone."""
@@ -1019,6 +1027,123 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._kept_settle()
         worth = sum((self._worth(position) for position in self._kept_positions()), 0.0)
         return self._cash + worth
+
+    @property
+    def balance_at_quote(self) -> float:
+        """`balance` with each open position marked at the mid of its name's quote in force —
+        the last quote the sleeve was handed, under `depth` the last level one — instead of at
+        its last print: the number for a strategy's own limits, a daily stop or a daily target.
+
+        `balance` marks a name at its last print, a quote's mid or a trade's price, whichever
+        came last, as the card's equity does, and a trade can print well outside the quote.
+        Measured on 2026-10-30 over the first second of nine opens — SPY, QQQ and IWM on
+        2025-01-02, 2025-01-03 and 2025-02-03 — 1,744 of 4,791 prints lay outside the quote in
+        force at them, a median of 0.68 bp and at most 13.7 bp of the price from its mid; one
+        NVDA print of a single share, at 140.00 against a last print of 141.10, took a
+        scalping card's balance from -0.9 bp of its book to -54 bp and ended its day at its
+        -40 bp stop.
+
+        The mark is the mid and not the side a close would take, because `balance` and the card
+        mark a quote at its mid: without `depth`, wherever the last point of every name held was
+        a valid quote this is `balance`, bit for bit. Under `depth` level one is the harness's,
+        read off its own copy of the book, and `balance` marks nothing at it (`_show_top`). The
+        side a close would take — the bid for a long, the ask for a short, where an exit at
+        market fills — would also move every limit by half the spread of every position open, at
+        those opens a median of 0.23 bp and at most 1.13 bp of the price: what a flatten pays on
+        top of this, and what a limit read off it has not paid.
+
+        A name with no valid quote in force — none yet, a name the sleeve is handed no quotes
+        of, or one whose last quote is locked, crossed or one-sided, so not `ask > bid > 0` —
+        is marked at its last trade or bar close, never at that quote's mid, and with neither
+        at its split-aware cost; for a name the sleeve is handed no quotes of that is the mark
+        `balance` reads. At those opens 48 of the 4,791 prints met such a quote. A quote or a
+        print stamped before a split the venue has since applied is restated by its ratio, as
+        `balance` restates a print.
+
+        Nothing of the harness reads it — sizing and the room read `balance`, and a card is
+        measured on the runner's equity, which `balance` mirrors — so a sleeve that neither
+        reads it nor binds a name it adds trades as it did before it existed. A read books the
+        fills the venue has made since the last, as a read of `balance` does (`_kept_settle`),
+        and moves nothing else, so a sleeve that reads it books, reads and trades as one that
+        reads `balance` at the same points. Read on a point where the sleeve reads nothing
+        else, it books a fill there and not at the sleeve's next read, as `balance` read there
+        would, and the same fills booked in another order can leave the cash a unit in its last
+        place apart: measured on 2026-10-31 on the suite's kept-reads tick sleeve, booking a
+        fill a print made on that print rather than after the next quote's own fills left the
+        next 65 balances the sleeve read one unit in the last place apart, and moved no fill,
+        period end or return.
+
+        What marks a position besides its quote — its name, quantity and multiplier — is kept
+        until anything it reads changes (`_forget_kept`), as `held` keeps its read, so a read
+        looks at no more than a quote and a print of each position open: measured on 2026-10-30
+        on the suite's kept-reads tick sleeve over 20,000 points, a median 1.6 µs a read holding
+        one position and 2.2 µs holding two, where a read of `balance` took 1.8 µs and 2.6 µs.
+        """
+        if self.cache is None:  # not registered with an engine: nothing booked, nothing held
+            return self._cash
+        self._kept_settle()
+        worth = sum(
+            (self._balance_at_quote_worth(*marked) for marked in self._balance_at_quote_marks()),
+            0.0,
+        )
+        return self._cash + worth
+
+    def _balance_at_quote_marks(self) -> list[tuple[str, float, float, Any]]:
+        """Each open position as `balance_at_quote` marks it — its name, its signed quantity,
+        its multiplier and the position itself — in the order the cache lists them, kept
+        until anything it reads could change (`_forget_kept`)."""
+        kept = self._balance_at_quote_kept
+        if kept is not None and not self._recheck_kept:
+            return kept
+        read: list[tuple[str, float, float, Any]] = []
+        for position in self._kept_positions():
+            instrument_id = position.instrument_id
+            key = self._kept_names.get(instrument_id) or instrument_id.value
+            qty = float(position.signed_qty)
+            read.append((key, qty, self._multiplier_of(instrument_id), position))
+        if kept is not None and (
+            len(kept) != len(read)
+            or any(
+                was[0] != now[0]
+                or was[1].hex() != now[1].hex()
+                or was[2].hex() != now[2].hex()
+                or was[3] is not now[3]
+                for was, now in zip(kept, read, strict=True)
+            )
+        ):
+            raise AssertionError(
+                f"_balance_at_quote_marks kept {kept!r} where the positions read {read!r} now: "
+                "something it reads changed and did not forget the reads kept "
+                "(KansoStrategy._forget_kept)"
+            )
+        self._balance_at_quote_kept = read
+        return read
+
+    def _balance_at_quote_worth(
+        self, key: str, qty: float, multiplier: float, position: Any
+    ) -> float:
+        """One open position's market value at the mid of its name's quote in force, quoted in
+        the shares held now; with no valid quote, at its last trade or bar close, and with
+        neither at its own split-aware cost. Never at the mid of a quote that is not
+        `ask > bid > 0`, which `handle_quote_tick` makes the last print `balance` marks at."""
+        quote = self._last_quote.get(key)
+        if quote is None:
+            quote = self._top_marked.get(key)
+        if quote is not None:
+            bid, ask = float(quote.bid_price), float(quote.ask_price)
+            if ask > bid > 0.0:
+                mid = (bid + ask) / 2.0
+                if key in self._restated:
+                    mid /= self._restating(key, int(quote.ts_event))
+                return qty * mid * multiplier
+        traded = self._balance_at_quote_traded.get(key)
+        if traded is None:
+            applied = tuple(self._restated.get(key, ()))
+            return qty * splits.ledger(splits.moves_of(position, applied)).basis * multiplier
+        price, printed_ns = traded
+        if key in self._restated:
+            price /= self._restating(key, printed_ns)
+        return qty * price * multiplier
 
     # --- the book policy: the runner's period ends, mirrored -------------------
 
@@ -1465,8 +1590,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Hand level one of a book just changed, when both sides hold a level and the top
         is unlike the one last shown.
 
-        The quote is stamped with the instant of the change and is a signal only: it moves
-        no last price, no mark and no quoted spread, as the book it is read from moves none.
+        The quote is stamped with the instant of the change and is a signal: it moves no last
+        price, no quoted spread and no mark `balance` or the card reads, as the book it is read
+        from moves none. `balance_at_quote` marks a name at the last one handed.
         """
         bids, asks = book
         bid, ask = bids.best(), asks.best()
@@ -1477,9 +1603,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if top == self._top_shown.get(key):
             return
         self._top_shown[key] = top
-        self._show_view(
-            QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init), ts_event
-        )
+        quote = QuoteTick(instrument_id, bid[0], ask[0], bid[1], ask[1], ts_event, ts_init)
+        self._top_marked[key] = quote
+        self._show_view(quote, ts_event)
 
     def _show_depth(self, ts_init: int) -> None:
         """Hand the book as of the last grid instant before `ts_init`, once per grid instant.
@@ -1681,6 +1807,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         latest by availability, and of one instant's, the greatest."""
         self._last_print[key] = price
         self._print_ns[key] = ts_event
+        self._balance_at_quote_traded[key] = (price, ts_event)
         held = self._mark_at.get(key)
         if held is None or ts_init > held[0] or (ts_init == held[0] and price > held[1]):
             self._mark_at[key] = (ts_init, price)
@@ -2204,8 +2331,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _forget_kept(self) -> None:
         """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`), the
-        open positions the balance marks (`_kept_positions`), and that the balance has folded
-        in every order (`_kept_settle`).
+        open positions the balance marks (`_kept_positions`) and what `balance_at_quote` marks
+        each with (`_balance_at_quote_marks`), and that the balance has folded in every order
+        (`_kept_settle`).
 
         A tick sleeve asks them of every name on every point — every tk_* seed walks its
         universe asking `held` once its day is done, and reads its balance — and measured on
@@ -2243,10 +2371,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         runs again). With `_recheck_kept` set every kept read is read again and compared,
         bit for bit, and a difference raises; the suite sets it for every test
         (`tests/conftest.py`), and a card does not.
+
+        `_balance_at_quote_marks` reads each position's instrument besides, for its multiplier,
+        which no point of a run changes. No quote moves a kept read: `balance_at_quote` reads the
+        quote of each name afresh.
         """
         self._kept_filled.clear()
         self._kept_intended.clear()
         self._kept_open = None
+        self._balance_at_quote_kept = None
         self._kept_settled = False
 
     def _kept_positions(self) -> list[Any]:
