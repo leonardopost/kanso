@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, timedelta
 from functools import cache
 
@@ -93,6 +94,7 @@ def test_the_bar_is_struck_on_the_larger_of_the_card_s_own_error_and_its_differe
     assert not keep(by(1.5, se=2.0, own=1.0), PARAMS, grew=0, max_lines=40)
     assert keep(by(2.5, se=2.0, own=1.0), PARAMS, grew=0, max_lines=40)
     assert by(1.0, se=0.1, own=2.0).error == by(1.0, se=2.0, own=0.1).error == 2.0
+    assert by(1.0, se=math.nan, own=2.0).error == 2.0, "never below the card's own"
 
 
 @given(

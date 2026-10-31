@@ -76,8 +76,9 @@ class Against:
 
     @property
     def error(self) -> float:
-        """The error the bar is struck on: the larger of the difference's and the card's own."""
-        return max(self.se, self.own)
+        """The error the bar is struck on: the larger of the card's own and the difference's,
+        and the card's own where the difference's is not a number."""
+        return max(self.own, self.se)
 
     def payload(self) -> dict[str, object]:
         """The comparison as the `card` event records it."""
