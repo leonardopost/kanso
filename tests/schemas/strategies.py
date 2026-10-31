@@ -290,6 +290,7 @@ def run_records(draw: st.DrawFn) -> RunRecord:
         card_budget_s=draw(POSITIVE),
         baseline_wall_s=draw(NON_NEGATIVE),
         baseline_peak_mem_gb=draw(NON_NEGATIVE),
+        budget_sha=draw(st.none() | SHAS),
         best_sha=best,
         best_metric=draw(FINITE) if best else None,
         started_at=started,

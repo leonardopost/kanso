@@ -5,7 +5,7 @@ synthetic bars, freeze a snapshot, register the idea, classify it, then hand it 
 driver — run here as one test because what it proves is that the pieces fit, which no
 one of them can prove alone. One step differs from what a person runs: the research runs
 under a card floor no operator can set (`CARD_FLOOR_S`), so whether the shipped budget fits
-the demo's cards on a given host is row 139 of `docs/backlog.md`, not this test's to say.
+the demo's cards on a given host is not this test's to say.
 
 Everything a model says comes from the demo's own scripted register, whose three answers
 are a keep, a discard and a crash in that order; nothing here resolves a provider key or
@@ -39,15 +39,15 @@ CARDS = 3
 CARD_FLOOR_S = 600.0
 """The card budget's floor while the demo researches: ten minutes.
 
-The budget is `max(MIN_CARD_BUDGET_S, HEADROOM × baseline wall)` (`research/loop.py`), and
-which term is larger, and whether a card fits under it, depends on how fast the host runs.
-This test asserts the demo's flow, not its budget: `tests/research/test_loop.py` pins the
-formula and its two constants, and `tests/nautilus/backtest/test_subprocess.py` the kill. So
-it lifts the floor to 600 s, about eight times the slowest demo card measured (74.9 s, the
-discard, on an Apple M2's efficiency cores under pytest-cov beside another test run), and
-the 3× term binds only past a 200 s baseline, over five times the 35.8 s measured there. A
-slow runner cannot turn the scripted discard into a budget crash, and a card that hangs is
-killed in ten minutes.
+The budget is `max(MIN_CARD_BUDGET_S, HEADROOM × the wall of the run's first card that
+traded)` (`research/loop.py`), and which term is larger, and whether a card fits under it,
+depends on how fast the host runs. This test asserts the demo's flow, not its budget:
+`tests/research/test_loop.py` pins the rule and its two constants, and
+`tests/nautilus/backtest/test_subprocess.py` the kill. So it lifts the floor to 600 s, about
+eight times the slowest demo card measured (74.9 s, the discard, on an Apple M2's efficiency
+cores under pytest-cov beside another test run), and the 3× term binds only past a 200 s
+card. A slow runner cannot turn the scripted discard into a budget crash, and a card that
+hangs is killed in ten minutes.
 """
 
 
@@ -156,13 +156,12 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     # The crash is the one the script plants, not a card the host was too slow to finish.
     assert "rolling_sigma" in (carded[-1].crash_tail or ""), log
     # The floor is lifted here, but an operator runs the demo under the shipped one: three times
-    # the baseline and never under 60 s. The demo's baseline is the stub, which trades nothing,
-    # and past it a card's wall grows with its fills, so a discard trading far more than the keep
-    # fits only under the floor and is killed on a host slow enough for the floor to stop binding
-    # (`docs/backlog.md` row 139: 2,445 trades to the keep's 1,003 took four times the baseline).
-    # Holding the script's discard to a fifth more than the keep's fills keeps its cost near the
-    # keep's on the operator's host; it narrows that margin, it guarantees none. The trade count
-    # is the proxy because it is deterministic and a wall time is not.
+    # the wall of the run's first card that traded — the keep, since the baseline is the stub,
+    # which trades nothing — and never under 60 s. A card's wall grows with its fills, so a
+    # discard trading far more than the keep is the card a slow host could kill. Holding the
+    # script's discard to a fifth more than the keep's fills keeps its cost near the keep's;
+    # it narrows that margin, it guarantees none. The trade count is the proxy because it is
+    # deterministic and a wall time is not.
     _, kept, discarded, _ = carded
     assert discarded.n_trades <= 1.2 * kept.n_trades, log
     assert outcome["best_sha"] is not None

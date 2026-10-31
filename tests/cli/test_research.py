@@ -156,7 +156,7 @@ def test_a_tag_names_the_run(runner: CliRunner, registered: Path) -> None:
 def test_a_card_that_trades_and_passes_its_constraints_keeps(
     runner: CliRunner, registered: Path
 ) -> None:
-    begin(runner, registered)
+    begun = begin(runner, registered)
     edit(registered, REVERTING)
 
     document = card(runner, registered, "fade the rolling mean")
@@ -166,6 +166,10 @@ def test_a_card_that_trades_and_passes_its_constraints_keeps(
     assert document["metric"] > 0
     assert document["best_sha"] == document["strategy_sha"]
     assert [gate["id"] for gate in document["gate_results"]] == ["strategy_integrity", "min_trades"]
+    # The baseline traded nothing, so this card, the first that traded, struck the budget.
+    assert (begun["baseline"]["n_trades"], begun["budget_sha"]) == (0, None)
+    assert document["budget_sha"] == document["strategy_sha"]
+    assert document["card_budget_s"] == max(60.0, 3.0 * document["wall_s"])
 
 
 def test_a_keep_rewrites_the_workspace_strategy(runner: CliRunner, registered: Path) -> None:
@@ -364,6 +368,8 @@ def test_a_card_reads_as_a_few_lines_for_a_human(runner: CliRunner, registered: 
     assert "min_trades: pass" in result.stdout
     assert " a session over " in result.stdout, "how often it traded, beside the metric"
     assert " bp a trade net (gross " in result.stdout, "and what a trade earned"
+    struck = payload(at(runner, registered, "research", "show", HYP_ID, "--json"))["card"]
+    assert f"s · struck by {struck['strategy_sha'][:7]}\n" in result.stdout, "the budget it struck"
 
 
 def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers(
