@@ -173,7 +173,7 @@ def test_a_print_outside_the_quote_moves_the_balance_and_not_the_balance_at_quot
     assert back[2] == ten[2]
 
 
-def test_with_no_valid_quote_in_force_the_balance_at_quote_marks_at_the_last_trade(
+def test_with_no_valid_quote_in_force_the_balance_at_quote_marks_at_the_last_trade_or_at_cost(
     tmp_path: Path,
 ) -> None:
     """A locked quote, a crossed one and one that shows no bid are not `ask > bid > 0`, so on
