@@ -1075,10 +1075,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         What marks a position besides its quote — its name, quantity and multiplier — is kept
         until anything it reads changes (`_forget_kept`), as `held` keeps its read, so a read
-        looks at no more than a quote and a print of each position open: measured on
-        2026-10-30 on the suite's
-        kept-reads tick sleeve over 20,000 points, a median 1.6 µs a read holding one position
-        and 2.2 µs holding two, where a read of `balance` took 1.8 µs and 2.6 µs.
+        looks at no more than a quote and a print of each position open: measured on 2026-10-30
+        on the suite's kept-reads tick sleeve over 20,000 points, a median 1.6 µs a read holding
+        one position and 2.2 µs holding two, where a read of `balance` took 1.8 µs and 2.6 µs.
         """
         if self.cache is None:  # not registered with an engine: nothing booked, nothing held
             return self._cash
