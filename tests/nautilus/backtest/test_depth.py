@@ -594,6 +594,33 @@ def test_an_owed_exit_is_stamped_with_the_change_it_is_paid_on(request_for) -> N
     assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [3_000, 33_000]
 
 
+def test_what_the_rate_held_back_is_sent_from_the_change_and_stamped_with_it(request_for) -> None:
+    """At two a minute, with no latency, the cancel BOOK_ONLY's exit at market calls for on its
+    thirtieth view finds no token, and the exit is owed behind it; a token is back at 31.9 s, and
+    the cancel goes from the change at 32 s, after which the exit finds the bucket empty and is
+    owed for want of a token, until the next one is back at 61.9 s. No view sends either: each
+    goes from the change it is due on, once that change's views have been handled, stamped with
+    the change as an exit owed behind a cancel in flight is. So the exit is stamped with the
+    change at 62 s, not with the grid instant 100 ms before it that the view on the same change
+    carries, and fills on the next change."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS
+
+    changes, hyp = owed_exit(RESEARCH[0], shown=True, latency_ms=0.0)
+    document = hyp.model_dump(mode="json", by_alias=True)
+    document["costs"] = {**document["costs"], "orders_per_minute": 2}
+    rated = Hypothesis.model_validate(document)
+    result = run(request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=rated), [tuple(changes)])
+    base = midnight_ns(RESEARCH[0]) + BOOK_OPEN_NS
+
+    assert [((intent[0] - base) // MS_NS, intent[2], intent[4]) for intent in result.intents] == [
+        (1_900, "BUY", "LIMIT"),
+        (4_900, "SELL", "LIMIT"),
+        (62_000, "SELL", "MARKET"),
+    ]
+    assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [2_000, 63_000]
+    assert result.commands is not None and result.commands.cancels == 1
+
+
 def _bars(day: date, at_ms: tuple[int, ...]) -> list[Bar]:
     from kanso.nautilus.strategy import _bar_type
 

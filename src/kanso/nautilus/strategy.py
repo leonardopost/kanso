@@ -1515,7 +1515,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         where the venue's state that makes them due — a cancel that has landed, a fill that
         has cut what is left — is known, whether or not the author was shown anything of it.
         `_show_view` asks for none, because the grid's view is stamped with an instant
-        before the change it is shown on.
+        before the change it is shown on, and sends nothing the rate held back: that is sent
+        here too, before the cancels held behind a modify (`_pay_rated`).
         """
         instrument_id = deltas.instrument_id
         key = instrument_id.value
@@ -1528,6 +1529,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._show_top(instrument_id, book, ts_event, int(deltas.ts_init))
         self._data_time = ts_event
         if self.is_running and not self._warming():
+            if self._command_deferred or self._rate_owed:
+                self._pay_rated()
             self._send_behind_modify()
             self._pay_owed()
 
@@ -1596,8 +1599,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _show_view(self, data: QuoteTick | OrderBookDeltas, data_time: int) -> None:
         """Hand the author a view of the book stamped `data_time`, the cancels held behind a
-        modify sent before it as before any handler. The exits owed are not asked for here
-        but by the point the view is shown on, stamped with that point (`_take_depth`)."""
+        modify sent before it as before any handler. The exits owed are not asked for here,
+        nor is what the rate held back sent, but by the point the view is shown on, stamped
+        with that point (`_take_depth`, `_pay_rated`)."""
         self._data_time = data_time
         if self.is_running and not self._warming():
             self._send_behind_modify()
@@ -1707,6 +1711,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self._is_extra_bar(bar):
             self._overlay_due = (instrument_id, bar, float(bar.close))
             return
+        if self._command_deferred or self._rate_owed:
+            self._pay_rated()
         self._send_behind_modify()
         super().handle_bar(bar, False)
         self._pay_owed()
@@ -1719,11 +1725,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> None:
         """Hand a quote to the author, then ask for the exits owed and the exit rules, with the
         id its handler read and its name, or `None` for the name to be read when it is asked
-        for. The cancels held behind a modify or deferred for a token, and the exits an empty
-        bucket owed, are sent and the owed exits asked for only when there are any, which is
-        what `_send_behind_modify` and `_pay_owed` ask first."""
+        for. What the rate held back (`_pay_rated`) and the cancels held behind a modify are
+        sent and the owed exits asked for only when there are any, which is what
+        `_send_behind_modify` and `_pay_owed` ask first."""
         self._data_time = int(tick.ts_event)
-        if self._behind_modify or self._command_deferred or self._rate_owed:
+        if self._command_deferred or self._rate_owed:
+            self._pay_rated()
+        if self._behind_modify:
             self._send_behind_modify()
         super().handle_quote_tick(tick, False)
         if self._owed:
@@ -1737,7 +1745,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> None:
         """As `_dispatch_quote`, for a print."""
         self._data_time = int(tick.ts_event)
-        if self._behind_modify or self._command_deferred or self._rate_owed:
+        if self._command_deferred or self._rate_owed:
+            self._pay_rated()
+        if self._behind_modify:
             self._send_behind_modify()
         super().handle_trade_tick(tick, False)
         if self._owed:
@@ -1750,6 +1760,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         instrument_id = getattr(data, "instrument_id", None)
         key = None if instrument_id is None else str(instrument_id)
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
+        if self._command_deferred or self._rate_owed:
+            self._pay_rated()
         self._send_behind_modify()
         super().handle_data(data)
         self._pay_owed()
@@ -2742,12 +2754,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._rate_owed[(key, side)] = None
 
     def _pay_rated(self) -> None:
-        """Ask again for the exits the rate owed for want of a token, once the deferred cancels
-        the bucket holds tokens for have been sent (`_send_behind_modify`) and before the
-        strategy's handler of the point: each is asked for again as `submit_exit` asks for it,
-        and an order it sends takes a token the bucket holds then, while a cancel waits as well
-        (`_command_spend`). One owed for another reason, or no longer owed, is left to
-        `_pay_owed` after the handler, as before."""
+        """Send what the rate held back: before the strategy's handler of a quote, a print, a
+        bar or any other point, and on a change of the book under `depth` once its views have
+        been handled, stamped with the change (`_take_depth`); a view of the book sends none
+        of it (`_show_view`).
+
+        The deferred cancels go first, as many as the bucket now holds tokens for
+        (`_send_deferred`), and then the exits the rate owed for want of a token are asked for
+        again, each as `submit_exit` asks for it, an order it sends taking a token the bucket
+        holds then, while a cancel waits as well (`_command_spend`). One owed for another
+        reason, or no longer owed, is left to `_pay_owed` after the handler, as before. A
+        point is matched by the venue before any handler of it runs, on both paths, so what
+        waited goes on a later point, after the venue has matched it."""
+        if self._command_deferred:
+            self._send_deferred()
         held, self._rate_owed = self._rate_owed, {}
         for name in held:
             if name in self._owed:
@@ -3230,17 +3250,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         at 2500 ms with the status seen here, and a modify followed by an exit at market at
         20 ms. (At 2500 ms that sleeve modifies an order the venue has not taken yet, whose
         cancel goes out as it is taken, not from here.)
-
-        The cancels the bucket deferred are sent first, as many as it now holds tokens for
-        (`_send_deferred`), and then the exits the rate owed for want of a token are asked for
-        again (`_pay_rated`): this is the one place both paths reach before every handler of a
-        point. A point is matched by the venue before any handler of it runs, on both paths,
-        so what waited goes on a later point, after the venue has matched it.
         """
-        if self._command_deferred:
-            self._send_deferred()
-        if self._rate_owed:
-            self._pay_rated()
         if not self._behind_modify:
             return
         held, self._behind_modify = self._behind_modify, {}
