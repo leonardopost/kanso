@@ -1450,8 +1450,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         # The point's id, its name and its instants are read once and handed on: a tick feed
         # sends a quote and its flush marker on every point, and in nautilus_trader 1.231.0
         # `InstrumentId.value` formats the name afresh on every read. What each step does is
-        # what the helper it stands for does (`_undelivered`, `_show_book`, `_printed`,
-        # `_observe_price`, `_quoted`, `_held`), in the same order.
+        # what the helper it stands for does (`_undelivered`, `_show_book`, `_observe_price`,
+        # `_quoted`, `_held`), in the same order.
         ts_init = int(tick.ts_init)
         instrument_id = tick.instrument_id
         key = instrument_id.value
