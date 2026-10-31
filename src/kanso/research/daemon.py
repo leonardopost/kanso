@@ -859,9 +859,8 @@ def parked(ws: Workspace, store: StateStore, hyp_id: str) -> bool:
 
     Before this a baseline killed for its clock was put back and begun again `BACKOFF_S`
     later on the same strategy, hypothesis, snapshot and budget, and killed again a budget
-    later (`docs/backlog.md` row 73). It stays where `put_back` put it, and the first lane
-    to look once one of what it ran on has moved begins it. When what a baseline would run
-    on cannot be read — a file gone — it is not parked, so the begin says why.
+    later (`docs/backlog.md` row 73). It stays where `put_back` put it. When what a baseline
+    would run on cannot be read — a file gone — it is not parked, so the begin says why.
     """
     failed = store.events(kind=research_loop.BASELINE_FAILED, subject=hyp_id)
     if not failed or research_loop.INPUTS not in failed[-1].detail:

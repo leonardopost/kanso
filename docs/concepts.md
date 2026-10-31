@@ -211,12 +211,11 @@ is running, so the card in flight runs to its own end, its budget included, and 
 before the lane exits. The monitor is stopped as a stop stops it, and the supervisor and the
 command wait for every child however long its card takes. A stop meanwhile is a stop.
 
-**A baseline killed for its clock is not begun again on what it ran on.** The lane puts the
+**A hypothesis whose baseline was killed for its clock waits in the queue.** The lane puts the
 hypothesis back in the queue and passes over it while a baseline begun now would run on the
 same strategy, `hypothesis.yaml`, `program.md`, snapshots, `[research] baseline_budget_s` and
-kanso version as the one killed — which its `baseline_failed` event records — and begins it
-once one of them has moved (`docs/cli.md`, The daemon and the queue). A run begun since ends
-the wait.
+kanso version as the one killed, which its `baseline_failed` event records (`docs/cli.md`,
+The daemon and the queue). A run begun since ends the wait.
 
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
@@ -541,15 +540,14 @@ session under an environment allow-list. A card therefore has no route to data o
 window even if its code went looking for one. The parent supervises wall time and resident
 memory and kills the process group on breach. The wall-time budget is three times the wall
 of the run's first card that traded and never under 60 s, and a card killed for it is a
-`crash`. The baseline is the strategy the run starts from, and the first card of the run: a
-later run starts from the hypothesis's best, or from the card a re-seed names, so its baseline
-trades and strikes the budget itself. A hypothesis's first run starts from the workspace's
-`strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
-nothing: the budget is three times its wall (the `budget` `research begin` prints) until a
-card trades, and that card strikes it from its own. Struck once from a baseline that traded
-nothing, a card that traded spent the headroom on its fills and could be killed before it was
-scored (row 139 of `docs/backlog.md`). The run records which card struck its budget
-(`budget_sha`), and `research card` prints the budget after every card.
+`crash`. The baseline is the strategy the run starts from, and the first card of the run. A
+hypothesis's first run starts from the workspace's `strategy.py`, and when that is the stub
+kanso renders, as in the demo, the baseline trades nothing: the budget is three times its
+wall (the `budget` `research begin` prints) until a card trades, and that card strikes it
+from its own. Struck once from a baseline that traded nothing, a card that traded spent the
+headroom on its fills and could be killed before it was scored (row 139 of
+`docs/backlog.md`). The run records which card struck its budget (`budget_sha`), and
+`research card` prints the budget after every card.
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog in steps of an hour when the

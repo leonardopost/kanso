@@ -158,7 +158,7 @@ def test_the_pages_name_what_a_baseline_killed_for_its_clock_waits_on() -> None:
     for phrase in named.values():
         assert phrase in cli
     lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
-    assert "**A baseline killed for its clock is not begun again on what it ran on.**" in lanes
+    assert "**A hypothesis whose baseline was killed for its clock waits in the queue.**" in lanes
 
 
 def test_the_pages_say_a_card_budget_is_struck_from_the_first_card_that_traded() -> None:

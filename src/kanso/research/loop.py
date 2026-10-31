@@ -246,11 +246,7 @@ class TakenError(PreconditionError):
 
 
 class OverBudgetError(PreconditionError):
-    """The baseline was killed for its clock: it ran out of `[research] baseline_budget_s`.
-
-    A lane does not begin the run again until what that baseline ran on has moved
-    (`baseline_inputs`, `kanso.research.daemon.parked`).
-    """
+    """The baseline was killed for its clock: it ran out of `[research] baseline_budget_s`."""
 
 
 BASELINE_FAILED: Final = "baseline_failed"
