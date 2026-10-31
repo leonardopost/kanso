@@ -46,9 +46,9 @@ is a second definition of a quantity the toolbox already defines:
   and to its last, and from its first fill to its last. A period opens on the UTC clock and at
   no venue's open, since no calendar is consulted, so at a daily period an offset is the UTC
   time of day. Each median is the lower middle value over an even count, an offset some period
-  filled at: the mean of the two middle ones need be no such instant — on ten scalping cards
-  of 44 winter and 44 summer sessions it fell half an hour from every first fill, 14:00 where
-  the lower one reads 13:30.
+  filled at: the mean of the two middle ones need be no such instant — on twelve tick cards of
+  44 winter and 44 summer sessions each it fell half an hour from every first fill, and on
+  eleven of them read 14:00 where the lower one reads 13:30.
 
 Funding is a payment on what was held, not a fill cost, so it stays in gross and in net
 alike; a run with none of something reads `None` for what that something measures.
