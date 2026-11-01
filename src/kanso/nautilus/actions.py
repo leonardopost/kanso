@@ -90,7 +90,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from kanso.nautilus import availability, splits, tape
 from kanso.nautilus.availability import Availability
 from kanso.nautilus.splits import Split
-from kanso.nautilus.tape import Tape
+from kanso.nautilus.tape import Tape, Unlit
 
 __all__ = [
     "MODULES",
@@ -425,7 +425,7 @@ class KansoModules(SimulationModule):  # type: ignore[misc]
         key the venue's engines, their books and their quotes by it. Measured on
         2026-10-26, kanso's three parts were 10% of a tick card."""
         kind = type(data)
-        if kind is QuoteTick or kind is TradeTick:
+        if kind is QuoteTick or kind is TradeTick or kind is Unlit:
             instrument_id = data.instrument_id
             for part, point in self._pointed:
                 if point is None:

@@ -1040,10 +1040,11 @@ def test_the_workspace_page_s_block_for_the_operator_s_rule_validates_as_stated(
 def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> None:
     costs = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
     assert (
-        "**`print_through` fills a resting limit only on a print through it, and a taker only"
+        "**`print_through` fills a resting limit on the prints that reach it once the size ahead"
         in (costs)
     )
-    assert "and by that print's own size, shared across the orders it reaches" in costs
+    assert "fills it by that print's own size, shared across the orders it reaches" in costs
+    assert "A print at its price fills it only once the size ahead of it there has traded" in costs
     assert "`print_through_whole` is the same rule with the other reading" in costs
     assert "so a buy limit never pays above its limit" in costs
     assert "`docs/backlog.md` row 158 records each" in costs
@@ -1051,7 +1052,7 @@ def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> No
         costs
     )
     delivery = prose(page("concepts.md"))
-    assert "**Under `print_through` only a print through a resting order fills it, and a taker" in (
+    assert "**Under `print_through` a resting order fills on the lit prints that reach it" in (
         delivery
     )
     assert "Where a sleeve sends no cancel the venue's rule is built not to part the two" in (

@@ -64,6 +64,7 @@ from nautilus_trader.model.data import (
 )
 
 from kanso.nautilus.costs import BookPolicy
+from kanso.nautilus.tape import Unlit
 
 if TYPE_CHECKING:
     from kanso.schemas import Hypothesis
@@ -105,7 +106,7 @@ CLOSES = 0
 
 MARKER_TYPE = DataType(KansoCrossSection)
 
-_PLAIN = (QuoteTick, TradeTick, Bar, OrderBookDelta, OrderBookDeltas)
+_PLAIN = (QuoteTick, TradeTick, Unlit, Bar, OrderBookDelta, OrderBookDeltas)
 """The market types, none of which is a marker or wraps one."""
 
 BAR = "bar"
@@ -326,7 +327,11 @@ def _cohorts(points: Sequence[object]) -> list[tuple[object, ...]]:
         kind = type(point)
         at = (
             int(point.ts_init),  # type: ignore[attr-defined]
-            QUOTE if kind is QuoteTick else TRADE if kind is TradeTick else _kind(point),
+            QUOTE
+            if kind is QuoteTick
+            else TRADE
+            if kind is TradeTick or kind is Unlit
+            else _kind(point),
         )
         if at != held:
             if run:
@@ -343,7 +348,7 @@ def _kind(point: object) -> str:
     kind = type(point)
     if kind is QuoteTick:
         return QUOTE
-    if kind is TradeTick:
+    if kind is TradeTick or kind is Unlit:
         return TRADE
     inner = _inner(point)
     if isinstance(inner, Bar):

@@ -458,3 +458,51 @@ def test_a_warmup_prefix_is_read_on_the_calendar_as_well(ws: FakeWorkspace) -> N
     assert not snap.covering(
         ws, [AAPL], ["bar"], "1d", windows(), ((date(2023, 12, 18), date(2023, 12, 31)),)
     )
+
+
+def load_terms(ws: FakeWorkspace, instrument: str, start: date, count: int) -> cat.Written:
+    """A print's terms on each of `count` days from `start`, at the close."""
+    from nautilus_trader.model.identifiers import InstrumentId
+
+    from kanso.data.catalog import day_start_ns
+    from kanso.data.types import PrintTerms
+
+    made = [
+        PrintTerms(
+            instrument_id=InstrumentId.from_str(instrument),
+            trade_id=f"T{day:%Y%m%d}",
+            exchange="11",
+            conditions="",
+            lit=True,
+            ts_event=day_start_ns(day) + 16 * 3_600 * 1_000_000_000,
+            ts_init=day_start_ns(day) + 16 * 3_600 * 1_000_000_000,
+        )
+        for day in (date.fromordinal(start.toordinal() + n) for n in range(count))
+    ]
+    define(ws, instrument)
+    span = (start, date.fromordinal(start.toordinal() + count - 1))
+    return cat.write(
+        ws,
+        made,
+        ref=Ref(instrument=instrument, type="print_terms", resolution=None, span=span),
+        source="synthetic",
+    )
+
+
+def test_short_of_names_each_name_a_snapshot_does_not_hold_a_type_for_over_a_window(
+    ws: FakeWorkspace,
+) -> None:
+    """AAPL's terms cover the research window and MSFT's stop two days in: MSFT is named,
+    and so is a name the snapshot holds nothing of; a later snapshot holding MSFT's whole
+    window names neither."""
+    load_quotes(ws, instrument=AAPL)
+    load_quotes(ws, instrument=MSFT)
+    load_terms(ws, AAPL, JAN1, 10)
+    load_terms(ws, MSFT, JAN1, 2)
+    first = snap.freeze(ws)
+    load_terms(ws, MSFT, date(2024, 1, 3), 8)
+    second = snap.freeze(ws)
+
+    assert snap.short_of(ws, first, "print_terms", [AAPL, MSFT], RESEARCH) == (MSFT,)
+    assert snap.short_of(ws, first, "print_terms", ["NONE.XNAS"], RESEARCH) == ("NONE.XNAS",)
+    assert snap.short_of(ws, second, "print_terms", [AAPL, MSFT], RESEARCH) == ()

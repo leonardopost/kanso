@@ -32,7 +32,7 @@ from nautilus_trader.model.identifiers import (
 )
 from nautilus_trader.model.objects import Price, Quantity
 
-from kanso.nautilus.tape import PrintThrough, PrintThroughConfig, Rested, Tape, observe
+from kanso.nautilus.tape import PrintThrough, PrintThroughConfig, Rested, Tape, Unlit, observe
 
 COIN = InstrumentId.from_str("FRAC.XNAS")
 INSTRUMENT = SimpleNamespace(id=COIN, size_precision=4, price_precision=2)
@@ -54,8 +54,10 @@ def order(name: str, leaves: str, price: float = 9.5, side: Any = OrderSide.BUY)
     )
 
 
-def printed(price: float, size: str, side: Any = AggressorSide.NO_AGGRESSOR) -> TradeTick:
-    return TradeTick(COIN, Price(price, 2), Quantity.from_str(size), side, TradeId("P"), 1, 1)
+def printed(
+    price: float, size: str, side: Any = AggressorSide.NO_AGGRESSOR, kind: type = TradeTick
+) -> TradeTick:
+    return kind(COIN, Price(price, 2), Quantity.from_str(size), side, TradeId("P"), 1, 1)  # type: ignore[no-any-return]
 
 
 def quoted(bid: float, ask: float, bid_size: str = "1", ask_size: str = "1") -> QuoteTick:
@@ -145,6 +147,7 @@ def test_the_observer_ranks_a_modified_order_from_its_modify_and_skips_an_untrig
             is_triggered=bool(triggered),
             ts_accepted=accepted,
             events=events,
+            event_count=1 + len(events),
         )
 
     def updated(rested: Any, ts: int) -> OrderUpdated:
@@ -206,9 +209,15 @@ def test_the_observer_ranks_a_triggered_stop_from_its_trigger() -> None:
             is_triggered=True,
             ts_accepted=1,
             events=[triggered],
+            event_count=2,
         ),
         SimpleNamespace(
-            **vars(plain), has_trigger_price=False, is_triggered=False, ts_accepted=3, events=[]
+            **vars(plain),
+            has_trigger_price=False,
+            is_triggered=False,
+            ts_accepted=3,
+            events=[],
+            event_count=1,
         ),
     ]
     fills = model()
@@ -383,3 +392,107 @@ def test_a_split_restates_the_model_s_own_quote_and_ends_the_print_in_hand() -> 
     assert filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, rested, None, None)) == [
         (9.5, "0.0000")
     ]
+
+
+def test_a_print_at_the_price_fills_only_past_the_size_shown_ahead_when_the_order_joined() -> None:
+    """A buy joining a bid of 9.50 showing 0.5000 is filled by prints of 0.1000 at 9.50 only
+    once five have traded what stood ahead of it, then 0.1000 a print; one joining a bid
+    showing 0.0500 is filled 0.2000 by a print of 0.2500 there."""
+    buy = order("O-1", "0.3000")
+    fills = model()
+    fills.seen(quoted(9.5, 9.52, bid_size="0.5000", ask_size="1.0000"), [])
+    asked = []
+    for size in ("0.1000",) * 5 + ("0.1000", "0.1000"):
+        fills.seen(printed(9.5, size), resting(buy))
+        asked.append(filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, buy, None, None)))
+    other = order("O-2", "0.3000")
+    fills.seen(quoted(9.5, 9.52, bid_size="0.0500", ask_size="1.0000"), [])
+    fills.seen(printed(9.5, "0.2500"), resting(other))
+    past = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, other, None, None))
+
+    assert asked == [[(9.5, "0.0000")]] * 5 + [[(9.5, "0.1000"), (9.5, "0.0000")]] * 2
+    assert past == [(9.5, "0.2000"), (9.5, "0.0000")]
+
+
+def test_a_quote_cuts_the_size_ahead_to_what_it_shows_and_never_raises_it() -> None:
+    """Size cancelled at the price is taken from behind the order first: a bid showing 0.5000
+    when the order joined and 0.2000 at the next quote leaves 0.2000 ahead, and one showing
+    0.9000 after leaves it there; a bid moved under the buy leaves nothing ahead."""
+    buy = order("O-1", "1.0000")
+    fills = model()
+    fills.seen(quoted(9.5, 9.52, bid_size="0.5000", ask_size="1.0000"), [])
+    fills.seen(quoted(9.5, 9.52, bid_size="0.2000", ask_size="1.0000"), resting(buy))
+    fills.seen(quoted(9.5, 9.52, bid_size="0.9000", ask_size="1.0000"), resting(buy))
+    fills.seen(printed(9.5, "0.3000"), resting(buy))
+    cut = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, buy, None, None))
+    away = order("O-2", "1.0000")
+    fills.seen(quoted(9.5, 9.52, bid_size="5.0000", ask_size="1.0000"), resting(away))
+    fills.seen(quoted(9.49, 9.52), resting(away))
+    fills.seen(printed(9.5, "0.0700"), resting(away))
+    moved = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, away, None, None))
+
+    assert cut == [(9.5, "0.1000"), (9.5, "0.0000")]
+    assert moved == [(9.5, "0.0700"), (9.5, "0.0000")]
+
+
+def test_an_order_behind_the_touch_waits_for_the_bid_to_reach_it_and_one_inside_has_none() -> None:
+    """A buy at 9.50 under a bid of 9.51 has no size shown at its price: a print there fills
+    nothing until a quote shows the bid at 9.50, which starts the estimate at its size; a buy
+    at 9.51 inside a quote of 9.50/9.52 is alone at its price, and a print there fills it."""
+    behind = order("O-1", "1.0000")
+    fills = model()
+    fills.seen(quoted(9.51, 9.53), [])
+    fills.seen(printed(9.5, "0.5000"), resting(behind))
+    waiting = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, behind, None, None))
+    fills.seen(quoted(9.5, 9.52, bid_size="0.4000", ask_size="1.0000"), resting(behind))
+    fills.seen(printed(9.5, "0.5000"), resting(behind))
+    reached = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, behind, None, None))
+    inside = order("O-2", "1.0000", 9.51)
+    fills.seen(printed(9.51, "0.2000"), resting(inside))
+    alone = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, inside, None, None))
+
+    assert waiting == [(9.5, "0.0000")]
+    assert reached == [(9.5, "0.1000"), (9.5, "0.0000")]
+    assert alone == [(9.51, "0.2000"), (9.51, "0.0000")]
+
+
+def test_the_sleeve_s_own_orders_at_one_price_queue_behind_each_other() -> None:
+    """Two buys join a bid of 9.50 showing 0.2000, the second after a quote showing 0.3000: a
+    print of 0.4500 trades the 0.2000 ahead of the first, fills it 0.2000 and leaves the
+    second, behind 0.3000 and all of the first, nothing; the next print of 0.1000 fills it."""
+    first, second = order("O-1", "0.2000"), order("O-2", "0.5000")
+    fills = model()
+    fills.seen(quoted(9.5, 9.52, bid_size="0.2000", ask_size="1.0000"), [])
+    fills.seen(quoted(9.5, 9.52, bid_size="0.3000", ask_size="1.0000"), resting(first))
+    fills.seen(quoted(9.5, 9.52, bid_size="0.3000", ask_size="1.0000"), resting(first, second))
+    fills.seen(printed(9.5, "0.4500"), resting(first, second))
+    shared = [
+        filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, each, None, None))
+        for each in (first, second)
+    ]
+    left = Rested(second.client_order_id, True, second.price, second.leaves_qty.raw, 1)
+    fills.seen(printed(9.5, "0.1000"), [left])
+    after = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, second, None, None))
+
+    assert shared == [[(9.5, "0.2000"), (9.5, "0.0000")], [(9.5, "0.0000")]]
+    assert after == [(9.5, "0.1000"), (9.5, "0.0000")]
+
+
+def test_an_unlit_print_fills_nothing_and_moves_no_queue_and_still_ends_the_quote() -> None:
+    """A print the data marks unlit, through a resting buy or at its price, credits nothing and
+    leaves the size ahead as it was; one outside the quote ends it as any print does."""
+    buy = order("O-1", "1.0000")
+    fills = model()
+    fills.seen(quoted(9.5, 9.52, bid_size="0.3000", ask_size="1.0000"), [])
+    fills.seen(printed(9.5, "0.5000", kind=Unlit), resting(buy))
+    at = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, buy, None, None))
+    fills.seen(printed(9.49, "0.5000", kind=Unlit), resting(buy))
+    through = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, buy, None, None))
+    ended = COIN not in fills._quote
+    fills.seen(quoted(9.5, 9.52, bid_size="0.3000", ask_size="1.0000"), resting(buy))
+    fills.seen(printed(9.5, "0.4000"), resting(buy))
+    lit = filled(fills.get_orderbook_for_fill_simulation(INSTRUMENT, buy, None, None))
+
+    assert at == through == [(9.5, "0.0000")]
+    assert ended
+    assert lit == [(9.5, "0.1000"), (9.5, "0.0000")]

@@ -242,6 +242,7 @@ from kanso.nautilus.sizing import (
     SizingError,
     full_book_quantity,
 )
+from kanso.nautilus.tape import Unlit
 from kanso.schemas.duration import is_duration
 
 __all__ = [
@@ -1580,7 +1581,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             kind = type(event)
             if kind is QuoteTick:
                 quote = True
-            elif kind is TradeTick:
+            elif kind is TradeTick or kind is Unlit:
                 quote = False
             elif isinstance(event, Bar):
                 self._dispatch_bar(event)

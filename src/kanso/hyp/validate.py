@@ -597,8 +597,8 @@ BAR_TYPE: Final = "bar"
 
 
 def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> None:
-    """The print rules fill a resting limit only on a print through it and a taker only on
-    a quote, on the top-of-book venue: a hypothesis under one, from whichever layer it was
+    """The print rules fill a resting limit only on the prints that reach it and a taker only
+    on a quote, on the top-of-book venue: a hypothesis under one, from whichever layer it was
     stated at, requires both feeds and no book, and asks no instrument for bars beside its
     quotes — a bar walks the engine's own bid and ask past the quote in force, so the venue
     would judge a taker marketable on prices the quote never showed."""
@@ -609,8 +609,8 @@ def _check_print_through(hyp: Hypothesis, models: Mapping[str, VenueModel]) -> N
     missing = [kind for kind in (QUOTE_TYPE, TRADE_TYPE) if kind not in hyp.data_requirements]
     if missing:
         raise ValidationError(
-            f"costs.limit_fill: {rule} on {', '.join(ruled)} fills a resting limit only on a "
-            f"print through it and a taker only on the last quote, and data_requirements has "
+            f"costs.limit_fill: {rule} on {', '.join(ruled)} fills a resting limit only on the "
+            f"prints that reach it and a taker only on the last quote, and data_requirements has "
             f"no {' or '.join(missing)}",
             remedy="add quote and trade to data_requirements, or state limit_fill: touch or "
             "through",
@@ -672,8 +672,9 @@ def default_limit_fill(hyp: Hypothesis) -> LimitFill:
     would fill nothing there, and nothing would say so. On a tape `touch` credits a resting
     limit with no queue ahead of it, all that is left of it from any point beyond its price, and
     the size a quote shows again at every quote that shows it; the print rule credits it only
-    from a print through it, by that print's size, which is the tape's own evidence that the
-    order would have traded. A rule a layer states is the operator's and stands, `touch`
+    from the lit prints that reach it — one through it by that print's size, one at its price
+    past the size the quote showed ahead of it — which is the tape's own evidence that the order
+    would have traded. A rule a layer states is the operator's and stands, `touch`
     included.
     """
     if hyp.resolution not in TICK_RESOLUTIONS or BOOK_TYPE in hyp.data_requirements:
@@ -762,8 +763,8 @@ def check_tick_costs(ws: Workspace, hyp: Hypothesis, models: Mapping[str, VenueM
     )
     ruled = (
         "state limit_fill: print_through or print_through_whole, which fills a resting limit "
-        "only on a later print through it and needs every name the strategy trades asked for "
-        "quote and trade, and no book; or "
+        "only on the later prints that reach it past the size ahead of it and needs every name "
+        "the strategy trades asked for quote and trade, and no book; or "
     )
     if _barred(hyp):
         taped = {QUOTE_TYPE, TRADE_TYPE} <= set(hyp.data_requirements)

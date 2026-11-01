@@ -1058,8 +1058,9 @@ def test_a_maker_schedule_under_a_stated_rule_over_bars_beside_quotes_is_offered
 
     assert failure.remedy == (
         f"{BOTH_FEEDS_BARLESS}, and state limit_fill: print_through or print_through_whole, "
-        "which fills a resting limit only on a later print through it and needs every name the "
-        "strategy trades asked for quote and trade, and no book; or remove maker_bps and "
+        "which fills a resting limit only on the later prints that reach it past the size ahead "
+        "of it and needs every name the strategy trades asked for quote and trade, and no book; "
+        "or remove maker_bps and "
         "maker_per_share from the hypothesis costs and from venues.SIM.costs in portfolio.yaml"
     )
     assert {model["costs"]["limit_fill"] for model in resolved(ws, followed).values()} == {
