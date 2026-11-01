@@ -801,6 +801,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._clip_orders: dict[str, list[object]] = {}
         self._kept_filled: dict[str, float] = {}
         self._kept_intended: dict[str, float] = {}
+        self._kept_held: dict[str, float] = {}
         self._sizing_call = False
         self._built = False
         self._owed: dict[tuple[str, OrderSide], tuple[float | None, float | None, bool]] = {}
@@ -1024,15 +1025,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return self._last_price.get(str(instrument_id))
 
     def held(self, instrument_id: InstrumentId | str) -> float:
-        """This sleeve's own signed position in an instrument, its market orders in flight
-        applied.
+        """This sleeve's own signed position in an instrument, held until its exit has filled.
 
         The reader a strategy sizes and flips by, on both paths: this sleeve's own position
         — never the account's, which a stage-mate in the same name shares — less what the
         attached overlays hold as clips in the same name, plus what the sleeve's own market
-        orders not yet filled will add. An exit at market submitted in
-        this handler already reads as gone, which is what lets the entry that follows it
-        size to the room the exit frees. A limit or stop order is not applied, whether it
+        orders not yet filled will add to it. A market order that would take from it — an
+        exit at market on its way to the venue, the rest of one the venue filled in part —
+        counts only once it has filled, so a sleeve whose exit the venue refuses, or fills in
+        part, never reads itself flat while it still holds what the exit left: measured on
+        2026-10-30, a sweep scout that read its exit in flight as done entered again behind
+        it, and on 22 of its card's 1,310 trades the venue refused the exit and the position
+        doubled. An entry that would grow a position such an exit is on its way to close is
+        dropped unsent (`_behind_exit`). A limit or stop order is not applied, whether it
         rests at the venue or is still in flight to it: a sleeve whose exit rests at the ask
         reads the whole position until the exit fills. `submit_exit` is what counts the
         exits still working, so an exit sized from this reader never closes more than they
@@ -1049,9 +1054,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 key = _name_of(instrument_id)
         else:
             key = str(instrument_id)
-        kept = self._kept_intended.get(key)
+        kept = self._kept_held.get(key)
         if kept is None or self._recheck_kept:
-            return self._own_intended(key)
+            return self._own_held(key)
         return kept
 
     @property
@@ -1912,7 +1917,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the order takes its token once every check has let it through. With no token available
         to it it is not sent: an entry is dropped and counted as refused, never funded, and its
         hedges are not placed; an exit `submit_exit` sized is owed; and any other exit is
-        refused (`_short_of_rate`).
+        refused (`_short_of_rate`). An entry on the side of a position an exit at market of
+        its name is still on its way to close — built by hand, an overlay's leg or clip — is
+        dropped then (`_behind_exit`), one built by hand before it is funded or filtered.
         """
         closing, self._command_closing = self._command_closing, None
         opening, self._command_opening = self._command_opening, False
@@ -1926,6 +1933,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         )
         if not self._command_spend(SUBMIT, exiting=exiting, ask=True):
             self._short_of_rate(order, exiting, closing)
+            return
+        key = order.instrument_id.value  # type: ignore[attr-defined]
+        clip = self._is_clip(order)
+        if self._behind_exit(key, order.side, clip=clip):  # type: ignore[attr-defined]
+            if clip:
+                self._clip_orders[key] = [
+                    held for held in self._clip_orders[key] if held is not order
+                ]
             return
         if kind == ENTRY and not (self.sized or self._built or self._sizing_call):
             self._check_funded((order,))
@@ -1954,7 +1969,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the position the sleeve's orders on their way leave (`_opens`) — is dropped whole and
         each of its orders counted as refused, as an entry is; one whose first order is an exit
         is refused, since kanso owes an exit only as `submit_exit` sized it, and an order of a
-        list is not."""
+        list is not. A list whose first order is an entry behind an exit at market of its name
+        still on its way is dropped whole, before it is funded (`_behind_exit`)."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
@@ -1972,6 +1988,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 f"a list of {len(orders)} orders closing a position",
                 len(orders),
             )
+        if self._behind_exit(orders[0].instrument_id.value, orders[0].side):
+            return
         if not (self.sized or self._built or self._sizing_call):
             self._check_funded(orders)
         ctx = self._context_for(orders[0])
@@ -2337,8 +2355,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         return read
 
     def _own_intended(self, key: str) -> float:
-        """`_own_filled` with this sleeve's own market orders in flight applied (`held`);
-        kept until it could change (`_forget_kept`)."""
+        """`_own_filled` with every one of this sleeve's own market orders in flight applied,
+        an exit at market among them, as if each had filled: the position kanso sizes and funds
+        an entry on (`_holdings`, `_sized_entry`, `_opening`), classifies an order by under a
+        rate (`_opens`), and hands a filter or an overlay (`_context`, `_book`), where `held`
+        counts an exit only once it has filled (`_own_held`). Kept until it could change
+        (`_forget_kept`)."""
         kept = self._kept_intended.get(key)
         if kept is not None and not self._recheck_kept:
             return kept
@@ -2353,10 +2375,31 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._kept_intended[key] = _same(kept, read, "_own_intended", key)
         return read
 
+    def _own_held(self, key: str) -> float:
+        """`_own_filled` with this sleeve's own market orders in flight applied only where they
+        add to it, an exit counting once it has filled (`held`); with none that takes from it,
+        `_own_intended` read for read. Kept until it could change (`_forget_kept`)."""
+        kept = self._kept_held.get(key)
+        if kept is not None and not self._recheck_kept:
+            return kept
+        filled = self._own_filled(key)
+        read = filled + sum(
+            (
+                _signed(order, filled=False)
+                for order in self._open_markets()
+                if order.instrument_id.value == key  # type: ignore[attr-defined]
+                and not self._is_clip(order)
+                and _signed(order, filled=False) * filled >= 0.0
+            ),
+            0.0,
+        )
+        self._kept_held[key] = _same(kept, read, "_own_held", key)
+        return read
+
     def _forget_kept(self) -> None:
-        """Forget every position read kept (`_own_filled`, `_own_intended`, and so `held`), the
-        open positions the balance marks (`_kept_positions`), and that the balance has folded
-        in every order (`_kept_settle`).
+        """Forget every position read kept (`_own_filled`, `_own_intended`, `_own_held`, and so
+        `held`), the open positions the balance marks (`_kept_positions`), and that the balance
+        has folded in every order (`_kept_settle`).
 
         A tick sleeve asks them of every name on every point — every tk_* seed walks its
         universe asking `held` once its day is done, and reads its balance — and measured on
@@ -2397,6 +2440,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         self._kept_filled.clear()
         self._kept_intended.clear()
+        self._kept_held.clear()
         self._kept_open = None
         self._kept_settled = False
 
@@ -2666,8 +2710,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         decided once its market orders in flight have filled and an exit the rate owes at
         market has gone (`_left`).
 
-        It is the position `held` reads, the reader a strategy sizes and flips by — an exit at
-        market sent in this handler reads as gone — with an exit the rate owes at market, for
+        It is the position kanso sizes an entry on (`_own_intended`) — an exit at market sent
+        and not yet filled reads as gone — with an exit the rate owes at market, for
         want of a token or behind a cancel it deferred, read as gone too: it stands for the
         market order the rate held back, which goes once the rate lets it through (`_left`). So
         `submit_exit(name)` and then an order on the other side built by hand, in one handler,
@@ -2846,9 +2890,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         freeing the room the entry takes, and the venue settles both at one price with the
         exit first. Attached overlays then scale it. Returns the submitted order, or `None`
         when nothing was submitted — no room, no price to size against, an attached filter
-        refused the entry, or a stated `orders_per_minute` left no token available to it. The
-        bucket is asked first, so an entry it would not send is dropped and counted as refused
-        before it is sized (`_drop_rate`), and the room is read only for one it lets through.
+        refused the entry, a stated `orders_per_minute` left no token available to it, or the
+        entry would grow a position an exit at market of the name is still on its way to close.
+        The bucket is asked first, so an entry it would not send is dropped and counted as
+        refused before it is sized (`_drop_rate`); then one behind such an exit is dropped,
+        before it is sized too (`_behind_exit`); and the room is read only for one both let
+        through.
 
         **In a book the entry is the book's to place** (`kanso.nautilus.book`). It is
         collected, returning `None`, and placed when the instant ends, after every member's
@@ -2883,6 +2930,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return self._sized_entry(instrument, resolved_id, resolved_side, notional, qty, price)
         if not self._command_spend(SUBMIT, ask=True):
             self._drop_rate(SUBMIT)
+            return None
+        if self._behind_exit(resolved_id.value, resolved_side):
             return None
         reference = price if price is not None else self._price_now(resolved_id.value)
         if reference is None or reference <= 0:
@@ -3025,8 +3074,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         counts: its market order nets the old leg to nothing before this entry sizes, so
         a flip is legal at leverage one. Under a stated `orders_per_minute` the bucket is asked
         first: an entry it would not send is dropped and counted before it is checked or sized
-        (`_drop_rate`). The price is the last print of the finest grain loaded — what the
-        venue's book holds — never the host grain's own close.
+        (`_drop_rate`). Then an entry on the side of a position an exit at market of its name is
+        still on its way to close is dropped, before it is checked or sized (`_behind_exit`).
+        The price is the last print of the finest grain loaded — what the venue's book holds —
+        never the host grain's own close.
         """
         key = instrument_id.value
         asked = order_side_to_str(side)
@@ -3045,6 +3096,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         if not self._command_spend(SUBMIT, ask=True):
             self._drop_rate(SUBMIT)
+            return None
+        if self._behind_exit(key, side):
             return None
         own = self._own_intended(key)
         signed = 1.0 if side == OrderSide.BUY else -1.0
@@ -3708,6 +3761,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         submitted in the same handler counts as gone, so a flip fits at leverage one exactly
         as it does under a sizing rule, where the same rule was written first. Read on the
         venue alone, the old leg still filled the book and every flip was refused for a bar.
+        In the exit's own name only an entry on the exit's side is sent, one on the other
+        being dropped (`_behind_exit`): it sells, or buys, where the exit does, so whatever the
+        venue does with the exit it never adds to what the exit leaves.
         """
         intended = self._holdings()
         resting = self._resting(intended)
@@ -4077,9 +4133,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The closed part frees its own room before the opened part takes any, so a leg that
         crosses zero is funded like an exit followed by an entry. The room is the reserved
-        one `submit_entry` sizes to, in notional — price times multiplier per contract.
+        one `submit_entry` sizes to, in notional — price times multiplier per contract — and
+        what the leg closes is read on the position the room reads, every market order in
+        flight applied (`_own_intended`).
         """
-        now = self.held(instrument_id)
+        now = self._own_intended(instrument_id.value)
         signed = quantity if side == OrderSide.BUY else -quantity
         closing = min(quantity, abs(now)) if now * signed < 0 else 0.0
         room = self._headroom(instrument_id, price)
@@ -4231,7 +4289,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             qty=qty,
             price=price,
             order_type=order_type,
-            position_qty=self.held(instrument_id),
+            position_qty=self._own_intended(key),
             capital=self.capital,
             last_bar=self._last_bar.get(key),
             last_quote=self._last_quote.get(key),
@@ -4278,6 +4336,42 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """
         return any(
             order.instrument_id == instrument_id and order.side == side  # type: ignore[attr-defined]
+            for order in self._open_markets()
+        )
+
+    def _behind_exit(self, key: str, side: OrderSide, *, clip: bool = False) -> bool:
+        """Whether an entry on `side` of a name would grow a position an exit at market is
+        still on its way to close: what this sleeve holds there filled — its own, or for a
+        clip its overlays' clips — is on `side`, and a market order of the same ledger on the
+        other side is one the venue has not closed (`_open_markets`), on its way to it or the
+        rest of one it filled in part.
+
+        Such an entry is dropped unsent, as an entry past `costs.orders_per_minute` is, and the
+        run goes on, on both paths: `submit_entry`'s before it is sized, and `None` answered;
+        one built by hand before it is funded or filtered; an overlay's leg or clip once it is
+        built, a clip forgotten as one; a list whose first order is one, whole. Sent, it would
+        be sized, or funded, on the room the exit frees (`_headroom`, `_check_funded`), and an
+        exit the venue refused, or filled in part, would leave it stacked on what the exit did
+        not close. It is dropped
+        rather than refused because no strategy can time the venue's answer — when it comes is
+        the venue model's latency — and a refusal would end the card, and stop a node, for a
+        race the strategy could not avoid; it reads the position held until the exit fills
+        (`held`) and decides again once the venue has answered. It is not counted: the refused
+        counts a card carries are the rate's (`kanso.schemas.Commands`). An entry on the exit's
+        own side, the second leg of a flip, is not behind it: it sells, or buys, where the exit
+        does, so it never adds to what the exit leaves. Nor is an entry in another name, whose
+        room still counts the exit as filled, so a rotation whose exit the venue refuses holds
+        both names (`docs/backlog.md` row 236). A limit or stop exit is no exit at market here,
+        as `held` applies none: the position it would close is read as held, and an entry is
+        sized on it."""
+        filled = self._clips_filled(key) if clip else self._own_filled(key)
+        if filled == 0.0 or (filled > 0.0) != (side == OrderSide.BUY):
+            return False
+        closing = OrderSide.SELL if filled > 0.0 else OrderSide.BUY
+        return any(
+            order.side == closing  # type: ignore[attr-defined]
+            and order.instrument_id.value == key  # type: ignore[attr-defined]
+            and self._is_clip(order) == clip
             for order in self._open_markets()
         )
 
@@ -4435,7 +4529,6 @@ _CONTEXT_READS: Final = frozenset(
         "balance",
         "before_exit",
         "capital",
-        "held",
         "host_names",
         "sized",
         "universe",

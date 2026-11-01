@@ -1,14 +1,13 @@
 """A sleeve keeps its position reads until something they read changes, and a kept read is
 always the read it stands for.
 
-`held`, `_own_filled` and `_own_intended` are kept by name and forgotten at every change of
-what they read (`KansoStrategy._forget_kept`). The property here drives a real engine through
-random orders — entries at market and at a limit, exits, hand-built orders, modifies,
+`held`, `_own_filled`, `_own_intended` and `_own_held` are kept by name and forgotten at every
+change of what they read (`KansoStrategy._forget_kept`). The property here drives a real engine
+through random orders — entries at market and at a limit, exits, hand-built orders, modifies,
 cancels of one order and of a name, the engine's own close — with and without a latency,
 and with clips an overlay holds, and at every bar and every order and position event the
-sleeve's reads are compared with the reads made from scratch the way they were made before
-anything was kept. The suite's own check (`tests/conftest.py`) is off here, so what is
-answered is what a card is answered.
+sleeve's reads are compared with the reads made from scratch with nothing kept. The suite's
+own check (`tests/conftest.py`) is off here, so what is answered is what a card is answered.
 """
 
 from __future__ import annotations
@@ -53,9 +52,10 @@ def _kept_reads_answered(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(KansoStrategy, "_recheck_kept", False)
 
 
-def from_scratch(sleeve: KansoStrategy, key: str) -> tuple[float, float]:
-    """`(_own_filled, _own_intended)` of a name, read as the harness read them before it kept
-    anything."""
+def from_scratch(sleeve: KansoStrategy, key: str) -> tuple[float, float, float]:
+    """`(_own_filled, _own_intended, _own_held)` of a name, read as the harness reads them with
+    nothing kept: what `held` reads applies only the market orders in flight that add to the
+    filled position."""
     instrument_id = InstrumentId.from_str(key)
     position = sum(
         (
@@ -68,17 +68,15 @@ def from_scratch(sleeve: KansoStrategy, key: str) -> tuple[float, float]:
     )
     clips = sleeve._clip_orders.get(key, ())
     filled = float(position) - sum((_signed(order, filled=True) for order in clips), 0.0)
-    flying = sum(
-        (
-            _signed(order, filled=False)
-            for order in sleeve._sent
-            if not order.is_closed  # type: ignore[attr-defined]
-            and order.instrument_id.value == key  # type: ignore[attr-defined]
-            and not any(order is clip for clip in clips)
-        ),
-        0.0,
-    )
-    return filled, filled + flying
+    flying = [
+        _signed(order, filled=False)
+        for order in sleeve._sent
+        if not order.is_closed  # type: ignore[attr-defined]
+        and order.instrument_id.value == key  # type: ignore[attr-defined]
+        and not any(order is clip for clip in clips)
+    ]
+    adding = [signed for signed in flying if signed * filled >= 0.0]
+    return filled, filled + sum(flying, 0.0), filled + sum(adding, 0.0)
 
 
 def _signed(order: object, *, filled: bool) -> float:
@@ -90,9 +88,10 @@ def compare(sleeve: KansoStrategy) -> int:
     """Every name's kept reads against the reads from scratch, bit for bit; how many."""
     for instrument_id in sleeve.universe:
         key = instrument_id.value
-        filled, intended = from_scratch(sleeve, key)
-        for read in (sleeve.held(instrument_id), sleeve.held(key), sleeve._own_intended(key)):
-            assert read.hex() == intended.hex(), (key, read, intended)
+        filled, intended, held = from_scratch(sleeve, key)
+        assert sleeve._own_intended(key).hex() == intended.hex(), (key, intended)
+        for read in (sleeve.held(instrument_id), sleeve.held(key), sleeve._own_held(key)):
+            assert read.hex() == held.hex(), (key, read, held)
         assert sleeve._own_filled(key).hex() == filled.hex(), (key, filled)
     return 1
 
@@ -321,7 +320,7 @@ def test_a_kept_read_is_answered_until_something_it_reads_changes(backtest) -> N
     sleeve = ran.strategy
     assert sleeve.held(DEMO) == 0.0
 
-    sleeve._kept_intended["DEMO.XNAS"] = 7.0
+    sleeve._kept_held["DEMO.XNAS"] = 7.0
     sleeve._kept_filled["DEMO.XNAS"] = 5.0
 
     assert (sleeve.held(DEMO), sleeve._own_filled("DEMO.XNAS")) == (7.0, 5.0)
@@ -335,9 +334,9 @@ def test_under_checking_a_kept_read_unlike_the_fresh_one_raises(
     ran = backtest(Shuffles(config()))
     sleeve = ran.strategy
     monkeypatch.setattr(KansoStrategy, "_recheck_kept", True)
-    sleeve._kept_intended["DEMO.XNAS"] = 7.0
+    sleeve._kept_held["DEMO.XNAS"] = 7.0
 
-    with pytest.raises(AssertionError, match=r"_own_intended\('DEMO.XNAS'\) kept 7.0"):
+    with pytest.raises(AssertionError, match=r"_own_held\('DEMO.XNAS'\) kept 7.0"):
         sleeve.held(DEMO)
 
 

@@ -445,9 +445,21 @@ floored onto the instrument's lot — a `qty` the limits leave whole is submitte
 its notional divided back by the price — read on the smaller
 of the capital and the balance the sleeve has left, so an account that has lost money cannot
 borrow to keep its size, and one that has made money does not grow past its capital — and on
-both paths the limits and `self.held(id)` are read with the sleeve's own unfilled market
-orders applied, so the same flip fits at leverage one either way: the exit in flight frees
-the room the entry takes, and the venue settles both at one price, the exit first.
+both paths the limits are read with the sleeve's own unfilled market orders applied, so the
+same flip fits at leverage one either way: the exit in flight frees the room the entry takes,
+and the venue settles both at one price, the exit first. **A position is held until its exit
+has filled:** `self.held(id)` applies only the unfilled market orders that add to the
+position, so an exit at market on its way to the venue, or the rest of one the venue filled
+in part, counts once it has filled, and a sleeve whose exit is refused never reads itself flat
+while it still holds what the exit left. An entry that would grow a position such an exit is
+still on its way to close is dropped unsent — `submit_entry`'s before it is sized, one built
+by hand before it is funded, an overlay's leg or clip once it is built, a list whose first
+order is one whole — and the card runs on, as an entry past `costs.orders_per_minute` is,
+though it is not counted: sent, it was sized on the room the exit frees, and on the 22 of
+1,310 trades of a 10 ms QQQ scout's card where the venue refused that exit, measured on
+2026-10-30, it doubled the position. The second leg of a flip sells, or buys, where its exit
+does, so it is never behind it and goes; an entry in another name is not behind it either, and
+a rotation whose exit the venue refuses holds both names (`docs/backlog.md` row 236).
 `modify_order` is neither cut nor refused for a sleeve run alone: kanso hands the modify to
 the engine's own unchanged, and an entry grown or re-priced by it is held to no ceiling until
 kanso holds it to one (`docs/backlog.md` row 123).
@@ -520,9 +532,10 @@ emulator holds** (one sent with an `emulation_trigger`) has not reached the venu
 until it is cancelled, an exit at market cancels it with the resting ones, and its cancel
 takes it out at once, at any latency; `cancel_orders` cancels it on its own, through the
 emulator, and batches the rest. An attached exit rule closes through the same market exit.
-`self.held(id)` applies the sleeve's market orders in flight and no limit or stop order, so
-a sleeve whose exit rests at the ask reads the whole position there until the exit fills; an
-exit sized from it is cut to what the working ones leave.
+`self.held(id)` applies the sleeve's market orders in flight that add to the position and no
+limit or stop order, so a sleeve whose exit rests at the ask, or whose exit at market has not
+filled, reads what it still holds until the exit fills; an exit sized from it is cut to what
+the working ones leave.
 `self.balance` is what the sleeve's account is worth at that moment — the capital, less what
 its fills paid and were charged, plus its positions marked at the last print — the number the
 equity curve strikes at each period end, and one a strategy may size from. Reading it on every
@@ -1259,7 +1272,9 @@ name, which cancels nothing of a market order there either. On a level-two book 
 deeper than the book keeps its rest open, partly filled, and nothing fills it later:
 `cancel_order` and `cancel_orders` leave it there — the venue would have rejected that cancel,
 since it looks for the order among those resting on its book — and `cancel_all_orders` cancels
-it, as the engine's cancel of the name cancels every order open in it. A cancel the sleeve
+it, as the engine's cancel of the name cancels every order open in it. Until it does, the rest
+of an exit so left is an exit at market that has not filled: the position it would close reads
+as held, and an entry that would grow it is dropped. A cancel the sleeve
 itself sends right behind a
 modify of an order the venue already holds is not held back, as an exit at market's is: on a node it overtakes the
 modify, where the backtest lands the modify first and fills it if it is marketable, so the
