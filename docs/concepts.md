@@ -1175,7 +1175,9 @@ could never validate. `position_size` stays as the backstop, and under the rule 
 market order past a quarter of the bar's volume as two events — rather than period-end
 marks, which a leveraged leg drifts through between two closes. A flip is `submit_exit(old)`
 then `submit_entry(new, side)` in the same handler: the exit in flight nets the old leg to
-nothing before the new one sizes, so one leg at a time needs no leverage. A sized overlay
+nothing before the new one sizes, so one leg at a time needs no leverage, while `self.held(id)`
+reads the old leg as held until its exit fills and an entry that would grow it meanwhile is
+dropped (`docs/workspace.md`). A sized overlay
 (`docs/constructs.md`) names `Clip(instrument, side)` and the harness sizes it to the
 overlay's own budget; the host's own share and the overlay's clips are told apart by a
 ledger over the clip orders, so `self.held(id)` and `ctx.book` are the host's and

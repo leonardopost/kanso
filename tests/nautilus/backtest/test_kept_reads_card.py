@@ -6,7 +6,8 @@ consult runs on every point it holds a position. So `held` answers a kept read i
 balance marks the open positions it kept and makes no settling pass with nothing to fold,
 a name no split was applied to is priced without a ratio, and an exit consult nothing is
 attached to builds no context. Each card here is run twice: as the harness runs it, and with
-those reads made as kanso 0.20.0 made them (`AFRESH`) — and every balance and holding the
+those reads made afresh (`AFRESH`) — `held` from scratch, the rest as kanso 0.20.0 made
+them — and every balance and holding the
 sleeve read, every fill, every period end and every intent must agree to the last bit. The
 suite's own check (`tests/conftest.py`) reads every kept read again beside it as well.
 """
@@ -121,14 +122,15 @@ from kanso.nautilus.strategy import _name_of
 
 
 class Strategy(Strategy):
-    """The same sleeve, its reads made as kanso 0.20.0 made them: `held` through
-    `_own_intended`, the balance from a settling pass and the cache's list on every read, a
+    """The same sleeve, its reads made afresh: `held` through `_own_held`, the read it makes
+    from scratch, and as kanso 0.20.0 made them the balance from a settling pass and the
+    cache's list on every read, a
     price divided by its split ratios whether or not there are any, and an exit consult that
     builds its context and asks `before_exit` whatever is attached."""
 
     def held(self, instrument_id):
         key = _name_of(instrument_id) if type(instrument_id) is InstrumentId else str(instrument_id)
-        return self._own_intended(key)
+        return self._own_held(key)
 
     @property
     def balance(self):
@@ -602,7 +604,7 @@ def test_held_names_an_id_by_the_table_kept_with_the_universe_or_afresh(
     )
     ids = sleeve.universe
     assert sleeve._kept_names == {instrument_id: str(instrument_id) for instrument_id in ids}
-    sleeve._kept_intended.update({NAMES[0]: 5.0, NAMES[1]: -2.0, "ELSE.XNAS": 1.5})
+    sleeve._kept_held.update({NAMES[0]: 5.0, NAMES[1]: -2.0, "ELSE.XNAS": 1.5})
     assert sleeve.held(ids[0]) == 5.0
     assert sleeve.held(InstrumentId.from_str(NAMES[1])) == -2.0
     assert sleeve.held(InstrumentId.from_str("ELSE.XNAS")) == 1.5
