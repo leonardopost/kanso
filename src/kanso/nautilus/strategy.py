@@ -4359,9 +4359,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`held`) and decides again once the venue has answered. It is not counted: the refused
         counts a card carries are the rate's (`kanso.schemas.Commands`). An entry on the exit's
         own side, the second leg of a flip, is not behind it: it sells, or buys, where the exit
-        does, so it never adds to what the exit leaves. A limit or stop exit is no exit at
-        market here, as `held` applies none: the position it would close is read as held, and
-        an entry is sized on it."""
+        does, so it never adds to what the exit leaves. Nor is an entry in another name, whose
+        room still counts the exit as filled, so a rotation whose exit the venue refuses holds
+        both names (`docs/backlog.md` row 236). A limit or stop exit is no exit at market here,
+        as `held` applies none: the position it would close is read as held, and an entry is
+        sized on it."""
         filled = self._clips_filled(key) if clip else self._own_filled(key)
         if filled == 0.0 or (filled > 0.0) != (side == OrderSide.BUY):
             return False

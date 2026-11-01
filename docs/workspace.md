@@ -458,7 +458,8 @@ order is one whole — and the card runs on, as an entry past `costs.orders_per_
 though it is not counted: sent, it was sized on the room the exit frees, and on the 22 of
 1,310 trades of a 10 ms QQQ scout's card where the venue refused that exit, measured on
 2026-10-30, it doubled the position. The second leg of a flip sells, or buys, where its exit
-does, so it is never behind it and goes.
+does, so it is never behind it and goes; an entry in another name is not behind it either, and
+a rotation whose exit the venue refuses holds both names (`docs/backlog.md` row 236).
 `modify_order` is neither cut nor refused for a sleeve run alone: kanso hands the modify to
 the engine's own unchanged, and an entry grown or re-priced by it is held to no ceiling until
 kanso holds it to one (`docs/backlog.md` row 123).
