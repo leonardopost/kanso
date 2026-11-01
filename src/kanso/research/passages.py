@@ -29,6 +29,7 @@ __all__ = [
     "QUEUED",
     "REMOVED",
     "RESEED_FROM",
+    "WITHOUT_TERMS",
     "Passage",
     "last_passage",
     "reseed_of",
@@ -48,6 +49,11 @@ RESEED_FROM: Final = "reseed_from"
 another keep than the best: the sha of the blob to start from. It rides on the passage
 rather than on the stall's own event because the passage is what survives `put_back`
 and `recover` — a decision written only where the stall was decided does not."""
+
+WITHOUT_TERMS: Final = "prints_without_terms"
+"""The key a `run_begun` passage carries under a print rule: each name the run asks for prints
+whose terms its snapshot does not hold on every day of the research window, so that its
+resting orders fill on every print the tape holds, each read as lit."""
 
 Passage = tuple[str, dict[str, object]]
 """One passage as read back: its kind and its detail."""

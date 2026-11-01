@@ -255,6 +255,30 @@ def covering(
     )
 
 
+def short_of(
+    ws: Workspace,
+    snapshot: Snapshot,
+    type_id: str,
+    names: Sequence[str],
+    window: tuple[date, date],
+) -> tuple[str, ...]:
+    """The names among `names` whose `type_id` the snapshot does not hold on every day of
+    `window` their market opened, read on each one's own calendar as `covering` reads it — the
+    test a required type is held to, asked of a type nothing requires."""
+    held = manifests(ws)
+    picked = [held[name] for name in snapshot.datasets if name in held]
+    closed = closures.by_instrument(_definitions(ws, names).values())
+    return tuple(
+        name
+        for name in names
+        if not contains(
+            [m.span for m in picked if m.instrument == name and m.type == type_id],
+            window,
+            closed.get(name, closures.never),
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class InstrumentDrift:
     """A snapshot whose pinned instruments are no longer the ones the store holds."""

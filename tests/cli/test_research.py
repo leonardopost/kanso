@@ -43,8 +43,27 @@ from .conftest import (
     payload,
     schedule_split,
     write_hypothesis,
+    write_spec,
     write_split,
 )
+
+HYPOTHESIS_COSTS = {"commission_bps": 0.5, "slippage_bps": 1.0}
+
+TICK_FLAT = '''from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Trades nothing on a tape of quotes and prints."""
+
+    config_cls = Config
+
+    def on_quote_tick(self, tick) -> None:
+        pass
+'''
 
 
 def begin(runner: CliRunner, root: Path, *args: object) -> dict[str, object]:
@@ -76,6 +95,40 @@ def test_begin_prints_the_lane_directory_because_an_agent_works_there(
     assert document["lane"] == "op"
     assert document["snapshot_id"]
     assert document["baseline"]["desc"] == "baseline"
+
+
+def test_begin_names_each_name_whose_prints_carry_no_terms_under_a_print_rule(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A tick hypothesis on quotes and prints resolves to `print_through`, and the snapshot it
+    pins holds no `print_terms`: the run says which names fill on every print, on its human
+    line, under `--json` and on its `run_begun` event. A run on bars says nothing of it."""
+    spec = write_spec(loaded, "tape.yaml", types=["quote", "trade"])
+    assert (
+        at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    )
+    assert at(runner, loaded, "data", "snapshot").exit_code == 0
+    costs = {**HYPOTHESIS_COSTS, "spread": "quotes", "latency_ms": 5}
+    path = write_hypothesis(
+        loaded, TICK_FLAT, resolution="tick", data_requirements=["quote", "trade"], costs=costs
+    )
+    assert at(runner, loaded, "hyp", "add", path).exit_code == 0
+    classify(loaded)
+
+    shown = at(runner, loaded, "research", "begin", HYP_ID)
+    at(runner, loaded, "research", "end", HYP_ID)
+    document = begin(runner, loaded)
+    with StateStore(find(loaded).path("state.db")) as store:
+        begun = store.events(kind="run_begun", subject=HYP_ID)[-1].detail
+
+    assert shown.exit_code == Exit.OK, shown.stdout
+    assert f"no print terms held for {INSTRUMENT}" in shown.stdout
+    assert document["prints_without_terms"] == [INSTRUMENT]
+    assert begun["prints_without_terms"] == [INSTRUMENT]
+
+
+def test_a_run_on_bars_says_nothing_of_print_terms(runner: CliRunner, registered: Path) -> None:
+    assert "prints_without_terms" not in begin(runner, registered)
 
 
 def test_begin_reads_as_the_path_and_the_next_command(runner: CliRunner, registered: Path) -> None:

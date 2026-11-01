@@ -29,6 +29,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.criteria.run import midnight_ns
 from kanso.nautilus import backtest, node, session
 from kanso.nautilus.backtest import HOLD
+from kanso.nautilus.tape import Unlit
 from tests.replay.conftest import INSTRUMENT, hypothesis, instrument, request_for
 
 MS = 1_000_000
@@ -177,11 +178,13 @@ def t(
     ms: int,
     side: AggressorSide = AggressorSide.NO_AGGRESSOR,
     day: int = 0,
+    kind: type = TradeTick,
 ) -> TradeTick:
-    """A print of the demo name, `day` sessions after the first."""
+    """A print of the demo name, `day` sessions after the first — an `Unlit` one, a print its
+    terms mark not lit, when `kind` says so."""
     _printed[0] += 1
     ns = T0 + day * DAY + ms * MS
-    return TradeTick(
+    return kind(  # type: ignore[no-any-return]
         DEMO, Price(px, 2), Quantity.from_int(size), side, TradeId(f"P{_printed[0]}"), ns, ns
     )
 
@@ -293,7 +296,104 @@ SCENARIOS: dict[
         every([]),
     ),
     "a quote through the price": ([*OPEN, q(9.45, 9.49, 100, ask_size=100)], REST, every([])),
-    "a print at the price": ([*OPEN, t(9.5, 100, 100)], REST, every([])),
+    "a print at the price of an order inside the spread": (
+        [*OPEN, t(9.5, 100, 100)],
+        REST,
+        every([(100, 100.0, 9.5, M)]),
+    ),
+    "prints at the price of an order joining the bid": (
+        [
+            q(9.48, 9.52, 10, bid_size=200),
+            q(9.48, 9.52, 50, bid_size=200),
+            *[t(9.48, 100, 100 + 10 * k) for k in range(4)],
+        ],
+        {1: [("limit", "BUY", 150, 9.48)]},
+        every([(120, 100.0, 9.48, M), (130, 50.0, 9.48, M)]),
+    ),
+    "a quote that shows less at the price cuts the size ahead": (
+        [
+            q(9.48, 9.52, 10, bid_size=500),
+            q(9.48, 9.52, 50, bid_size=500),
+            q(9.48, 9.52, 90, bid_size=100),
+            t(9.48, 150, 100),
+        ],
+        {1: [("limit", "BUY", 150, 9.48)]},
+        every([(100, 50.0, 9.48, M)]),
+    ),
+    "a bid that falls away from a resting buy leaves nothing ahead of it": (
+        [*OPEN, q(9.47, 9.52, 90), t(9.48, 100, 100)],
+        {1: [("limit", "BUY", 320, 9.48)]},
+        every([(100, 100.0, 9.48, M)]),
+    ),
+    "unlit prints at and through the price": (
+        [
+            q(9.48, 9.52, 10, bid_size=100),
+            q(9.48, 9.52, 50, bid_size=100),
+            t(9.48, 300, 100, kind=Unlit),
+            t(9.47, 300, 110, kind=Unlit),
+            q(9.48, 9.52, 120, bid_size=100),
+            t(9.48, 150, 130),
+        ],
+        {1: [("limit", "BUY", 150, 9.48)]},
+        every([(130, 50.0, 9.48, M)]),
+    ),
+    "three market buys against one quote's displayed size": (
+        [
+            q(9.48, 9.52, 10, ask_size=100),
+            q(9.48, 9.52, 50, ask_size=100),
+            q(9.48, 9.52, 100, ask_size=100),
+        ],
+        {1: [("market", "BUY", 80, 0)] * 3},
+        {
+            (rule, latency): [
+                (at, 80.0, 9.52, T),
+                (at, 20.0, 9.52, T),
+                (at, 60.0, 9.53, T),
+                (at, 80.0, 9.53, T),
+            ]
+            for rule in RULES
+            for latency, at in ((0, 10), (20, 50), (30, 50))
+        },
+    ),
+    "a quote that shows more at the price leaves the size ahead where it was": (
+        [
+            q(9.48, 9.52, 10, bid_size=200),
+            q(9.48, 9.52, 50, bid_size=200),
+            q(9.48, 9.52, 90, bid_size=900),
+            t(9.48, 250, 100),
+        ],
+        {1: [("limit", "BUY", 150, 9.48)]},
+        every([(100, 50.0, 9.48, M)]),
+    ),
+    "a sale taken at the bid cuts the size ahead of a resting buy there": (
+        [
+            q(9.48, 9.52, 10, bid_size=300),
+            q(9.48, 9.52, 50, bid_size=300),
+            t(9.48, 150, 100),
+        ],
+        {1: [("limit", "BUY", 100, 9.48)], 2: [("market", "SELL", 200, 0)]},
+        {(rule, 0): [(50, 200.0, 9.48, T), (100, 50.0, 9.48, M)] for rule in RULES}
+        | {
+            # The sale lands before the print it is due by; one instant's fills are listed by
+            # client order id, the buy's first.
+            (rule, latency): [(100, 50.0, 9.48, M), (100, 200.0, 9.48, T)]
+            for rule in RULES
+            for latency in (20, 30)
+        },
+    ),
+    "a sale sent beside the buy is taken before the buy has a place": (
+        [
+            q(9.48, 9.52, 10, bid_size=300),
+            q(9.48, 9.52, 50, bid_size=300),
+            t(9.48, 150, 100),
+        ],
+        {1: [("limit", "BUY", 100, 9.48), ("market", "SELL", 200, 0)]},
+        {
+            (rule, latency): [(at, 200.0, 9.48, T), (100, 50.0, 9.48, M)]
+            for rule in RULES
+            for latency, at in ((0, 10), (20, 50), (30, 50))
+        },
+    ),
     "a print through, smaller than the order": (
         [*OPEN, t(9.49, 100, 100)],
         REST,
@@ -361,7 +461,7 @@ SCENARIOS: dict[
     "a resting sell": (
         [*OPEN, t(9.53, 100, 100), q(9.53, 9.56, 110), t(9.52, 100, 120)],
         {1: [("limit", "SELL", 320, 9.52)]},
-        each_latency("print_through", [(100, 100.0, 9.52, M)])
+        each_latency("print_through", [(100, 100.0, 9.52, M), (120, 100.0, 9.52, M)])
         | each_latency("print_through_whole", [(100, 320.0, 9.52, M)]),
     ),
     "a cancel that lands before the print": (
@@ -422,7 +522,7 @@ ENGINE_RULES: dict[str, dict[tuple[str, int], tuple[list[Any], list[Any]]]] = {
         ("through", 20): ([(100, 100.0, 9.5, M), (100, 220.0, 9.5, M)],) * 2,
         ("through", 30): ([(100, 100.0, 9.5, M), (100, 220.0, 9.5, M)],) * 2,
     },
-    "a print at the price": {
+    "a print at the price of an order inside the spread": {
         ("touch", 0): ([(100, 100.0, 9.5, M)],) * 2,
         ("touch", 20): ([(100, 100.0, 9.5, M)],) * 2,
         ("touch", 30): ([(100, 100.0, 9.5, M)],) * 2,

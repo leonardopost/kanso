@@ -1645,9 +1645,10 @@ that price, as a maker. Whether *reaching* is enough is the venue model's `limit
 that does not hold quotes and prints at tick resolution — one that asks every name for both,
 none for bars and nothing for a book, resolves to `print_through` — a bar whose low is a buy's
 price fills it; under `through` the low has to go under it, a sell's high over it,
-a print past it. Under `print_through` only a print past it fills it, by that print's own size,
-and a taker fills on the quote rather than on a print (below). On a bar the venue walks the
-open, the high, the low and the close as prints in turn, so a bar that only touched the level
+a print past it. Under `print_through` a print past it fills it, by that print's own size, and a
+print at it once the size ahead of it there has traded; a print its terms mark not lit fills it
+neither way, and a taker fills on the quote rather than on a print (below). On a bar the venue
+walks the open, the high, the low and the close as prints in turn, so a bar that only touched the level
 at its low fills a resting buy at the limit under `touch` and leaves it resting under
 `through`; on a quote the engine asks the rule only when the order's own side of the book is
 at the price, so an ask falling to a resting buy fills it under either. Both code paths build their venue from the same configuration, so a
@@ -1698,15 +1699,23 @@ it, two orders at one price each credited a point whole, a point beyond two orde
 the better-priced, the print standing as the book and why `liquidity_consumption` stays off as
 engine facts.
 
-**Under `print_through` only a print through a resting order fills it, and a taker fills on the
-quote in force.** The venue's fill model is kanso's own there (`kanso.nautilus.tape`): the
-matching engine asks it for the fills of every order it has matched, and a venue module tells
-it before each point which point is in hand, which orders rested before a print and at what
-price, and the last quote. So a quote never fills a resting order and neither does a print at
-its price; a print through it fills it once, by the print's own size shared with the other
+**Under `print_through` a resting order fills on the lit prints that reach it once the size
+ahead of it has traded, and a taker fills on the quote in force.** The venue's fill model is
+kanso's own there (`kanso.nautilus.tape`): the matching engine asks it for the fills of every
+order it has matched, and a venue module tells it before each point which point is in hand,
+which orders rested before a print and at what price, and the last quote. So a quote never fills
+a resting order; a print through it fills it once, by the print's own size shared with the other
 orders it reaches, in price priority and then time at the price — the size the tape shows
-traded there — or, under `print_through_whole`, for all that is left; a print the venue
-applied before the order landed, or before a modify moved it to its price, fills nothing. A
+traded there — or, under `print_through_whole`, for all that is left; a print at its price fills
+it by what of the print is left past the size estimated ahead of it there, which starts as what
+the quote showed at the price when the order took its place — nothing for an order inside the
+spread, unknown for one behind the touch — and falls with every print at the price, with every
+quote that shows less there, taking a size cancelled there from behind the order first, and to
+nothing once the price trades through; and a print the venue applied before the order landed,
+before a modify moved it to its price, or whose terms mark it not lit — off-exchange, an odd
+lot, late, out of sequence (`print_terms`, `docs/workspace.md`) — fills nothing and moves no
+queue. A taker takes what the quote in force shows less what the sleeve's own takers took from
+it, so clips sent into one quote share its size. A
 taker fills at the touch of the last quote, up to the size it shows and never past its own limit, not at a print standing as the
 book — and a print that trades strictly outside that quote ends it: until the next quote a
 market order is refused for want of a market and a limit rests at its price, so a sleeve buying
@@ -1760,10 +1769,10 @@ print by print, so joining the touch is as honest as improving it. Measured thro
 runner and on both code paths: 500 shown on the bid, an order of 300 joining it, and eight
 sellers' prints of 100 a second apart fill the order at the seventh, eighth and ninth prints;
 the top-of-book venue a hypothesis without `book` gets fills the same order at the second,
-third and fourth, credited with what stood ahead of it — which is why a posting thesis on
-that venue rests a level of its own, though even there a print or a quote beyond the order
-fills all of it, when it is the best-priced order the point reaches. `kanso doctor` checks
-both engine facts.
+third and fourth under `touch`, credited with what stood ahead of it, and under the print rules
+at the sixth, seventh and eighth, past the 500 the quote showed ahead of it — though under
+`touch` a print or a quote beyond the order fills all of it, when it is the best-priced order
+the point reaches. `kanso doctor` checks both engine facts.
 
 **Under `depth` the strategy sees the book its account would, and the venue every change.**
 Without the key a sleeve is handed each change to the book as the venue is. With it

@@ -33,7 +33,10 @@ from kanso.data.adapters.massive.financials import FinancialsLoader
 from kanso.data.adapters.massive.loaders import bulk
 from kanso.data.adapters.massive.loaders.bars import MassiveBarsLoader
 from kanso.data.adapters.massive.loaders.quotes import MassiveQuotesLoader
-from kanso.data.adapters.massive.loaders.trades import MassiveTradesLoader
+from kanso.data.adapters.massive.loaders.trades import (
+    MassivePrintTermsLoader,
+    MassiveTradesLoader,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.data.loader import Loader
@@ -53,6 +56,7 @@ def loaders(ws: Workspace) -> dict[str, Callable[[], Loader]]:
     return {
         MassiveBarsLoader.id: lambda: MassiveBarsLoader(workspace=ws),
         MassiveTradesLoader.id: lambda: MassiveTradesLoader(workspace=ws),
+        MassivePrintTermsLoader.id: lambda: MassivePrintTermsLoader(workspace=ws),
         MassiveQuotesLoader.id: lambda: MassiveQuotesLoader(workspace=ws),
         bulk.BulkLoader.id: lambda: bulk.loader(ws),
         CorporateActionsLoader.id: lambda: CorporateActionsLoader(client=_client(ws)),

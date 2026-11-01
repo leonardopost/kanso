@@ -128,9 +128,10 @@ BINDINGS = {
     "command due by then before the matching engine applies the point",
     "a print inside the last quote leaves the engine's bid and ask no wider than that "
     "quote, re-matched or not, so a limit the quote makes marketable is matched on landing",
-    "kanso's print_through venue fills a resting limit only from a later print strictly "
-    "through its price, by that print's size or whole, never from a quote, and fills a "
-    "taker at the last quote's touch, an IOC limit no further than the quote shows",
+    "kanso's print_through venue fills a resting limit alone at its price from a later "
+    "print at or through it, by that print's size or the rest whole, never from a "
+    "quote, and fills a taker at the last quote's touch, an IOC limit no further than "
+    "the quote shows",
     "under the NETTING OMS the cache keeps one position per (instrument, strategy), "
     "named {instrument}-{strategy}, and the portfolio's net position is every "
     "strategy's sum",

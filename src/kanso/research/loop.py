@@ -105,7 +105,7 @@ from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
 from kanso.data.instruments import run_definitions
 from kanso.data.manifest import catalog_path
-from kanso.data.snapshot import covering
+from kanso.data.snapshot import Snapshot, covering, short_of
 from kanso.env import read as read_envelope
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.hyp import (
@@ -128,7 +128,7 @@ from kanso.research import lanes, records
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
 from kanso.research.keep import noise_floor
-from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
+from kanso.research.passages import BEGUN, RESEED_FROM, WITHOUT_TERMS, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
@@ -1306,6 +1306,9 @@ def begin(
     begun: dict[str, object] = {"run_id": run.run_id, "tag": run.tag, "lane": lane}
     if reseeded is not None:
         begun[RESEED_FROM] = reseeded
+    bare = _without_terms(ws, hyp, snapshot, setup.venue_model)
+    if bare is not None:
+        begun[WITHOUT_TERMS] = list(bare)
     store.event(BEGUN, hyp_id, begun)
     if registration.status != RESEARCHING:
         set_status(store, hyp_id, RESEARCHING)
@@ -1325,6 +1328,23 @@ def begin(
         benchmark_run=benchmark_run,
     )
     return records.require_active(store, hyp_id)
+
+
+def _without_terms(
+    ws: Workspace, hyp: Hypothesis, snapshot: Snapshot, model: VenueModel
+) -> tuple[str, ...] | None:
+    """Under a print rule, each name the hypothesis asks for `trade` whose `print_terms` the
+    pinned snapshot does not hold on every day of the research window its market opened: its
+    resting orders fill on every print the tape holds, lit or not (`kanso.nautilus.tape`).
+    `None` under any other rule, where a print's terms move no fill."""
+    from kanso.data.types.print_terms import TYPE_ID
+    from kanso.nautilus.venue import PRINT_SIZE
+
+    if model.costs.limit_fill not in PRINT_SIZE:
+        return None
+    names = [name for name in sorted(hyp.universe) if "trade" in hyp.required_of(name)]
+    window = (hyp.windows.research.start, hyp.windows.research.end)
+    return short_of(ws, snapshot, TYPE_ID, names, window)
 
 
 def _base_source(

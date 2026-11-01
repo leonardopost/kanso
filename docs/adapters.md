@@ -208,6 +208,7 @@ fetches through it needs `KANSO_MASSIVE_API_KEY`, as any request-path load does.
 |---|---|---|
 | `massive_bars` | aggregate bars for any class | REST |
 | `massive_trades` | trade prints | REST |
+| `massive_print_terms` | each print's exchange and condition codes, and whether they make it lit, as `print_terms` | REST |
 | `massive_quotes` | top-of-book quotes | REST |
 | `massive_bulk` | `1d` and `1m` bars for the classes the object store lays out | flat files over a signed object store |
 | `massive_corporate_actions` | splits and dividends, as `CorporateAction` | REST |
@@ -220,8 +221,9 @@ instant in the `us_stocks_sip/quotes_v1` flat file carrying the same 400 and 200
 shares on both transports, and the loader multiplies nothing. The displayed size a taker
 fills against under `print_through`, and a book's touch budget, read that unit.
 
-`massive_trades` and `massive_quotes` declare `chunk_days` 1: a liquid name's day is millions of
-ticks — 3.4 million TQQQ quotes and 1.4 million NVDA prints on 2026-09-14 — so every load,
+`massive_trades`, `massive_print_terms` and `massive_quotes` declare `chunk_days` 1: a liquid
+name's day is millions of ticks — 3.4 million TQQQ quotes and 1.4 million NVDA prints on
+2026-09-14 — so every load,
 backfill and screen fetch writes one dataset a day as the pages stream in, and a walk that
 fails loses that day and no other. A day costs its pages: the source serves 50,000 ticks a
 page in a few seconds, every page of a walk at the size its first page asked for, and a
@@ -303,9 +305,36 @@ META and AMD listed on Nasdaq, UBER, JPM, CAT and LLY on NYSE — over 2026-08-1
 So a bar is the wrong source for anything that needs the auction's price, such as an
 opening-gap measure or a market-on-open fill, and kanso's trade points are no better:
 `massive_trades` keeps neither a print's exchange nor its conditions, because a
-`TradeTick` has no field for either, so the official open cannot be picked out of the
-catalog. It is in the vendor's `/v3/trades` rows, as the listing exchange's condition-16
-print. The close needs nothing of the kind.
+`TradeTick` has no field for either. Both are in the vendor's `/v3/trades` rows — the official
+open is the listing exchange's condition-16 print — and `massive_print_terms` keeps them, one
+`print_terms` point per print `massive_trades` keeps, at its instants and under its trade id.
+The close needs nothing of the kind.
+
+### Which prints are lit
+
+`massive_print_terms` reads the same `/v3/trades` rows as `massive_trades` — a second walk of
+the same pages, asked with a spec that names it in place of `massive_trades` — and keeps for
+each print the vendor's `exchange` and
+`conditions` as served and `lit`: whether the print was an execution on an exchange's
+displayed book in the regular way, which a displayed order resting at its price there could
+have been part of. Under the print rules only a lit print fills a resting order or moves the
+queue ahead of one (`docs/workspace.md`, `limit_fill`). A print is lit when it was not
+reported to a FINRA trade reporting facility (exchange 4, or a `trf_id`); when each of its
+conditions is one the vendor's reference lets set the consolidated last price, or an
+indicator it gives no update rule, and none marks an auction, official open or close, cross,
+cash, next-day, prior-reference, sold-last, out-of-sequence, average-price, contingent or
+stock-option print; when it is not one of the vendor's correction records; when it is priced
+in whole cents; and when the tape carried it within a second of the participant's own
+instant. The reference is `/v3/reference/conditions?asset_class=stocks&data_type=trade` as it
+answered on 2026-10-28, which the suite holds. Measured on the vendor's flat files of 139
+sessions of twenty names by an independent derivation of these rules, which also keeps a print
+to the regular session, 18.4 % of the 992.5 million prints in the session were lit, 34.4 % of
+the shares; 41.4 % of them traded off any exchange and 67.6 % were odd lots, and 16,991 prints
+outside the session met every other rule. On 376 SPY prints recorded from two seconds of
+2025-01-02, the loader reads 134 lit, print for print the derivation's reading of the same
+prints in that day's file. A file of your own carries terms through `csv_parquet` as any
+custom type: map `trade_id` to the column your trade file's `trade_id` came from, and
+`exchange`, `conditions` and `lit` to yours (`docs/workspace.md`).
 
 ### Reference resolution
 

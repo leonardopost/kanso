@@ -448,10 +448,10 @@ already applied, a taker at 9.49, without it.
 **kanso's print rule.** Under `print_through` the venue loads kanso's own fill model with a
 module that tells it, before each point, which point is in hand and which orders rested before
 a print (`kanso.nautilus.tape`), and `kanso doctor` checks it as kanso loads it: a buy of 320
-resting at 9.50 under 9.48/9.52 is not filled by a quote of 9.45/9.49 showing 100, nor by a
-print of 100 at 9.50, and is filled 100 by each of two prints of 100 at 9.49 and 9.48 — 320 by
-the first under `print_through_whole` — and a market buy of 300 sent on a print of 100 at 9.50
-under 9.48/9.52 fills 300 at 9.52.
+resting at 9.50 under 9.48/9.52, alone at its price, is not filled by a quote of 9.45/9.49
+showing 100, is filled 100 by a print of 100 at 9.50 and 100 by each of two prints of 100 at
+9.49 and 9.48 — the 220 left by the first of those under `print_through_whole` — and a market
+buy of 300 sent on a print of 100 at 9.50 under 9.48/9.52 fills 300 at 9.52.
 
 **A print is the top-of-book until the next quote.** `process_trade_tick` sets both sides of a
 level-one book — the `OrderBook` — to the print's price and size, and they stay there until the
@@ -3377,11 +3377,11 @@ def _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_tak
 
 
 def _check_kanso_s_print_through_venue() -> tuple[bool, str]:
-    """`kanso.nautilus.tape` as kanso loads it: a resting limit fills only from a later print
-    strictly through its price, by that print's size, never from a quote or a print at its
-    price, and a taker fills at the last quote's touch rather than at a print — an IOC limit no
-    further than the quote shows, the rest cancelled, and cancelled whole when the quote shows
-    nothing it can take, however the engine's own bid and ask stand."""
+    """`kanso.nautilus.tape` as kanso loads it: a resting limit alone at its price fills from a
+    later print at or through it, by that print's size, never from a quote, and a taker fills
+    at the last quote's touch rather than at a print — an IOC limit no further than the quote
+    shows, the rest cancelled, and cancelled whole when the quote shows nothing it can take,
+    however the engine's own bid and ask stand."""
     from nautilus_trader.backtest.node import get_fill_model
     from nautilus_trader.config import BacktestVenueConfig
 
@@ -3435,8 +3435,9 @@ def _check_kanso_s_print_through_venue() -> tuple[bool, str]:
         modules=tuple(modules("XNAS")),
     )
     holds = (
-        rested["print_through"] == [(50, 100.0, 9.5, "MAKER"), (60, 100.0, 9.5, "MAKER")]
-        and rested["print_through_whole"] == [(50, 320.0, 9.5, "MAKER")]
+        rested["print_through"]
+        == [(40, 100.0, 9.5, "MAKER"), (50, 100.0, 9.5, "MAKER"), (60, 100.0, 9.5, "MAKER")]
+        and rested["print_through_whole"] == [(40, 100.0, 9.5, "MAKER"), (50, 220.0, 9.5, "MAKER")]
         and taken == [(20, 300.0, 9.52, "TAKER")]
         and ioc["fills"] == [(10, 100.0, 9.52, "TAKER")]
         and ioc["status"] == ["CANCELED", "CANCELED"]
@@ -5961,9 +5962,10 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_a_print_inside_the_quote_leaves_every_order_it_makes_marketable_a_taker,
     ),
     (
-        "kanso's print_through venue fills a resting limit only from a later print strictly "
-        "through its price, by that print's size or whole, never from a quote, and fills a "
-        "taker at the last quote's touch, an IOC limit no further than the quote shows",
+        "kanso's print_through venue fills a resting limit alone at its price from a later "
+        "print at or through it, by that print's size or the rest whole, never from a "
+        "quote, and fills a taker at the last quote's touch, an IOC limit no further than "
+        "the quote shows",
         _check_kanso_s_print_through_venue,
     ),
     (
