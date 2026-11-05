@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ import pytest
 from kanso import __version__
 from kanso.errors import ValidationError
 from kanso.screen import catalogue, check, screen_version
-from kanso.screen.library import LIBRARY
+from kanso.screen.library import LIBRARY, SOURCE
 from tests.schemas.test_screen import BASE, CATCH_UP, build
 
 
@@ -39,6 +40,26 @@ def test_a_misfiled_measure_is_refused(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_the_version_is_the_package_s_and_a_digest_of_the_library() -> None:
     assert re.fullmatch(rf"{re.escape(__version__)}\+[0-9a-f]{{12}}", screen_version())
+
+
+def test_the_version_moves_with_the_modules_that_measure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A copy of the package is the same build; one byte more in the module that scores a
+    # z-trigger is another, whose results are measured again rather than returned as stored.
+    copy = tmp_path / "screen"
+    shutil.copytree(SOURCE, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr("kanso.screen.library.SOURCE", copy)
+    monkeypatch.setattr("kanso.screen.library.LIBRARY", copy / "library")
+    shipped = screen_version()
+    screen_version.cache_clear()
+    try:
+        assert screen_version() == shipped
+        (copy / "response.py").write_bytes((copy / "response.py").read_bytes() + b"\n")
+        screen_version.cache_clear()
+        assert screen_version() != shipped
+    finally:
+        screen_version.cache_clear()
 
 
 def test_a_screen_inside_every_range_is_admitted() -> None:
