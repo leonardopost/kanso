@@ -5,8 +5,14 @@ measure lives in the package and never in an extension, for the reason a gate do
 verdict means the package's arithmetic or it means nothing, and a result records the
 version of the library that produced it.
 
-`screen_version` is that record: the package version and a digest of the library files,
-so a result measured under one library is never mistaken for one measured under another.
+`screen_version` is that record: the package version and a digest of the library files and
+of this package's own modules, so a result measured under one library, or by one build of the
+arithmetic, is never mistaken for one measured under another. The modules are in it because a
+result is returned as stored under its key: with the package version alone, a development
+build that measures differently, or a fix that ships before the version moves, would be handed
+the old build's numbers for the same screen and snapshot. A change to any module of the package
+moves it, so a result is measured again even when the change was not to its arithmetic; the
+arithmetic a screen borrows from elsewhere — a hurdle's `fill_cost` — moves with the version.
 """
 
 from __future__ import annotations
@@ -21,7 +27,8 @@ from kanso.errors import ValidationError
 from kanso.schemas import parse_yaml
 from kanso.schemas.screen import CatchUp, LeadLag, MeasureItem, Response, Screen, span_ns
 
-LIBRARY: Final = Path(__file__).resolve().parent / "library"
+SOURCE: Final = Path(__file__).resolve().parent
+LIBRARY: Final = SOURCE / "library"
 
 
 @cache
@@ -38,9 +45,9 @@ def catalogue() -> dict[str, MeasureItem]:
 
 @cache
 def screen_version() -> str:
-    """The package version and a digest of the library, so a result records what measured it."""
+    """The package version and a digest of the library and the modules that measure with it."""
     digest = sha256()
-    for path in sorted(LIBRARY.glob("*.yaml")):
+    for path in [*sorted(LIBRARY.glob("*.yaml")), *sorted(SOURCE.glob("*.py"))]:
         digest.update(path.name.encode("utf-8"))
         digest.update(path.read_bytes())
     return f"{__version__}+{digest.hexdigest()[:12]}"

@@ -313,7 +313,9 @@ declared — is marked `clock_bound`: it may be the difference between the clock
 
 **A response is set against the hurdle a card would pay.** A `response` cell fires on a
 trigger — a move of at least `move_bp` within `within`, or a z-score over a trailing `lookback`,
-cut at the session's open because the session is the unit — and enters the follower at its first point after the declared latency, exits at its first
+cut at the session's open because the session is the unit, and taken on the levels less the
+session's first, since a log price's square summed over millions of quotes swamps a window's
+spread of a few basis points — and enters the follower at its first point after the declared latency, exits at its first
 point after the horizon, one position at a time. Its gross is what a taker would have made — a
 quoted follower buys the ask and sells the bid it shows — and its hurdle is the round trip the
 venue model charges, struck by the runner's own `fill_cost`: commission, slippage, the sale's
@@ -381,7 +383,10 @@ judge — and the verdict is part of the file's bytes, so loosening it after rea
 new screen with a new result, beside the old one.
 
 **A result is immutable.** It is keyed by the screen's bytes, the snapshot and the measure
-library's version; the same three again return it as it was.
+library's version; the same three again return it as it was. The version is the package's and
+a digest of the library's files and of the screen package's own modules, so a build that
+measures differently — a fix shipped before the version moves, a development build — measures
+again rather than being handed what the old arithmetic recorded.
 
 **The embargo holds.** A free screen's window is refused when it meets, for any registered
 hypothesis holding one of its instruments, the span from that hypothesis's certification start
