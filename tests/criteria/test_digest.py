@@ -16,6 +16,7 @@ from kanso.criteria.digest import digest, edge_per_trade, session_edge
 from kanso.criteria.objectives import net_edge_bps
 from kanso.criteria.quantities import edge_bps, edge_series
 from kanso.criteria.run import Fill
+from kanso.schemas import Commands
 from tests.criteria.builders import START, at, build_run, trade
 
 TRADES = (
@@ -97,6 +98,15 @@ def test_a_run_with_no_period_end_has_no_session_to_divide_by() -> None:
 
     assert made.sessions == 0
     assert made.trades_per_session is None and made.net_bps_per_session is None
+
+
+def test_the_digest_carries_the_commands_the_run_counted_as_they_were_sent() -> None:
+    """How fast the strategy sent its orders is the run's own count, handed on whole; a run
+    handed none — a card recorded before cards kept it — carries none."""
+    sent = Commands(submits=4, modifies=1, cancels=3, peak_60s=7, p99_60s=6)
+
+    assert digest(RUN, (), sent).commands == sent
+    assert digest(RUN).commands is None
 
 
 def test_a_strategy_that_sent_only_market_orders_has_no_fill_ratio() -> None:

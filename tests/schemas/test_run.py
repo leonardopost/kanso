@@ -14,6 +14,7 @@ from kanso.schemas import (
     TAGS,
     Card,
     CardDigest,
+    Commands,
     GateResult,
     RunRecord,
     resolve_venue_model,
@@ -261,6 +262,54 @@ def test_a_card_made_by_hand_carries_no_tags_and_a_tag_is_from_the_vocabulary() 
     assert len(TAGS) == 21 and len(set(TAGS)) == len(TAGS)
     with pytest.raises(ValidationError, match="tags"):
         Card.model_validate({**CARD, "tags": ["clever"]})
+
+
+@pytest.mark.parametrize(
+    ("counts", "field"),
+    [
+        ({"submits": 3, "peak_60s": 2, "p99_60s": 3}, "p99_60s"),
+        ({"submits": 3, "peak_60s": 4, "p99_60s": 4}, "peak_60s"),
+        ({"submits": 3, "peak_60s": 3}, "p99_60s"),
+        ({"submits": -1}, "submits"),
+        ({"refused_submits": -1}, "refused_submits"),
+        ({"refused_modifies": -1}, "refused_modifies"),
+    ],
+)
+def test_a_command_count_reads_its_peak_and_percentile_off_what_was_sent(
+    counts: dict[str, int], field: str
+) -> None:
+    """The 99th percentile of the per-command counts is never above their peak, the peak
+    never above what was sent, and both are zero exactly when nothing was."""
+    with pytest.raises(ValidationError, match=field):
+        Commands.model_validate(counts)
+
+
+def test_a_digest_carries_its_command_counts_beside_its_trades_and_no_column_for_them() -> None:
+    sent = Commands(submits=3, modifies=1, cancels=2, peak_60s=6, p99_60s=5)
+    digest = CardDigest.model_validate({**DIGEST, "commands": sent.model_dump()})
+
+    assert digest.commands == sent and sent.sent == 6
+    assert digest.cells() == CardDigest.model_validate(DIGEST).cells()
+    assert CardDigest.model_validate(DIGEST).commands is None, "a card recorded before it"
+    assert Commands() == Commands(
+        submits=0,
+        modifies=0,
+        cancels=0,
+        peak_60s=0,
+        p99_60s=0,
+        refused_submits=0,
+        refused_modifies=0,
+    )
+
+
+def test_what_a_rate_refused_was_never_sent_and_bounds_no_minute() -> None:
+    """A sleeve whose every command the rate dropped sent nothing: its peak and percentile are
+    zero, and what it was refused is counted apart, by kind. A session or a card written
+    before the refused counts were kept reads them as zero."""
+    dropped = Commands(refused_submits=4, refused_modifies=2)
+
+    assert dropped.sent == 0 and (dropped.peak_60s, dropped.p99_60s) == (0, 0)
+    assert Commands.model_validate({"submits": 1, "peak_60s": 1, "p99_60s": 1}).refused_submits == 0
 
 
 def test_a_skipped_gate_passes() -> None:

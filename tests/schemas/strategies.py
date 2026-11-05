@@ -20,6 +20,7 @@ from kanso.schemas import (
     CardDigest,
     Certificate,
     CertificationPlan,
+    Commands,
     ConstraintRef,
     ConstructItem,
     ConstructRef,
@@ -125,6 +126,7 @@ def durations(draw: st.DrawFn, max_units: int = 99) -> str:
 @st.composite
 def costs(draw: st.DrawFn) -> Costs:
     spread = draw(st.sampled_from(["quotes", "fixed_bps"]))
+    per_cancel = draw(st.none() | st.integers(1, 4))
     return Costs(
         commission_bps=draw(NON_NEGATIVE),
         slippage_bps=draw(NON_NEGATIVE),
@@ -138,6 +140,9 @@ def costs(draw: st.DrawFn) -> Costs:
         limit_fill=draw(
             st.sampled_from(["touch", "through", "print_through", "print_through_whole"])
         ),
+        # never below what a cancel spends, which the model refuses
+        orders_per_minute=draw(st.none() | st.integers(per_cancel or 1, 100_000)),
+        requests_per_cancel=per_cancel,
     )
 
 
@@ -309,6 +314,25 @@ def gate_results(draw: st.DrawFn) -> GateResult:
 
 
 @st.composite
+def commands(draw: st.DrawFn) -> Commands:
+    """How fast a sleeve sent its orders: a peak no larger than what was sent, a 99th
+    percentile no larger than the peak, and both zero exactly when nothing was sent; and what
+    a rate refused, which bounds none of them, since it was never sent."""
+    submits, modifies, cancels = (draw(st.integers(0, 10**6)) for _ in range(3))
+    sent = submits + modifies + cancels
+    peak = draw(st.integers(1, sent)) if sent else 0
+    return Commands(
+        submits=submits,
+        modifies=modifies,
+        cancels=cancels,
+        peak_60s=peak,
+        p99_60s=draw(st.integers(1, peak)) if sent else 0,
+        refused_submits=draw(st.integers(0, 10**6)),
+        refused_modifies=draw(st.integers(0, 10**6)),
+    )
+
+
+@st.composite
 def digests(draw: st.DrawFn) -> CardDigest:
     """A card digest: per-trade numbers all present or all absent — the edge's error absent
     alone where the trades closed in one period — per-session numbers present exactly when a
@@ -333,6 +357,7 @@ def digests(draw: st.DrawFn) -> CardDigest:
         gross_bps_per_session=net_session + cost_session if sessions else None,
         cost_bps_per_session=cost_session if sessions else None,
         net_bps_per_session=net_session if sessions else None,
+        commands=draw(st.none() | commands()),
     )
 
 
@@ -877,6 +902,7 @@ def sessions(draw: st.DrawFn) -> Session:
         released=draw(st.integers(0, 10**9)),
         stream_sha256=draw(st.none() | SHAS),
         intents=draw(st.integers(0, 10**9)),
+        commands=draw(st.none() | commands()),
         clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
         started_at=draw(TIMESTAMPS),
         ended_at=draw(st.none() | TIMESTAMPS),

@@ -16,6 +16,7 @@ from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.errors import ValidationError
 from kanso.nautilus.hooks import EXIT, FILTER, OVERLAY
+from kanso.nautilus.sizing import ORDER_RATE, SizingError
 from kanso.nautilus.strategy import (
     Decision,
     Hedge,
@@ -263,6 +264,91 @@ def test_an_overlay_hedge_leg_is_placed_beside_the_entry(backtest) -> None:
         ("HEDGE.XNAS", "SELL", 40.0),
         ("DEMO.XNAS", "SELL", 100.0),
     ]
+
+
+def test_an_entry_dropped_past_the_rate_places_no_hedge_leg(backtest) -> None:
+    """At two a minute the host's first entry on its third bar and the hedge leg the overlay
+    answers it with take both tokens, and its second entry in the same handler is dropped and
+    counted before it is sized, and no leg of it is placed: a leg is part of the entry it
+    hedges, so nothing of it is sent, and nothing more is counted."""
+
+    class Twice(Host):
+        def on_bar(self, bar_: object) -> None:
+            self.bars += 1
+            if self.bars == 3:
+                self.submit_entry(DEMO, "BUY", qty=100)
+                self.submit_entry(DEMO, "BUY", qty=100)
+
+    rated = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "orders_per_minute": 2}}
+    config = host(venue_model=rated).kanso_config
+    run = backtest(Twice(config), [attached_for(Hedged, "Twice")], instruments=(DEMO, HEDGE))
+
+    assert [(i.instrument_id, i.side, i.qty) for i in run.strategy.intents] == [
+        ("DEMO.XNAS", "BUY", 100.0),
+        ("HEDGE.XNAS", "SELL", 40.0),
+    ]
+    assert run.strategy._command_tally.summary().refused_submits == 1
+
+
+class Unwound(KansoModifier):
+    """Hedges the host's first entry short 40 of `HEDGE`, and buys the 40 back beside every
+    entry after it."""
+
+    construct = OVERLAY
+    config_cls = Attached
+    answered = 0
+
+    def evaluate(self, ctx: HookContext) -> Decision:
+        self.answered += 1
+        return Decision(
+            scale=1.0, hedges=(Hedge("HEDGE.XNAS", 40.0 if self.answered > 1 else -40.0),)
+        )
+
+
+def test_a_hedge_leg_that_closes_past_the_rate_is_refused_and_not_told_to_use_submit_exit(
+    backtest,
+) -> None:
+    """At two a minute the host's entry on its third bar and the overlay's hedge of it take both
+    tokens. Two bars on the bucket is full again, and the host's exit of 10 and its second entry
+    take both, so the leg the overlay answers the second with, which buys its hedge back, finds
+    none. kanso owes only an exit `submit_exit` sized, and an overlay's leg is not one: the leg
+    is refused as `order_rate`, and the refusal does not tell the overlay to close with
+    `submit_exit` — an overlay answers with legs and clips and cannot itself close with it — but
+    to send fewer commands or state the account's figure."""
+
+    class Unwinds(Host):
+        def on_bar(self, bar_: object) -> None:
+            if str(bar_.bar_type.instrument_id) != "DEMO.XNAS":  # type: ignore[attr-defined]
+                return
+            self.bars += 1
+            if self.bars == 3:
+                self.submit_entry(DEMO, "BUY", qty=100)
+            elif self.bars == 5:
+                self.submit_exit(DEMO, qty=10)
+                self.submit_entry(DEMO, "BUY", qty=10)
+
+    rated = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "orders_per_minute": 2}}
+    config = host(venue_model=rated).kanso_config
+    with pytest.raises(SizingError) as failure:
+        backtest(
+            Unwinds(config),
+            [attached_for(Unwound, "Unwinds")],
+            data=[*flat(DEMO), *flat(HEDGE, close=20.0)],
+            instruments=(DEMO, HEDGE),
+        )
+
+    refused = failure.value.refusal
+    assert (refused.rule, refused.instrument_id, refused.asked) == (
+        ORDER_RATE,
+        "HEDGE.XNAS",
+        "BUY",
+    )
+    assert refused.why.startswith("an exit an overlay asked for needed 1 of the 2 tokens")
+    assert refused.why.endswith(
+        "a cancel deferred: send fewer commands — re-post only when the price has moved enough "
+        "to matter — or state the account's own figure as costs.orders_per_minute"
+    )
+    assert "close with submit_exit" not in refused.why
 
 
 def test_a_hedge_leg_is_not_itself_hedged_or_filtered(backtest) -> None:

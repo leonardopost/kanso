@@ -146,6 +146,12 @@ class OkxBroker:
         declaration and the workspace's `venues.OKX` entry (`account.py`)."""
         return account.check(ws, overrides.get(VENUE))
 
+    def requests_per_minute(self, ws: Workspace) -> int | None:
+        """None: `rate_per_second` meters kanso's own public requests and nothing the
+        engine sends, and the engine's own client meters itself on buckets kanso does not
+        read (`config.py`)."""
+        return None
+
 
 BROKER: Final = OkxBroker()
 """The registered instance. Building one costs nothing and touches no credential."""

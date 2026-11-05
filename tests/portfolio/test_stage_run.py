@@ -228,6 +228,49 @@ def test_a_strategy_that_raises_halts_the_node_rather_than_the_process(
     assert made.results[0].run.trades == ()
 
 
+BURSTING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Rests three buys far under the market on its first bar: one more than two a minute."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.rested = False
+
+    def on_bar(self, bar) -> None:
+        if not self.rested:
+            for share in (0.5, 0.6, 0.7):
+                price = round(float(bar.close) * share, 2)
+                self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=1, price=price)
+            self.rested = True
+'''
+
+
+@pytest.mark.parametrize(("per_minute", "sent"), [(None, 3), (2, 2)], ids=["unrated", "rated"])
+def test_a_stage_node_drops_an_entry_past_the_rate_and_runs_on(
+    ws: Workspace, store: StateStore, per_minute: int | None, sent: int
+) -> None:
+    """A stage runs the sleeve's own code, so it holds the version to the rate it was
+    certified under as a card does: at two a minute the third entry of an instant is dropped
+    unsent, and the node runs its window to the end rather than halting."""
+    doc = document(id="burst")
+    if per_minute is not None:
+        doc["costs"] = {**doc["costs"], "orders_per_minute": per_minute}
+    deployable(ws, store, "burst", sleeve=BURSTING, doc=doc)
+
+    made = deploy(ws, store, "paper")
+
+    assert made.halted is None
+    assert made.session is not None and made.session.intents == sent
+
+
 def test_a_clock_past_the_catalog_runs_no_node(
     ws: Workspace, store: StateStore, composed_strategy: StrategyFile
 ) -> None:

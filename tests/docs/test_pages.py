@@ -1093,3 +1093,84 @@ def test_the_concepts_page_says_a_window_reads_through_a_file_replaced_while_it_
     assert "is found gone by the read that wants it, which lists that type's files again" in card
     assert "is refused (exit 2), naming the series" in card
     assert "is read by a later read only once one of that type has listed afresh" in card
+
+
+def test_the_pages_say_an_entry_past_the_rate_is_dropped_and_counted_and_the_card_runs_on() -> None:
+    """Past `costs.orders_per_minute` an entry and a modify are dropped and counted, and the
+    card runs on; once the pages said the card was refused, and a proposer told so stops
+    sending what the rate would have let through. Each page names the fields that carry the
+    count and still names the one refusal the rate makes: an exit the strategy built itself,
+    since kanso owes only an exit `submit_exit` sized. Once the pages said an exit built by
+    hand at market or at a good-till-cancelled limit was owed, which sent an order kanso built
+    in its place, one the strategy could neither cancel nor move."""
+    for name in ("concepts.md", "workspace.md", "cli.md"):
+        said = prose(page(name))
+        assert "dropped unsent and counted" in said, name
+        assert "`order_rate`" in said and "one the strategy built itself" in said, name
+        assert "`submit_exit` sized" in said, name
+        assert "exit kanso cannot send again as it was asked" not in said, name
+        assert "an entry, a modify and an order list are refused" not in said, name
+        assert "an entry is refused" not in said, name
+    for name in ("concepts.md", "workspace.md"):
+        assert "`refused_submits`" in page(name) and "`refused_modifies`" in page(name), name
+
+
+def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep() -> None:
+    """Of when what waits for a token goes, the pages keep what the replay tests pin on both
+    paths and an operator acts on: no entry or modify takes a token while a cancel waits, an
+    exit takes one the bucket holds, so exits asked for on every point can keep a cancel
+    waiting while its order fills, and what waits goes on a later point, after the venue has
+    matched it. They once said more, and each time it was more than the code kept: that what
+    waited took every token that came back before the handler could, though an exit owed behind
+    a deferred cancel is asked for after the handler of the point its cancel goes on; that an
+    exit owed for want of a token went before anything asked after it, though the deferred
+    cancels take the tokens first, and what an order that came to rest meanwhile cuts from it is
+    owed behind that order's deferred cancel, where an entry can go first; that a whole
+    `submit_exit` could not keep a cancel waiting, though an order on the opening side whose
+    cancel waits keeps filling; that what waited went on the first point a token came back for
+    it; that a second cancel of an order whose cancel waits goes at once when the bucket holds
+    what it costs, which no test pinned and no operator acts on; and that a deferred cancel
+    keeps its place in line, though an exit takes a token the bucket holds while it waits."""
+    said = {name: prose(page(name)) for name in ("concepts.md", "workspace.md", "cli.md")}
+    for name, text in said.items():
+        for promise in (
+            "before anything asked after it",
+            "before any entry or modify asked after it",
+            "takes the tokens it waits for first",
+            "goes to what waited for it",
+            "finds the bucket as they left it",
+            "leaves nothing to close once it has gone",
+            "first point at or after the instant",
+            "before the strategy's handler of the first point",
+            "take what tokens came back",
+            "goes at once if the bucket",
+            "its place in line",
+        ):
+            assert promise not in text, (name, promise)
+    assert "can keep a cancel waiting" in said["workspace.md"]
+    assert "can keep a cancel waiting" in said["concepts.md"]
+    assert "goes on a later point, after the venue has matched it" in said["workspace.md"]
+
+
+def test_the_pages_say_an_overlay_s_leg_or_clip_past_the_rate_is_not_told_to_use_submit_exit() -> (
+    None
+):
+    """An overlay answers with legs and clips and cannot itself close with `submit_exit`, so the
+    refusal of its leg or clip past the rate names fewer commands or the account's own figure,
+    and only the strategy's own exit is told to close with `submit_exit`; and an exit kanso did
+    not size neither drops nor waits, but refuses the card."""
+    row = prose(next(line for line in page("workspace.md").splitlines() if "`order_rate`" in line))
+    assert "for an exit the strategy built itself, to close with `submit_exit`" in row
+    assert "for an overlay's leg or clip, to send fewer commands" in row
+    assert "when kanso did not size it, refuses the card" in prose(page("concepts.md"))
+
+
+def test_the_pages_say_a_second_exit_past_the_rate_leaves_an_exit_rule_s_owed_exit_alone() -> None:
+    """kanso owes one exit a side of a name, so a second `submit_exit` asked past the rate while
+    the first is owed replaces it rather than adding to it — but not an exit rule's, which its
+    host's ask neither replaces nor adds to, as the replay tests pin on both paths
+    (`test_an_exit_rule_s_owed_exit_is_not_replaced_by_its_host_s`)."""
+    for name in ("workspace.md", "backlog.md"):
+        said = prose(page(name))
+        assert "replaces it rather than adding to it" in said, name
+        assert "unless the first was an exit rule's, which its host's ask neither" in said, name

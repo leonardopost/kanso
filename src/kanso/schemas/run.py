@@ -121,6 +121,63 @@ Share = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Positive = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
+class Commands(KansoModel):
+    """How fast a sleeve sent its orders: what it sent of each kind, and how many it sent in
+    the busiest 60 s of the data clock.
+
+    Counted by `kanso.nautilus.rate.Tally` as the sleeve sends them, on both code paths: a
+    submit per order, a modify per modify the engine sends, a cancel per order cancelled, each
+    at the data-clock instant the sleeve sent it. A command is what the sleeve asks of the
+    venue: an order the engine's emulator holds is counted when the strategy submits it, and
+    its cancel when the strategy sends it, though the emulator sends the venue nothing while it
+    holds the order and sends the order itself, uncounted, when it releases it. `peak_60s` is
+    the most commands sent in the 60 s ending at any one of them, that one and every other sent
+    at the same instant included, and `p99_60s` the 99th percentile of that count over every
+    command, by nearest rank — so 99 in 100 of the sleeve's commands were sent in a minute
+    holding no more than it. Both are zero for a sleeve that sent nothing.
+
+    `refused_submits` and `refused_modifies` are what the sleeve dropped unsent under a stated
+    `costs.orders_per_minute` because no token was available to them — the bucket holding
+    fewer tokens than they cost, an entry's list one for each of its orders, all or none, or a
+    cancel waiting for its tokens, which no entry or modify takes before it — the run
+    going on past them: a submit per order of an entry — every order of an entry's list — and
+    a modify, the order it would have moved staying as it was. They were never sent, so they
+    are in none of the counts above and in no minute. Both are zero under no stated rate, and
+    for a session or a card recorded before they were kept.
+    """
+
+    submits: int = Field(default=0, ge=0)
+    modifies: int = Field(default=0, ge=0)
+    cancels: int = Field(default=0, ge=0)
+    peak_60s: int = Field(default=0, ge=0)
+    p99_60s: int = Field(default=0, ge=0)
+    refused_submits: int = Field(default=0, ge=0)
+    refused_modifies: int = Field(default=0, ge=0)
+
+    @property
+    def sent(self) -> int:
+        """Every command sent, of every kind; the refused ones were not."""
+        return self.submits + self.modifies + self.cancels
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Commands:
+        if self.p99_60s > self.peak_60s:
+            raise ValueError(
+                f"p99_60s: {self.p99_60s} is above the peak {self.peak_60s}, and a percentile "
+                "of the counts is never above the largest of them"
+            )
+        if self.peak_60s > self.sent:
+            raise ValueError(
+                f"peak_60s: {self.peak_60s} commands in 60 s, of {self.sent} sent in all"
+            )
+        if (self.p99_60s == 0) != (self.sent == 0):
+            raise ValueError(
+                "p99_60s: a sleeve that sent a command sent at least one in the 60 s ending "
+                "at it, and one that sent none sent none in any"
+            )
+        return self
+
+
 class CardDigest(KansoModel):
     """What a card's trades did: how often it traded, how it filled, and what each trade and
     each session earned before and after costs.
@@ -135,6 +192,10 @@ class CardDigest(KansoModel):
     to be read off — a rate with no trade, a share with no fill, the error of an edge whose
     trades closed in fewer than two periods, which an error read period by period reads as
     zero whatever they did — is `None`, never zero.
+
+    `commands` is how fast the card's strategy sent its orders (`Commands`), read off the run
+    beside its fills, with what a stated order rate dropped unsent; `None` for a card recorded
+    before cards kept it. It is not among the `results.tsv` columns.
     """
 
     sessions: int = Field(ge=0)
@@ -151,6 +212,7 @@ class CardDigest(KansoModel):
     gross_bps_per_session: Bps | None = None
     cost_bps_per_session: Bps | None = None
     net_bps_per_session: Bps | None = None
+    commands: Commands | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> CardDigest:

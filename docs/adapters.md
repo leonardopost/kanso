@@ -462,6 +462,44 @@ There is no switch anywhere in the adapter that turns one into the other: the id
 account, the variables and the host together. A stage that trades real money says so by
 naming the client that declares it.
 
+### The venue model it declares
+
+For every listing venue it serves, one declaration: a `margin` account in `USD`, a
+`commission_bps` of zero — the broker's published US equity commission, which leaves out the
+regulatory fees passed through on a sale — an `orders_per_minute` of 190 and a
+`requests_per_cancel` of 2. Slippage and the spread are not declared, since the broker
+publishes neither. The commission is published, not measured here.
+
+The rate is what this adapter's client sends at. The broker publishes 200 trading API requests
+a minute per account on its standard plan and 1,000 on its Elite plan, and the client holds
+every request it sends to `requests_per_minute` (below), 190 by default, under the 200. A
+submit is one request and a modify one, and a cancel two: the `DELETE`, and then a read of the
+order, since no order stream reports what the cancel came to. So a workspace whose
+`[research] broker` is `alpaca` researches every card with its orders held to those requests —
+a burst of 190 and then 190 a minute, a cancel two of them (`docs/workspace.md`,
+`costs.orders_per_minute`) — which is what the client lets through, unless it states its
+plan's figure. Past it a card drops the entries and modifies no request is available to —
+fewer left than they cost, an entry's list one for each of its orders, all or none, or a cancel
+waiting for its two — and counts them on its `commands`, running on; it owes
+the exits `submit_exit` sized and defers its cancels, and while a cancel waits for its two
+requests no entry or modify takes one that comes back; and it is refused only for an exit kanso
+did not size — one the strategy built itself, or an overlay's leg or clip — sent with no
+request left for it. An account on the Elite plan states, beside a
+`requests_per_minute` raised to match,
+
+```yaml
+venues:
+  XNAS:
+    costs: {orders_per_minute: 1000}
+```
+
+in `portfolio.yaml`, for each venue its universe lists; the cancel's two are inherited. What the
+figure does not hold is what the client spends on no order: the engine's polling of orders and
+positions (`open_check_interval_secs`, `position_check_interval_secs`) and the feed's sweeps
+share the one quota and leave the orders less of it. `kanso doctor`'s `order rate` check warns
+where `requests_per_minute` is below what the sleeves on a stage may spend between them, and
+says that it counts neither.
+
 ### The feed is declared, never defaulted
 
 The market data host serves two tapes and they are **different series for the same day**.
@@ -486,7 +524,7 @@ check. It holds no credential.
 | key | default | what it does |
 |---|---|---|
 | `feed` | *none* | `sip` or `iex`; the tape the data client reads. Required before a data client opens |
-| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200 |
+| `requests_per_minute` | `190` | the rate limit every request through this adapter shares, under the published 200, and the `orders_per_minute` the broker declares; `kanso doctor`'s `order rate` check sets it against the `orders_per_minute` the versions on a stage were certified under |
 | `timeout_s` | `30` | per-request timeout |
 | `poll_interval_s` | `15` | seconds between the live feed's sweeps; `1` to `3600`, and a value outside that is refused when the table is read |
 | the six URLs | the broker's own hosts | the paper, live and market-data REST hosts and their stream endpoints |
