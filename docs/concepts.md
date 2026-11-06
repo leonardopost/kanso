@@ -365,7 +365,7 @@ and the workspace's own 0/1 controls, each a point every session read as of the 
 its `ts_init` at or before that exit and its `ts_event` on the session's date in the clock's
 zone, which west of Greenwich a table stamped at midnight UTC on its date is not. The state is
 not in the regression, so the null never refits it; the R² of the state on that design is
-reported.
+reported — under a contrast, over the sessions in either state.
 Against `rest` the estimate is exactly the state's least-squares coefficient in a regression on
 it and the design, β, times one less that R², and long or flat exactly s·β·f(1 − f)·(1 − R²) at
 exposure f and side s; against a comparison, whose residuals were fitted on the sessions in
@@ -373,9 +373,23 @@ neither state too, the identity is approximate. Long or flat, `mean` is the exce
 under a contrast it is the mean long less the mean short, signed by the side, so a correctly
 signed effect is positive under either. Either way the session values the null and `se` read
 weigh each return so the weights sum to zero — long or flat, the position less the cell's mean
-position — so `se` is the estimate's own. A position times its residual alone would overstate it
-by 1/√(1 − f) at exposure f, as though the residuals' mean had not been fitted: measured on a
-thousand drifting followers held half the time, sign flips of it put 1.3% of p at or under 0.05.
+position. A position times its residual alone would overstate `se` by 1/√(1 − f) at exposure f,
+as though the residuals' mean had not been fitted: measured on a thousand drifting followers held
+half the time, sign flips of it put 1.3% of p at or under 0.05. Under `circular` the weights are
+residualised on the design as the returns were, so `se` is the estimate's own, and every shifted
+position is residualised afresh, so each shift is judged by the statistic the observed alignment
+is; weights not residualised would overstate `se` by about 1/√(1 − R²), as though the design
+shared nothing with the state — measured on a state with an R² of 0.52 on a weekday design, 1.47
+times the estimate's spread over 2,000 redraws, against 1.01 residualised. Under `sign_flip` they
+are not: residualised, a month's block sums share its fitted mean across the blocks it spans and
+spread less than their total does, so the null would run above its level — measured with weekday
+and month dummies over 250 sessions in blocks of five, contrast positions in runs averaging ten,
+6.95% of p at or under 0.05, against 3.05% on the weights alone. So under `sign_flip`, `se` and
+`mde_bp` read the weights alone, and where the design shares the state they overstate the
+estimate's own and understate `t` by about 1/√(1 − `control_r2`), and p errs conservative by as
+much. Under a contrast judged by circular shifts a session in neither state holds a value too —
+its residualised weight, what the design shares with the contrast, times its residual — and none
+with the intercept alone; `sessions` counts the sessions in either state either way.
 Each position — a run of sessions, joined across a boundary only when its periods are contiguous — is charged one round trip struck at its entry and its
 exit, so a state held for days close to close pays once and open to close pays daily.
 
@@ -416,7 +430,10 @@ with no relationship, every shift is as likely as the observed alignment. Blocks
 roughly so: with few of them and a state persisting about a block's length the null runs
 slightly above its level — over 250 sessions in 25 blocks of 10, long or flat on runs averaging
 10, 5.3% of p fell at or under 0.05 and 10.6% at or under 0.10, against 4.7% and 9.6% with
-positions independent session to session. A shift rotates one
+positions independent session to session. Month dummies over a window of about a year err the
+other way: each month's residuals sum to zero, so for a state persisting across blocks the
+block sums inside one month are anti-correlated, and the null runs below its level — the 3.05%
+above. A shift rotates one
 index, so a circular family holds only the N sessions every one of its cells holding any holds:
 a cell holding only some would have its positions shifted off its returns, keep fewer values
 than it observed on most shifts, and pull the family's maxima down — measured on two contrast
@@ -442,8 +459,10 @@ condition's null has its own floor, refused the same way: 2^(1−J) over the J b
 `min_sessions` fill under `sign_flip`, and 1/`min_sessions` under `circular`, the floor of a
 family of `min_sessions` sessions — the fewest a cell is judged on, so the worst case, since a
 family holding more has a lower one. Beside a verdict, a condition declaring `mde_power` reports
-the least |t| its null passes at `alpha` and the effect that would reach it at that power: a
-detection threshold, never a forecast. Under `circular` it is read off maxima the observed data
+the least |t| its null passes at `alpha` and the effect that would reach it at that power, in
+`mean`'s units: a detection threshold, never a forecast. Long or flat, `mean` is s·β·f(1 − f) ·
+(1 − R²), so at an exposure of a half and no calendar shared the move a session while the state
+holds would need to be about four times `mde_bp`. Under `circular` it is read off maxima the observed data
 make, and a shift of a session or two nearly re-aligns a persistent position, so a real effect
 raises them: the threshold is conditional on the data seen, larger the larger the effect —
 measured over 1,000 sessions with runs averaging 40, the median critical |t| at an `alpha` of

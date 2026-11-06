@@ -223,7 +223,9 @@ def test_an_always_true_long_reads_no_excess_and_its_margin_shows_the_drift(
     assert stats.hurdle_bp == pytest.approx(ROUND_TRIP)
     held = cell.sessions
     assert stats.ceiling_bp_day == pytest.approx(found.drift_bp_day - ROUND_TRIP / held)
-    assert found.exposure == 1.0 and found.raw_bp == pytest.approx(found.drift_bp_day)
+    # Centred on the mean position, the raw estimator carries none of the drift either: held
+    # throughout, the drift is all in the ceiling.
+    assert found.exposure == 1.0 and found.raw_bp == pytest.approx(0.0, abs=1e-9)
     assert found.long_flat_bp is None and found.sessions_against is None
 
 
@@ -1211,6 +1213,134 @@ def test_control_r2_is_zero_with_the_intercept_alone(monkeypatch: pytest.MonkeyP
 
     assert cell.condition is not None and cell.condition.control_r2 == pytest.approx(0, abs=1e-12)
     assert cell.condition.dropped == []
+
+
+def calendar(sessions: Sequence[date], event: Mapping[date, float]) -> np.ndarray:
+    """The design `demean: [weekday, month]` and one control make over a window from a Monday
+    in January to a Friday in March: the intercept, Tuesday to Friday, February, March, and the
+    control."""
+    return np.asarray(
+        [
+            [1.0, *(float(day.weekday() == k) for k in range(1, 5))]
+            + [float(day.month == 2), float(day.month == 3), event[day]]
+            for day in sessions
+        ]
+    )
+
+
+def annihilated(matrix: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """`target` less its least-squares projection on `matrix`'s columns, by `numpy.linalg`."""
+    return np.asarray(target - matrix @ np.linalg.lstsq(matrix, target, rcond=None)[0])
+
+
+def leaning(sessions: Sequence[date], seed: int, neither: float = 0.0) -> tuple[Any, ...]:
+    """A state leaning on Mondays, Tuesdays and the event days, a control marking every fifth
+    session, and a follower 8 bp up while the state holds and 5 bp a weekday later in the week;
+    a share `neither` of sessions is in neither state."""
+    rng = np.random.default_rng(seed)
+    event = {day: float(n % 5 == 2) for n, day in enumerate(sessions)}
+    level: dict[date, float] = {}
+    for day in sessions:
+        lean = day.weekday() < 2 or bool(event[day])
+        level[day] = 1.0 if rng.random() < (0.85 if lean else 0.15) else -1.0
+        if rng.random() < neither:
+            level[day] = 0.0
+    moves = {
+        day: rng.normal() * 30 + 8.0 * (level[day] > 0) + 5.0 * day.weekday() for day in sessions
+    }
+    prices = {"a": {day: (100.0, 100.0 * math.exp(moves[day] / 1e4)) for day in sessions}}
+    points = {"lvl": daily(level), "evt": daily(event, hour=9)}
+    returns = np.asarray([1e4 * math.log(prices["a"][d][1] / prices["a"][d][0]) for d in sessions])
+    return level, event, prices, points, returns
+
+
+def test_against_rest_and_long_or_flat_the_estimate_is_the_state_s_coefficient_attenuated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    level, event, prices, points, returns = leaning(sessions, 31)
+    design = {"demean": ["weekday", "month"], "controls": ["evt"]}
+    rest = {"up": {**TEST, "against": "rest"}}
+    lone = {"up": {**TEST, "against": None}}
+    cells = {
+        "rest": [
+            measured(screen(rest, **design, **null), prices, points, monkeypatch)[0]
+            for null in ({}, {"null_by": "sign_flip", "block": 1})
+        ],
+        "lone": [
+            measured(
+                screen(lone, payoff="long_flat", **design, **null), prices, points, monkeypatch
+            )[0]
+            for null in ({}, {"null_by": "sign_flip", "block": 1})
+        ],
+    }
+
+    # The reference: the state's coefficient beside the design, and the state's R² on it.
+    matrix = calendar(sessions, event)
+    state = np.asarray([float(level[day] > 0) for day in sessions])
+    beta = float(np.linalg.lstsq(np.column_stack([state, matrix]), returns, rcond=None)[0][0])
+    left = annihilated(matrix, state)
+    f = float(np.mean(state))
+    r2 = 1.0 - float(left @ left) / float(np.sum((state - f) ** 2))
+    assert 0.3 <= r2 <= 0.7, "the design shares much of the state"
+    residuals = annihilated(matrix, returns)
+    n, longs = len(sessions), float(np.sum(state))
+    weights = {"rest": np.where(state > 0, n / longs, -n / (n - longs)), "lone": state - f}
+    expected = {"rest": beta * (1 - r2), "lone": beta * f * (1 - f) * (1 - r2)}
+    for name, (shifted, flipped) in cells.items():
+        # Circular shifts read each weight residualised on the design, as the residuals were;
+        # sign flips read the weight alone, which overstates se by about 1 / sqrt(1 - R²).
+        values = annihilated(matrix, weights[name]) * residuals
+        se = float(np.std(values, ddof=1)) / math.sqrt(n)
+        alone = float(np.std(weights[name] * residuals, ddof=1)) / math.sqrt(n)
+        assert alone / se >= 1.2
+        for cell, spread in ((shifted, se), (flipped, alone)):
+            assert cell.condition is not None and cell.condition.dropped == []
+            assert cell.mean == pytest.approx(expected[name], rel=1e-9)
+            assert cell.condition.control_r2 == pytest.approx(r2, rel=1e-9)
+            assert cell.se == pytest.approx(spread, rel=1e-9) and cell.sessions == n
+            assert cell.t == pytest.approx(cell.mean / cell.se, rel=1e-9)
+
+
+def test_against_a_comparison_r2_is_the_state_s_over_the_sessions_in_either_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    level, event, prices, points, returns = leaning(sessions, 32, neither=0.3)
+    design = {"demean": ["weekday", "month"], "controls": ["evt"]}
+
+    shifted, flipped = (
+        measured(screen(**design, **null), prices, points, monkeypatch)[0]
+        for null in ({}, {"null_by": "sign_flip", "block": 1})
+    )
+
+    matrix = calendar(sessions, event)
+    positions = np.asarray([level[day] for day in sessions])
+    moving = positions != 0
+    long = (positions[moving] > 0).astype(np.float64)
+    left = annihilated(matrix[moving], long)
+    r2 = 1.0 - float(left @ left) / float(np.sum((long - long.mean()) ** 2))
+    everywhere = (positions > 0).astype(np.float64)
+    spread = annihilated(matrix, everywhere)
+    whole = 1.0 - float(spread @ spread) / float(np.sum((everywhere - everywhere.mean()) ** 2))
+    assert abs(r2 - whole) > 0.02, "the two R² differ, so the test tells them apart"
+    # The residuals are fitted on every held session, a session in neither state too. Under
+    # circular shifts each session's value is its weight residualised on the design over them
+    # times its residual, so a session in neither state holds one; sign flips read the weight
+    # alone, which a session in neither state does not hold.
+    residuals = annihilated(matrix, returns)
+    n, longs, shorts = len(sessions), int(np.sum(positions > 0)), int(np.sum(positions < 0))
+    weights = np.where(positions > 0, n / longs, np.where(positions < 0, -n / shorts, 0.0))
+    se = float(np.std(annihilated(matrix, weights) * residuals, ddof=1)) / math.sqrt(n)
+    side = longs + shorts
+    alone = np.where(positions > 0, side / longs, -side / shorts)[moving] * residuals[moving]
+    mean = float(np.mean(residuals[positions > 0]) - np.mean(residuals[positions < 0]))
+    for cell, spread in ((shifted, se), (flipped, float(np.std(alone, ddof=1)) / math.sqrt(side))):
+        assert cell.condition is not None
+        assert cell.condition.control_r2 == pytest.approx(r2, rel=1e-9)
+        assert cell.mean == pytest.approx(mean, rel=1e-9)
+        assert cell.se == pytest.approx(spread, rel=1e-9)
+        assert cell.sessions == side < n, "the sessions in either state"
 
 
 def test_the_long_flat_realisation_is_reported_beside_a_contrast(

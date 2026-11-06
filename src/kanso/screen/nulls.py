@@ -37,13 +37,18 @@ of the screen's bytes, the snapshot and the measure's index. The same pins give 
 signs; another cell in one measure changes that measure's family and no other's.
 
 **Circular shifts, for positions that persist.** A position held while a slow state holds is
-the same sign for runs of sessions, so its values are not independent session to session, and
-flipping their signs one at a time would read a run as many chances. A `condition` measure may
-be judged instead by shifting every cell's positions round the calendar against its returns,
-which stay with their dates: one draw moves every position k sessions later, wrapping at the
-end, with one k shared by every cell of the measure, so the cells' dependence is kept, and so is
-each cell's own — its runs, its holds, how long a state persists. Only the alignment of positions
-with returns is redrawn.
+the same sign for runs of sessions. With returns independent session to session that alone
+costs per-session flips nothing: the values are independent given the positions, and over 250
+sessions of contrast positions in runs averaging 20, 5.2% of p fell at or under 0.05 and 10.1% at
+or under 0.10 (4,000 seeds). What breaks them is a persistent position meeting a return mean
+that wanders, whose excursion every session of a run shares, so that flips one at a time read a
+run as many chances: with the mean an AR(1) of coefficient 0.99 and a standard deviation 0.3 of
+the noise's, 12.4% and 19.5% fell there, against 5.0% and 10.6% by circular shifts. A
+`condition` measure may be judged by shifting every cell's positions round the calendar against
+its returns, which stay with their dates: one draw moves every position k sessions later,
+wrapping at the end, with one k shared by every cell of the measure, so the cells' dependence is
+kept, and so is each cell's own — its runs, its holds, how long a state persists. Only the
+alignment of positions with returns is redrawn.
 
 **Every shift, so the level is the null's.** The shifts are the whole group of rotations: over
 the measure's N sessions every k from 1 to N − 1, which with the identity — the alignment
@@ -166,35 +171,77 @@ def evidence(values: np.ndarray, draws: int, seeded: int) -> Evidence:
     )
 
 
-def values_of(positions: np.ndarray, returns: np.ndarray, contrast: bool) -> np.ndarray:
+def values_of(
+    positions: np.ndarray,
+    returns: np.ndarray,
+    contrast: bool,
+    spanned: np.ndarray | None = None,
+) -> np.ndarray:
     """Each session's value of a cell's positions against its returns, along the last axis.
 
     NaN where either is. Under either payoff a session's return is weighted so that the weights
     sum to zero over the sessions holding a value: a constant added to every return leaves the
-    values' sum where it was, and their spread is the spread of that sum, so their standard
-    error is the mean's own. Long or flat, the weight is the session's position less the mean
-    position over those sessions, `π − π̄`; on returns that themselves sum to zero there — the
-    residuals of a fit with an intercept — the values sum to `Σ π r`, so their mean is the
-    excess a session, while a position times its return alone would spread as if the returns'
-    own mean were not fitted, overstating the standard error by `1 / √(1 − f)` at exposure `f`.
-    Under a contrast, a session long is weighted `n / n⁺` and one short `−n / n⁻`, over the
-    `n = n⁺ + n⁻` sessions holding either, so the values' mean is the mean return long less the
-    mean return short; a flat session holds no value, and none does unless both sides hold at
-    least one.
+    values' sum where it was, and their spread is the spread of that sum. Long or flat, the
+    weight is the session's position less the mean position over those sessions, `π − π̄`; on
+    returns that themselves sum to zero there — the residuals of a fit with an intercept — the
+    values sum to `Σ π r`, so their mean is the excess a session, while a position times its
+    return alone would spread as if the returns' own mean were not fitted, overstating the
+    standard error by `1 / √(1 − f)` at exposure `f`. Under a contrast, a session long is
+    weighted `n / n⁺` and one short `−n / n⁻`, over the `n` sessions holding a value, so the
+    values' mean is the mean return long less the mean return short; none holds one unless
+    both sides hold at least one session.
+
+    `spanned` is, per cell, the orthonormal vectors its returns were fitted on beyond the
+    intercept, cells x vectors x sessions and zero where a cell holds nothing. Each weight is
+    then residualised on them, `M_X w`, as the returns were: the values' sum is unchanged,
+    since `(M_X w)·(M_X r) = w·(M_X r)`, and their spread is the estimate's own, where the
+    weight alone spreads as if the design shared nothing with the state and overstates the
+    standard error by `1 / √(1 − R²)`, R² the state's on the design. The residualised weight of
+    a flat session under a contrast is what the design shares with the contrast, so with any
+    vector to residualise on every held session holds a value — `n` is then the held sessions —
+    and with none a flat session holds no value. Only a circular null hands vectors over: summed
+    into blocks and sign-flipped, residualised values share a design group's fitted mean across
+    the blocks it spans and spread less than their total, so the null would run above its level
+    (`kanso.screen.condition`).
     """
     held = ~np.isnan(positions) & ~np.isnan(returns)
     signed = np.where(held, positions, 0.0)
+    residuals = np.where(held, returns, 0.0)
     if not contrast:
         counts = np.add.reduce(held, axis=-1, keepdims=True)
         centre = np.add.reduce(signed, axis=-1, keepdims=True) / np.maximum(counts, 1)
-        return np.where(held, (signed - centre) * np.where(held, returns, 0.0), np.nan)
+        weight = _residualised(np.where(held, signed - centre, 0.0), spanned)
+        return np.where(held, weight * residuals, np.nan)
     plus, minus = held & (signed > 0), held & (signed < 0)
     longs = np.add.reduce(plus, axis=-1, keepdims=True)
     shorts = np.add.reduce(minus, axis=-1, keepdims=True)
-    both = (longs + shorts).astype(np.float64)
-    weight = np.where(plus, both / np.maximum(longs, 1), -both / np.maximum(shorts, 1))
-    usable = (plus | minus) & (longs > 0) & (shorts > 0)
-    return np.where(usable, weight * np.where(usable, returns, 0.0), np.nan)
+    carrying = held & (longs > 0) & (shorts > 0) & ((plus | minus) | _spans(spanned))
+    count = np.add.reduce(carrying, axis=-1, keepdims=True).astype(np.float64)
+    weight = np.where(
+        plus,
+        count / np.maximum(longs, 1),
+        np.where(minus, -count / np.maximum(shorts, 1), 0.0),
+    )
+    return np.where(carrying, _residualised(weight, spanned) * residuals, np.nan)
+
+
+def _spans(spanned: np.ndarray | None) -> np.ndarray | bool:
+    """Per cell, whether it has any vector to residualise on, shaped to broadcast by session."""
+    if spanned is None:
+        return False
+    return np.asarray(np.add.reduce(np.add.reduce(spanned * spanned, axis=-1), axis=-1) > 0)[
+        :, None
+    ]
+
+
+def _residualised(weight: np.ndarray, spanned: np.ndarray | None) -> np.ndarray:
+    """Each cell's weights less their projection on each of its spanned vectors, in order."""
+    if spanned is None:
+        return weight
+    for column in range(spanned.shape[-2]):
+        vector = spanned[:, column, :]
+        weight = weight - np.add.reduce(weight * vector, axis=-1, keepdims=True) * vector
+    return weight
 
 
 def blocks(values: np.ndarray, size: int) -> np.ndarray:
@@ -216,6 +263,7 @@ def circular(
     contrast: bool,
     draws: int,
     seeded: int,
+    spanned: np.ndarray | None = None,
 ) -> Evidence:
     """Each cell's mean, standard error and t of its values, and its max-T p over circular
     shifts of every cell's positions against its returns, one shift shared by the family.
@@ -223,12 +271,14 @@ def circular(
     `positions` and `returns` are cells x sessions, and every cell holds both at every session
     or at none: a row NaN in part would have its positions shifted off its returns. Every shift
     from 1 to N − 1 is a draw, or `draws` of them when they are more; a family of fewer than
-    two sessions has none, and every cell of it reads p one.
+    two sessions has none, and every cell of it reads p one. `spanned` stays with the dates as
+    the returns do, and every shifted position's weights are residualised on it afresh
+    (`values_of`), so a shift is judged by the same statistic as the alignment observed.
     """
     cells, sessions = positions.shape
     holding = ~np.isnan(positions) & ~np.isnan(returns)
     assert np.all(holding.all(axis=1) | ~holding.any(axis=1)), "a cell holds every session or none"
-    observed = values_of(positions, returns, contrast)
+    observed = values_of(positions, returns, contrast, spanned)
     held = ~np.isnan(observed)
     filled = np.where(held, observed, 0.0)
     counts = held.sum(axis=1)
@@ -243,7 +293,7 @@ def circular(
     for start in range(0, len(shifts) if cells else 0, BATCH):
         batch = shifts[start : start + BATCH]
         moved = positions[:, (column[None, :] - batch[:, None]) % sessions].transpose(1, 0, 2)
-        values = values_of(moved, returns[None, :, :], contrast)
+        values = values_of(moved, returns[None, :, :], contrast, spanned)
         inside = ~np.isnan(values)
         kept = np.where(inside, values, 0.0)
         drawn_t = _t(

@@ -36,6 +36,14 @@ and `r2` is not taken over, so the identity is approximate. `r2` reports that R�
 the calendar shared with the state is visible, and with the intercept alone the two estimates
 are one.
 
+**What the estimate's noise is.** The estimate is a weighted sum of the residuals, `w·(M_X r)`,
+whose variance is that of `(M_X w)·r`: the weights residualised on the design as the returns
+were. `spanned` hands a circular null the design's orthonormal vectors beyond the intercept, so
+the values it reads are `(M_X w)` times the residual, which sum to the same and spread as the
+estimate does; the weights alone would spread as though the design shared nothing with the
+state, and overstate the standard error by about `1 / √(1 − R²)` — which a sign-flip null does,
+conservatively, rather than run above its level (`kanso.screen.condition`).
+
 **No BLAS.** Every inner product is `numpy.add.reduce` of an elementwise product in a fixed
 order: nothing here calls `@`, `numpy.dot` or `numpy.linalg`, so one host gives the same bits
 every time.
@@ -96,6 +104,15 @@ def residuals(
     columns kept and of those dropped."""
     basis, kept, dropped = _basis(matrix, names)
     return _residual(basis, np.asarray(target, dtype=np.float64)), kept, dropped
+
+
+def spanned(matrix: np.ndarray, names: Sequence[str]) -> np.ndarray:
+    """The orthonormal vectors the design's kept columns span beyond the intercept, one a row
+    of `vectors x sessions`: what a null residualises a state's weights on
+    (`kanso.screen.nulls.values_of`)."""
+    vectors, kept, _ = _basis(matrix, names)
+    beyond = vectors[int(kept[:1] == ["intercept"]) :]
+    return np.vstack(beyond) if beyond else np.zeros((0, matrix.shape[0]), dtype=np.float64)
 
 
 def r2(matrix: np.ndarray, names: Sequence[str], indicator: np.ndarray) -> float | None:

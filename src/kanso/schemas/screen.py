@@ -820,17 +820,20 @@ class ConditionStats(KansoModel):
     null judged the cell on, `shifts` the shifts there are of a circular one, N − 1 over the N
     sessions every cell of the measure holds, and `exact` whether every assignment the null has
     was taken once rather than drawn — a statement about the arithmetic, not about how well the
-    null's assumption holds. `raw_bp` is the estimator on returns not demeaned, `drift_bp_day` the
-    follower's mean return over the held sessions, and under a contrast `long_flat_bp` and
+    null's assumption holds. `raw_bp` is the estimator on the returns less their mean alone — what
+    the cell's mean would be with `demean: []`, long or flat its positions centred on their mean
+    so the drift times the exposure is no part of it — `drift_bp_day` the follower's mean return
+    over the held sessions, and under a contrast `long_flat_bp` and
     `long_flat_ceiling_bp_day` are the long-or-flat realisation of the same test, reported and
     never judged. `control_r2` is the R² of the state on the design the returns were demeaned
-    on — against `rest` the estimator is exactly the state's own coefficient times one less it,
+    on, under a contrast over the sessions in either state — against `rest` the estimator is
+    exactly the state's own coefficient times one less it,
     long or flat that times f(1 − f), and against a comparison approximately so — and `dropped`
     the design's columns that held nothing. `folds_adjusted` is the estimator inside each fold,
     long or flat its positions centred on the fold's own mean, so a fold's drift is no part of it.
     `critical_t` and `mde_bp` are the |t| a cell needs to pass the verdict's alpha under its own
-    null and the effect that reaches it at `mde_power`, a detection threshold and never a
-    forecast. The signal's age is how old the point read was at each decision.
+    null and the effect, in the cell's mean's units, that reaches it at `mde_power`, a detection
+    threshold and never a forecast. The signal's age is how old the point read was at each decision.
     """
 
     payoff: Literal["contrast", "long_flat"]

@@ -4,13 +4,14 @@ family-wise, and honest about thin cells."""
 from __future__ import annotations
 
 import math
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from kanso.screen import nulls
+from kanso.screen import demean, nulls
 
 
 def test_the_seed_is_the_pins_and_nothing_else() -> None:
@@ -159,6 +160,141 @@ def test_contrast_weights_average_to_the_mean_long_less_the_mean_short() -> None
     assert float(np.nanmean(lopsided)) == pytest.approx(7.0 - 3.0)
     one_side = nulls.values_of(np.asarray([[1.0, 1.0, 0.0]]), np.asarray([[1.0, 2.0, 3.0]]), True)
     assert np.isnan(one_side).all(), "a contrast with one side empty reads nothing"
+
+
+def weekday_design(sessions: int) -> tuple[np.ndarray, list[str]]:
+    """Weekday dummies over `sessions` consecutive weekdays from a Monday."""
+    days = [date(2024, 1, 1) + timedelta(days=7 * (n // 5) + n % 5) for n in range(sessions)]
+    return demean.design(days, ["weekday"], {}, None)
+
+
+def leaning(rng: np.random.Generator, sessions: int, contrast: bool) -> np.ndarray:
+    """A state that leans on Mondays and Tuesdays, so the weekday design shares about half of
+    it; under a contrast one session in five is in neither state."""
+    lean = np.arange(sessions) % 5 < 2
+    long = rng.random(sessions) < np.where(lean, 0.85, 0.15)
+    if not contrast:
+        return long.astype(np.float64)
+    return np.where(rng.random(sessions) < 0.2, 0.0, np.where(long, 1.0, -1.0))
+
+
+@pytest.mark.parametrize("contrast", [False, True])
+def test_residualised_on_the_design_the_values_spread_as_the_estimate_does(contrast: bool) -> None:
+    # A state sharing half of itself with a weekday design. Residualised, the mean se was
+    # measured here at 1.011 times the estimate's spread over the redraws long or flat and 0.991
+    # under a contrast; the weights alone at 1.467 and 1.324, against 1 / sqrt(1 - R²) of 1.447
+    # and 1.477 at the R² of 0.522 and 0.541 the state has on the weekdays.
+    rng = np.random.default_rng(8)
+    sessions = 500
+    matrix, names = weekday_design(sessions)
+    spanned = demean.spanned(matrix, names)
+    positions = leaning(rng, sessions, contrast)
+    moving = positions != 0 if contrast else np.ones(sessions, dtype=bool)
+    r2 = demean.r2(matrix[moving], names, (positions[moving] > 0).astype(np.float64))
+    assert r2 is not None and 0.5 <= r2 <= 0.55
+    estimates, ses, naive = [], [], []
+    for _ in range(2000):
+        returns = rng.normal(size=sessions) * 30 + 5.0 * (np.arange(sessions) % 5)
+        residuals = demean.residuals(matrix, names, returns)[0]
+        values = nulls.values_of(positions[None], residuals[None], contrast, spanned[None])
+        plain = nulls.values_of(positions[None], residuals[None], contrast)
+        estimates.append(float(np.nanmean(plain)))
+        assert float(np.nanmean(values)) == pytest.approx(estimates[-1], abs=1e-9)
+        ses.append(float(nulls.evidence(values, 1, 0).se[0]))
+        naive.append(float(nulls.evidence(plain, 1, 0).se[0]))
+    spread = float(np.std(estimates, ddof=1))
+    assert 0.94 <= float(np.mean(ses)) / spread <= 1.06
+    assert float(np.mean(naive)) / spread >= 1.25, "the weights alone overstate it"
+
+
+def test_a_contrast_s_flat_session_holds_a_value_only_when_the_design_spans_more() -> None:
+    positions = np.asarray([[1.0, 1.0, -1.0, 0.0, -1.0, 0.0, 1.0, -1.0, 1.0, 0.0]])
+    returns = np.asarray([[3.0, -1.0, 2.0, 5.0, -4.0, 1.0, 2.0, -3.0, 0.5, -5.5]])
+    matrix, names = weekday_design(10)
+    spanned = demean.spanned(matrix, names)
+
+    alone = nulls.values_of(positions, returns, True, np.zeros((1, 0, 10)))
+    spanning = nulls.values_of(positions, returns, True, spanned[None])
+
+    assert np.array_equal(np.isnan(alone), positions == 0), "the intercept alone: as before"
+    assert np.array_equal(alone, nulls.values_of(positions, returns, True), equal_nan=True)
+    assert not np.isnan(spanning).any(), "every held session holds one"
+    # Four sessions long and three short of ten: each weighed 10/4 and -10/3, a flat one 0, and
+    # every weight residualised on the weekdays, as the residuals would be.
+    weights = np.where(positions[0] > 0, 10 / 4, np.where(positions[0] < 0, -10 / 3, 0.0))
+    left = weights - matrix @ np.linalg.lstsq(matrix, weights, rcond=None)[0]
+    assert np.allclose(spanning[0], left * returns[0], rtol=0, atol=1e-12)
+
+
+def test_a_circular_shift_residualises_the_moved_positions_afresh() -> None:
+    rng = np.random.default_rng(3)
+    matrix, names = weekday_design(60)
+    spanned = demean.spanned(matrix, names)
+    positions = leaning(rng, 60, contrast=False)
+    residuals = demean.residuals(matrix, names, rng.normal(size=60))[0]
+
+    found = nulls.circular(positions[None], residuals[None], False, 999, 1, spanned[None])
+    plain = nulls.circular(positions[None], residuals[None], False, 999, 1)
+
+    assert found.mean[0] == pytest.approx(plain.mean[0])
+    assert found.se[0] < plain.se[0], "the state shares the weekdays, so its own se is less"
+    for shift in (1, 7, 30, 59):
+        moved = nulls.values_of(
+            np.roll(positions, shift)[None], residuals[None], False, spanned[None]
+        )
+        assert found.maxima[shift - 1] == pytest.approx(abs(nulls.evidence(moved, 1, 0).t[0]))
+
+
+def calendar_year() -> tuple[np.ndarray, list[str]]:
+    """Weekday and month dummies over the 250 weekdays from Monday 2 January 2023."""
+    days = [date(2023, 1, 2) + timedelta(days=7 * (n // 5) + n % 5) for n in range(250)]
+    return demean.design(days, ["weekday", "month"], {}, None)
+
+
+def test_residualised_block_sums_run_above_their_level_where_a_design_group_spans_blocks() -> None:
+    # A month is about four blocks of five here, and its residuals sum to zero over it, as do the
+    # residualised weights: their block sums then share the month's fitted mean across blocks,
+    # and spread less than their total does. Measured on these seeds, 6.95% of p fell at or under
+    # 0.05 and 12.25% at or under 0.10 residualised, and 3.05% and 6.85% on the weights alone —
+    # which is why sign flips read the weights alone, and only circular shifts residualise.
+    matrix, names = calendar_year()
+    spanned = demean.spanned(matrix, names)
+    found: dict[bool, list[float]] = {False: [], True: []}
+    for seed in range(2000):
+        rng = np.random.default_rng(60000 + seed)
+        runs = persistent(rng, 250, 10.0)
+        residuals = demean.residuals(matrix, names, rng.normal(size=250))[0]
+        for residualised in found:
+            values = nulls.values_of(
+                runs[None], residuals[None], True, spanned[None] if residualised else None
+            )
+            found[residualised].append(
+                float(nulls.evidence(nulls.blocks(values, 5), 199, seed).p[0])
+            )
+    above, alone = np.asarray(found[True]), np.asarray(found[False])
+    assert float(np.mean(alone <= 0.05)) <= 0.04 and float(np.mean(above <= 0.05)) >= 0.06
+    assert float(np.mean(alone <= 0.10)) <= 0.08 and float(np.mean(above <= 0.10)) >= 0.11
+
+
+def test_with_nothing_planted_residualised_shifts_hold_the_level_on_a_calendar() -> None:
+    matrix, names = calendar_year()
+    spanned = demean.spanned(matrix, names)
+    ps = []
+    for seed in range(1500):
+        rng = np.random.default_rng(70000 + seed)
+        runs = persistent(rng, 250, 30.0)
+        residuals = demean.residuals(matrix, names, rng.normal(size=250))[0]
+        ps.append(nulls.circular(runs[None], residuals[None], True, 9999, seed, spanned[None]).p[0])
+    # p is (1 + reaching) / 250: at most 0.05 is reaching eleven or fewer, 0.10 twenty-four.
+    rejected(np.asarray(ps), 0.05, 12 / 250)
+    rejected(np.asarray(ps), 0.10, 25 / 250)
+
+
+def test_a_circular_null_is_exact_when_its_shifts_are_exactly_the_draws() -> None:
+    positions, returns = planted(20, 4)
+
+    assert nulls.circular(positions, returns, True, 19, 1).exact is True
+    assert nulls.circular(positions, returns, True, 18, 1).exact is False
 
 
 def test_blocks_sum_consecutive_sessions_and_hold_nothing_where_nothing_was_held() -> None:

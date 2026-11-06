@@ -34,9 +34,16 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    design and controls, with the state not in it (`kanso.screen.demean`). Long or flat, the
    estimate is the mean of position times residual, the excess a session over the calendar's
    mean, and a session's value is its position less the cell's mean position times its
-   residual, which sums to the same and spreads as the estimate does; under a contrast it is
-   the mean residual long less the mean residual short, so a correctly signed effect is
-   positive under either.
+   residual, which sums to the same; under a contrast it is the mean residual long less the
+   mean residual short, so a correctly signed effect is positive under either. Under circular
+   shifts each weight is residualised on the design as the returns were, so the values spread
+   as the estimate does (`kanso.screen.nulls.values_of`). Under sign flips it is not: a
+   month's residuals, and its residualised weights, sum to zero over the month, so their block
+   sums share its fitted mean across the blocks it spans, spread less than their total, and
+   run the null above its level — measured with weekday and month dummies over 250 sessions in
+   blocks of five, contrast positions in runs averaging ten, 6.95% of p fell at or under 0.05,
+   against 3.05% on the weights alone, which overstate the standard error by about
+   `1 / √(1 − R²)` and err conservative. A contrast's `sessions` are those in either state.
 5. **Round trips, by position.** A position is a maximal run of held sessions with one
    direction; across sessions it runs on only when its periods are contiguous — the exit of one
    is the entry of the next — so a state held k sessions close to close is one round trip, and
@@ -237,13 +244,15 @@ class _States:
 class _Realised:
     """One realisation of a cell's positions over its held sessions, and what it came to.
 
-    `held` are positions in the follower's sessions; `days` the window's day indices of them.
+    `held` are positions in the follower's sessions; `days` the window's day indices of them;
+    `spanned` the orthonormal vectors the returns were demeaned on beyond the intercept.
     """
 
     held: list[int]
     days: list[int]
     positions: np.ndarray
     residuals: np.ndarray
+    spanned: np.ndarray
     estimate: float
     raw: float
     drift: float
@@ -318,21 +327,40 @@ def measure(
     column = {day: position for position, day in enumerate(union)}
     positions_by = np.full((len(found), len(union)), np.nan, dtype=np.float64)
     residuals_by = np.full((len(found), len(union)), np.nan, dtype=np.float64)
+    shifted = measure.block is None
+    width = max((len(item.realised.spanned) for item in found), default=0) if shifted else 0
+    spanned_by = np.zeros((len(found), width, len(union)), dtype=np.float64)
     for row, item in enumerate(found):
         at = [column[day] for day in item.realised.days]
         positions_by[row, at] = item.realised.positions
         residuals_by[row, at] = item.realised.residuals
+        if shifted:
+            vectors = spanned_by[row, : len(item.realised.spanned)]
+            vectors[:, at] = item.realised.spanned
     contrast = measure.payoff == "contrast"
     seeded = nulls.seed(context.sha, context.snapshot_id, index)
+    values = nulls.values_of(positions_by, residuals_by, contrast, spanned_by)
+    carried = ~np.isnan(values)
     if measure.block is not None:
-        values = nulls.values_of(positions_by, residuals_by, contrast)
         evidence = nulls.evidence(nulls.blocks(values, measure.block), context.draws, seeded)
-        counts = np.add.reduce(~np.isnan(values), axis=1)
     else:
-        evidence = nulls.circular(positions_by, residuals_by, contrast, context.draws, seeded)
-        counts = evidence.sessions
+        evidence = nulls.circular(
+            positions_by, residuals_by, contrast, context.draws, seeded, spanned_by
+        )
+    counts = np.add.reduce(carried, axis=1)
+    reported = np.add.reduce(carried & (positions_by != 0), axis=1) if contrast else counts
     return [
-        _cell(context, index, measure, item, evidence, row, int(counts[row]), len(union), fold_of)
+        _cell(
+            context,
+            index,
+            measure,
+            item,
+            evidence,
+            row,
+            (int(counts[row]), int(reported[row])),
+            len(union),
+            fold_of,
+        )
         for row, item in enumerate(found)
     ]
 
@@ -565,6 +593,7 @@ def _realise(
         follower.calendar,
     )
     residuals, _, dropped = demean.residuals(matrix, names, returns)
+    spanned = demean.spanned(matrix, names)
     if contrast:
         moving = signed != 0
         r2 = demean.r2(matrix[moving], names, (signed[moving] > 0).astype(np.float64))
@@ -577,12 +606,13 @@ def _realise(
     adjusted: list[float | None] = []
     for fold in range(context.folds):
         inside = folds == fold
-        adjusted.append(_within(signed[inside], residuals[inside], contrast))
+        adjusted.append(_estimate(signed[inside], residuals[inside], contrast))
     return _Realised(
         held=held,
         days=on,
         positions=signed,
         residuals=residuals,
+        spanned=spanned,
         estimate=_estimate(signed, residuals, contrast) or 0.0,
         raw=_estimate(signed, returns, contrast) or 0.0,
         drift=float(np.add.reduce(returns) / len(returns)) if len(returns) else 0.0,
@@ -601,21 +631,15 @@ def _return(plan: _Plan, position: int) -> float:
 
 
 def _estimate(signed: np.ndarray, returns: np.ndarray, contrast: bool) -> float | None:
-    """The estimator on these returns: long or flat, the mean of position times return, its
-    excess a session; under a contrast long less short. `None` with no session to read."""
-    if contrast:
-        values = nulls.values_of(signed[None, :], returns[None, :], True)[0]
-    else:
-        values = signed * returns
-    return _mean(values)
+    """The estimator on these sessions' returns, `None` with no session to read: long or flat,
+    the mean of each session's position less these sessions' mean position times its return,
+    the excess a session; under a contrast long less short, weighed over these sessions.
 
-
-def _within(signed: np.ndarray, residuals: np.ndarray, contrast: bool) -> float | None:
-    """The estimator inside one fold, on residuals fitted over the whole window, which sum to
-    zero there and not in the fold: long or flat, each session's position less the fold's own
-    mean position times its residual, so the fold's drift times its exposure is no part of it;
-    under a contrast long less short, weighed afresh. `None` with no session to read."""
-    return _mean(nulls.values_of(signed[None, :], residuals[None, :], contrast)[0])
+    On the window's residuals, which sum to zero over it, that is the mean of position times
+    residual. Inside a fold they do not sum to zero, and centring the positions on the fold's
+    own mean keeps the fold's drift times its exposure out of it; on returns not demeaned it
+    keeps the follower's drift out of it, so the two differ by what the calendar took."""
+    return _mean(nulls.values_of(signed[None, :], returns[None, :], contrast)[0])
 
 
 def _mean(values: np.ndarray) -> float | None:
@@ -702,15 +726,18 @@ def _cell(
     item: _Found,
     evidence: nulls.Evidence,
     row: int,
-    sessions: int,
+    held: tuple[int, int],
     union: int,
     fold_of: np.ndarray,
 ) -> Cell:
+    """One cell's record. `held` is the sessions holding a value, which `se` is scaled by, and
+    the sessions reported: under a contrast those in either state alone."""
     realised = item.realised
+    carried, sessions = held
     blocks = int(evidence.sessions[row]) if measure.block is not None else None
     se = float(evidence.se[row])
     if blocks is not None:
-        se = blocks / sessions * se if sessions else 0.0
+        se = blocks / carried * se if carried else 0.0
     critical = _critical(context.screen, measure, evidence, blocks)
     mde = None
     if critical is not None and measure.mde_power is not None:
