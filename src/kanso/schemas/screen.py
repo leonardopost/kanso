@@ -824,7 +824,8 @@ class ConditionStats(KansoModel):
     never judged. `control_r2` is the R² of the state on the design the returns were demeaned
     on — against `rest` the estimator is exactly the state's own coefficient times one less it,
     long or flat that times f(1 − f), and against a comparison approximately so — and `dropped`
-    the design's columns that held nothing. `folds_adjusted` is the estimator inside each fold.
+    the design's columns that held nothing. `folds_adjusted` is the estimator inside each fold,
+    long or flat its positions centred on the fold's own mean, so a fold's drift is no part of it.
     `critical_t` and `mde_bp` are the |t| a cell needs to pass the verdict's alpha under its own
     null and the effect that reaches it at `mde_power`, a detection threshold and never a
     forecast. The signal's age is how old the point read was at each decision.

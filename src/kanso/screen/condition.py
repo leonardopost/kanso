@@ -569,7 +569,7 @@ def _realise(
     adjusted: list[float | None] = []
     for fold in range(context.folds):
         inside = folds == fold
-        adjusted.append(_estimate(signed[inside], residuals[inside], contrast))
+        adjusted.append(_within(signed[inside], residuals[inside], contrast))
     return _Realised(
         held=held,
         days=on,
@@ -599,6 +599,18 @@ def _estimate(signed: np.ndarray, returns: np.ndarray, contrast: bool) -> float 
         values = nulls.values_of(signed[None, :], returns[None, :], True)[0]
     else:
         values = signed * returns
+    return _mean(values)
+
+
+def _within(signed: np.ndarray, residuals: np.ndarray, contrast: bool) -> float | None:
+    """The estimator inside one fold, on residuals fitted over the whole window, which sum to
+    zero there and not in the fold: long or flat, each session's position less the fold's own
+    mean position times its residual, so the fold's drift times its exposure is no part of it;
+    under a contrast long less short, weighed afresh. `None` with no session to read."""
+    return _mean(nulls.values_of(signed[None, :], residuals[None, :], contrast)[0])
+
+
+def _mean(values: np.ndarray) -> float | None:
     held = values[~np.isnan(values)]
     return float(np.add.reduce(held) / len(held)) if len(held) else None
 

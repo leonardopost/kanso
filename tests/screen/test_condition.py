@@ -943,6 +943,31 @@ def test_folds_adjusted_reestimate_inside_each_fold(monkeypatch: pytest.MonkeyPa
     assert found.folds_adjusted_same_sign == 1
 
 
+def test_a_long_or_flat_fold_reads_the_condition_and_not_the_fold_s_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    second = date(2026, 2, 15)  # the second of two equal calendar folds of the window
+    level = {day: (1.0 if n % 2 else -1.0) for n, day in enumerate(sessions)}
+    # 10 bp more while the state holds, in both folds, on a drift of +20 bp and then -20 bp.
+    moves = {day: (20.0 if day < second else -20.0) + 10.0 * (level[day] > 0) for day in sessions}
+    prices = {"a": {day: (100.0, 100.0 * math.exp(moves[day] / 1e4)) for day in sessions}}
+    test = {"up": {**TEST, "against": None}}
+
+    (cell,) = measured(screen(test, payoff="long_flat"), prices, {"lvl": daily(level)}, monkeypatch)
+
+    # Inside a fold, the position less its mean there times the return is the exposure times
+    # one less it times the 10 bp, whatever the fold drifted; the residuals' window mean is not
+    # the fold's, so a position times its residual alone would read +12.1 and -7.8 here.
+    found = cell.condition
+    assert found is not None
+    for fold, adjusted in zip((True, False), found.folds_adjusted, strict=True):
+        held = [level[day] > 0 for day in sessions if (day < second) == fold]
+        share = sum(held) / len(held)
+        assert adjusted == pytest.approx(10.0 * share * (1 - share), rel=1e-9)
+    assert found.folds_adjusted_same_sign == 2
+
+
 def test_control_r2_is_zero_with_the_intercept_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = trading()
     level = {day: (1.0 if n % 3 else -1.0) for n, day in enumerate(sessions)}
