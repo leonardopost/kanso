@@ -109,9 +109,7 @@ snapshot taken before it still covers the series until `kanso data snapshot` tak
 ```
 $ kanso data load --loader synthetic --spec demo.yaml
 error: DEMO.SIM-bar-1m-raw-20250901 is named by a snapshot and cannot be rewritten
-remedy: load it again with --supersedes DEMO.SIM-bar-1m-raw-20250901 to put this dataset in its
-        place; every snapshot naming the old one then stops supporting a certification, only
-        when the successor's id differs (docs/backlog.md row 232)
+remedy: load it again with --supersedes DEMO.SIM-bar-1m-raw-20250901 to put this dataset in its place; every snapshot naming the old one then stops supporting a certification, only when the successor's id differs (docs/backlog.md row 232)
 $ echo $?
 2
 ```
