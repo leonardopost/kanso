@@ -48,7 +48,6 @@ from kanso.schemas import Hypothesis, dump_yaml, embargo_days, parse_yaml, rende
 from kanso.schemas.screen import (
     CatchUp,
     Cell,
-    LeadLag,
     Response,
     Screen,
     ScreenResult,
@@ -115,7 +114,7 @@ def draft(
         )
     cell = _cell(result, cell_key)
     measure = screen.measures[cell.measure]
-    assert not isinstance(measure, LeadLag)
+    assert isinstance(measure, Response | CatchUp)
     trigger, follower = _leader(measure), str(cell.params["follower"])
     _refuse_untradable(screen, (trigger, follower))
     identity = _free_id(ws, store, new_id)
@@ -164,6 +163,12 @@ def _cell(result: ScreenResult, key: str) -> Cell:
             remedy="draft from a response or a catch_up cell: each names a rule, a follower "
             "and when it leaves",
         )
+    if cell.id == "condition":
+        raise ValidationError(
+            f"{key} is a condition cell, whose seed would read a custom type in its own "
+            "strategy, which no template carries",
+            remedy="write the hypothesis with `kanso hyp new`, the cell's numbers beside it",
+        )
     return cell
 
 
@@ -204,7 +209,7 @@ def _hypothesis(
     certify: tuple[date, date],
 ) -> Hypothesis:
     measure = screen.measures[cell.measure]
-    assert not isinstance(measure, LeadLag)
+    assert isinstance(measure, Response | CatchUp)
     trigger = screen.legs[_leader(measure)]
     follower = screen.legs[str(cell.params["follower"])]
     legs = [trigger, follower]

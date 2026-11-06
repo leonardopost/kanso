@@ -76,7 +76,12 @@ from kanso.schemas.screen import (
     CatchUpStats,
     Cell,
     Clock,
+    Comparison,
+    Condition,
+    ConditionStats,
+    ConditionTest,
     Derived,
+    FixedHold,
     Hours,
     LeadLag,
     Leg,
@@ -89,6 +94,7 @@ from kanso.schemas.screen import (
     Spread,
     Summary,
     Trigger,
+    TurnOfMonth,
 )
 
 SAFE_TEXT = st.text(
@@ -920,7 +926,7 @@ def screens(draw: st.DrawFn) -> Screen:
         )
     )
     horizons = draw(st.lists(st.integers(1, 3600), min_size=1, max_size=4, unique=True))
-    measures: list[LeadLag | Response | CatchUp] = [
+    measures: list[LeadLag | Response | CatchUp | Condition] = [
         LeadLag.model_validate(
             {
                 "id": "lead_lag",
@@ -955,10 +961,24 @@ def screens(draw: st.DrawFn) -> Screen:
         ),
     ]
     signals: dict[str, Signal] = {}
+    verdict = draw(
+        st.none()
+        | st.builds(
+            ScreenVerdict,
+            alpha=st.floats(0.001, 0.2),
+            min_margin_bp=st.floats(-5, 50),
+            min_events_per_day=st.floats(0, 500),
+            min_sessions=st.integers(12, 250),
+        )
+    )
     if draw(st.booleans()):
         signals["s_level"] = Signal(
             type="kanso_state_tape", field="level", instrument=draw(SCREEN_INSTRUMENTS)
         )
+        signals["s_flag"] = Signal(
+            type="kanso_state_tape", field="flag", instrument=draw(SCREEN_INSTRUMENTS)
+        )
+        measures.append(draw(conditions(names[1], judged=verdict is not None)))
     bound = draw(st.booleans())
     start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
     return Screen(
@@ -981,16 +1001,65 @@ def screens(draw: st.DrawFn) -> Screen:
         costs=None
         if bound
         else draw(st.none() | st.just({"OKX": CostsOverride(commission_bps=5)})),
-        verdict=draw(
-            st.none()
-            | st.builds(
-                ScreenVerdict,
-                alpha=st.floats(0.001, 0.2),
-                min_margin_bp=st.floats(-5, 50),
-                min_events_per_day=st.floats(0, 500),
-                min_sessions=st.integers(12, 250),
-            )
-        ),
+        verdict=verdict,
+    )
+
+
+COMPARISONS = st.sampled_from(["gt", "ge", "lt", "le", "eq", "ne"])
+
+
+@st.composite
+def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
+    """A condition over the screen's two signals: either payoff, either hold, either null —
+    a sign flip of single sessions when a verdict is judged, so no floor refuses it."""
+    payoff = draw(st.sampled_from(["contrast", "long_flat"]))
+    null_by = "sign_flip" if judged else draw(st.sampled_from(["sign_flip", "circular"]))
+    block = 1 if judged else draw(st.integers(5, 20))
+    tests: dict[str, ConditionTest] = {}
+    for name in draw(st.lists(st.sampled_from(["up", "down", "flat"]), min_size=1, unique=True)):
+        hold = (
+            "while"
+            if judged
+            else draw(st.just("while") | st.builds(FixedHold, sessions=st.integers(1, 5)))
+        )
+        tests[name] = ConditionTest(
+            signal="s_level",
+            when=Comparison(gt=draw(st.floats(0, 1))),
+            against=draw(st.sampled_from(["rest", Comparison(lt=0.0)]))
+            if payoff == "contrast"
+            else None,
+            entry=draw(st.sampled_from(["open", "close"])),
+            exit=draw(st.sampled_from(["open", "close"])),
+            hold=hold,
+            side=draw(st.sampled_from(["long", "short"])),
+        )
+    demean = draw(
+        st.lists(
+            st.sampled_from(
+                [
+                    "weekday",
+                    "month",
+                    "third_friday_week",
+                    "pre_holiday",
+                    TurnOfMonth(turn_of_month=(1, 3)),
+                ]
+            ),
+            unique_by=lambda item: str(item),
+            max_size=5,
+        )
+    )
+    return Condition(
+        id="condition",
+        tests=tests,
+        followers=follower,
+        payoff=payoff,
+        null_by=null_by,
+        block=block if null_by == "sign_flip" else None,
+        min_shift=draw(st.integers(1, 40)) if null_by == "circular" else None,
+        demean=demean,
+        controls=draw(st.sampled_from([[], ["s_flag"]])),
+        latency_ms=draw(st.floats(1, 86_400_000, allow_nan=False)),
+        mde_power=draw(st.none() | st.floats(0.5, 0.99)),
     )
 
 
@@ -998,9 +1067,41 @@ FINITE = st.floats(-1e6, 1e6, allow_nan=False)
 
 
 @st.composite
+def condition_stats(draw: st.DrawFn) -> ConditionStats:
+    contrast = draw(st.booleans())
+    circular = draw(st.booleans())
+    return ConditionStats(
+        payoff="contrast" if contrast else "long_flat",
+        null_by="circular" if circular else "sign_flip",
+        sessions_when=draw(st.integers(0, 5000)),
+        sessions_against=draw(st.integers(0, 5000)) if contrast else None,
+        exposure=draw(st.floats(0, 1)),
+        episodes=draw(st.integers(0, 500)),
+        episodes_against=draw(st.integers(0, 500)) if contrast else None,
+        longest_run=draw(st.integers(0, 500)),
+        skipped=draw(st.integers(0, 50)),
+        blocks=None if circular else draw(st.integers(0, 500)),
+        shifts=draw(st.integers(1, 9999)) if circular else None,
+        exact=draw(st.booleans()),
+        raw_bp=draw(FINITE),
+        drift_bp_day=draw(FINITE),
+        long_flat_bp=draw(st.none() | FINITE) if contrast else None,
+        long_flat_ceiling_bp_day=draw(st.none() | FINITE) if contrast else None,
+        control_r2=draw(st.none() | st.floats(0, 1)),
+        dropped=draw(st.lists(st.sampled_from(["weekday:4", "control:s_flag"]), unique=True)),
+        folds_adjusted=draw(st.lists(st.none() | FINITE, min_size=2, max_size=6)),
+        folds_adjusted_same_sign=draw(st.integers(0, 6)),
+        critical_t=draw(st.none() | st.floats(0, 10)),
+        mde_bp=draw(st.none() | st.floats(0, 1e3)),
+        signal_age_median_s=draw(st.floats(0, 1e6)),
+        signal_age_max_s=draw(st.floats(0, 1e6)),
+    )
+
+
+@st.composite
 def screen_cells(draw: st.DrawFn) -> Cell:
     judged = draw(st.sampled_from([None, "pass", "fail", "thin"]))
-    kind = draw(st.sampled_from(["lead_lag", "response", "catch_up"]))
+    kind = draw(st.sampled_from(["lead_lag", "response", "catch_up", "condition"]))
     return Cell(
         measure=draw(st.integers(0, 4)),
         id=kind,
@@ -1026,6 +1127,7 @@ def screen_cells(draw: st.DrawFn) -> Cell:
             hold_median_s=draw(st.floats(0, 86_400)),
             hold_p90_s=draw(st.floats(0, 86_400)),
         ),
+        condition=draw(condition_stats()) if kind == "condition" else None,
         judged=judged,
         reason=None if judged in (None, "pass") else draw(SAFE_TEXT),
     )
@@ -1046,6 +1148,17 @@ def screen_results(draw: st.DrawFn) -> ScreenResult:
         draws=draw(st.integers(99, 99_999)),
         folds=draw(st.integers(2, 8)),
         assumption="sessions are roughly independent of each other",
+        assumptions=draw(
+            st.lists(
+                st.sampled_from(
+                    [
+                        "sessions are roughly independent of each other",
+                        "blocks of 20 sessions are roughly independent of each other",
+                    ]
+                ),
+                max_size=3,
+            )
+        ),
         created_at=datetime(2026, 10, 5, 1, 2, 3, tzinfo=UTC),
         wall_s=draw(st.floats(0, 1e5)),
         peak_mem_gb=draw(st.floats(0, 64)),

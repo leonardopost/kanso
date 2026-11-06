@@ -13,13 +13,14 @@ from kanso import __version__
 from kanso.errors import ValidationError
 from kanso.screen import catalogue, check, screen_version
 from kanso.screen.library import LIBRARY, SOURCE
-from tests.schemas.test_screen import BASE, CATCH_UP, build
+from tests.schemas.test_screen import BASE, CATCH_UP, CONDITION, TESTED, build, conditioned
 
 
 def test_every_measure_a_screen_can_name_is_shipped_under_its_own_id() -> None:
-    assert sorted(catalogue()) == ["catch_up", "lead_lag", "response"]
+    assert sorted(catalogue()) == ["catch_up", "condition", "lead_lag", "response"]
     assert sorted(path.stem for path in LIBRARY.glob("*.yaml")) == [
         "catch_up",
+        "condition",
         "lead_lag",
         "response",
     ]
@@ -112,3 +113,55 @@ def test_a_catch_up_parameter_outside_its_range_is_refused_naming_it(
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         check(build(measures=[{**CATCH_UP, **change}]))
+
+
+def test_a_condition_inside_every_range_is_admitted() -> None:
+    check(conditioned())
+    blocks = {**CONDITION, "null_by": "sign_flip", "min_shift": None, "block": 252}
+    check(
+        conditioned(
+            {**blocks, "mde_power": 0.8, "tests": {"up": {**TESTED, "hold": {"sessions": 5}}}}
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"latency_ms": 0}, r"measures\.0\.latency_ms: 0 is outside the condition range \[1\.0, "),
+        ({"latency_ms": 90_000_000}, r"measures\.0\.latency_ms: 9e\+07 is outside"),
+        ({"min_shift": 2521}, r"measures\.0\.min_shift: 2521 is outside"),
+        (
+            {"null_by": "sign_flip", "min_shift": None, "block": 253},
+            r"measures\.0\.block: 253 is outside",
+        ),
+        ({"demean": [{"turn_of_month": [11, 1]}]}, r"measures\.0\.turn_of_month: 11 is outside"),
+        ({"mde_power": 0.3}, r"measures\.0\.mde_power: 0\.3 is outside"),
+        (
+            {"tests": {"up": {**TESTED, "hold": {"sessions": 300}}}},
+            r"hold_sessions: 300 is outside",
+        ),
+        ({"tests": {f"t{n}": TESTED for n in range(65)}}, r"measures\.0\.tests: 65 is outside"),
+    ],
+)
+def test_a_condition_parameter_outside_its_range_is_refused_naming_it(
+    change: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        check(conditioned({**CONDITION, **change}))
+
+
+def test_more_controls_than_the_range_admits_are_refused() -> None:
+    signals = {
+        f"c{n}": {"type": "house_calendar", "field": "flag", "instrument": "MARA.XNAS"}
+        for n in range(17)
+    }
+    screen = build(
+        signals=signals
+        | {"regime": {"type": "house_state", "field": "level", "instrument": "MARA.XNAS"}},
+        groups={**BASE["groups"], "names": ["mara", "riot"]},
+        measures=[{**CONDITION, "controls": list(signals)}],
+    )
+
+    with pytest.raises(ValidationError, match=r"measures\.0\.controls: 17 is outside"):
+        check(screen)

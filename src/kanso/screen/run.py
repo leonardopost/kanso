@@ -15,9 +15,13 @@ The order is the contract.
 4. **Measure**, one session at a time: every leg of the session is read once through the
    runner's reader, every measure takes its cells' values from it, and the session is let go.
    What a measure fits first — a spread's hedge, a catch-up's response — is fitted before, on
-   the sessions of its fit span.
-5. **Judge** each measure's cells across sessions with its max-T null (`kanso.screen.nulls`),
-   and, when the file declares a verdict, each cell against it.
+   the sessions of its fit span. A condition keeps each follower's open and close of the
+   session, and its signals are read afterwards in a pass of their own, a day at a time, as of
+   each decision (`kanso.screen.condition`); a calendar control no calendar on file can read is
+   refused before anything is.
+5. **Judge** each measure's cells across sessions with its max-T null (`kanso.screen.nulls`) —
+   session sign flips, or, for a condition, the null it declares — and, when the file declares
+   a verdict, each cell against it. Each measure's assumption is stated in the result.
 6. **Record** the result in `state.db`, render it beside the screen, and append `screened`.
 
 No model is called anywhere here.
@@ -44,6 +48,7 @@ from kanso.schemas.screen import (
     CatchUp,
     CatchUpStats,
     Cell,
+    Condition,
     LeadLag,
     Response,
     ResponseStats,
@@ -56,6 +61,7 @@ from kanso.schemas.screen import (
 )
 from kanso.screen import (
     catch_up,
+    condition,
     data,
     embargo,
     fit,
@@ -76,9 +82,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 ASSUMPTION: Final = "sessions are roughly independent of each other"
+"""What a session measure's inference rests on, stated in the result; a condition states its
+null's own (`kanso.screen.condition.assumption`)."""
 
 NS_PER_SECOND: Final = 1_000_000_000
-"""What every result's inference rests on, stated in the result."""
 
 GIB: Final = 1024**3
 _MAXRSS_BYTES: Final = 1 if sys.platform == "darwin" else 1024
@@ -107,6 +114,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     fetched = data.fetch(ws, store, screen, window, plans)
     catalog = open_catalog(ws)
     held = sessions.definitions(catalog, screen)
+    condition.refuse_uncalendared(screen, held, window)
     snapshot = pin.covering(
         ws, store, screen, window, {**signals.definitions(catalog, screen), **held}
     )
@@ -127,6 +135,8 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         stamps=stamps,
         betas=(betas := _fit(ws, screen, window, catalog, held)),
         slopes=_slopes(ws, screen, window, catalog, held, betas),
+        window=window,
+        definitions=held,
     )
     cells = _measure(ws, context, window, catalog, held, priced)
     result = ScreenResult(
@@ -140,6 +150,10 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         draws=ws.config.screen.draws,
         folds=ws.config.research.folds,
         assumption=ASSUMPTION,
+        assumptions=[
+            condition.assumption(measure) if isinstance(measure, Condition) else ASSUMPTION
+            for measure in screen.measures
+        ],
         created_at=datetime.now(tz=UTC),
         wall_s=round(time.monotonic() - started, 3),
         peak_mem_gb=round(_peak_gb(), 3),
@@ -163,6 +177,8 @@ class Context:
     stamps: dict[str, str]
     betas: dict[str, float]
     slopes: dict[int, dict[catch_up.Pair, float | None]]
+    window: tuple[date, date]
+    definitions: dict[str, Any]
 
 
 def _measure(
@@ -196,6 +212,8 @@ def _measure(
                 )
                 columns[index].append(values)
                 stale[index].append(staleness)
+            elif isinstance(measure, Condition):
+                columns[index].append(condition.marks(screen, measure, series))
             elif isinstance(measure, CatchUp):
                 assert hurdles is not None
                 columns[index].append(
@@ -223,6 +241,11 @@ def _measure(
             cells += _lead_lag_cells(context, index, measure, columns[index], stale[index], fold_of)
         elif isinstance(measure, CatchUp):
             cells += _catch_up_cells(context, index, measure, columns[index], fold_of)
+        elif isinstance(measure, Condition):
+            assert hurdles is not None
+            cells += condition.measure(
+                context, index, measure, days, columns[index], fold_of, catalog, hurdles
+            )
         else:
             cells += _response_cells(context, index, measure, columns[index], fold_of)
     return [_judged(screen.verdict, cell) for cell in cells]
@@ -246,7 +269,7 @@ def _lead_lag_cells(
     )
     cells: list[Cell] = []
     for row, key in enumerate(keys):
-        folds = _fold_means(matrix[row], fold_of, context.folds)
+        folds = nulls.fold_means(matrix[row], fold_of, context.folds)
         cells.append(
             Cell(
                 measure=index,
@@ -259,7 +282,7 @@ def _lead_lag_cells(
                 p=float(found.p[row]),
                 sessions=int(found.sessions[row]),
                 folds=folds,
-                folds_same_sign=_same_sign(folds, float(found.mean[row])),
+                folds_same_sign=nulls.same_sign(folds, float(found.mean[row])),
                 staleness=_staleness([day[row] for day in stale]),
                 in_sample_fit="window" in _fits(context.screen, (key.source, key.target)),
                 clock_bound=_clock_bound(context.screen, key, context.stamps),
@@ -351,7 +374,7 @@ def _traded_cells(
             dtype=np.float64,
         )
         stats = _stats(live)
-        folds = _fold_means(margins, fold_of, context.folds)
+        folds = nulls.fold_means(margins, fold_of, context.folds)
         cells.append(
             Cell(
                 measure=index,
@@ -364,7 +387,7 @@ def _traded_cells(
                 p=float(evidence.p[row]),
                 sessions=int(evidence.sessions[row]),
                 folds=folds,
-                folds_same_sign=_same_sign(folds, stats.ceiling_bp_day),
+                folds_same_sign=nulls.same_sign(folds, stats.ceiling_bp_day),
                 in_sample_fit=item.in_sample_fit,
                 response=stats,
                 catch_up=item.exits,
@@ -557,21 +580,6 @@ def _folds(days: Sequence[date], window: tuple[date, date], folds: int) -> np.nd
     length = (window[1] - window[0]).days + 1
     offsets = [min(max((day - window[0]).days, 0), length - 1) for day in days]
     return np.asarray([offset * folds // length for offset in offsets], dtype=np.int64)
-
-
-def _fold_means(row: np.ndarray, fold_of: np.ndarray, folds: int) -> list[float | None]:
-    means: list[float | None] = []
-    for fold in range(folds):
-        inside = row[(fold_of == fold) & ~np.isnan(row)]
-        means.append(float(np.add.reduce(inside) / len(inside)) if len(inside) else None)
-    return means
-
-
-def _same_sign(folds: Sequence[float | None], mean: float) -> int:
-    """How many folds' means share the sign of the whole; none when the whole is zero."""
-    if mean == 0.0:
-        return 0
-    return sum(1 for value in folds if value is not None and value * mean > 0)
 
 
 def _staleness(sessions_seen: Sequence[dict[str, float]]) -> dict[str, float]:

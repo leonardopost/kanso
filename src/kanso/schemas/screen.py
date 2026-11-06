@@ -22,6 +22,10 @@ The rules enforced here are local to the file:
 * a grid exists whenever a measure samples on one, and no bar leg it samples is coarser;
 * a signal is one numeric field of a custom type, filed under one instrument: never a market
   type, which is a leg, and never a timestamp or the instrument itself, which are no value.
+* a condition is a dict of named tests over a declared signal, each a comparison that is the
+  favoured state and, under a contrast, a disjoint one or `rest` it is set against; a test's
+  followers are catalog legs, its family is its measure, and its null is declared with the one
+  parameter that null takes and no other.
 
 What the instrument store holds, what the measure library permits, which custom types this
 process has registered and what a bound screen's hypothesis says are checked where those
@@ -372,7 +376,169 @@ the week holding the month's third Friday, the session before a closure, or a de
 the month."""
 
 
-Measure = Annotated[LeadLag | Response | CatchUp, Field(discriminator="id")]
+OPERATORS: Final = ("gt", "ge", "lt", "le", "eq", "ne")
+_UPPER: Final = frozenset({"gt", "ge"})
+
+
+class Comparison(KansoModel):
+    """A signal's value against one number: exactly one of `gt`, `ge`, `lt`, `le`, `eq`, `ne`,
+    each compared exactly."""
+
+    gt: float | None = Field(default=None, allow_inf_nan=False)
+    ge: float | None = Field(default=None, allow_inf_nan=False)
+    lt: float | None = Field(default=None, allow_inf_nan=False)
+    le: float | None = Field(default=None, allow_inf_nan=False)
+    eq: float | None = Field(default=None, allow_inf_nan=False)
+    ne: float | None = Field(default=None, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _one(self) -> Comparison:
+        if sum(getattr(self, name) is not None for name in OPERATORS) != 1:
+            raise ValueError("a comparison states exactly one of gt, ge, lt, le, eq or ne")
+        return self
+
+    @property
+    def operator(self) -> tuple[str, float]:
+        """The operator stated, and the number it compares with."""
+        name = next(name for name in OPERATORS if getattr(self, name) is not None)
+        return name, float(getattr(self, name))
+
+    @property
+    def text(self) -> str:
+        """`gt 0`: the comparison as a cell's parameters spell it."""
+        name, value = self.operator
+        return f"{name} {value:g}"
+
+    def holds(self, value: float) -> bool:
+        """Whether `value` meets the comparison, compared exactly."""
+        name, bound = self.operator
+        if name == "gt":
+            return value > bound
+        if name == "ge":
+            return value >= bound
+        if name == "lt":
+            return value < bound
+        if name == "le":
+            return value <= bound
+        if name == "eq":
+            return value == bound
+        return value != bound
+
+
+def disjoint(a: Comparison, b: Comparison) -> bool:
+    """Whether no number meets both comparisons, decided exactly over the six shapes.
+
+    An upper half-line from `a` and a lower one to `b` are disjoint when `a` lies above `b`, or
+    at it unless both are closed; two upper or two lower half-lines always meet; `eq v` misses a
+    set exactly when `v` is outside it; `ne v` misses only `eq v`.
+    """
+    (first, low), (second, high) = a.operator, b.operator
+    if first == "eq":
+        return not b.holds(low)
+    if second == "eq":
+        return not a.holds(high)
+    if "ne" in (first, second) or (first in _UPPER) == (second in _UPPER):
+        return False
+    if first not in _UPPER:
+        (first, low), (second, high) = (second, high), (first, low)
+    return low > high or (low == high and not (first == "ge" and second == "le"))
+
+
+class FixedHold(KansoModel):
+    """A position held a fixed number of sessions from the onset that opened it."""
+
+    sessions: int = Field(ge=1)
+
+
+class ConditionTest(KansoModel):
+    """One pre-registered test: a signal, the state it favours, and how a position follows it.
+
+    `when` is the favoured state and `side` the position it takes; under a contrast, `against`
+    — a comparison disjoint from `when`, or `rest` for every value `when` misses — takes the
+    other. `entry` and `exit` name a session's first or last point, so a period may run across
+    one session boundary; `hold` re-decides at every entry (`while`) or holds a fixed number of
+    sessions from an onset.
+    """
+
+    signal: Name
+    when: Comparison
+    against: Comparison | Literal["rest"] | None = None
+    entry: Literal["open", "close"]
+    exit: Literal["open", "close"]
+    hold: Literal["while"] | FixedHold
+    side: Literal["long", "short"]
+
+    @model_validator(mode="after")
+    def _apart(self) -> ConditionTest:
+        if isinstance(self.against, Comparison) and not disjoint(self.when, self.against):
+            raise ValueError(
+                f"against: {self.against.text} meets when {self.when.text}; a value in both "
+                "states belongs to neither"
+            )
+        return self
+
+
+class Condition(KansoModel):
+    """Whether a follower's session returns differ while a declared signal meets a declared
+    comparison, after the calendar is taken out, and against the round trip a position pays.
+
+    One measure is one family: its cells are its tests by its followers, judged together by the
+    null it declares — session sign flips summed into `block`s, or circular shifts of the
+    positions at least `min_shift` sessions from the observed alignment — and each null states
+    the one parameter it takes and no other. `demean` and `controls` are the design the returns
+    are demeaned on; `[]` is the window's mean alone. `latency_ms` is how long before the entry
+    it orders the decision is made, at least a millisecond, so a point stamped at a fill's own
+    instant is never read for it. `mde_power` asks for the minimum detectable effect at that
+    power beside a verdict, and reports nothing else.
+    """
+
+    id: Literal["condition"]
+    tests: dict[Name, ConditionTest] = Field(min_length=1)
+    followers: Name
+    payoff: Literal["contrast", "long_flat"]
+    null_by: Literal["sign_flip", "circular"]
+    block: int | None = Field(default=None, ge=1)
+    min_shift: int | None = Field(default=None, ge=1)
+    demean: list[CalendarControl]
+    controls: list[Name]
+    latency_ms: float = Field(ge=0, allow_inf_nan=False)
+    mde_power: float | None = Field(default=None, gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def _declared(self) -> Condition:
+        for name, test in self.tests.items():
+            if self.payoff == "contrast" and test.against is None:
+                raise ValueError(
+                    f"tests.{name}.against: a contrast states what the favoured state is set "
+                    "against, a comparison or rest"
+                )
+            if self.payoff == "long_flat" and test.against is not None:
+                raise ValueError(
+                    f"tests.{name}.against: a long-or-flat payoff sets the favoured state "
+                    "against nothing"
+                )
+        if self.null_by == "sign_flip" and (self.block is None or self.min_shift is not None):
+            raise ValueError("block: a sign-flip null states its block and no min_shift")
+        if self.null_by == "circular" and (self.min_shift is None or self.block is not None):
+            raise ValueError("min_shift: a circular null states its min_shift and no block")
+        for name, test in self.tests.items():
+            hold = test.hold
+            if (
+                self.block is not None
+                and isinstance(hold, FixedHold)
+                and hold.sessions > self.block
+            ):
+                raise ValueError(
+                    f"block: {self.block} session(s) is shorter than tests.{name}'s hold of "
+                    f"{hold.sessions}, so one position's sessions would be flipped apart"
+                )
+        kinds = [item if isinstance(item, str) else "turn_of_month" for item in self.demean]
+        _distinct(kinds, "demean")
+        _distinct(self.controls, "controls")
+        return self
+
+
+Measure = Annotated[LeadLag | Response | CatchUp | Condition, Field(discriminator="id")]
 
 RangeEnd = float | Span
 """A range end: a number, or a span for a parameter that is one."""
@@ -385,9 +551,47 @@ class MeasureItem(KansoModel):
     longer than a day is not a lead, a thousand lags are not a lattice — and nothing more.
     """
 
-    id: Literal["lead_lag", "response", "catch_up"]
+    id: Literal["lead_lag", "response", "catch_up", "condition"]
     meaningful_when: NonEmpty
     ranges: dict[NonEmpty, tuple[RangeEnd, RangeEnd]]
+
+
+def condition_keys(screen: Screen, measure: Condition) -> tuple[str, ...]:
+    """A condition measure's cell keys, test by follower: `condition/<test>/<follower>/<null>`."""
+    return tuple(
+        f"condition/{test}/{follower}/{measure.null_by}"
+        for test in measure.tests
+        for follower in screen.members(measure.followers)
+    )
+
+
+def _passable(verdict: ScreenVerdict, measure: Condition, index: int) -> None:
+    """Refuse a verdict no cell of a condition could pass under its own null."""
+    alpha, sessions = verdict.alpha, verdict.min_sessions
+    if measure.block is not None:
+        blocks = -(-sessions // measure.block)
+        floor = p_floor(blocks)
+        if alpha < floor:
+            raise ValueError(
+                f"verdict.alpha: {alpha:g} is below {floor:.3g}, the smallest p {blocks} "
+                f"block(s) of measures.{index}'s {measure.block} session(s) can give; raise "
+                "min_sessions or alpha, or shorten the block"
+            )
+        return
+    assert measure.min_shift is not None
+    if sessions < 2 * measure.min_shift:
+        raise ValueError(
+            f"verdict.min_sessions: {sessions} session(s) admit no circular shift of at least "
+            f"measures.{index}'s min_shift {measure.min_shift}; raise min_sessions to "
+            f"{2 * measure.min_shift} or lower min_shift"
+        )
+    floor = 1.0 / (sessions - 2 * measure.min_shift + 2)
+    if alpha < floor:
+        raise ValueError(
+            f"verdict.alpha: {alpha:g} is below {floor:.3g}, the smallest p {sessions} "
+            f"session(s) can give over shifts of at least measures.{index}'s min_shift "
+            f"{measure.min_shift}; raise min_sessions or alpha, or lower min_shift"
+        )
 
 
 class ScreenVerdict(KansoModel):
@@ -442,6 +646,7 @@ class Screen(Versioned):
         self._check_names()
         self._check_references()
         self._check_grid()
+        self._check_conditions()
         return self
 
     def _check_names(self) -> None:
@@ -481,12 +686,47 @@ class Screen(Versioned):
                 self._known(measure.followers, f"{where}.followers")
                 if self.members(measure.followers) == (measure.leader,):
                     raise ValueError(f"{where}.followers: the leader cannot follow itself")
+            elif isinstance(measure, Condition):
+                self._check_condition(measure, where)
             else:
                 if measure.trigger.leg not in self.legs and measure.trigger.leg not in self.derived:
                     raise ValueError(
                         f"{where}.trigger.leg: {measure.trigger.leg!r} is not a declared leg"
                     )
                 self._known(measure.followers, f"{where}.followers")
+
+    def _check_condition(self, measure: Condition, where: str) -> None:
+        for name, test in measure.tests.items():
+            if test.signal not in self.signals:
+                raise ValueError(
+                    f"{where}.tests.{name}.signal: {test.signal!r} is not a declared signal"
+                )
+        for control in measure.controls:
+            if control not in self.signals:
+                raise ValueError(f"{where}.controls: {control!r} is not a declared signal")
+        self._known(measure.followers, f"{where}.followers")
+        for member in self.members(measure.followers):
+            if member not in self.legs:
+                raise ValueError(
+                    f"{where}.followers: {member!r} is a derived leg, and a condition's "
+                    "follower is a catalog leg"
+                )
+
+    def _check_conditions(self) -> None:
+        """Every condition cell's key once, and a verdict each condition's null could pass."""
+        seen: dict[str, int] = {}
+        for index, measure in enumerate(self.measures):
+            if not isinstance(measure, Condition):
+                continue
+            for key in condition_keys(self, measure):
+                if key in seen:
+                    raise ValueError(
+                        f"measures.{index}: {key} is measures.{seen[key]}'s cell too; name the "
+                        "test apart, or judge it under the other null"
+                    )
+                seen[key] = index
+            if self.verdict is not None:
+                _passable(self.verdict, measure, index)
 
     def _known(self, name: str, where: str) -> None:
         if name not in self.legs and name not in self.derived and name not in self.groups:
@@ -576,6 +816,51 @@ class CatchUpStats(KansoModel):
     hold_p90_s: float = Field(ge=0, allow_inf_nan=False)
 
 
+class ConditionStats(KansoModel):
+    """What a `condition` cell came to beyond the response its positions make.
+
+    `sessions_when` and `sessions_against` are the held sessions the position took the favoured
+    state's side in and the other side in; `exposure` the share of held sessions with a
+    position; `episodes`, `episodes_against` and `longest_run` the runs of each state among the
+    decisions; `skipped` the onsets a fixed hold let pass. `blocks` is the blocks a sign-flip
+    null judged the cell on, `shifts` the admissible shifts of a circular one, `exact` whether
+    every one was taken. `raw_bp` is the estimator on returns not demeaned, `drift_bp_day` the
+    follower's mean return over the held sessions, and under a contrast `long_flat_bp` and
+    `long_flat_ceiling_bp_day` are the long-or-flat realisation of the same test, reported and
+    never judged. `control_r2` is the R² of the state on the design the returns were demeaned
+    on — the estimator is attenuated by one less it — and `dropped` the design's columns that
+    held nothing. `folds_adjusted` is the estimator inside each fold. `critical_t` and `mde_bp`
+    are the |t| a cell needs to pass the verdict's alpha under its own null and the effect that
+    reaches it at `mde_power`, a detection threshold and never a forecast. The signal's age is
+    how old the point read was at each decision.
+    """
+
+    payoff: Literal["contrast", "long_flat"]
+    null_by: Literal["sign_flip", "circular"]
+    sessions_when: int = Field(ge=0)
+    sessions_against: int | None = Field(default=None, ge=0)
+    exposure: float = Field(ge=0, le=1)
+    episodes: int = Field(ge=0)
+    episodes_against: int | None = Field(default=None, ge=0)
+    longest_run: int = Field(ge=0)
+    skipped: int = Field(ge=0)
+    blocks: int | None = Field(default=None, ge=0)
+    shifts: int | None = Field(default=None, ge=0)
+    exact: bool
+    raw_bp: float = Field(allow_inf_nan=False)
+    drift_bp_day: float = Field(allow_inf_nan=False)
+    long_flat_bp: float | None = Field(default=None, allow_inf_nan=False)
+    long_flat_ceiling_bp_day: float | None = Field(default=None, allow_inf_nan=False)
+    control_r2: float | None = Field(default=None, ge=0, le=1)
+    dropped: list[NonEmpty] = Field(default_factory=list)
+    folds_adjusted: list[Annotated[float, Field(allow_inf_nan=False)] | None]
+    folds_adjusted_same_sign: int = Field(ge=0)
+    critical_t: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mde_bp: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    signal_age_median_s: float = Field(ge=0, allow_inf_nan=False)
+    signal_age_max_s: float = Field(ge=0, allow_inf_nan=False)
+
+
 class Cell(KansoModel):
     """One cell of a result: what it measured, the evidence, and how it was judged.
 
@@ -587,7 +872,7 @@ class Cell(KansoModel):
     """
 
     measure: int = Field(ge=0)
-    id: Literal["lead_lag", "response", "catch_up"]
+    id: Literal["lead_lag", "response", "catch_up", "condition"]
     key: NonEmpty
     params: dict[NonEmpty, str | float]
     mean: float = Field(allow_inf_nan=False)
@@ -602,6 +887,7 @@ class Cell(KansoModel):
     clock_bound: bool = False
     response: ResponseStats | None = None
     catch_up: CatchUpStats | None = None
+    condition: ConditionStats | None = None
     judged: Judged | None = None
     reason: str | None = None
 
@@ -637,6 +923,9 @@ class ScreenResult(Versioned):
     """One measurement of one screen's bytes on one snapshot under one measure library.
 
     Immutable: the same three pins again return this record rather than a second one.
+    `assumptions` states, measure by measure, what that measure's inference rests on;
+    `assumption` is the session measures' one, kept so a result recorded before a measure had
+    its own still reads.
     """
 
     screen: HypId
@@ -649,6 +938,7 @@ class ScreenResult(Versioned):
     draws: int = Field(ge=1)
     folds: int = Field(ge=1)
     assumption: NonEmpty
+    assumptions: list[NonEmpty] = Field(default_factory=list)
     created_at: datetime
     wall_s: float = Field(ge=0, allow_inf_nan=False)
     peak_mem_gb: float = Field(ge=0, allow_inf_nan=False)
@@ -689,6 +979,8 @@ def cells(screen: Screen) -> tuple[int, ...]:
                 * len(measure.close)
                 * len(measure.stop)
             )
+        elif isinstance(measure, Condition):
+            counts.append(len(measure.tests) * len(screen.members(measure.followers)))
         else:
             counts.append(
                 len(measure.trigger.thresholds)

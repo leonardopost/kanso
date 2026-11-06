@@ -345,6 +345,29 @@ The result adds the fitted beta, how many positions closed, stopped and were cap
 median and 90th percentile of the holds — how long the rule holds is something the screen
 measures rather than something it is told.
 
+**A condition is a state read off a declared signal.** A `condition` cell asks whether a
+follower's session returns differ while a signal — one numeric field of a registered custom type
+the workspace holds, declared under `signals` — meets a declared comparison. Each of its tests
+names the signal, the favoured state (`when`), under a contrast the state it is set against (a
+disjoint comparison, or `rest`), an `entry` and an `exit` at a session's first or last point, a
+hold and a side. Its periods are named for their exit session, and `close → close`, `open →
+open` and `close → open` run from the follower's previous session into this one — the one
+measure that takes a return across a session boundary — while no day between them is one the
+market opened. The position is decided from the signal as of `latency_ms` before the entry: the
+newest point published by then, never one after, and none before the window opened, so a
+session before the signal's first point holds no value rather than a zero. One position at a
+time: re-decided every entry under `while`, or held a fixed number of sessions from an onset,
+an onset inside a hold skipped and counted. The returns are demeaned once a cell by least
+squares on declared calendar facts — weekday and month dummies, a declared turn of the month,
+the week of the third Friday, the session before a closure, read off the calendar on file —
+and the workspace's own 0/1 controls, a point dated every session, with the state not in the
+regression, so the null never refits it; the R² of the state on that design, which attenuates
+the estimate by one less it, is reported. Long or flat, `mean` is the excess a session; under a
+contrast it is the mean long less the mean short, signed by the side, so a correctly signed
+effect is positive under either. Each position — a run of sessions, joined across a boundary
+only when its periods are contiguous — is charged one round trip struck at its entry and its
+exit, so a state held for days close to close pays once and open to close pays daily.
+
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
 `basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
 and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only
@@ -372,16 +395,27 @@ a lag, on a grid — reported as the mean across sessions and the standard error
 Each measure's cells are judged together by max-T over session sign flips: one shared vector of
 signs per draw, `[screen] draws` draws, seeded from the screen's bytes, the snapshot and the
 measure's index. So forty lags of one pair are one family, not forty chances, and the same pins
-give the same numbers. Every result states the one assumption that rests on: that sessions are
-roughly independent of each other. Lag zero is refused: the same instant's co-movement is not a
-lead.
+give the same numbers. Every result states, measure by measure, the assumption that rests on:
+for the session measures, that sessions are roughly independent of each other. A condition's
+position persists for runs of sessions, so its null is declared with it: its values summed into
+blocks of `block` sessions and sign-flipped (`sign_flip`), which assumes the blocks roughly
+independent, or its positions shifted round the calendar against its residuals, one shift
+shared by every cell and every shift at least `min_shift` sessions from the one observed
+(`circular`), which keeps the positions' own runs and assumes only that, with no relationship,
+every admissible shift is as likely as the observed alignment. Lag zero is refused: the same
+instant's co-movement is not a lead.
 
 **Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
 judges nothing. Sign flips over S sessions can give no p below 2^(1−S) — the observed signs and their
 negation both reach the observed t. When the 2^S vectors are no more than the draws, each is taken
 once and p is exact; when they are more, the draws estimate it, and an estimate that fell below
 2^(1−S) reads the floor. So a verdict whose `alpha` is below what its `min_sessions`
-allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
+allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. A
+condition's null has its own floor, refused the same way: 2^(1−J) over the J blocks
+`min_sessions` fill under `sign_flip`, and 1/(K+1) over the K = `min_sessions` − 2·`min_shift` + 1
+shifts under `circular`, none at all when `min_sessions` is under twice `min_shift`. Beside a
+verdict, a condition declaring `mde_power` reports the least |t| its null passes at `alpha` and
+the effect that would reach it at that power: a detection threshold, never a forecast. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
 judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
 new screen with a new result, beside the old one.
 
@@ -401,7 +435,8 @@ screen read for one of its instruments, a signal's included. Whichever arrives f
 that chose an idea never judges it.
 
 **From a cell to a lane.** `kanso screen draft` writes one `response` or `catch_up` cell as a
-draft hypothesis, registering nothing: its research window is the window the screen read, its
+draft hypothesis, registering nothing — a `condition` cell is refused, because its seed would
+read a custom type no template carries, and its hypothesis is written with `kanso hyp new`: its research window is the window the screen read, its
 certification window is the operator's and starts no sooner than the embargo after it, its
 `program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
 sleeve — a catch-up's with its fitted beta, its entry, its close, its stop and its cap. So the lane's first act, the baseline card, re-measures the screened cell through the

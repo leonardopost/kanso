@@ -25,7 +25,17 @@ from typing import Final
 from kanso import __version__
 from kanso.errors import ValidationError
 from kanso.schemas import parse_yaml
-from kanso.schemas.screen import CatchUp, LeadLag, MeasureItem, Response, Screen, span_ns
+from kanso.schemas.screen import (
+    CatchUp,
+    Condition,
+    FixedHold,
+    LeadLag,
+    MeasureItem,
+    Response,
+    Screen,
+    TurnOfMonth,
+    span_ns,
+)
 
 SOURCE: Final = Path(__file__).resolve().parent
 LIBRARY: Final = SOURCE / "library"
@@ -71,8 +81,10 @@ def check(screen: Screen) -> None:
                     )
 
 
-def _values(measure: LeadLag | Response | CatchUp) -> dict[str, list[float]]:
+def _values(measure: LeadLag | Response | CatchUp | Condition) -> dict[str, list[float]]:
     """Each ranged parameter of a measure, as numbers comparable with its range ends."""
+    if isinstance(measure, Condition):
+        return _condition_values(measure)
     if isinstance(measure, LeadLag):
         return {
             "lag": [abs(span_ns(lag)) for lag in measure.lags],
@@ -100,6 +112,34 @@ def _values(measure: LeadLag | Response | CatchUp) -> dict[str, list[float]]:
     if trigger.z is not None and trigger.lookback is not None:
         values["z"] = list(trigger.z)
         values["lookback"] = [span_ns(trigger.lookback)]
+    return values
+
+
+def _condition_values(measure: Condition) -> dict[str, list[float]]:
+    """A condition's ranged parameters: how many tests and controls, each fixed hold, its
+    null's one parameter, each end of a turn of the month, its latency and its power."""
+    values: dict[str, list[float]] = {
+        "tests": [len(measure.tests)],
+        "controls": [len(measure.controls)],
+        "hold_sessions": [
+            test.hold.sessions
+            for test in measure.tests.values()
+            if isinstance(test.hold, FixedHold)
+        ],
+        "turn_of_month": [
+            end
+            for item in measure.demean
+            if isinstance(item, TurnOfMonth)
+            for end in item.turn_of_month
+        ],
+        "latency_ms": [measure.latency_ms],
+    }
+    if measure.block is not None:
+        values["block"] = [measure.block]
+    if measure.min_shift is not None:
+        values["min_shift"] = [measure.min_shift]
+    if measure.mde_power is not None:
+        values["mde_power"] = [measure.mde_power]
     return values
 
 

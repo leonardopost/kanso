@@ -23,7 +23,7 @@ from kanso import screen
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import ValidationError
-from kanso.schemas.screen import CatchUp, Cell, LeadLag, ScreenResult
+from kanso.schemas.screen import CatchUp, Cell, Condition, ConditionStats, LeadLag, ScreenResult
 from kanso.screen import draft, hurdle, records, run
 from kanso.workspace import Workspace
 
@@ -190,6 +190,8 @@ def _summary_lines(valid: screen.Validated, path: Path) -> tuple[str, ...]:
             detail = measure.estimator
         elif isinstance(measure, CatchUp):
             detail = f"{measure.leader} leads · beta fitted on the {measure.fit.replace('_', ' ')}"
+        elif isinstance(measure, Condition):
+            detail = f"{measure.payoff} · {measure.null_by}"
         else:
             detail = measure.side
         lines.append(indent(f"measure {index}  {measure.id} · {detail} · {count} cell(s)"))
@@ -314,6 +316,8 @@ def _cell_detail(cell: Cell) -> tuple[str, ...]:
         )
     folds = ", ".join("—" if value is None else f"{value:+.4g}" for value in cell.folds)
     lines.append(field("folds", f"{folds} ({unit}) · {cell.folds_same_sign} share the sign"))
+    if cell.condition is not None:
+        lines += _condition_lines(cell.condition)
     if cell.staleness:
         stale = ", ".join(f"{leg} {value:.3g}" for leg, value in sorted(cell.staleness.items()))
         lines.append(field("staleness", stale))
@@ -325,6 +329,62 @@ def _cell_detail(cell: Cell) -> tuple[str, ...]:
     if flags:
         lines.append(field("flags", ", ".join(flags)))
     return tuple(lines)
+
+
+def _condition_lines(found: ConditionStats) -> list[str]:
+    """What a condition cell's null, states, demeaning and detection floor came to."""
+    null = (
+        f"sign flips of {found.blocks} block(s)"
+        if found.null_by == "sign_flip"
+        else f"circular shifts, {found.shifts} admissible"
+    )
+    against = "" if found.sessions_against is None else f", against {found.sessions_against}"
+    lines = [
+        field("null", f"{null} · {'exact' if found.exact else 'drawn'}"),
+        field(
+            "states",
+            f"held when {found.sessions_when}{against} · exposure {found.exposure:.3g} · "
+            f"{found.episodes} episode(s), longest {found.longest_run} · skipped {found.skipped}",
+        ),
+        field(
+            "demeaned",
+            f"raw {found.raw_bp:+.4g} bp · drift {found.drift_bp_day:+.4g} bp/day · control R² "
+            f"{'—' if found.control_r2 is None else f'{found.control_r2:.3g}'}"
+            + (f" · dropped {', '.join(found.dropped)}" if found.dropped else ""),
+        ),
+    ]
+    if found.long_flat_bp is not None and found.long_flat_ceiling_bp_day is not None:
+        lines.append(
+            field(
+                "long_flat",
+                f"{found.long_flat_bp:+.4g} bp a session · net "
+                f"{found.long_flat_ceiling_bp_day:+.4g} bp/day (reported, never judged)",
+            )
+        )
+    adjusted = ", ".join(
+        "—" if value is None else f"{value:+.4g}" for value in found.folds_adjusted
+    )
+    lines.append(
+        field(
+            "adjusted",
+            f"{adjusted} (the estimator) · {found.folds_adjusted_same_sign} share the sign",
+        )
+    )
+    if found.critical_t is not None and found.mde_bp is not None:
+        lines.append(
+            field(
+                "mde",
+                f"{found.mde_bp:.4g} bp at critical t {found.critical_t:.3g} (a detection "
+                "threshold, not a forecast)",
+            )
+        )
+    lines.append(
+        field(
+            "signal age",
+            f"median {found.signal_age_median_s:.4g} s, max {found.signal_age_max_s:.4g} s",
+        )
+    )
+    return lines
 
 
 def _result_summary(result: ScreenResult) -> dict[str, Any]:
@@ -365,6 +425,13 @@ def _verdict(result: ScreenResult) -> str:
 
 def _cell_line(cell: Cell) -> str:
     judged = f"{cell.judged} · " if cell.judged else ""
+    if cell.condition is not None and cell.response is not None:
+        stats = cell.response
+        return (
+            f"{judged}{cell.key}  mean {cell.mean:+.4g} ± {cell.se:.2g} bp · t {cell.t:+.2f}"
+            f" · p {cell.p:.4g} · net {stats.ceiling_bp_day:+.4g} bp/day · margin "
+            f"{stats.margin_bp:+.4g} bp · exposure {cell.condition.exposure:.3g}"
+        )
     if cell.response is not None:
         stats = cell.response
         return (

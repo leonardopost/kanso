@@ -180,11 +180,13 @@ commented out, header included, because its two keys — `reference`, naming the
 resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
 until a vendor is configured, and the table you then append is not declared twice.
 
-`[screen] draws` is how many session sign flips a screen's null is drawn from (`docs/concepts.md`,
-Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
+`[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
+many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
 A measure over S sessions whose 2^S vectors of signs are no more than `draws` takes each of them
-once instead, and its p is exact — seven sessions under the default are 128 vectors.
+once instead, and its p is exact — seven sessions under the default are 128 vectors. A circular
+null over N sessions has N − 2·`min_shift` + 1 admissible shifts; when they are no more than
+`draws` each is taken once, and no p is below one over their number plus one.
 
 The two top-level keys are written by `init` and read by nothing: `kanso_version` records
 the kanso that scaffolded the workspace, and `schema_version` is not the schema guard —
@@ -1420,8 +1422,8 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `groups` | name → a list of legs and derived legs, for a measure to name at once |
 | `signals` | name → `{type, field, instrument}`: one numeric field of a registered custom type, read as a series filed under `instrument` — a file loaded by `csv_parquet` is filed under its entry's instrument and venue. The type must be registered once the workspace's extensions are imported (an unknown one is refused with the remedy `kanso ext show`), and the field one of its own annotated fields, `float`, `int` or `bool` — never `ts_event`, `ts_init` or `instrument_id`; a market type is a leg, not a signal. A signal is read as of an instant, by `ts_init` and never ahead, from the window's first midnight: only points filed under its instrument, never a market-wide one. It shares the namespace of legs, derived legs and groups, joins the data plan, the pin and the embargo as a leg's series does, and in a bound screen is filed under an instrument of the hypothesis's universe at a type the hypothesis requires (exit 3 otherwise) |
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
-| `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`), `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) or `catch_up` (`leader`, a leg or derived leg; `followers`, never the leader alone; `within`, the trailing span the gap is measured over; `fit: window` or `first_fold` and `beta_over`, where and at what return span the follower's response to its leader is fitted; `enter_bp`, the gap and implied move that open a position; `close`, the share of the entry gap at which it has caught up, each at least 0 and under 1; `stop`, the multiple of it at which it has failed, each over 1; `max_hold`, the safety cap; `latency_ms`) |
-| `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a cell that trades — `response` or `catch_up` — `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`, both stated whatever the measures; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3) |
+| `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`), `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) or `catch_up` (`leader`, a leg or derived leg; `followers`, never the leader alone; `within`, the trailing span the gap is measured over; `fit: window` or `first_fold` and `beta_over`, where and at what return span the follower's response to its leader is fitted; `enter_bp`, the gap and implied move that open a position; `close`, the share of the entry gap at which it has caught up, each at least 0 and under 1; `stop`, the multiple of it at which it has failed, each over 1; `max_hold`, the safety cap; `latency_ms`) or `condition` (`tests`, name → `{signal, when, against, entry, exit, hold, side}`: a declared signal; `when`, exactly one of `gt`, `ge`, `lt`, `le`, `eq`, `ne` and a number, the favoured state; `against`, under a contrast only, a comparison no number meets together with `when`, or `rest`; `entry` and `exit`, `open` or `close`, the session's first or last point, a period running from the previous session's when they are not `open → close`; `hold`, `while` or `{sessions: k}`; `side`, `long` or `short`, the position the favoured state takes. Then `followers`, a leg or a group of catalog legs, never a derived one; `payoff: contrast` or `long_flat`; `null_by: sign_flip` with `block` or `circular` with `min_shift`, each refused under the other, and a `block` at least every fixed hold; `demean`, a list of `weekday`, `month`, `third_friday_week`, `pre_holiday` and `{turn_of_month: [last, first]}`, `[]` for the window's mean alone; `controls`, declared 0/1 signals, `[]` for none; `latency_ms`, how long before the entry the decision is made; and, optional, `mde_power`. The null's key is `null_by` and never `null`, which YAML reads as no key at all. Each cell is `condition/<test>/<follower>/<null_by>`, and two measures making one key are refused, so one set of tests can be measured once under each null) |
+| `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a cell that trades — `response` or `catch_up` — `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`, both stated whatever the measures; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3). A `condition` cell trades too, and is judged on its positions' margin and events a day; its null's own floor refuses an `alpha` below 2^(1 − J) over the J blocks of `block` sessions in `min_sessions`, or below 1/(`min_sessions` − 2·`min_shift` + 2), with `min_sessions` under twice `min_shift` refused outright |
 | `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis |
 
 Each parameter of a measure has the range the measure library declares, and `kanso screen
@@ -1445,6 +1447,14 @@ validate` refuses one outside it (exit 3):
 | `catch_up` | `close` | `0` | `1` |
 | `catch_up` | `stop` | `1` | `100` |
 | `catch_up` | `latency_ms` | `0` | `60000` |
+| `condition` | `tests` (how many) | `1` | `64` |
+| `condition` | `hold_sessions` (each fixed hold) | `1` | `252` |
+| `condition` | `block` | `1` | `252` |
+| `condition` | `min_shift` | `1` | `2520` |
+| `condition` | `controls` (how many) | `0` | `16` |
+| `condition` | `turn_of_month` (each end) | `0` | `10` |
+| `condition` | `latency_ms` | `1` | `86400000` |
+| `condition` | `mde_power` | `0.5` | `0.99` |
 
 A result is rendered beside the screen as `<sha7>-s<snap7>-v<ver7>.yaml` — the screen's bytes,
 the snapshot and the measure library's version, the three pins its record in `state.db` is
@@ -1452,13 +1462,14 @@ keyed by. It is a rendering: editing it changes nothing, and `kanso screen show`
 record. The loader specs a run's fetches were made with are kept under `specs/`.
 
 A result lists every series it read in `series` — a signal's under its custom type's id, with the
-signals that read it — and holds one entry per cell:
+signals that read it — states in `assumptions`, one sentence a measure, what each measure's
+inference rests on, and holds one entry per cell:
 
 | field | what it is |
 |---|---|
 | `key`, `params` | the cell: its measure, legs and lattice point |
-| `mean`, `se`, `t`, `sessions` | across the sessions the cell held a value in. For `lead_lag`, the correlation at the lag. For `response`, a session's value is the sum of its events' drift-adjusted signal — the follower's signed move at its mid, less its session drift over the hold, in bp at one notional an event — so `mean` is bp a day of a follow, before any cost |
-| `p` | family-wise over the measure's cells, by session sign-flip max-T; with 2^S sign vectors no more than `[screen] draws`, exact |
+| `mean`, `se`, `t`, `sessions` | across the sessions the cell held a value in. For `lead_lag`, the correlation at the lag. For `response`, a session's value is the sum of its events' drift-adjusted signal — the follower's signed move at its mid, less its session drift over the hold, in bp at one notional an event — so `mean` is bp a day of a follow, before any cost. For `condition`, across the held sessions the cell's values were defined in, on the returns demeaned: long or flat, the excess a session in bp; under a contrast, the mean long less the mean short, signed by the side; under `sign_flip`, `t` is the block sums' and `se` is scaled to `mean` |
+| `p` | family-wise over the measure's cells, by session sign-flip max-T; with 2^S sign vectors no more than `[screen] draws`, exact. A `condition`'s by its declared null: sign flips of its block sums, or circular shifts of its positions, `(1 + reaching) / (shifts + 1)` |
 | `folds`, `folds_same_sign` | the means inside each calendar fold of the window, and how many share the sign of the whole. For `lead_lag`, the same quantity as `mean`. For `response`, **net** bp a day — gross less the hurdle — sharing the sign of `ceiling_bp_day`: so a cell can show a significant follow in `p` and every fold negative, a real move a taker cannot earn |
 | `staleness` | a `grid` lead only: per leg, the share of grid intervals it did not print in; Hayashi–Yoshida and response cells have none |
 | `clock_bound` | a lead under a second between legs whose timestamp kinds differ, or are undeclared: it may be the gap between two clocks |
@@ -1470,10 +1481,20 @@ signals that read it — and holds one entry per cell:
 | `catch_up.beta` | a `catch_up` cell only: the follower's fitted response to its leader, of either sign; absent when the leader never moved over the fit span, and then the pair's cells hold no value. Its `response` fields are its positions', read as a response's are |
 | `catch_up.closed`, `stopped`, `capped` | how many scored positions ended because the gap closed, because it grew to the stop, and because `max_hold` came first |
 | `catch_up.hold_median_s`, `hold_p90_s` | the holds those exits produced, in seconds: an output of the conditions, never an input |
+| `condition.*`, its `response` | a `condition` cell only. Its `response` fields are its positions': `events` the round trips, each a maximal run of held sessions with one direction, joined across sessions only when its periods are contiguous; `gross_bp`, `hurdle_bp` and `margin_bp` a round trip; `ceiling_bp_day` the net a held session; `unfilled` the periods that could not be scored; `drift_adjusted_bp` the demeaned signed move a round trip |
+| `condition.sessions_when`, `sessions_against`, `exposure` | held sessions the position took the favoured side in, and the other (contrast only); the share of held sessions with any position |
+| `condition.episodes`, `episodes_against`, `longest_run`, `skipped` | runs of each state among the decisions, the longest run of `when`, and onsets a fixed hold let pass |
+| `condition.blocks`, `shifts`, `exact` | the blocks a sign-flip null judged the cell on, the admissible shifts of a circular one, and whether every draw there is was taken |
+| `condition.raw_bp`, `drift_bp_day` | the estimator on returns not demeaned, and the follower's mean return over the held sessions |
+| `condition.long_flat_bp`, `long_flat_ceiling_bp_day` | under a contrast only: the long-or-flat realisation of the same test, its excess a session and its net a session after its own round trips — reported, never judged |
+| `condition.control_r2`, `dropped` | the R² of the state on the demeaning design, which attenuates `mean` by one less it, absent when the state never varies; the design's columns that held nothing, by name |
+| `condition.folds_adjusted`, `folds_adjusted_same_sign` | the estimator inside each fold, its contrast weighed afresh there, and how many share the sign of `mean` |
+| `condition.critical_t`, `mde_bp` | with a verdict and `mde_power` only: the least absolute t the cell's null passes at `alpha`, and `(critical_t + Φ⁻¹(mde_power)) × se` — a detection threshold, never a forecast |
+| `condition.signal_age_median_s`, `signal_age_max_s` | how old the point a decision read was, over the held sessions |
 | `judged`, `reason` | `pass`, `fail` or `thin` under the verdict, and every clause the cell missed |
 
-The summary says whether the result is `worth_a_lane` — a cell that trades, `response` or
-`catch_up`, passed; a lead alone names no trade — counts the cells each way, and ranks the
+The summary says whether the result is `worth_a_lane` — a cell that trades, `response`,
+`catch_up` or `condition`, passed; a lead alone names no trade — counts the cells each way, and ranks the
 passing ones in `best`: cells that trade by `ceiling_bp_day`, then leads by |t| whichever way they point, so a negative lag, the reverse
 direction, can rank beside its mirror.
 
@@ -1481,8 +1502,14 @@ Spans are `<n>(ms|s|m|h|d)` — finer than a hypothesis's grain, because a lead 
 is measured in milliseconds — and a lag carries a sign, positive when `from` leads `to`. The
 followers of a response are `followers` and never `on`: YAML reads a bare `on` as the boolean
 true. Every list of a measure is a declared, finite lattice; its cells are the cross product —
-a catch-up's are follower by entry by close by stop — and `kanso screen validate` prints how
-many there are.
+a catch-up's are follower by entry by close by stop, a condition's test by follower — and `kanso
+screen validate` prints how many there are.
+
+A session is read over `clock.hours`, from its opening instant to the instant before its close,
+so a series stamped at its close needs a span that says so: one-minute bars stamped at their
+close read a US regular session as `span: "09:31-16:01"`, the 09:31 bar its first and the 16:00
+bar its last, where `"09:30-16:00"` would read the pre-market 09:30 bar and drop the closing
+one. A condition's open and close are those two bars.
 
 ## `models.yaml`
 

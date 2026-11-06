@@ -59,7 +59,7 @@ same bytes every time.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
@@ -253,6 +253,22 @@ def critical(maxima: np.ndarray, alpha: float, enumerated_flips: bool) -> float 
     if reached < 0:
         return None
     return float(ordered[reached]) if reached < total else 0.0
+
+
+def fold_means(row: np.ndarray, fold_of: np.ndarray, folds: int) -> list[float | None]:
+    """The mean of a row's values inside each calendar fold, `None` for a fold holding none."""
+    means: list[float | None] = []
+    for fold in range(folds):
+        inside = row[(fold_of == fold) & ~np.isnan(row)]
+        means.append(float(np.add.reduce(inside) / len(inside)) if len(inside) else None)
+    return means
+
+
+def same_sign(folds: Sequence[float | None], mean: float) -> int:
+    """How many folds' means share the sign of the whole; none when the whole is zero."""
+    if mean == 0.0:
+        return 0
+    return sum(1 for value in folds if value is not None and value * mean > 0)
 
 
 def _joined(maxima: list[np.ndarray]) -> np.ndarray:

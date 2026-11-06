@@ -12,11 +12,13 @@ from hypothesis import strategies as st
 from kanso.errors import ValidationError
 from kanso.schemas import dump_yaml, parse_yaml
 from kanso.schemas.screen import (
+    Comparison,
     LeadLag,
     Screen,
     ScreenResult,
     TurnOfMonth,
     cells,
+    disjoint,
     hours_minutes,
     pairs,
     span_ns,
@@ -334,3 +336,152 @@ def test_a_catch_up_names_its_pair_and_ends_on_either_side_of_its_entry_gap(
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         build(measures=[{**CATCH_UP, **measure}])
+
+
+TESTED: dict[str, Any] = {
+    "signal": "regime",
+    "when": {"gt": 0},
+    "against": {"lt": 0},
+    "entry": "close",
+    "exit": "close",
+    "hold": "while",
+    "side": "long",
+}
+
+CONDITION: dict[str, Any] = {
+    "id": "condition",
+    "tests": {"up": TESTED, "down": {**TESTED, "when": {"lt": 0}, "against": "rest"}},
+    "followers": "names",
+    "payoff": "contrast",
+    "null_by": "circular",
+    "min_shift": 30,
+    "demean": ["weekday", "month", {"turn_of_month": [1, 3]}, "third_friday_week"],
+    "controls": ["event_day"],
+    "latency_ms": 900000,
+}
+
+
+def conditioned(measure: dict[str, Any] | None = None, **changes: Any) -> Screen:
+    return build(
+        signals=SIGNALS,
+        groups={**BASE["groups"], "names": ["mara", "riot"]},
+        measures=[measure or CONDITION],
+        **changes,
+    )
+
+
+def test_a_condition_counts_its_tests_by_its_followers() -> None:
+    screen = conditioned()
+
+    assert cells(screen) == (2 * 2,)
+    assert parse_yaml(Screen, dump_yaml(screen)) == screen
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"tests": {"up": {**TESTED, "when": {}}}}, "exactly one of gt, ge, lt, le, eq or ne"),
+        (
+            {"tests": {"up": {**TESTED, "when": {"gt": 0, "lt": 1}}}},
+            "exactly one of gt, ge, lt, le, eq or ne",
+        ),
+        (
+            {"tests": {"up": {**TESTED, "against": {"le": 0.5}}}},
+            "against: le 0.5 meets when gt 0",
+        ),
+        ({"tests": {"up": {**TESTED, "against": None}}}, "a contrast states what"),
+        ({"payoff": "long_flat"}, "a long-or-flat payoff sets the favoured state against nothing"),
+        ({"block": 20}, "a circular null states its min_shift and no block"),
+        ({"min_shift": None}, "a circular null states its min_shift"),
+        ({"null_by": "sign_flip"}, "a sign-flip null states its block and no min_shift"),
+        ({"null_by": "sign_flip", "min_shift": None}, "a sign-flip null states its block"),
+        (
+            {
+                "null_by": "sign_flip",
+                "min_shift": None,
+                "block": 3,
+                "tests": {"up": {**TESTED, "hold": {"sessions": 5}}},
+            },
+            "block: 3 session.s. is shorter than tests.up's hold of 5",
+        ),
+        ({"demean": ["weekday", "weekday"]}, "demean: a value appears twice"),
+        (
+            {"demean": [{"turn_of_month": [1, 3]}, {"turn_of_month": [2, 2]}]},
+            "demean: a value appears twice",
+        ),
+        ({"controls": ["event_day", "event_day"]}, "controls: a value appears twice"),
+        ({"tests": {"up": {**TESTED, "signal": "nobody"}}}, "'nobody' is not a declared signal"),
+        ({"controls": ["nobody"]}, "controls: 'nobody' is not a declared signal"),
+        ({"followers": "miners"}, "'miners' is a derived leg"),
+        ({"followers": "follow"}, "'miners' is a derived leg"),
+        ({"followers": "nobody"}, "'nobody' is not a declared leg or group"),
+        ({"tests": {}}, "at least 1"),
+        ({"tests": {"up": {**TESTED, "hold": {"sessions": 0}}}}, "greater than or equal to 1"),
+    ],
+)
+def test_a_condition_that_breaks_a_rule_is_refused_by_name(
+    change: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        conditioned({**CONDITION, **change})
+
+
+def test_two_condition_measures_making_one_cell_are_refused_and_two_nulls_are_admitted() -> None:
+    blocks = {**CONDITION, "null_by": "sign_flip", "min_shift": None, "block": 20}
+    screen = build(
+        signals=SIGNALS,
+        groups={**BASE["groups"], "names": ["mara", "riot"]},
+        measures=[CONDITION, blocks],
+    )
+    assert cells(screen) == (4, 4)
+
+    with pytest.raises(ValidationError, match="measures.1: condition/up/mara/circular is"):
+        build(
+            signals=SIGNALS,
+            groups={**BASE["groups"], "names": ["mara", "riot"]},
+            measures=[CONDITION, {**CONDITION, "tests": {"up": TESTED}}],
+        )
+
+
+def test_a_verdict_no_condition_cell_could_pass_under_its_null_is_refused() -> None:
+    verdict = {"alpha": 0.01, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 100}
+    blocks = {**CONDITION, "null_by": "sign_flip", "min_shift": None, "block": 20}
+
+    with pytest.raises(ValidationError, match="smallest p 5 block.s. of measures.0's 20"):
+        conditioned(blocks, verdict=verdict)
+    conditioned({**blocks, "block": 10}, verdict=verdict)
+    with pytest.raises(ValidationError, match="raise min_sessions to 120 or lower min_shift"):
+        conditioned({**CONDITION, "min_shift": 60}, verdict=verdict)
+    with pytest.raises(ValidationError, match="below 0.025, the smallest p 100 session"):
+        conditioned({**CONDITION, "min_shift": 31}, verdict={**verdict, "alpha": 0.02})
+    conditioned(verdict={**verdict, "alpha": 0.03})
+
+
+CRITICAL = st.sampled_from([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0])
+OPERATOR = st.sampled_from(["gt", "ge", "lt", "le", "eq", "ne"])
+
+
+@given(first=OPERATOR, low=CRITICAL, second=OPERATOR, high=CRITICAL)
+def test_two_comparisons_are_disjoint_exactly_when_no_point_satisfies_both(
+    first: str, low: float, second: str, high: float
+) -> None:
+    a, b = Comparison.model_validate({first: low}), Comparison.model_validate({second: high})
+    points = {low, high, (low + high) / 2, low - 1, low + 1, high - 1, high + 1, -1e9, 1e9}
+
+    meets = any(a.holds(point) and b.holds(point) for point in points)
+
+    assert disjoint(a, b) is (not meets)
+    assert disjoint(b, a) is disjoint(a, b)
+
+
+@given(operator=OPERATOR, bound=CRITICAL, value=CRITICAL)
+def test_a_comparison_holds_where_its_operator_says(
+    operator: str, bound: float, value: float
+) -> None:
+    import operator as ops
+
+    compare = {"gt": ops.gt, "ge": ops.ge, "lt": ops.lt, "le": ops.le, "eq": ops.eq, "ne": ops.ne}
+    comparison = Comparison.model_validate({operator: bound})
+
+    assert comparison.holds(value) is compare[operator](value, bound)
+    assert comparison.text == f"{operator} {bound:g}"

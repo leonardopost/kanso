@@ -21,6 +21,10 @@ spread and `slippage_bps`. Under `spread: quotes` that spread is the stated `fix
 width a card's fill with no quote before it pays; a model whose spread comes from quotes and
 states no width, over a leg that has no quotes, is refused (exit 3): nothing could price it.
 
+A condition's position is charged one round trip, struck at its entry and its exit, however
+many sessions apart the two are: a state held for days close to close pays once, as a card
+holding it pays two fills.
+
 A derived follower is traded leg by leg: a basket's legs in its weights, a spread's long leg and
 beta of its short one, both legs of a gap. Its hurdle is the sum of its legs' round trips, each
 weighted by its share, each leg charged its own half spread — measured from its quotes where it
@@ -63,8 +67,8 @@ TOUCHED: Final = frozenset({"quote", "book"})
 
 @dataclass(frozen=True)
 class Hurdles:
-    """The venue model of every leg a response or a catch-up trades, and what one round trip
-    costs."""
+    """The venue model of every leg a response, a catch-up or a condition trades, and what one
+    round trip costs."""
 
     screen: Screen
     models: dict[str, VenueModel]
@@ -159,11 +163,13 @@ def shares(screen: Screen, name: str, betas: Mapping[str, float]) -> dict[str, f
 
 
 def traded(screen: Screen) -> tuple[str, ...]:
-    """Every catalog leg a response or a catch-up trades, its followers' legs expanded."""
+    """Every catalog leg a response, a catch-up or a condition trades, its followers' legs
+    expanded."""
     found: list[str] = []
     for measure in screen.measures:
         if isinstance(measure, LeadLag):
             continue
+        # A response's followers, or a condition's: every member of the name.
         names = followed(screen, measure) if isinstance(measure, CatchUp) else (measure.followers,)
         for name in names:
             for leg in screen.legs_of(name):
