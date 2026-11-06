@@ -353,6 +353,25 @@ class CatchUp(KansoModel):
         return self
 
 
+class TurnOfMonth(KansoModel):
+    """The turn of each calendar month: its last `l` trading days and its first `m`, declared as
+    `[l, m]`, because a turn fixed here would be an opinion. Not both zero, which holds no day."""
+
+    turn_of_month: tuple[Annotated[int, Field(ge=0)], Annotated[int, Field(ge=0)]]
+
+    @model_validator(mode="after")
+    def _holds_a_day(self) -> TurnOfMonth:
+        if self.turn_of_month == (0, 0):
+            raise ValueError("turn_of_month: [0, 0] holds no day of the month")
+        return self
+
+
+CalendarControl = Literal["weekday", "month", "third_friday_week", "pre_holiday"] | TurnOfMonth
+"""A calendar fact a condition's returns are demeaned on: the weekday and the month as dummies,
+the week holding the month's third Friday, the session before a closure, or a declared turn of
+the month."""
+
+
 Measure = Annotated[LeadLag | Response | CatchUp, Field(discriminator="id")]
 
 RangeEnd = float | Span

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.errors import ValidationError
 from kanso.schemas import dump_yaml, parse_yaml
@@ -14,6 +15,7 @@ from kanso.schemas.screen import (
     LeadLag,
     Screen,
     ScreenResult,
+    TurnOfMonth,
     cells,
     hours_minutes,
     pairs,
@@ -266,6 +268,17 @@ def test_a_signal_shares_the_namespace_of_legs_and_groups() -> None:
         build(signals={"btc": SIGNALS["regime"]})
     with pytest.raises(ValidationError, match="signals.lead: already declared as a group"):
         build(signals={"lead": SIGNALS["regime"]})
+
+
+@given(st.tuples(st.integers(0, 10), st.integers(0, 10)).filter(lambda pair: pair != (0, 0)))
+def test_a_turn_of_month_round_trips(window: tuple[int, int]) -> None:
+    value = TurnOfMonth(turn_of_month=window)
+    assert parse_yaml(TurnOfMonth, dump_yaml(value)) == value
+
+
+def test_a_turn_of_month_holding_no_day_is_refused() -> None:
+    with pytest.raises(ValidationError, match=r"\[0, 0\] holds no day"):
+        TurnOfMonth(turn_of_month=(0, 0))
 
 
 def test_a_verdict_no_cell_could_pass_is_refused() -> None:
