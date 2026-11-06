@@ -28,7 +28,12 @@ refused (exit 2): a comparison of a NaN reads false whichever way it is asked.
 **A refused point is reloaded by supersession.** A run pins a snapshot covering every series
 before it reads a point, so by the time a point is refused the dataset holding it is named by
 one, and a `--replace` over it is refused. The remedy names a load that supersedes it, one
-dataset at a time, since `--supersedes` names one (`reload`).
+dataset at a time, since `--supersedes` names one, and then a snapshot (`reload`): a load over
+the same span keeps the dataset's id, the series and its last day, so the snapshot pinned
+before still names a dataset the store holds and still covers the window. Without a newer one
+the next run would pin that snapshot again, its checksums those of bytes the store no longer
+holds, and once a result was recorded under it, return that result stored without reading the
+bytes the load wrote.
 
 NautilusTrader facts relied on (nautilus_trader 1.231.0): a custom point read back from the
 catalog arrives wrapped in `CustomData`, whose `data` is the point; a query filters on
@@ -74,13 +79,14 @@ Day = tuple[int, int, np.ndarray, np.ndarray, np.ndarray]
 
 def reload(screen: Screen, name: str) -> str:
     """How to reload a signal's series once a run has pinned it: a superseding load for each of
-    its datasets."""
+    its datasets, then a snapshot of what the loads wrote."""
     signal = screen.signals[name]
     return (
         f"reload {signal.type} under {signal.instrument} one dataset at a time — each `kanso data "
         "show` lists, from a spec over that dataset's span — with `kanso data load --loader "
         "csv_parquet --spec <spec> --supersedes <dataset>`: the snapshot the run pinned names "
-        "them, so a `--replace` is refused"
+        "them, so a `--replace` is refused; then run `kanso data snapshot`, since a load over "
+        "the same span keeps the dataset's id and the old snapshot would still be pinned"
     )
 
 

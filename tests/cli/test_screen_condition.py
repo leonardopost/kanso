@@ -19,10 +19,12 @@ import yaml
 from typer.testing import CliRunner
 
 from kanso.data.closures import US_EQUITY
+from kanso.data.snapshot import snapshots
 from kanso.errors import Exit
 from kanso.schemas import parse_yaml
 from kanso.schemas.screen import Cell, ScreenResult
 from kanso.screen.condition import CIRCULAR
+from kanso.workspace import find
 
 from .conftest import (
     INSTRUMENT,
@@ -218,17 +220,19 @@ def test_a_calendar_control_no_calendar_on_file_covers_is_refused_before_anythin
     assert "supply them as 0/1 controls" in payload(result)["remedy"]
 
 
-def test_a_refused_control_is_reloaded_by_the_superseding_load_its_remedy_names(
+def test_a_refused_control_is_reloaded_by_the_superseding_load_and_the_snapshot_its_remedy_names(
     runner: CliRunner, taped: Path
 ) -> None:
     from tests.screen.conftest import TAPE_ID
 
-    def written(bad: date | None) -> Path:
-        """The tape filed under the one name alone, its flag 2 on `bad`."""
+    odd = date(2024, 2, 1)
+
+    def written(flagged: int) -> Path:
+        """The tape filed under the one name alone, its flag `flagged` on `odd`."""
         rows = ["t,level,flag,switch,label"]
         day = TAPE_FIRST
         while day <= TAPE_LAST:
-            flag = 2 if day == bad else tape_flag(day)
+            flag = flagged if day == odd else tape_flag(day)
             rows.append(f"{day} 13:00:00,{tape_level(day)},{flag},{'true' if flag else 'false'},x")
             day = date.fromordinal(day.toordinal() + 1)
         (taped / "one.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -255,7 +259,11 @@ def test_a_refused_control_is_reloaded_by_the_superseding_load_its_remedy_names(
     def loaded(spec: Path, *flags: str) -> Any:
         return at(runner, taped, "data", "load", "--loader", "csv_parquet", "--spec", spec, *flags)
 
-    assert loaded(written(date(2024, 2, 1)), "--supersedes", dataset()).exit_code == Exit.OK
+    def newest() -> str:
+        return max(snapshots(find(taped)), key=lambda item: item.created_at).snapshot_id
+
+    assert loaded(written(2), "--supersedes", dataset()).exit_code == Exit.OK
+    pinned = newest()
     path = write_screen(taped, STATE)
 
     refused = at(runner, taped, "screen", "run", path, "--json")
@@ -266,12 +274,23 @@ def test_a_refused_control_is_reloaded_by_the_superseding_load_its_remedy_names(
     assert f"reload {TAPE_ID} under {INSTRUMENT} one dataset at a time" in remedy
     assert "`kanso data show`" in remedy
     assert "kanso data load --loader csv_parquet --spec <spec> --supersedes <dataset>" in remedy
+    assert "then run `kanso data snapshot`" in remedy
     # The run pinned the dataset before it read the point, so a replace over it is refused and
-    # the superseding load the remedy names is what puts the fixed tape in its place.
-    fixed = written(None)
+    # the superseding load the remedy names is what puts the fixed tape in its place. The fixed
+    # tape is not the one first loaded: its flag on that day is the other control value.
+    assert tape_flag(odd) == 0
+    fixed = written(1)
     assert loaded(fixed, "--replace").exit_code == Exit.PRECONDITION
     assert loaded(fixed, "--supersedes", dataset()).exit_code == Exit.OK
-    assert at(runner, taped, "screen", "run", path, "--json").exit_code == Exit.OK
+    # Each load kept the dataset's id, so the snapshot taken before either still covers the
+    # series: without a newer one the run pins it again, its checksums those of the tape first
+    # loaded, and a second run over the same pins hands that result back unread.
+    stale = run_screen(runner, taped, STATE)
+    assert stale["snapshot"] == pinned and stale["stored"] is False
+    assert run_screen(runner, taped, STATE)["stored"] is True
+    assert at(runner, taped, "data", "snapshot").exit_code == Exit.OK
+    again = run_screen(runner, taped, STATE)
+    assert again["snapshot"] != pinned and again["stored"] is False
 
 
 def test_two_workspaces_holding_the_same_bytes_measure_the_same_result(
