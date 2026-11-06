@@ -46,8 +46,10 @@ the values it reads are `(M_X w)` times the residual, which sum to the same and 
 estimate does; the weights alone would spread as though the design shared nothing with the
 state, and overstate the standard error — by about `1 / √(1 − R²)` against `rest` and long or
 flat, and by less against a comparison, whose `r2` is taken over the sessions in either state
-while the residuals are fitted on every held one — which a sign-flip null does, conservatively,
-rather than run above its level (`kanso.screen.condition`).
+while the residuals are fitted on every held one. A sign-flip null reads them all the same,
+because residualised block sums run it above its level wherever a design group spans blocks;
+the weights alone do as well for a state that changes sign inside a month's blocks, so neither
+weighting makes it conservative (`kanso.screen.condition`).
 
 **No BLAS.** Every inner product is `numpy.add.reduce` of an elementwise product in a fixed
 order: nothing here calls `@`, `numpy.dot` or `numpy.linalg`, so one host gives the same bits

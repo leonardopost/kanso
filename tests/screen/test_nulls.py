@@ -11,6 +11,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from kanso.data import closures
 from kanso.screen import demean, nulls
 
 
@@ -280,6 +281,79 @@ def test_residualised_block_sums_run_above_their_level_where_a_design_group_span
     above, alone = np.asarray(found[True]), np.asarray(found[False])
     assert float(np.mean(alone <= 0.05)) <= 0.04 and float(np.mean(above <= 0.05)) >= 0.06
     assert float(np.mean(alone <= 0.10)) <= 0.08 and float(np.mean(above <= 0.10)) >= 0.11
+
+
+def first_half_of_month(
+    first: date, last: date, calendar: list[str]
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Contrast positions long over the first fifteen days of each month and short over the
+    rest, on the US equity sessions from `first` to `last`, and the design `calendar` makes."""
+    days = [first + timedelta(days=n) for n in range((last - first).days + 1)]
+    sessions = [day for day in days if not closures.US_EQUITY.closed(day)]
+    matrix, names = demean.design(sessions, calendar, {}, None)
+    return np.asarray([1.0 if day.day <= 15 else -1.0 for day in sessions]), matrix, names
+
+
+def flip_spread(
+    positions: np.ndarray, matrix: np.ndarray, names: list[str], block: int, residualised: bool
+) -> float:
+    """Exactly, the expected sum of squared block sums over the variance of their total, for a
+    contrast's values on the residuals of independent unit noise. A sum of values over sessions
+    weighed `u` is `u·(M_X ε)`, of variance `u·(M_X u)`, so this is the spread sign flips of the
+    blocks draw against the spread of the estimate: below one, the null runs above its level."""
+    spanned = demean.spanned(matrix, names)[None] if residualised else None
+    weights = nulls.values_of(positions[None], np.ones((1, len(positions))), True, spanned)[0]
+
+    def variance(part: np.ndarray) -> float:
+        return float(np.add.reduce(part * demean.residuals(matrix, names, part)[0]))
+
+    blocks = 0.0
+    for start in range(0, len(weights), block):
+        part = np.zeros_like(weights)
+        part[start : start + block] = weights[start : start + block]
+        blocks += variance(part)
+    return blocks / variance(weights)
+
+
+def test_block_sums_spread_too_little_for_a_state_that_changes_sign_inside_the_month() -> None:
+    # Month dummies make a month's residuals covary by −1/n with each other, so where the
+    # weights change sign between a month's blocks their block sums correlate positively and
+    # spread less than their total. Over 2025 in blocks of 10 this is exactly 0.703 on the
+    # weights alone and 0.702 residualised — about 10% of p at or under 0.05 — while the state's
+    # R² on the months is 0.003; with the intercept alone it is 0.980. It fades as the window
+    # grows: 0.877 over 2024-2025, 0.978 over 2016-2025.
+    year = first_half_of_month(date(2025, 1, 1), date(2025, 12, 31), ["month"])
+    positions, matrix, names = year
+    r2 = demean.r2(matrix, names, (positions > 0).astype(np.float64))
+    assert r2 is not None and r2 < 0.01, "the design shares nothing with the state"
+    alone = flip_spread(*year, 10, residualised=False)
+    assert alone < 0.75 and flip_spread(*year, 10, residualised=True) < 0.75
+    plain = first_half_of_month(date(2025, 1, 1), date(2025, 12, 31), [])
+    assert flip_spread(*plain, 10, residualised=False) > 0.95
+    two = first_half_of_month(date(2024, 1, 1), date(2025, 12, 31), ["month"])
+    ten = first_half_of_month(date(2016, 1, 1), date(2025, 12, 31), ["month"])
+    assert alone < flip_spread(*two, 10, residualised=False) < 0.9
+    assert flip_spread(*ten, 10, residualised=False) > 0.95
+
+
+def test_on_a_state_that_changes_sign_inside_the_month_flips_run_above_and_shifts_hold() -> None:
+    # Measured on these seeds: 11.25% of p at or under 0.05 by sign flips of blocks of 10, and
+    # by circular shifts 5.15%, and 11.5% at or under 0.10 (4.75% and 9.92% over 10,000 seeds).
+    positions, matrix, names = first_half_of_month(date(2025, 1, 1), date(2025, 12, 31), ["month"])
+    spanned = demean.spanned(matrix, names)
+    flips, shifts = [], []
+    for seed in range(2000):
+        rng = np.random.default_rng(90000 + seed)
+        residuals = demean.residuals(matrix, names, rng.normal(size=len(positions)))[0]
+        values = nulls.values_of(positions[None], residuals[None], True)
+        flips.append(float(nulls.evidence(nulls.blocks(values, 10), 499, seed).p[0]))
+        shifts.append(
+            nulls.circular(positions[None], residuals[None], True, 9999, seed, spanned[None]).p[0]
+        )
+    assert float(np.mean(np.asarray(flips) <= 0.05)) >= 0.08
+    # p is (1 + reaching) / 250: at most 0.05 is reaching eleven or fewer, 0.10 twenty-four.
+    rejected(np.asarray(shifts), 0.05, 12 / 250)
+    rejected(np.asarray(shifts), 0.10, 25 / 250)
 
 
 def test_with_nothing_planted_residualised_shifts_hold_the_level_on_a_calendar() -> None:

@@ -391,13 +391,15 @@ are not: residualised, a month's block sums share its fitted mean across the blo
 spread less than their total does, so the null would run above its level — measured with weekday
 and month dummies over 250 sessions in blocks of five, contrast positions in runs averaging ten,
 6.95% of p at or under 0.05, against 3.05% on the weights alone. So under `sign_flip`, `se` and
-`mde_bp` read the weights alone, and where the design shares the state they overstate the
-estimate's own and understate `t` — against `rest` and long or flat by about
+`mde_bp` read the weights alone, and where the design shares the state that overstates the
+estimate's own and understates `t` — against `rest` and long or flat by about
 1/√(1 − `control_r2`), against a comparison by less, `control_r2` being taken over the sessions
 in either state while the residuals are fitted on every held session (measured on a state with
 a `control_r2` of 0.541 on a weekday design over 500 sessions, one in five in neither state, `se`
 was 1.32 times the estimate's spread over 2,000 redraws, where 1/√(1 − 0.541) is 1.48; long or
-flat, at an R² of 0.522, 1.47 where it is 1.45) — and p errs conservative for it. Under a
+flat, at an R² of 0.522, 1.47 where it is 1.45). That does not make `se` or p conservative: the
+block sums decide both, and under month dummies, for a state that changes sign inside the month,
+they understate the estimate's spread on either weighting — below. Under a
 contrast judged by circular shifts a session in neither state holds a value too — its
 residualised weight, what the design shares with the contrast, times its residual — and none
 with the intercept alone; `sessions` counts the sessions in either state either way.
@@ -441,10 +443,21 @@ with no relationship, every shift is as likely as the observed alignment. Blocks
 roughly so: with few of them and a state persisting about a block's length the null runs
 slightly above its level — over 250 sessions in 25 blocks of 10, long or flat on runs averaging
 10, 5.3% of p fell at or under 0.05 and 10.6% at or under 0.10, against 4.7% and 9.6% with
-positions independent session to session. Month dummies over a window of about a year err the
-other way: each month's residuals sum to zero, so for a state persisting across blocks the
-block sums inside one month are anti-correlated, and the null runs below its level — the 3.05%
-above. A shift rotates one
+positions independent session to session. Month dummies over a window of a year or two move it
+either way, by how the state falls inside the month: each month's residuals sum to zero, so two
+block sums inside one month covary with the sign opposite to their weights'. Where the
+weights keep one sign across a month's blocks the sums are anti-correlated and the null runs
+below its level — the 3.05% above. Where the state changes sign inside the month at about a
+block's length — its first half, the expiry week, a cycle of about twenty sessions — they are
+positively correlated, and the null runs above its level on the weights alone or residualised,
+with `se` understating the estimate's spread and a `control_r2` near zero that gives no warning:
+contrasting the first half of each month with the rest over 2025 in blocks of 10, `control_r2`
+0.003, 10.7% of p fell at or under 0.05 and 16.9% at or under 0.10 over 1,500 seeds, against
+5.5% and 11.0% with `demean: []`, and `se` was 0.82 times the estimate's spread (0.90 in blocks
+of five). Exactly, the block sums' expected sum of squares is 0.70 of the estimate's variance
+there under either weighting, and the shortfall fades as the window grows: 0.88 over 2024–2025,
+0.98 over 2016–2025. Judge such a state by `circular`, which held its level on it: 4.75% of p at
+or under 0.05 and 9.92% at or under 0.10 over 10,000 seeds. A shift rotates one
 index, so a circular family holds only the N sessions every one of its cells holding any holds:
 a cell holding only some would have its positions shifted off its returns, keep fewer values
 than it observed on most shifts, and pull the family's maxima down — measured on two contrast

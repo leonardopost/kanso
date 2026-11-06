@@ -13,7 +13,15 @@ returns is as likely as the one observed. Blocks are only roughly so: with few o
 state persisting about a block's length, the null runs slightly above its level — over 250
 sessions in 25 blocks of 10, long or flat on runs averaging 10, 5.3% of p fell at or under 0.05
 and 10.6% at or under 0.10 (20,000 seeds), against 4.7% and 9.6% with positions independent
-session to session.
+session to session. Under month dummies over a year or two it can run well above it: each
+month's residuals sum to zero, so where a state changes sign inside the month at about a
+block's length — its first half, the expiry week, a cycle of about twenty sessions — two block
+sums of one month correlate positively and spread less than their total. Contrasting the first
+half of each month with the rest over 2025 in blocks of 10, their expected sum of squares is
+0.70 of the estimate's variance, on a cell's weights alone or residualised, and 11.25% of p fell
+at or under 0.05 (2,000 seeds); the shortfall fades as the window grows, to 0.88 over 2024–2025
+and 0.98 over 2016–2025. Circular shifts held their level on it, 4.75% of p at or under 0.05 and
+9.92% at or under 0.10 (10,000 seeds), so a state like it is better judged by them.
 
 **Max-T over exactly the declared cells.** Under the null of no relationship a cell's
 per-session values are symmetric about zero, so one draw flips the sign of every session's
