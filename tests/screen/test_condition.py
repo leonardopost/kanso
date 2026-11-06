@@ -502,7 +502,85 @@ def test_a_state_held_k_sessions_close_to_close_is_one_round_trip_and_open_to_cl
     )
     assert one.response.hurdle_bp == pytest.approx(expected)
     assert one.response.gross_bp == pytest.approx(1e4 * math.log(exit_ / entry))
+    assert one.response.margin_bp == pytest.approx(1e4 * math.log(exit_ / entry) - expected)
+    # Close to close the first session has no previous close, so is held by none of them.
+    assert one.sessions == len(sessions) - 1
+    assert one.response.events_per_day == pytest.approx(1 / (len(sessions) - 1), abs=1e-6)
     assert four.response.hurdle_bp == pytest.approx(ROUND_TRIP)
+    assert four.response.events_per_day == pytest.approx(4 / len(sessions), abs=1e-6)
+
+
+@pytest.mark.parametrize("quoted", [None, 0.02])
+def test_a_short_close_to_close_position_makes_what_a_short_makes(
+    monkeypatch: pytest.MonkeyPatch, quoted: float | None
+) -> None:
+    sessions = trading(date(2026, 1, 5), date(2026, 2, 27))
+    level = dict.fromkeys(sessions, -1.0)
+    for day in sessions[10:14]:
+        level[day] = 1.0
+    follower = "a" if quoted is None else "q"
+    prices = {follower: {day: (100.0, 100.0 * (1 + 0.002 * n)) for n, day in enumerate(sessions)}}
+    test = {**TEST, "entry": "close", "against": None, "side": "short"}
+    spec = screen({"down": test}, payoff="long_flat", followers=follower)
+
+    (cell,) = measured(spec, prices, {"lvl": daily(level)}, monkeypatch, quoted=quoted)
+
+    # Short from the close of the first day the state holds to the close after its last, on a
+    # follower rising every session: a taker sells at the entry and buys back at the exit.
+    entry, exit_ = prices[follower][sessions[10]][1], prices[follower][sessions[14]][1]
+    if quoted is not None:
+        entry, exit_ = entry - quoted, exit_ + quoted
+    stats = cell.response
+    assert stats is not None and stats.events == 1
+    assert stats.gross_bp == pytest.approx(1e4 * math.log(entry / exit_)) and stats.gross_bp < 0
+    assert stats.hurdle_bp == pytest.approx(2 * 1.0 if quoted else _close_hurdle(spec, prices))
+    assert stats.margin_bp == pytest.approx(stats.gross_bp - stats.hurdle_bp)
+    assert stats.ceiling_bp_day == pytest.approx(stats.margin_bp / cell.sessions)
+    assert stats.hit_rate == 0.0 and cell.condition is not None
+    assert cell.condition.sessions_when == 4 and cell.mean < 0
+
+
+def _close_hurdle(spec: Screen, prices: Mapping[str, Prices]) -> float:
+    """The round trip of a short bar follower from the close of the 11th session to the 15th's."""
+    sessions = sorted(prices["a"])
+    entry, exit_ = sessions[10], sessions[14]
+    series = Series(
+        ts=np.asarray([at(entry, 16), at(exit_, 16)], dtype=np.int64),
+        price=np.asarray([prices["a"][entry][1], prices["a"][exit_][1]]),
+    )
+    hurdles = Hurdles(spec, {"XNAS": MODEL}, {"a": "XNAS"}, {"a": 1.0}, {"a": 0.01})
+    return hurdles.round_trip("a", -1, {"a": series}, int(series.ts[0]), int(series.ts[1]), {})
+
+
+def test_a_position_s_round_trip_is_booked_on_the_session_it_leaves_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    second = date(2026, 2, 15)  # the second of two equal calendar folds of the window
+    after = next(n for n, day in enumerate(sessions) if day >= second)
+    # Decided on the two sessions before the split and the one after it, the close-to-close
+    # position runs from the close two sessions before the split to the close two after it.
+    level = dict.fromkeys(sessions, -1.0)
+    for day in sessions[after - 2 : after + 1]:
+        level[day] = 1.0
+    prices = {"a": walk(sessions, 41)}
+    test = {"up": {**TEST, "entry": "close", "against": None}}
+
+    (cell,) = measured(screen(test, payoff="long_flat"), prices, {"lvl": daily(level)}, monkeypatch)
+
+    held = sessions[1:]
+    run = sessions[after - 1 : after + 2]
+    assert cell.response is not None and cell.response.events == 1 and cell.sessions == len(held)
+    closes = {day: prices["a"][day][1] for day in sessions}
+    moved = {
+        day: 1e4 * math.log(closes[day] / closes[sessions[n]]) for n, day in enumerate(sessions[1:])
+    }
+    net = {day: moved[day] if day in run else 0.0 for day in held}
+    net[run[-1]] -= cell.response.hurdle_bp
+    for fold, mean in zip((True, False), cell.folds, strict=True):
+        inside = [net[day] for day in held if (day < second) == fold]
+        assert mean == pytest.approx(sum(inside) / len(inside))
+    assert run[0] < second <= run[-1], "the position straddles the split"
 
 
 @pytest.mark.parametrize("entry", ["close", "open"])
@@ -561,6 +639,9 @@ def test_a_cell_s_folds_drift_adjusted_move_and_hit_rate_are_its_positions(
     longs = [day for day in sessions if level[day] > 0]
     centre = sum(move(day) for day in sessions) / len(sessions)
     assert stats.events == len(longs)
+    assert stats.events_per_day == pytest.approx(len(longs) / len(sessions), abs=1e-6)
+    assert stats.gross_bp == pytest.approx(sum(move(day) for day in longs) / len(longs))
+    assert stats.margin_bp == pytest.approx(stats.gross_bp - ROUND_TRIP)
     assert stats.hit_rate == pytest.approx(sum(day < second for day in longs) / len(longs))
     assert stats.drift_adjusted_bp == pytest.approx(
         sum(move(day) - centre for day in longs) / len(longs)
@@ -1018,20 +1099,29 @@ def test_a_calendar_control_without_a_calendar_over_the_window_is_refused() -> N
     )
     defined = {f"{s}.XNAS": instrument(s) for s in ("AAA", "BBB", "QQQ")}
 
+    # Read off the calendar on file, so a calendar that moves its edges moves these with it.
+    first, last = US_EQUITY.first, US_EQUITY.last
     condition.refuse_uncalendared(spec, defined, WINDOW)
     with pytest.raises(
         PreconditionError, match=r"measures\.1\.demean: turn_of_month and pre_"
     ) as one:
-        condition.refuse_uncalendared(spec, defined, (date(2003, 9, 1), date(2003, 12, 31)))
-    assert "holds 2003-09-10..2027-09-06" in one.value.message
+        condition.refuse_uncalendared(spec, defined, (first - timedelta(days=10), first))
+    assert f"holds {first}..{last}" in one.value.message
     assert "supply them as 0/1 controls" in (one.value.remedy or "")
-    condition.refuse_uncalendared(spec, defined, (date(2027, 8, 2), date(2027, 8, 31)))
-    with pytest.raises(PreconditionError, match=r"window touches, 2027-08-01\.\.2027-09-30, "):
-        condition.refuse_uncalendared(spec, defined, (date(2027, 8, 2), date(2027, 9, 3)))
+    whole = last if month_end(last) == last else last.replace(day=1) - timedelta(days=1)
+    condition.refuse_uncalendared(spec, defined, (whole.replace(day=1), whole))
+    beyond = (last - timedelta(days=10), last + timedelta(days=10))
+    touched = f"{beyond[0].replace(day=1)}..{month_end(beyond[1])}"
+    with pytest.raises(PreconditionError, match=rf"window touches, {touched}, "):
+        condition.refuse_uncalendared(spec, defined, beyond)
     crypto = {**defined, "AAA.XNAS": perpetual()}
     with pytest.raises(PreconditionError, match="none is on file"):
         condition.refuse_uncalendared(spec, crypto, WINDOW)
     condition.refuse_uncalendared(screen(demean=["weekday"]), crypto, WINDOW)
+
+
+def month_end(day: date) -> date:
+    return (day.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
 
 def test_turn_of_month_and_pre_holiday_demean_on_the_follower_s_calendar(
@@ -1343,17 +1433,19 @@ def test_against_a_comparison_r2_is_the_state_s_over_the_sessions_in_either_stat
         assert cell.sessions == side < n, "the sessions in either state"
 
 
+@pytest.mark.parametrize("hold", ["while", {"sessions": 3}])
 def test_the_long_flat_realisation_is_reported_beside_a_contrast(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, hold: Any
 ) -> None:
     sessions = trading()
     level = {day: (1.0 if (n // 2) % 2 else -1.0) for n, day in enumerate(sessions)}
     prices = {"a": walk(sessions, 17)}
     points = {"lvl": daily(level)}
+    test = {**TEST, "hold": hold}
 
-    (contrast,) = measured(screen(), prices, points, monkeypatch)
+    (contrast,) = measured(screen({"up": test}), prices, points, monkeypatch)
     (lone,) = measured(
-        screen({"up": {**TEST, "against": None}}, payoff="long_flat"), prices, points, monkeypatch
+        screen({"up": {**test, "against": None}}, payoff="long_flat"), prices, points, monkeypatch
     )
 
     found = contrast.condition
@@ -1465,6 +1557,33 @@ def test_a_session_whose_control_has_no_point_yet_is_not_held(
     )
 
     assert cell.sessions == len(sessions) - 10, "the first, invalid, and nine with no control"
+
+
+def test_an_exact_sign_flip_family_reads_its_critical_t_by_the_enumeration_s_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading(date(2026, 1, 5), date(2026, 1, 23))
+    level = {day: (1.0 if n % 2 else -1.0) for n, day in enumerate(sessions)}
+    verdict = {"alpha": 0.1, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 10}
+    found: list[nulls.Evidence] = []
+    real = nulls.evidence
+
+    def kept(*args: Any) -> nulls.Evidence:
+        found.append(real(*args))
+        return found[-1]
+
+    monkeypatch.setattr(nulls, "evidence", kept)
+    spec = screen(verdict=verdict, mde_power=0.8, null_by="sign_flip", block=2)
+
+    (cell,) = measured(spec, {"a": walk(sessions, 23)}, {"lvl": daily(level)}, monkeypatch)
+
+    (evidence,) = found
+    blocks = math.ceil(len(sessions) / 2)
+    assert cell.condition is not None and cell.condition.blocks == blocks
+    assert evidence.exact is True and len(evidence.maxima) == 2**blocks <= 999
+    enumerated = nulls.critical(evidence.maxima, 0.1, enumerated_flips=True)
+    assert enumerated != nulls.critical(evidence.maxima, 0.1, enumerated_flips=False)
+    assert cell.condition.critical_t == enumerated
 
 
 def test_a_sign_flip_family_reads_its_critical_t_off_its_own_maxima(

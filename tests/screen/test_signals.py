@@ -20,6 +20,7 @@ from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest
 from kanso.schemas.screen import Screen
 from kanso.screen import signals
+from kanso.screen.sessions import window_ns
 
 from .conftest import TAPE_ID, ns, store, tape
 
@@ -184,7 +185,7 @@ def test_signals_of_one_type_filed_under_two_instruments_are_read_together(
     assert asked == [["AAA.XNAS", "BBB.XNAS"]] * 3
 
 
-def test_nothing_is_read_for_no_instant_or_past_the_window(
+def test_nothing_is_read_for_no_instant_or_one_before_the_window(
     held: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def forbidden(*_: object) -> None:
@@ -196,6 +197,33 @@ def test_nothing_is_read_for_no_instant_or_past_the_window(
     found = signals.asof(held, screen(), {"lvl": np.zeros(0, np.int64), "flg": early}, WINDOW)
 
     assert len(found["lvl"].value) == 0 and np.isnan(found["flg"].value[0])
+
+
+def test_an_instant_past_the_window_reads_no_day_after_it(
+    tmp_path: Path, tape_cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    after = ns("2026-03-09T13:00:00+00:00")  # the Monday after the window's last day
+    points = [
+        *tape(tape_cls, "AAA.XNAS", [(ns("2026-03-04T13:00:00+00:00"), -1.0, 0), (after, 5.0, 1)])
+    ]
+    catalog = store(tmp_path / "catalog", points, ["AAA"])
+    asked: list[tuple[int, int]] = []
+    real = backtest._custom_points
+
+    def recorded(catalog_: Any, cls: type, instruments: Any, start: int, end: int) -> Any:
+        asked.append((start, end))
+        return real(catalog_, cls, instruments, start, end)
+
+    monkeypatch.setattr("kanso.screen.signals.backtest._custom_points", recorded)
+    instants = [ns("2026-03-06T20:00:00+00:00"), window_ns(WINDOW)[1], after + DAY]
+
+    found = signals.asof(catalog, screen(), {"lvl": np.asarray(instants, np.int64)}, WINDOW)
+
+    # The read stops at the window's end: an instant on its last day reads the last point
+    # inside it, and one at or past its end reads nothing, the point after it never read.
+    assert max(end for _, end in asked) == window_ns(WINDOW)[1] - 1
+    assert found["lvl"].value[0] == -1.0 and np.isnan(found["lvl"].value[1:]).all()
+    assert found["lvl"].ts_init.tolist() == [ns("2026-03-04T13:00:00+00:00"), -1, -1]
 
 
 def test_another_instrument_s_points_and_market_wide_ones_are_no_signal_s() -> None:

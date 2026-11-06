@@ -11,6 +11,7 @@ import pytest
 
 from kanso import __version__
 from kanso.errors import ValidationError
+from kanso.schemas.screen import Screen
 from kanso.screen import catalogue, check, screen_version
 from kanso.screen.library import LIBRARY, SOURCE
 from tests.schemas.test_screen import BASE, CATCH_UP, CONDITION, TESTED, build, conditioned
@@ -126,6 +127,34 @@ def test_a_condition_inside_every_range_is_admitted() -> None:
 
 
 @pytest.mark.parametrize(
+    "change",
+    [
+        {"tests": {f"t{n}": TESTED for n in range(64)}},
+        {
+            "null_by": "sign_flip",
+            "block": 252,
+            "tests": {"up": {**TESTED, "hold": {"sessions": 252}}},
+        },
+        {"null_by": "sign_flip", "block": 1},
+        {"tests": {"up": {**TESTED, "hold": {"sessions": 1}}}},
+        {"demean": [{"turn_of_month": [10, 10]}]},
+        {"demean": [{"turn_of_month": [0, 1]}]},
+        {"latency_ms": 1},
+        {"latency_ms": 86_400_000},
+        {"mde_power": 0.5},
+        {"mde_power": 0.99},
+        {"controls": []},
+    ],
+)
+def test_a_condition_at_an_edge_of_its_ranges_is_admitted(change: dict[str, Any]) -> None:
+    check(conditioned({**CONDITION, **change}))
+
+
+def test_as_many_controls_as_the_range_admits_are_admitted() -> None:
+    check(controlled(16))
+
+
+@pytest.mark.parametrize(
     ("change", "message"),
     [
         ({"latency_ms": 0}, r"measures\.0\.latency_ms: 0 is outside the condition range \[1\.0, "),
@@ -136,6 +165,7 @@ def test_a_condition_inside_every_range_is_admitted() -> None:
         ),
         ({"demean": [{"turn_of_month": [11, 1]}]}, r"measures\.0\.turn_of_month: 11 is outside"),
         ({"mde_power": 0.3}, r"measures\.0\.mde_power: 0\.3 is outside"),
+        ({"mde_power": 0.995}, r"measures\.0\.mde_power: 0\.995 is outside"),
         (
             {"tests": {"up": {**TESTED, "hold": {"sessions": 300}}}},
             r"hold_sessions: 300 is outside",
@@ -150,17 +180,20 @@ def test_a_condition_parameter_outside_its_range_is_refused_naming_it(
         check(conditioned({**CONDITION, **change}))
 
 
-def test_more_controls_than_the_range_admits_are_refused() -> None:
+def controlled(count: int) -> Screen:
+    """The condition with `count` controls, each a declared 0/1 signal."""
     signals = {
         f"c{n}": {"type": "house_calendar", "field": "flag", "instrument": "MARA.XNAS"}
-        for n in range(17)
+        for n in range(count)
     }
-    screen = build(
+    return build(
         signals=signals
         | {"regime": {"type": "house_state", "field": "level", "instrument": "MARA.XNAS"}},
         groups={**BASE["groups"], "names": ["mara", "riot"]},
         measures=[{**CONDITION, "controls": list(signals)}],
     )
 
+
+def test_more_controls_than_the_range_admits_are_refused() -> None:
     with pytest.raises(ValidationError, match=r"measures\.0\.controls: 17 is outside"):
-        check(screen)
+        check(controlled(17))

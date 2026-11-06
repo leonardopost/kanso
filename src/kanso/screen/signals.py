@@ -13,7 +13,8 @@ one instant, the last the catalog hands over — and there is none before the fi
 A point's `ts_init` is when it became public, so a value read this way was known at the
 instant it is read for. Nothing before the window's first midnight is read, as no leg is: a
 point published before the window opened is never carried into it, and the instants before a
-signal's first point inside the window hold no value, never a zero.
+signal's first point inside the window hold no value, never a zero. Nothing from the midnight
+after its last day is read either, and an instant from then on holds no value.
 
 **One read a day per type.** The points are read one UTC day at a time through
 `kanso.nautilus.backtest._custom_points`, the reader a card's custom series comes through, so
