@@ -98,14 +98,20 @@ economic reference time, and `ts_init`, the instant its information became publi
 declared publication rule is refused at write. Backtesting on ingest time is the most
 comfortable way to be wrong, because it is invisible in every metric.
 
-**It never rewrites data a snapshot pins.** A run is pinned to a snapshot, so the bytes it
-was measured on stay exactly as they were; a later load writes a successor dataset that
-records what it supersedes.
+**It never rewrites data a snapshot pins unless a load names it.** A run is pinned to a
+snapshot, so an overlapping write into the bytes it was measured on is refused, and
+`--replace` does not lift the refusal; only a load with `--supersedes` naming the pinned
+dataset takes its place, and the new one records what it supersedes. Over the same span that
+successor keeps the old dataset's id, so it rewrites the pinned dataset under that id, and a
+snapshot taken before it still covers the series until `kanso data snapshot` takes a newer one
+(`docs/backlog.md` row 232).
 
 ```
 $ kanso data load --loader synthetic --spec demo.yaml
 error: DEMO.SIM-bar-1m-raw-20250901 is named by a snapshot and cannot be rewritten
-remedy: write a successor dataset recording supersedes=<dataset_id>
+remedy: load it again with --supersedes DEMO.SIM-bar-1m-raw-20250901 to put this dataset in its
+        place; every snapshot naming the old one then stops supporting a certification, only
+        when the successor's id differs (docs/backlog.md row 232)
 $ echo $?
 2
 ```

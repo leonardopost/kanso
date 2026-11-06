@@ -22,8 +22,9 @@ overlapping write is refused, `--replace` does not lift the refusal, and the way
 is a successor dataset that records what it follows in `supersedes`. A successor written
 over the span of the one pinned dataset it names takes its place — the files and the
 manifest go, as a replace's do — and every snapshot naming the old dataset stops
-supporting a certification, since the workspace no longer describes what it pinned; that
-is the one way a pinned mistake is corrected, and it says so in the refusal. Data no snapshot has
+supporting a certification, since the workspace no longer describes what it pinned, only
+when the successor's id differs (`docs/backlog.md` row 232); that is the one way a pinned
+mistake is corrected, and it says so in the refusal. Data no snapshot has
 named yet is still refused an overlapping write, but that refusal is lifted by an explicit
 replace, because a destructive default on a command that reads like an import is the
 wrong default.
@@ -629,7 +630,8 @@ def _clear(
             f"{', '.join(frozen)} {'is' if len(frozen) == 1 else 'are'} named by a snapshot and "
             "cannot be rewritten",
             remedy=f"load it again with --supersedes {frozen[0]} to put this dataset in its "
-            "place; every snapshot naming the old one then stops supporting a certification",
+            "place; every snapshot naming the old one then stops supporting a certification, "
+            "only when the successor's id differs (docs/backlog.md row 232)",
         )
     others = [m for m in clashing if m.dataset_id != supersedes]
     if others and not replace:
@@ -811,7 +813,8 @@ def _unknown_files(
     if dataset == supersedes:
         again += (
             f" without --supersedes {dataset}: every snapshot naming it then stops supporting "
-            "a certification, as after a supersede, and the new dataset records no predecessor"
+            "a certification only when the new dataset's id differs, as after a supersede "
+            "(docs/backlog.md row 232), and the new dataset records no predecessor"
         )
     return PreconditionError(
         f"{dataset}: no run of the files in {filed} hashes to the checksum its manifest "

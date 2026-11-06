@@ -1,13 +1,14 @@
 """The snapshot a screen is pinned to: the newest that covers every series it reads.
 
 A screen's legs are of many types and grains, so the question `research begin` asks of one
-universe at one resolution is asked here of each series: does the union of the spans a
-snapshot pins for it contain every day of the window its market opened, read on the
-closures the store's definition of its instrument is filed under. A dataset of unknown
-publication covers nothing, as it covers nothing for a run: availability nobody declared is
-availability nobody can rely on. Among the covering snapshots the newest whose instrument
-checksum is the store's own is the one a screen is pinned to; when one covers and none
-matches, the definitions moved since it was taken, and that is refused by name. When none
+universe at one resolution is asked here of each series — a leg's, and a signal's custom type
+filed under its instrument: does the union of the spans a snapshot pins for it contain every
+day of the window its market opened, read on the closures the store's definition of its
+instrument is filed under, every day open when the store defines no such instrument. A dataset
+of unknown publication covers nothing, as it covers nothing for a run: availability nobody
+declared is availability nobody can rely on. Among the covering snapshots the newest whose
+instrument checksum is the store's own is the one a screen is pinned to; when one covers and
+none matches, the definitions moved since it was taken, and that is refused by name. When none
 covers because what the catalog holds has not been frozen yet, the screen freezes it.
 """
 
@@ -56,7 +57,9 @@ def covering(
 
 
 def _wanted(screen: Screen) -> list[tuple[str, str, str | None]]:
-    return sorted({(leg.instrument, str(leg.type), leg.resolution) for leg in screen.legs.values()})
+    legs = {(leg.instrument, str(leg.type), leg.resolution) for leg in screen.legs.values()}
+    signals = {(signal.instrument, signal.type, None) for signal in screen.signals.values()}
+    return sorted(legs | signals, key=lambda key: (key[0], key[1], key[2] or ""))
 
 
 def _newest(

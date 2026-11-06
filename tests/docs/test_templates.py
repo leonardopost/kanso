@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
+
+import pytest
+import yaml
 
 from kanso.config import Config, render_config
 from kanso.criteria.integrity import DENIED_UNDER_SIZING
+from kanso.errors import ValidationError
 from kanso.research import driver
 from kanso.schemas import CardStatus
+from kanso.schemas.screen import Screen
 from tests.docs.test_pages import spelled
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "src" / "kanso" / "templates"
@@ -137,3 +142,61 @@ def test_the_program_says_the_print_rule_holds_where_nothing_states_it() -> None
     assert "in `hypothesis.yaml` the venue fills by the tape" not in bullet
     assert "asks every name for `quote` and `trade` and none for `bar`" in bullet
     assert "a `hypothesis.yaml` that names no `limit_fill` is no sign the rule is off" in bullet
+
+
+def uncommented_screen() -> dict[str, Any]:
+    """The screen template's body with its examples uncommented: a `# key:` at the margin loses
+    its marker and its space, an indented line its marker, and a line commented twice stays a
+    comment, as it is in the file."""
+    body = template("screen.yaml").split("schema: 1\n", 1)[1]
+    rows = []
+    for line in body.splitlines():
+        if line.startswith("{{"):
+            continue
+        if re.match(r"# [a-z_]+:", line):
+            line = line[2:]
+        elif re.match(r"#\s+[^\s#]", line):
+            line = line[1:]
+        rows.append(line)
+    found = yaml.safe_load("\n".join(rows))
+    assert isinstance(found, dict)
+    return found
+
+
+def test_the_screen_template_s_condition_example_follows_catalog_legs_alone() -> None:
+    """Every operator's screen starts from this file, and its example once named `follow`, a
+    group holding the derived `miners`, beside a comment saying never a derived leg. Validated
+    with the template's own legs, derived legs, groups and signals — the legs its derived ones
+    read and it never declares stood in for by bars — the example is admitted, and the group it
+    named is refused."""
+    found = uncommented_screen()
+    (example,) = [item for item in found["measures"] if item["id"] == "condition"]
+    legs = dict(found["legs"])
+    for name in ("riot", "coin", "mstr", "okx_btc", "binance_btc"):
+        legs.setdefault(
+            name, {"instrument": f"{name.upper()}.XNAS", "type": "bar", "resolution": "1s"}
+        )
+
+    def screen(measure: dict[str, Any]) -> Screen:
+        return Screen.model_validate(
+            {
+                "schema": 1,
+                "id": "probe",
+                "title": "probe",
+                "thesis": "probe",
+                "window": {"start": "2024-01-02", "end": "2024-03-29"},
+                "legs": legs,
+                "derived": found["derived"],
+                "groups": found["groups"],
+                "signals": found["signals"],
+                "clock": {"hours": {"tz": "America/New_York", "span": "09:31-16:01"}},
+                "measures": [measure],
+                "verdict": found["verdict"],
+            }
+        )
+
+    assert example["followers"] in found["legs"]
+    assert screen(example).measures[0].id == "condition"
+    assert "miners" in found["groups"]["follow"] and "miners" in found["derived"]
+    with pytest.raises(ValidationError, match="'miners' is a derived leg"):
+        screen({**example, "followers": "follow"})

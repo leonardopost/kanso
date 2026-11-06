@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from typing import Any
 
 import pytest
 from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.errors import ValidationError
 from kanso.schemas import dump_yaml, parse_yaml
 from kanso.schemas.screen import (
+    Comparison,
     LeadLag,
     Screen,
     ScreenResult,
+    TurnOfMonth,
     cells,
+    disjoint,
     hours_minutes,
     pairs,
     span_ns,
@@ -231,6 +236,54 @@ def test_hours_are_minutes_after_midnight() -> None:
         hours_minutes("9:30-16:00")
 
 
+SIGNALS: dict[str, Any] = {
+    "regime": {"type": "house_state", "field": "level", "instrument": "IDX.XNAS"},
+    "event_day": {"type": "house_calendar", "field": "flag", "instrument": "MARA.XNAS"},
+}
+
+
+def test_a_signal_is_a_custom_field_and_its_instrument_is_one_the_screen_reads() -> None:
+    screen = build(signals=SIGNALS)
+
+    assert screen.signals["regime"].field == "level"
+    assert screen.instruments == ("BTC-USDT-SWAP.OKX", "IDX.XNAS", "MARA.XNAS", "RIOT.XNAS")
+    assert build().instruments == ("BTC-USDT-SWAP.OKX", "MARA.XNAS", "RIOT.XNAS")
+    assert parse_yaml(Screen, dump_yaml(screen)) == screen
+
+
+@pytest.mark.parametrize(
+    ("signal", "message"),
+    [
+        ({"type": "bar", "field": "close"}, "'bar' is a market type"),
+        ({"type": "house_state", "field": "ts_init"}, "says when or whose a point is"),
+        ({"type": "house_state", "field": "instrument_id"}, "says when or whose a point is"),
+        ({"type": "house_state", "field": "9lives"}, "field"),
+        ({"type": "House", "field": "level"}, "type"),
+    ],
+)
+def test_a_signal_that_is_no_custom_value_is_refused(signal: dict[str, str], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        build(signals={"regime": {**signal, "instrument": "IDX.XNAS"}})
+
+
+def test_a_signal_shares_the_namespace_of_legs_and_groups() -> None:
+    with pytest.raises(ValidationError, match="signals.btc: already declared as a leg"):
+        build(signals={"btc": SIGNALS["regime"]})
+    with pytest.raises(ValidationError, match="signals.lead: already declared as a group"):
+        build(signals={"lead": SIGNALS["regime"]})
+
+
+@given(st.tuples(st.integers(0, 10), st.integers(0, 10)).filter(lambda pair: pair != (0, 0)))
+def test_a_turn_of_month_round_trips(window: tuple[int, int]) -> None:
+    value = TurnOfMonth(turn_of_month=window)
+    assert parse_yaml(TurnOfMonth, dump_yaml(value)) == value
+
+
+def test_a_turn_of_month_holding_no_day_is_refused() -> None:
+    with pytest.raises(ValidationError, match=r"\[0, 0\] holds no day"):
+        TurnOfMonth(turn_of_month=(0, 0))
+
+
 def test_a_verdict_no_cell_could_pass_is_refused() -> None:
     from kanso.schemas.screen import p_floor
 
@@ -284,3 +337,180 @@ def test_a_catch_up_names_its_pair_and_ends_on_either_side_of_its_entry_gap(
 ) -> None:
     with pytest.raises(ValidationError, match=message):
         build(measures=[{**CATCH_UP, **measure}])
+
+
+TESTED: dict[str, Any] = {
+    "signal": "regime",
+    "when": {"gt": 0},
+    "against": {"lt": 0},
+    "entry": "close",
+    "exit": "close",
+    "hold": "while",
+    "side": "long",
+}
+
+CONDITION: dict[str, Any] = {
+    "id": "condition",
+    "tests": {"up": TESTED, "down": {**TESTED, "when": {"lt": 0}, "against": "rest"}},
+    "followers": "names",
+    "payoff": "contrast",
+    "null_by": "circular",
+    "demean": ["weekday", "month", {"turn_of_month": [1, 3]}, "third_friday_week"],
+    "controls": ["event_day"],
+    "latency_ms": 900000,
+}
+
+
+def conditioned(measure: dict[str, Any] | None = None, **changes: Any) -> Screen:
+    return build(
+        signals=SIGNALS,
+        groups={**BASE["groups"], "names": ["mara", "riot"]},
+        measures=[measure or CONDITION],
+        **changes,
+    )
+
+
+def test_a_condition_counts_its_tests_by_its_followers() -> None:
+    screen = conditioned()
+
+    assert cells(screen) == (2 * 2,)
+    assert parse_yaml(Screen, dump_yaml(screen)) == screen
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"tests": {"up": {**TESTED, "when": {}}}}, "exactly one of gt, ge, lt, le, eq or ne"),
+        (
+            {"tests": {"up": {**TESTED, "when": {"gt": 0, "lt": 1}}}},
+            "exactly one of gt, ge, lt, le, eq or ne",
+        ),
+        (
+            {"tests": {"up": {**TESTED, "against": {"le": 0.5}}}},
+            "against: le 0.5 meets when gt 0",
+        ),
+        ({"tests": {"up": {**TESTED, "against": None}}}, "a contrast states what"),
+        ({"payoff": "long_flat"}, "a long-or-flat payoff sets the favoured state against nothing"),
+        ({"block": 20}, "a circular null takes every shift and sums into no block"),
+        ({"min_shift": 30}, "min_shift.*Extra inputs are not permitted"),
+        ({"null_by": "sign_flip"}, "a sign-flip null states the block its sessions are summed"),
+        (
+            {
+                "null_by": "sign_flip",
+                "block": 3,
+                "tests": {"up": {**TESTED, "hold": {"sessions": 5}}},
+            },
+            "block: 3 session.s. is shorter than tests.up's hold of 5, so no position of it fits",
+        ),
+        ({"demean": ["weekday", "weekday"]}, "demean: a value appears twice"),
+        (
+            {"demean": [{"turn_of_month": [1, 3]}, {"turn_of_month": [2, 2]}]},
+            "demean: a value appears twice",
+        ),
+        ({"controls": ["event_day", "event_day"]}, "controls: a value appears twice"),
+        ({"tests": {"up": {**TESTED, "signal": "nobody"}}}, "'nobody' is not a declared signal"),
+        ({"controls": ["nobody"]}, "controls: 'nobody' is not a declared signal"),
+        ({"followers": "miners"}, "'miners' is a derived leg"),
+        ({"followers": "follow"}, "'miners' is a derived leg"),
+        ({"followers": "nobody"}, "'nobody' is not a declared leg or group"),
+        ({"tests": {}}, "at least 1"),
+        ({"tests": {"up": {**TESTED, "hold": {"sessions": 0}}}}, "greater than or equal to 1"),
+    ],
+)
+def test_a_condition_that_breaks_a_rule_is_refused_by_name(
+    change: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        conditioned({**CONDITION, **change})
+
+
+def test_two_condition_measures_making_one_cell_are_refused_and_two_nulls_are_admitted() -> None:
+    blocks = {**CONDITION, "null_by": "sign_flip", "block": 20}
+    screen = build(
+        signals=SIGNALS,
+        groups={**BASE["groups"], "names": ["mara", "riot"]},
+        measures=[CONDITION, blocks],
+    )
+    assert cells(screen) == (4, 4)
+
+    with pytest.raises(ValidationError, match="measures.1: condition/up/mara/circular is"):
+        build(
+            signals=SIGNALS,
+            groups={**BASE["groups"], "names": ["mara", "riot"]},
+            measures=[CONDITION, {**CONDITION, "tests": {"up": TESTED}}],
+        )
+
+
+def test_a_verdict_no_condition_cell_could_pass_under_its_null_is_refused() -> None:
+    verdict = {"alpha": 0.01, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 100}
+    blocks = {**CONDITION, "null_by": "sign_flip", "block": 20}
+
+    with pytest.raises(ValidationError, match="smallest p 5 block.s. of measures.0's 20"):
+        conditioned(blocks, verdict=verdict)
+    conditioned({**blocks, "block": 10}, verdict=verdict)
+    with pytest.raises(ValidationError, match="below 0.01, the smallest p circular shifts") as e:
+        conditioned(verdict={**verdict, "alpha": 0.009})
+    assert "give a family of 100 session(s), one in its 100 rotations" in str(e.value)
+    conditioned(verdict=verdict)
+
+
+CRITICAL = st.sampled_from([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0])
+OPERATOR = st.sampled_from(["gt", "ge", "lt", "le", "eq", "ne"])
+
+
+@given(first=OPERATOR, low=CRITICAL, second=OPERATOR, high=CRITICAL)
+def test_two_comparisons_are_disjoint_exactly_when_no_point_satisfies_both(
+    first: str, low: float, second: str, high: float
+) -> None:
+    a, b = Comparison.model_validate({first: low}), Comparison.model_validate({second: high})
+    points = {low, high, (low + high) / 2, low - 1, low + 1, high - 1, high + 1, -1e9, 1e9}
+
+    meets = any(a.holds(point) and b.holds(point) for point in points)
+
+    assert disjoint(a, b) is (not meets)
+    assert disjoint(b, a) is disjoint(a, b)
+
+
+@given(operator=OPERATOR, bound=CRITICAL, value=CRITICAL)
+def test_a_comparison_holds_where_its_operator_says(
+    operator: str, bound: float, value: float
+) -> None:
+    import operator as ops
+
+    compare = {"gt": ops.gt, "ge": ops.ge, "lt": ops.lt, "le": ops.le, "eq": ops.eq, "ne": ops.ne}
+    comparison = Comparison.model_validate({operator: bound})
+
+    assert comparison.holds(value) is compare[operator](value, bound)
+    assert comparison.text == f"{operator} {bound:g}"
+
+
+@given(operator=OPERATOR, bound=st.floats(allow_nan=False, allow_infinity=False))
+def test_a_comparison_s_text_reads_back_as_the_number_it_compares_with(
+    operator: str, bound: float
+) -> None:
+    name, number = Comparison.model_validate({operator: bound}).text.split()
+
+    assert name == operator and float(number) == bound
+
+
+def test_a_comparison_s_text_is_short_where_that_is_exact_and_whole_where_not() -> None:
+    texts = {
+        bound: Comparison.model_validate({"gt": bound}).text
+        for bound in (2.0, 0.5, 2.0000001, 0.1234567, 1234567.0, 1e-7)
+    }
+
+    assert texts == {
+        2.0: "gt 2",
+        0.5: "gt 0.5",
+        2.0000001: "gt 2.0000001",
+        0.1234567: "gt 0.1234567",
+        1234567.0: "gt 1234567.0",
+        1e-7: "gt 1e-07",
+    }
+
+
+@pytest.mark.parametrize("bound", [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("operator", ["gt", "ge", "lt", "le", "eq", "ne"])
+def test_a_comparison_with_no_finite_number_is_refused(operator: str, bound: float) -> None:
+    with pytest.raises(ValidationError, match=f"{operator}: Input should be a finite number"):
+        Comparison.model_validate({operator: bound})
