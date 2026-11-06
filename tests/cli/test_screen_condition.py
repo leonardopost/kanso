@@ -388,5 +388,5 @@ def test_a_condition_cell_is_not_drafted(runner: CliRunner, taped: Path) -> None
 
     assert result.exit_code == Exit.VALIDATION, result.stdout
     assert "is a condition cell" in payload(result)["error"]
-    assert "kanso hyp new" in payload(result)["remedy"]
+    assert "`kanso hyp new tape_lane`" in payload(result)["remedy"]
     assert not (taped / "hypotheses" / "tape_lane").exists()

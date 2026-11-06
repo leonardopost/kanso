@@ -112,7 +112,7 @@ def draft(
             f"{screen_id} is bound to {screen.hyp}, which already exists",
             remedy=f"research {screen.hyp}; a draft is written from a free screen",
         )
-    cell = _cell(result, cell_key)
+    cell = _cell(result, cell_key, new_id)
     measure = screen.measures[cell.measure]
     assert isinstance(measure, Response | CatchUp)
     trigger, follower = _leader(measure), str(cell.params["follower"])
@@ -150,7 +150,7 @@ def draft(
     return Drafted(identity, directory, screen_id, cell.key)
 
 
-def _cell(result: ScreenResult, key: str) -> Cell:
+def _cell(result: ScreenResult, key: str, new_id: str) -> Cell:
     cell = next((item for item in result.cells if item.key == key), None)
     if cell is None:
         raise ValidationError(
@@ -167,7 +167,8 @@ def _cell(result: ScreenResult, key: str) -> Cell:
         raise ValidationError(
             f"{key} is a condition cell, whose seed would read a custom type in its own "
             "strategy, which no template carries",
-            remedy="write the hypothesis with `kanso hyp new`, the cell's numbers beside it",
+            remedy=f"write the hypothesis with `kanso hyp new {new_id}`, the cell's numbers "
+            "beside it",
         )
     return cell
 
