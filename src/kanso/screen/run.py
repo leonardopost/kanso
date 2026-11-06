@@ -535,7 +535,11 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     """The cell with its judgement, when the screen declared floors to judge it by.
 
     Every cell needs `min_sessions` and a p at or under `alpha`; a `response` cell needs its
-    margin over the hurdle and its events a day to clear their floors too. A cell under
+    margin over the hurdle and its events a day to clear their floors too. A `condition` cell
+    needs those and its `mean` above zero: its p ranks |t|, so it is two-sided, and its mean is
+    signed so that an effect on the side its test declares is positive. A significant mean below
+    zero is the state working against that side, which the margin need not show, since over a
+    hold of several sessions a round trip's gross is mostly the follower's drift. A cell under
     `min_sessions` is `thin`; otherwise every clause it misses is named in its reason, so a
     cell that fails on p and on events a day says both.
     """
@@ -547,6 +551,8 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     missed: list[str] = []
     if cell.p > verdict.alpha:
         missed.append(f"p {cell.p:.4g} above alpha {verdict.alpha:g}")
+    if cell.condition is not None and cell.mean <= 0:
+        missed.append(f"mean {cell.mean:.4g} bp is against the declared side")
     stats = cell.response
     if stats is not None and stats.margin_bp < verdict.min_margin_bp:
         missed.append(

@@ -168,12 +168,14 @@ def test_a_run_reads_the_tape_as_of_each_decision_and_judges_by_shifts(
     assert found.long_flat_bp is not None and found.control_r2 is not None
     assert cell.response.unfilled == 0 and cell.response.hurdle_bp > 0
     # Each cell is judged as a cell that trades is: thin under the verdict's sessions, else on
-    # its p and on its positions' margin and events a day. The fixed holds, flat between
-    # onsets, contrast fewer sessions than the verdict asks.
+    # its p, on its positions' margin and events a day, and on its mean's being on the declared
+    # side, its p being two-sided. The fixed holds, flat between onsets, contrast fewer
+    # sessions than the verdict asks.
     for item in rendered.cells:
         assert item.response is not None
         missed = [
             item.p > 0.1,
+            item.mean <= 0,
             item.response.margin_bp < 0,
             item.response.events_per_day < 0,
         ]

@@ -1599,3 +1599,48 @@ def test_a_sign_flip_family_reads_its_critical_t_off_its_own_maxima(
     found = cell.condition
     assert found is not None and found.exact is False and found.critical_t is not None
     assert found.mde_bp is not None and found.mde_bp > found.critical_t * cell.se
+
+
+def test_a_cell_whose_mean_is_against_its_side_fails_however_small_its_p_and_large_its_margin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kanso.schemas.screen import ScreenVerdict
+    from kanso.screen.run import _judged, _summary
+
+    sessions = trading(date(2022, 1, 3), date(2022, 12, 30))
+    rng = np.random.default_rng(3)
+    level, state = {}, 1.0
+    for day in sessions:
+        if rng.random() < 0.1:
+            state = -state
+        level[day] = state
+    # A close-to-close period is decided 15 minutes before the previous close, so the state a
+    # session is scored under is the point published that morning of the session before it. The
+    # follower drifts 25 bp a session and earns 20 bp less while the state holds: the long the
+    # test declares is on the wrong side of the state, and its runs still earn their drift.
+    scored = {day: level[before] > 0 for before, day in zip(sessions, sessions[1:], strict=False)}
+    price, prices = 100.0, {}
+    for day in sessions:
+        price *= math.exp((25.0 - 20.0 * scored.get(day, False) + rng.normal() * 40.0) / 1e4)
+        prices[day] = (price, price)
+    verdict = {"alpha": 0.05, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 100}
+    spec = screen(
+        {"up": {**TEST, "entry": "close", "exit": "close", "against": None}},
+        window=(sessions[0], sessions[-1]),
+        payoff="long_flat",
+        verdict=verdict,
+    )
+
+    (cell,) = measured(spec, {"a": prices}, {"lvl": daily(level)}, monkeypatch)
+    judged = _judged(ScreenVerdict.model_validate(verdict), cell)
+
+    assert cell.response is not None and cell.condition is not None
+    assert cell.p <= 0.05 and cell.t < 0, "p ranks |t|: a significant effect, the wrong way"
+    assert cell.response.margin_bp > 0, "a round trip's gross is mostly the follower's drift"
+    assert cell.sessions >= 100 and cell.mean < 0
+    assert judged.judged == "fail"
+    assert judged.reason == f"mean {cell.mean:.4g} bp is against the declared side"
+    assert _summary(spec.verdict, [judged]).worth_a_lane is False
+    # The mean is the only clause it missed: the same cell on the declared side passes.
+    mirrored = cell.model_copy(update={"mean": -cell.mean, "t": -cell.t})
+    assert _judged(ScreenVerdict.model_validate(verdict), mirrored).judged == "pass"

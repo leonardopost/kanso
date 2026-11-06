@@ -35,7 +35,8 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    estimate is the mean of position times residual, the excess a session over the calendar's
    mean, and a session's value is its position less the cell's mean position times its
    residual, which sums to the same; under a contrast it is the mean residual long less the
-   mean residual short, so a correctly signed effect is positive under either. Under circular
+   mean residual short, so a correctly signed effect is positive under either, and a verdict
+   passes no cell at or under zero, its p being two-sided (`kanso.screen.run`). Under circular
    shifts each weight is residualised on the design as the returns were, so the values spread
    as the estimate does (`kanso.screen.nulls.values_of`). Under sign flips it is not: a
    month's residuals, and its residualised weights, sum to zero over the month, so their block
