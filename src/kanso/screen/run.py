@@ -614,8 +614,8 @@ def _refuse_unserved(plans: Sequence[data.LegPlan]) -> None:
         if any(item.type not in BUILTIN_TYPES for item in unserved):
             remedy = (
                 "load each custom series from a file with `kanso data load --loader "
-                "csv_parquet --spec <spec>` over the window, or build a data adapter whose "
-                "`serves` names its type (docs/extensions.md)"
+                "csv_parquet --spec <spec>` over the days its reason names missing, or build a "
+                "data adapter whose `serves` names its type (docs/extensions.md)"
             )
         raise PreconditionError(
             f"the screen reads series no registered adapter serves: {reasons}",

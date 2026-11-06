@@ -185,7 +185,7 @@ def plan(
                     missing=missing,
                     defined=instrument in defined,
                     timestamps=stamps,
-                    reason=_unserved(instrument, kind, resolution),
+                    reason=_unserved(instrument, kind, resolution, missing),
                 )
             )
             continue
@@ -308,14 +308,17 @@ def _held_timestamps(
     return kinds.pop() if len(kinds) == 1 else MIXED
 
 
-def _unserved(instrument: str, kind: str, resolution: str | None) -> str:
+def _unserved(
+    instrument: str, kind: str, resolution: str | None, missing: Sequence[tuple[date, date]]
+) -> str:
     grain = f" {resolution}" if resolution else ""
     if kind not in BUILTIN_TYPES:
+        days = ", ".join(f"{start}..{end}" for start, end in missing) or "the window"
         return (
             f"no registered adapter serves {instrument} as {kind}; load it from a file with "
-            f"`kanso data load --loader csv_parquet --spec <spec>` over the window, or build "
-            f"an adapter whose `serves` names {kind} (docs/extensions.md), then run the screen "
-            "again"
+            f"`kanso data load --loader csv_parquet --spec <spec>` over the days missing, "
+            f"{days} — a load over days already held overlaps them — or build an adapter whose "
+            f"`serves` names {kind} (docs/extensions.md), then run the screen again"
         )
     return (
         f"no registered adapter serves {instrument} as {kind}{grain}; build one as a workspace "

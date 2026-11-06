@@ -24,6 +24,11 @@ instrument, is no signal's. The latest point is carried from one day to the next
 window of decades holds one day of points at a time. A field that is not a finite number is
 refused (exit 2): a comparison of a NaN reads false whichever way it is asked.
 
+**A refused point is reloaded by supersession.** A run pins a snapshot covering every series
+before it reads a point, so by the time a point is refused the dataset holding it is named by
+one, and a `--replace` over it is refused. The remedy names a load that supersedes it, one
+dataset at a time, since `--supersedes` names one (`reload`).
+
 NautilusTrader facts relied on (nautilus_trader 1.231.0): a custom point read back from the
 catalog arrives wrapped in `CustomData`, whose `data` is the point; a query filters on
 `ts_init` inclusively at both ends (`kanso.nautilus.facts`).
@@ -64,6 +69,18 @@ class Read:
 Day = tuple[int, int, np.ndarray, np.ndarray, np.ndarray]
 """One day's points of one signal: the day's span `[start, end)`, then `ts_init`, the value and
 `ts_event` of each point, in the order the catalog handed them."""
+
+
+def reload(screen: Screen, name: str) -> str:
+    """How to reload a signal's series once a run has pinned it: a superseding load for each of
+    its datasets."""
+    signal = screen.signals[name]
+    return (
+        f"reload {signal.type} under {signal.instrument} one dataset at a time — each `kanso data "
+        "show` lists, from a spec over that dataset's span — with `kanso data load --loader "
+        "csv_parquet --spec <spec> --supersedes <dataset>`: the snapshot the run pinned names "
+        "them, so a `--replace` is refused"
+    )
 
 
 def check(screen: Screen) -> None:
@@ -147,8 +164,7 @@ def _points(screen: Screen, name: str, points: Sequence[object], start: int, end
             raise PreconditionError(
                 f"signals.{name}: {signal.type}.{signal.field} is {value} at ts_init {stamp} "
                 f"on {signal.instrument}; a signal is a finite number",
-                remedy="set that point's field or drop the point, and reload the series with "
-                "`kanso data load --loader csv_parquet --spec <spec> --replace`",
+                remedy=f"set that point's field or drop the point, and {reload(screen, name)}",
             )
         stamps.append(stamp)
         values.append(value)

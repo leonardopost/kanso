@@ -533,13 +533,13 @@ def _controls(
                     "for",
                     remedy=f"give {name} a point every session, its ts_event on the session's "
                     f"date in {zone.key} and its ts_init at or before the period's exit, and "
-                    "reload it with `kanso data load --loader csv_parquet --spec <spec> --replace`",
+                    f"{signals.reload(context.screen, name)}",
                 )
             if value not in (0.0, 1.0):
                 raise PreconditionError(
                     f"controls.{name}: {value:g} on {day}; a control is 0 or 1",
-                    remedy=f"set every session's {name} to 0 or 1, and reload it with "
-                    "`kanso data load --loader csv_parquet --spec <spec> --replace`",
+                    remedy=f"set every session's {name} to 0 or 1, and "
+                    f"{signals.reload(context.screen, name)}",
                 )
             found[position, column] = value
     return found

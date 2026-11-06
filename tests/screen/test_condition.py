@@ -963,9 +963,9 @@ def test_a_control_not_zero_or_one_is_refused(monkeypatch: pytest.MonkeyPatch) -
     ) as refused:
         measured(screen(controls=["evt"]), {"a": flat(sessions)}, points, monkeypatch)
 
-    assert "kanso data load --loader csv_parquet --spec <spec> --replace" in (
-        refused.value.remedy or ""
-    )
+    remedy = refused.value.remedy or ""
+    assert "reload kanso_state_tape under AAA.XNAS one dataset at a time" in remedy
+    assert "kanso data load --loader csv_parquet --spec <spec> --supersedes <dataset>" in remedy
 
 
 def test_a_control_describing_another_day_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -982,7 +982,7 @@ def test_a_control_describing_another_day_is_refused(monkeypatch: pytest.MonkeyP
     remedy = refused.value.remedy or ""
     assert "ts_event on the session's date in America/New_York" in remedy
     assert "ts_init at or before the period's exit" in remedy
-    assert "kanso data load --loader csv_parquet --spec <spec> --replace" in remedy
+    assert "kanso data load --loader csv_parquet --spec <spec> --supersedes <dataset>" in remedy
 
 
 def test_a_control_is_dated_in_the_clock_s_zone_either_side_of_the_clock_change(

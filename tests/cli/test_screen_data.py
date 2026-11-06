@@ -276,11 +276,17 @@ def test_a_signal_no_file_or_adapter_supplies_is_unserved_naming_the_file_load(
     assert result.exit_code == Exit.OK, result.stdout
     tape = payload(result)["data"][1]
     assert tape["state"] == "unserved"
-    assert "kanso data load --loader csv_parquet" in tape["reason"]
+    days = ", ".join(f"{start}..{end}" for start, end in tape["missing"])
+    assert (
+        "kanso data load --loader csv_parquet --spec <spec>` over the days missing, "
+        in (tape["reason"])
+    )
+    assert days and f"missing, {days} — a load over days already held overlaps" in tape["reason"]
     assert "whose `serves` names kanso_state_tape" in tape["reason"]
     refused = at(runner, taped, "screen", "run", write_screen(taped, late), "--json")
     assert refused.exit_code == Exit.PRECONDITION
-    assert "kanso data load --loader csv_parquet" in payload(refused)["remedy"]
+    assert "over the days missing, " + days in payload(refused)["error"]
+    assert "over the days its reason names missing" in payload(refused)["remedy"]
 
 
 def test_a_snapshot_pins_a_screen_only_when_it_covers_the_signal_s_series(

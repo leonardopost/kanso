@@ -214,9 +214,9 @@ def test_another_instrument_s_points_and_market_wide_ones_are_no_signal_s() -> N
     for value in ("nan", "inf", "-inf"):
         with pytest.raises(PreconditionError, match=f"is {value} at ts_init 4 on AAA.XNAS") as one:
             signals._points(screen(), "lvl", [point("AAA.XNAS", float(value), 4)], 0, 10)
-        assert "kanso data load --loader csv_parquet --spec <spec> --replace" in (
-            one.value.remedy or ""
-        )
+        remedy = one.value.remedy or ""
+        assert f"reload {TAPE_ID} under AAA.XNAS one dataset at a time" in remedy
+        assert "kanso data load --loader csv_parquet --spec <spec> --supersedes <dataset>" in remedy
 
 
 INSTANTS = st.lists(st.integers(-50, 5 * 100 - 1), max_size=40)

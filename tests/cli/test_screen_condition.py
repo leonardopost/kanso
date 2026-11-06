@@ -24,7 +24,18 @@ from kanso.schemas import parse_yaml
 from kanso.schemas.screen import Cell, ScreenResult
 from kanso.screen.condition import CIRCULAR
 
-from .conftest import INSTRUMENT, OTHER, at, payload
+from .conftest import (
+    INSTRUMENT,
+    OTHER,
+    SYMBOL,
+    TAPE_FIRST,
+    TAPE_LAST,
+    VENUE,
+    at,
+    payload,
+    tape_flag,
+    tape_level,
+)
 from .test_screen import write_screen
 from .test_screen_run import run_screen
 
@@ -203,6 +214,62 @@ def test_a_calendar_control_no_calendar_on_file_covers_is_refused_before_anythin
         f"month the window touches, 2024-01-01..2024-03-31, and {held}"
     ) in payload(result)["error"]
     assert "supply them as 0/1 controls" in payload(result)["remedy"]
+
+
+def test_a_refused_control_is_reloaded_by_the_superseding_load_its_remedy_names(
+    runner: CliRunner, taped: Path
+) -> None:
+    from tests.screen.conftest import TAPE_ID
+
+    def written(bad: date | None) -> Path:
+        """The tape filed under the one name alone, its flag 2 on `bad`."""
+        rows = ["t,level,flag,switch,label"]
+        day = TAPE_FIRST
+        while day <= TAPE_LAST:
+            flag = 2 if day == bad else tape_flag(day)
+            rows.append(f"{day} 13:00:00,{tape_level(day)},{flag},{'true' if flag else 'false'},x")
+            day = date.fromordinal(day.toordinal() + 1)
+        (taped / "one.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        columns = {name: name for name in ("level", "flag", "switch", "label")}
+        source = {"path": str(taped / "one.csv"), "instrument": SYMBOL, "venue": VENUE}
+        spec = taped / "one.yaml"
+        files = [{**source, "type": TAPE_ID, "columns": {"ts_event": "t", **columns}}]
+        spec.write_text(
+            yaml.safe_dump({"loader": "csv_parquet", "timezone": "UTC", "files": files}),
+            encoding="utf-8",
+        )
+        return spec
+
+    def dataset() -> str:
+        series = payload(at(runner, taped, "data", "show", "--json"))["series"]
+        (held,) = (
+            item["datasets"]
+            for item in series
+            if item["type"] == TAPE_ID and item["instrument"] == INSTRUMENT
+        )
+        (only,) = held
+        return str(only["dataset_id"])
+
+    def loaded(spec: Path, *flags: str) -> Any:
+        return at(runner, taped, "data", "load", "--loader", "csv_parquet", "--spec", spec, *flags)
+
+    assert loaded(written(date(2024, 2, 1)), "--supersedes", dataset()).exit_code == Exit.OK
+    path = write_screen(taped, STATE)
+
+    refused = at(runner, taped, "screen", "run", path, "--json")
+
+    assert refused.exit_code == Exit.PRECONDITION, refused.stdout
+    assert "controls.event_day: 2 on 2024-02-01; a control is 0 or 1" in payload(refused)["error"]
+    remedy = payload(refused)["remedy"]
+    assert f"reload {TAPE_ID} under {INSTRUMENT} one dataset at a time" in remedy
+    assert "`kanso data show`" in remedy
+    assert "kanso data load --loader csv_parquet --spec <spec> --supersedes <dataset>" in remedy
+    # The run pinned the dataset before it read the point, so a replace over it is refused and
+    # the superseding load the remedy names is what puts the fixed tape in its place.
+    fixed = written(None)
+    assert loaded(fixed, "--replace").exit_code == Exit.PRECONDITION
+    assert loaded(fixed, "--supersedes", dataset()).exit_code == Exit.OK
+    assert at(runner, taped, "screen", "run", path, "--json").exit_code == Exit.OK
 
 
 def test_two_workspaces_holding_the_same_bytes_measure_the_same_result(
