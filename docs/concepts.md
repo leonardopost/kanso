@@ -461,8 +461,9 @@ contrasting the first half of each month with the rest over 2025 in blocks of 10
 5.5% and 11.0% with `demean: []`, and `se` was 0.82 times the estimate's spread (0.90 in blocks
 of five). Exactly, the block sums' expected sum of squares is 0.70 of the estimate's variance
 there under either weighting, and the shortfall fades as the window grows: 0.88 over 2024–2025,
-0.98 over 2016–2025. Judge such a state by `circular`, which held its level on it: 4.75% of p at
-or under 0.05 and 9.92% at or under 0.10 over 10,000 seeds. A shift rotates one
+0.98 over 2016–2025. Judge such a state by `circular`, which held its level on it: 5.07% of p at
+or under 0.05 and 10.76% at or under 0.10 over 10,000 seeds from 90000, inside binomial 99.9%
+bounds of the 4.8% and 10.0% its 250 sessions allow. A shift rotates one
 index, so a circular family holds only the N sessions every one of its cells holding any holds:
 a cell holding only some would have its positions shifted off its returns, keep fewer values
 than it observed on most shifts, and pull the family's maxima down — measured on two contrast

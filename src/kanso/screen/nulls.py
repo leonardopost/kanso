@@ -20,8 +20,9 @@ sums of one month correlate positively and spread less than their total. Contras
 half of each month with the rest over 2025 in blocks of 10, their expected sum of squares is
 0.70 of the estimate's variance, on a cell's weights alone or residualised, and 11.25% of p fell
 at or under 0.05 (2,000 seeds); the shortfall fades as the window grows, to 0.88 over 2024–2025
-and 0.98 over 2016–2025. Circular shifts held their level on it, 4.75% of p at or under 0.05 and
-9.92% at or under 0.10 (10,000 seeds), so a state like it is better judged by them.
+and 0.98 over 2016–2025. Circular shifts held their level on it, 5.07% of p at or under 0.05 and
+10.76% at or under 0.10 (10,000 seeds from 90000), inside binomial 99.9% bounds of the 4.8% and
+10.0% its 250 sessions allow, so a state like it is better judged by them.
 
 **Max-T over exactly the declared cells.** Under the null of no relationship a cell's
 per-session values are symmetric about zero, so one draw flips the sign of every session's

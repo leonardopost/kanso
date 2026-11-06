@@ -338,7 +338,8 @@ def test_block_sums_spread_too_little_for_a_state_that_changes_sign_inside_the_m
 
 def test_on_a_state_that_changes_sign_inside_the_month_flips_run_above_and_shifts_hold() -> None:
     # Measured on these seeds: 11.25% of p at or under 0.05 by sign flips of blocks of 10, and
-    # by circular shifts 5.15%, and 11.5% at or under 0.10 (4.75% and 9.92% over 10,000 seeds).
+    # by circular shifts 5.15%, and 11.5% at or under 0.10 (5.07% and 10.76% over the 10,000
+    # seeds from 90000, the same loop over range(10000)).
     positions, matrix, names = first_half_of_month(date(2025, 1, 1), date(2025, 12, 31), ["month"])
     spanned = demean.spanned(matrix, names)
     flips, shifts = [], []
