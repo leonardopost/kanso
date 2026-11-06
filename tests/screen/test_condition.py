@@ -293,6 +293,43 @@ def test_a_point_stamped_at_the_close_is_not_read_at_that_close_and_is_read_at_t
     assert opening.signal_age_median_s == 17 * 3600 + 16 * 60
 
 
+def utc(day: date, hour: int) -> int:
+    """An instant in UTC as nanoseconds."""
+    return int(datetime.combine(day, time(hour), tzinfo=ZoneInfo("UTC")).timestamp()) * 10**9
+
+
+@pytest.mark.parametrize(
+    ("entry", "standard", "daylight", "both"),
+    [
+        # 09:16 New York less 13:00 UTC: 14:16Z in EST, 13:16Z in EDT; ten sessions of each.
+        ("open", 76 * 60, 16 * 60, (76 + 16) * 60 / 2),
+        # 15:45 New York, a session's previous close less 15 minutes: 20:45Z in EST, 19:45Z in
+        # EDT. Monday 2026-03-09 enters at Friday's close, in EST: ten of EST to nine of EDT.
+        ("close", 7 * 3600 + 45 * 60, 6 * 3600 + 45 * 60, 7 * 3600 + 45 * 60),
+    ],
+)
+def test_a_table_stamped_at_13_utc_is_read_at_the_anchors_either_side_of_the_clock_change(
+    monkeypatch: pytest.MonkeyPatch, entry: str, standard: int, daylight: int, both: float
+) -> None:
+    # New York moves to daylight time on 2026-03-08; the table stays at 13:00 UTC.
+    every = [date(2026, 2, 23) + timedelta(days=n) for n in range(26)]
+    table = [(utc(day, 13), 1.0 if n % 2 else -1.0) for n, day in enumerate(every)]
+    test = {"up": {**TEST, "entry": entry}}
+    winter = trading(date(2026, 2, 23), date(2026, 3, 6))
+    summer = trading(date(2026, 3, 9), date(2026, 3, 20))
+
+    found = {}
+    for name, sessions in (("winter", winter), ("summer", summer), ("both", winter + summer)):
+        (cell,) = measured(screen(test), {"a": walk(sessions, 22)}, {"lvl": table}, monkeypatch)
+        assert cell.condition is not None
+        found[name] = cell.condition
+
+    assert found["winter"].signal_age_median_s == found["winter"].signal_age_max_s == standard
+    assert found["summer"].signal_age_median_s == found["summer"].signal_age_max_s == daylight
+    assert found["both"].signal_age_max_s == standard
+    assert found["both"].signal_age_median_s == both
+
+
 def test_monday_s_open_reads_sunday_s_point(monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = trading(date(2026, 1, 5), date(2026, 1, 30))
     # A point on Sunday at +1 and on Tuesday to Friday at -1, and none on Monday or Saturday.
@@ -332,6 +369,77 @@ def test_an_onset_while_a_fixed_hold_runs_is_skipped_and_counted(
     assert found.skipped == 2, "the against and when onsets inside the first hold"
     assert found.sessions_when == 3, "one hold of three sessions, opened at the first onset"
     assert found.sessions_against == 3, "then one short hold, opened at the next onset"
+
+
+def test_a_fixed_hold_runs_on_the_follower_s_sessions_and_never_on_a_closure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading(date(2026, 2, 2), date(2026, 2, 27))
+    assert date(2026, 2, 16) not in sessions, "Washington's Birthday is a closure"
+    level = dict.fromkeys(sessions, -1.0)
+    level[date(2026, 2, 13)] = 1.0
+    test = {**TEST, "against": None, "hold": {"sessions": 3}}
+
+    (cell,) = measured(
+        screen({"up": test}, payoff="long_flat"),
+        {"a": walk(sessions, 23)},
+        {"lvl": daily(level)},
+        monkeypatch,
+    )
+
+    # Opened on Friday the 13th, held that day, Tuesday and Wednesday: the closure is no session.
+    found = cell.condition
+    assert found is not None and cell.response is not None
+    assert found.sessions_when == 3 and cell.response.events == 3 and found.skipped == 0
+    assert found.exposure == pytest.approx(3 / len(sessions))
+
+
+def test_a_fixed_hold_counts_a_session_whose_period_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading(date(2026, 2, 2), date(2026, 2, 27))
+    missing = date(2026, 2, 18)  # the market opened, and the follower has no point
+    level = dict.fromkeys(sessions, -1.0)
+    level[date(2026, 2, 12)] = 1.0  # read at Thursday's close: the period into Friday
+    test = {**TEST, "entry": "close", "against": None, "hold": {"sessions": 3}}
+
+    (cell,) = measured(
+        screen({"up": test}, payoff="long_flat"),
+        {"a": {day: price for day, price in walk(sessions, 24).items() if day != missing}},
+        {"lvl": daily(level)},
+        monkeypatch,
+    )
+
+    # The hold is Friday, Tuesday and Thursday the 19th, whose period from Tuesday's close spans
+    # the 18th and is invalid: it counts toward the three and holds no value.
+    found = cell.condition
+    assert found is not None and cell.response is not None
+    assert found.sessions_when == 2 and cell.response.unfilled == 2
+    assert cell.response.events == 1, "Friday's and Tuesday's periods are contiguous"
+
+
+def test_a_fixed_hold_waits_flat_while_the_state_is_undefined_and_a_running_one_is_no_onset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading(date(2026, 2, 2), date(2026, 2, 27))
+    pattern = {5: 1.0, 6: 1.0, 10: 1.0}
+    level = {day: pattern.get(n, -1.0) for n, day in enumerate(sessions) if n >= 5}
+    test = {**TEST, "against": None, "hold": {"sessions": 2}}
+
+    (cell,) = measured(
+        screen({"up": test}, payoff="long_flat"),
+        {"a": walk(sessions, 25)},
+        {"lvl": daily(level)},
+        monkeypatch,
+    )
+
+    # Before the first point the state is undefined, so the position is too and nothing is held;
+    # the state the first point shows is already running, so the one onset is the eleventh's.
+    found = cell.condition
+    assert found is not None and cell.response is not None
+    assert cell.sessions == len(sessions) - 5
+    assert found.sessions_when == 2 and cell.response.events == 2
+    assert found.episodes == 2 and found.skipped == 0
 
 
 def test_a_state_held_k_sessions_close_to_close_is_one_round_trip_and_open_to_close_is_k(
@@ -415,6 +523,24 @@ def test_a_family_whose_signal_holds_no_point_reads_nothing_under_either_null(
         assert cell.sessions == 0 and cell.p == 1.0 and cell.t == 0.0
     assert shifted.condition is not None and shifted.condition.shifts == 0
     assert flipped.condition is not None and flipped.condition.blocks == 0
+
+
+def test_a_block_longer_than_the_window_is_one_block_and_judges_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading(date(2026, 1, 5), date(2026, 1, 16))
+    level = {day: (1.0 if n % 2 else -1.0) for n, day in enumerate(sessions)}
+
+    (cell,) = measured(
+        screen(null_by="sign_flip", block=40),
+        {"a": walk(sessions, 26)},
+        {"lvl": daily(level)},
+        monkeypatch,
+    )
+
+    assert cell.condition is not None and cell.condition.blocks == 1
+    assert cell.sessions == len(sessions) and cell.mean != 0.0
+    assert cell.t == 0.0 and cell.se == 0.0 and cell.p == 1.0, "one block has no spread"
 
 
 def test_sessions_before_the_signal_s_first_point_hold_no_value(
@@ -632,7 +758,9 @@ def test_turn_of_month_and_pre_holiday_demean_on_the_follower_s_calendar(
 
     (cell,) = measured(spec, {"a": walk(sessions, 12)}, {"lvl": daily(level)}, monkeypatch)
 
-    assert cell.condition is not None and "turn_of_month" not in cell.condition.dropped
+    # Every column holds something over the window: the turn of each month, the three
+    # third-Friday weeks, and the Fridays before Martin Luther King Jr. and Washington's Birthday.
+    assert cell.condition is not None and cell.condition.dropped == []
 
 
 def test_the_mde_is_the_critical_t_and_the_power_quantile_times_se(

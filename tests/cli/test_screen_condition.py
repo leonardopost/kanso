@@ -8,6 +8,7 @@ result's shape and its rendering — and the unit suite reads the arithmetic.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +156,26 @@ def test_a_run_reads_the_tape_as_of_each_decision_and_judges_by_shifts(
     assert held.response is not None and held.response.unfilled == 1, "no close before the first"
     again = run_screen(runner, taped, STATE)
     assert again["stored"] is True
+
+
+def test_two_workspaces_holding_the_same_bytes_measure_the_same_result(
+    runner: CliRunner, taped: Path, tmp_path: Path
+) -> None:
+    other = tmp_path / "again"
+    shutil.copytree(taped, other, symlinks=True)
+
+    documents = [run_screen(runner, root, STATE) for root in (taped, other)]
+
+    assert [document["stored"] for document in documents] == [False, False]
+    one, two = (
+        parse_yaml(ScreenResult, Path(document["result"]).read_text(encoding="utf-8"))
+        for document in documents
+    )
+    # Each workspace read its own catalog, drew its own null and kept its own clock; only the
+    # clock may differ.
+    volatile = {"created_at", "wall_s", "peak_mem_gb"}
+    assert one.model_dump_json(exclude=volatile) == two.model_dump_json(exclude=volatile)
+    assert any(cell.condition is not None and cell.condition.exact for cell in one.cells)
 
 
 def test_show_renders_a_condition_cell_and_its_detail(runner: CliRunner, taped: Path) -> None:

@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from kanso.errors import PreconditionError, ValidationError
@@ -40,6 +40,7 @@ def screen(**declared: dict[str, str]) -> Screen:
             or {
                 "lvl": {"type": TAPE_ID, "field": "level", "instrument": "AAA.XNAS"},
                 "flg": {"type": TAPE_ID, "field": "flag", "instrument": "AAA.XNAS"},
+                "swt": {"type": TAPE_ID, "field": "switch", "instrument": "AAA.XNAS"},
             },
             "clock": {"hours": "overlap"},
             "measures": [
@@ -80,7 +81,7 @@ def test_a_registered_numeric_field_is_admitted_and_anything_else_refused(tape_c
     with pytest.raises(ValidationError, match=r"signals\.x\.type: 'nobody' is not a known") as one:
         signals.check(screen(x={"type": "nobody", "field": "level", "instrument": "AAA.XNAS"}))
     assert "kanso ext show" in (one.value.remedy or "")
-    with pytest.raises(ValidationError, match="numeric fields are flag, level"):
+    with pytest.raises(ValidationError, match="numeric fields are flag, level, switch"):
         signals.check(screen(x={"type": TAPE_ID, "field": "levels", "instrument": "AAA.XNAS"}))
     with pytest.raises(ValidationError, match=rf"{TAPE_ID}\.label is annotated str") as three:
         signals.check(screen(x={"type": TAPE_ID, "field": "label", "instrument": "AAA.XNAS"}))
@@ -106,7 +107,7 @@ def test_a_value_is_read_as_of_each_instant_and_never_ahead(held: Any, tape_cls:
         dtype=np.int64,
     )
 
-    found = signals.asof(held, screen(), {"lvl": asked, "flg": asked[:1]}, WINDOW)
+    found = signals.asof(held, screen(), {"lvl": asked, "flg": asked[:1], "swt": asked}, WINDOW)
 
     handed = backtest._custom_points(held, tape_cls, ["AAA.XNAS"], *utc_day(WINDOW[0]))
     last = float(handed[-1].data.level)  # type: ignore[attr-defined]
@@ -121,6 +122,10 @@ def test_a_value_is_read_as_of_each_instant_and_never_ahead(held: Any, tape_cls:
         ns("2026-03-02T00:00:00+00:00"),
     ]
     assert found["flg"].value.tolist() == [0.0]
+    # A bool field is read as the number a comparison compares: 1 on, 0 off.
+    switch = float(handed[-1].data.switch)  # type: ignore[attr-defined]
+    assert switch in (0.0, 1.0) and found["swt"].value[0] == 0.0
+    assert np.isnan(found["swt"].value[1]) and found["swt"].value[2:].tolist() == [switch] * 2
 
 
 def utc_day(day: date) -> tuple[int, int]:
@@ -190,6 +195,7 @@ INSTANTS = st.lists(st.integers(-50, 5 * 100 - 1), max_size=40)
 
 
 @given(stamps=st.lists(st.integers(0, 5 * 100 - 1), max_size=40), asked=INSTANTS)
+@settings(deadline=None)
 def test_a_join_a_day_at_a_time_is_the_join_of_the_whole_series(
     stamps: list[int], asked: list[int]
 ) -> None:

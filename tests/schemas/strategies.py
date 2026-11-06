@@ -95,6 +95,7 @@ from kanso.schemas.screen import (
     Summary,
     Trigger,
     TurnOfMonth,
+    disjoint,
 )
 
 SAFE_TEXT = st.text(
@@ -978,6 +979,9 @@ def screens(draw: st.DrawFn) -> Screen:
         signals["s_flag"] = Signal(
             type="kanso_state_tape", field="flag", instrument=draw(SCREEN_INSTRUMENTS)
         )
+        signals["s_switch"] = Signal(
+            type="kanso_state_tape", field="switch", instrument=draw(SCREEN_INSTRUMENTS)
+        )
         measures.append(draw(conditions(names[1], judged=verdict is not None)))
     bound = draw(st.booleans())
     start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
@@ -1006,11 +1010,34 @@ def screens(draw: st.DrawFn) -> Screen:
 
 
 COMPARISONS = st.sampled_from(["gt", "ge", "lt", "le", "eq", "ne"])
+THRESHOLDS = st.sampled_from([-1.0, 0.0, 0.5, 1.0])
+
+AGAINST: dict[str, tuple[tuple[str, float], ...]] = {
+    "gt": (("lt", 0.0), ("le", -1.0), ("eq", -1.0)),
+    "ge": (("lt", 0.0), ("le", -1.0), ("eq", -1.0)),
+    "lt": (("gt", 0.0), ("ge", 1.0), ("eq", 1.0)),
+    "le": (("gt", 0.0), ("ge", 1.0), ("eq", 1.0)),
+    "eq": (("ne", 0.0), ("gt", 0.0), ("lt", 0.0)),
+    "ne": (("eq", 0.0),),
+}
+"""Per operator of `when`, comparisons disjoint from it, each offset from `when`'s number."""
+
+
+@st.composite
+def comparisons(draw: st.DrawFn) -> tuple[Comparison, Comparison]:
+    """A `when` of any of the six operators, and an `against` no number meets with it."""
+    operator, at = draw(COMPARISONS), draw(THRESHOLDS)
+    other, offset = draw(st.sampled_from(AGAINST[operator]))
+    when = Comparison.model_validate({operator: at})
+    against = Comparison.model_validate({other: at + offset})
+    assert disjoint(when, against), (when, against)
+    return when, against
 
 
 @st.composite
 def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
-    """A condition over the screen's two signals: either payoff, either hold, either null —
+    """A condition over the screen's signals, a bool among them: either payoff, either hold,
+    either null, every operator of a comparison, `rest` or a disjoint comparison against it —
     a sign flip of single sessions when a verdict is judged, so no floor refuses it."""
     payoff = draw(st.sampled_from(["contrast", "long_flat"]))
     null_by = "sign_flip" if judged else draw(st.sampled_from(["sign_flip", "circular"]))
@@ -1022,10 +1049,11 @@ def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
             if judged
             else draw(st.just("while") | st.builds(FixedHold, sessions=st.integers(1, 5)))
         )
+        when, disjoint_from = draw(comparisons())
         tests[name] = ConditionTest(
-            signal="s_level",
-            when=Comparison(gt=draw(st.floats(0, 1))),
-            against=draw(st.sampled_from(["rest", Comparison(lt=0.0)]))
+            signal=draw(st.sampled_from(["s_level", "s_switch"])),
+            when=when,
+            against=draw(st.sampled_from(["rest", disjoint_from]))
             if payoff == "contrast"
             else None,
             entry=draw(st.sampled_from(["open", "close"])),
@@ -1080,7 +1108,7 @@ def condition_stats(draw: st.DrawFn) -> ConditionStats:
         longest_run=draw(st.integers(0, 500)),
         skipped=draw(st.integers(0, 50)),
         blocks=None if circular else draw(st.integers(0, 500)),
-        shifts=draw(st.integers(1, 9999)) if circular else None,
+        shifts=draw(st.integers(0, 9999)) if circular else None,
         exact=draw(st.booleans()),
         raw_bp=draw(FINITE),
         drift_bp_day=draw(FINITE),

@@ -5,8 +5,9 @@ session a print falls in, or what a grid samples, reads its answer off its own a
 Prices are whole cents.
 
 `TAPE` is a synthetic custom type, written as a workspace extension would write one: a level,
-a flag and a label filed under an instrument. It is kanso's own fixture, not an outside
-party's, and stands for any series a workspace holds that a screen conditions on.
+a flag, a switch and a label filed under an instrument — a float, an int, a bool and a str, so
+every annotation a signal may or may not read is one of its fields. It is kanso's own fixture,
+not an outside party's, and stands for any series a workspace holds that a screen conditions on.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ class KansoStateTape(Data):
     instrument_id: InstrumentId
     level: float
     flag: int
+    switch: bool
     label: str
 
 
@@ -82,13 +84,22 @@ def tape(
     events: Sequence[int] | None = None,
 ) -> list[Any]:
     """Points of the tape filed under `instrument` at (ts_init, level, flag), each published
-    the instant it refers to unless `events` states its `ts_event`."""
+    the instant it refers to unless `events` states its `ts_event`; its switch is on where its
+    flag is odd."""
     ident = InstrumentId.from_str(instrument)
     found = []
     for n, (ts, level, flag) in enumerate(rows):
         event = ts if events is None else events[n]
         found.append(
-            cls(ts_event=event, ts_init=ts, instrument_id=ident, level=level, flag=flag, label="")
+            cls(
+                ts_event=event,
+                ts_init=ts,
+                instrument_id=ident,
+                level=level,
+                flag=flag,
+                switch=bool(flag % 2),
+                label="",
+            )
         )
     return found
 

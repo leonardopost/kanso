@@ -9,6 +9,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.schemas import parse_yaml
+from kanso.schemas.screen import ScreenResult
 
 from .conftest import HYP_ID, OTHER, at, payload, write_hypothesis
 from .test_screen import write_screen
@@ -76,21 +78,50 @@ def test_a_store_that_recorded_no_screen_holds_nothing_back(
 SIGNALLED: dict[str, object] = {
     "schema": 1,
     "id": "signalled",
-    "title": "The demo path against a tape filed under the other name",
-    "thesis": "The demo series reverts hour to hour, read beside a series filed elsewhere.",
+    "title": "The demo path conditioned on a tape filed under the other name",
+    "thesis": "The demo name's sessions differ while a tape filed elsewhere is above zero.",
     "window": {"start": "2024-01-02", "end": "2024-03-29"},
     "legs": {"a": {"instrument": "DEMO.SIM", "type": "bar", "resolution": "1h"}},
     "signals": {"regime": {"type": "kanso_state_tape", "field": "level", "instrument": OTHER}},
-    "clock": {"grid": "1h", "hours": "overlap"},
-    "measures": [{"id": "lead_lag", "from": "a", "to": "a", "estimator": "grid", "lags": ["1h"]}],
+    "clock": {"hours": {"tz": "America/New_York", "span": "09:30-16:01"}},
+    "costs": {
+        "SIM": {"commission_bps": 0.5, "slippage_bps": 1, "spread": "fixed_bps", "fixed_bps": 2}
+    },
+    "measures": [
+        {
+            "id": "condition",
+            "tests": {
+                "up": {
+                    "signal": "regime",
+                    "when": {"gt": 0},
+                    "against": {"lt": 0},
+                    "entry": "open",
+                    "exit": "close",
+                    "hold": "while",
+                    "side": "long",
+                }
+            },
+            "followers": "a",
+            "payoff": "contrast",
+            "null_by": "circular",
+            "demean": [],
+            "controls": [],
+            "latency_ms": 900000,
+        }
+    ],
 }
-"""A screen whose only reading of the other name is a signal filed under it."""
+"""A condition screen whose follower is the demo name and whose only reading of the other name
+is the signal it conditions on, filed under it."""
 
 
 def test_an_instrument_read_only_for_a_signal_is_held_to_the_embargo(
     runner: CliRunner, taped: Path
 ) -> None:
-    run_screen(runner, taped, SIGNALLED)  # type: ignore[arg-type]
+    document = run_screen(runner, taped, SIGNALLED)  # type: ignore[arg-type]
+    rendered = parse_yaml(ScreenResult, Path(document["result"]).read_text(encoding="utf-8"))
+    assert ("kanso_state_tape", ["regime"]) in [(item.type, item.legs) for item in rendered.series]
+    (cell,) = rendered.cells
+    assert cell.sessions > 0, "the follower was conditioned on the signal filed elsewhere"
     path = write_hypothesis(taped, id="othr_mr", universe=[OTHER], windows=certifying("2024-03-25"))
 
     result = at(runner, taped, "hyp", "validate", path, "--json")

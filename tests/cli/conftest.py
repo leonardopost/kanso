@@ -773,13 +773,20 @@ def _taped(tmp_path_factory: pytest.TempPathFactory, _prepared: Path) -> Path:
     assert at(runner, root, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
     (root / "kanso_ext").mkdir(exist_ok=True)
     (root / "kanso_ext" / f"{TAPE_ID}.py").write_text(TAPE, encoding="utf-8")
-    rows = ["t,level,flag,label"]
+    rows = ["t,level,flag,switch,label"]
     day = TAPE_FIRST
     while day <= TAPE_LAST:
-        rows.append(f"{day} 13:00:00,{tape_level(day)},{tape_flag(day)},x")
+        switch = "true" if tape_flag(day) else "false"
+        rows.append(f"{day} 13:00:00,{tape_level(day)},{tape_flag(day)},{switch},x")
         day = date.fromordinal(day.toordinal() + 1)
     (root / "tape.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
-    columns = {"ts_event": "t", "level": "level", "flag": "flag", "label": "label"}
+    columns = {
+        "ts_event": "t",
+        "level": "level",
+        "flag": "flag",
+        "switch": "switch",
+        "label": "label",
+    }
     files = [
         {
             "path": str(root / "tape.csv"),
