@@ -386,8 +386,8 @@ spread less than their total does, so the null would run above its level — mea
 and month dummies over 250 sessions in blocks of five, contrast positions in runs averaging ten,
 6.95% of p at or under 0.05, against 3.05% on the weights alone. So under `sign_flip`, `se` and
 `mde_bp` read the weights alone, and where the design shares the state they overstate the
-estimate's own and understate `t` by about 1/√(1 − `control_r2`), and p errs conservative by as
-much. Under a contrast judged by circular shifts a session in neither state holds a value too —
+estimate's own and understate `t` by about 1/√(1 − `control_r2`), and p errs conservative for
+it. Under a contrast judged by circular shifts a session in neither state holds a value too —
 its residualised weight, what the design shares with the contrast, times its residual — and none
 with the intercept alone; `sessions` counts the sessions in either state either way.
 Each position — a run of sessions, joined across a boundary only when its periods are contiguous — is charged one round trip struck at its entry and its
