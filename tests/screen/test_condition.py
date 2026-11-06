@@ -1644,3 +1644,54 @@ def test_a_cell_whose_mean_is_against_its_side_fails_however_small_its_p_and_lar
     # The mean is the only clause it missed: the same cell on the declared side passes.
     mirrored = cell.model_copy(update={"mean": -cell.mean, "t": -cell.t})
     assert _judged(ScreenVerdict.model_validate(verdict), mirrored).judged == "pass"
+
+
+def test_every_cell_of_a_circular_family_reads_its_own_weights_residualised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    rng = np.random.default_rng(41)
+    level = {day: rng.normal() + (1.0 if day.weekday() < 2 else -0.6) for day in sessions}
+    moves = {
+        name: {
+            day: rng.normal() * 30 + 5.0 * day.weekday() + lift * (level[day] > 0)
+            for day in sessions
+        }
+        for name, lift in (("a", 8.0), ("b", -4.0))
+    }
+    prices = {
+        name: {day: (100.0, 100.0 * math.exp(move / 1e4)) for day, move in found.items()}
+        for name, found in moves.items()
+    }
+    tests = {
+        "up": {**TEST, "against": "rest"},
+        "hi": {**TEST, "when": {"gt": 0.5}, "against": "rest"},
+    }
+    spec = screen(tests, followers="ab", demean=["weekday", "month"])
+
+    cells = measured(spec, prices, {"lvl": daily(level)}, monkeypatch)
+
+    # Each cell's reference: its own contrast weights, residualised on the calendar design as
+    # its follower's returns were, times those residuals. A family residualising only its first
+    # cell would read the others' weights alone, which spread wider where the design shares
+    # the state.
+    matrix = calendar(sessions, {day: 0.0 for day in sessions})[:, :-1]
+    n = len(sessions)
+    assert len(cells) == 4
+    for cell in cells:
+        _, test, follower, _ = cell.key.split("/")
+        threshold = 0.0 if test == "up" else 0.5
+        state = np.asarray([float(level[day] > threshold) for day in sessions])
+        longs = float(np.sum(state))
+        weights = np.where(state > 0, n / longs, -n / (n - longs))
+        returns = np.asarray([moves[follower][day] for day in sessions])
+        residuals = annihilated(matrix, returns)
+        values = annihilated(matrix, weights) * residuals
+        se = float(np.std(values, ddof=1)) / math.sqrt(n)
+        alone = float(np.std(weights * residuals, ddof=1)) / math.sqrt(n)
+        assert alone / se >= 1.05, (cell.key, "the design shares the state")
+        assert cell.condition is not None and cell.condition.dropped == []
+        assert cell.sessions == n
+        assert cell.mean == pytest.approx(float(np.mean(values)), rel=1e-9)
+        assert cell.se == pytest.approx(se, rel=1e-9), cell.key
+        assert cell.t == pytest.approx(float(np.mean(values)) / se, rel=1e-9), cell.key
