@@ -910,9 +910,9 @@ class SeriesRead(KansoModel):
 class Summary(KansoModel):
     """What a result says as a whole, when a verdict was declared.
 
-    `worth_a_lane` is whether a cell that trades — a `response` or a `catch_up` — passed: a
-    lead with no margin is information, not a trade. `best` names the passing cells, the
-    strongest first.
+    `worth_a_lane` is whether a cell that trades — a `response`, a `catch_up` or a `condition`
+    — passed: a lead with no margin is information, not a trade. `best` names the passing
+    cells, the strongest first.
     """
 
     declared: bool

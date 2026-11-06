@@ -184,6 +184,9 @@ def test_a_run_reads_the_tape_as_of_each_decision_and_judges_by_shifts(
         expected = "thin" if item.sessions < 40 else "fail" if any(missed) else "pass"
         assert item.judged == expected, item.key
         assert (item.reason is None) == (expected == "pass")
+        if expected != "thin":
+            against = "against the declared side" in (item.reason or "")
+            assert against == (item.mean <= 0), item.key
     assert [item.judged == "thin" for item in rendered.cells] == [False, False, True, True]
     held = shown(runner, taped, "tape_state", "condition/up_cc/b/circular")
     assert held.response is not None and held.response.unfilled == 1, "no close before the first"

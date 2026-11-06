@@ -1641,9 +1641,21 @@ def test_a_cell_whose_mean_is_against_its_side_fails_however_small_its_p_and_lar
     assert judged.judged == "fail"
     assert judged.reason == f"mean {cell.mean:.4g} bp is against the declared side"
     assert _summary(spec.verdict, [judged]).worth_a_lane is False
-    # The mean is the only clause it missed: the same cell on the declared side passes.
+    # The mean clause is read whatever the p, and beside every other clause the cell missed.
+    rule = ScreenVerdict.model_validate(verdict)
+    insignificant = _judged(rule, cell.model_copy(update={"p": 0.5}))
+    assert insignificant.judged == "fail"
+    assert insignificant.reason == (
+        f"p 0.5 above alpha 0.05; mean {cell.mean:.4g} bp is against the declared side"
+    )
+    # The mean is the only clause it missed: the same cell on the declared side passes, and a
+    # passing condition cell is a trade.
     mirrored = cell.model_copy(update={"mean": -cell.mean, "t": -cell.t})
-    assert _judged(ScreenVerdict.model_validate(verdict), mirrored).judged == "pass"
+    judged_mirrored = _judged(rule, mirrored)
+    assert judged_mirrored.judged == "pass"
+    summary = _summary(spec.verdict, [judged_mirrored])
+    assert summary.worth_a_lane is True
+    assert summary.best == [cell.key]
 
 
 def test_every_cell_of_a_circular_family_reads_its_own_weights_residualised(
