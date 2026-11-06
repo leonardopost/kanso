@@ -10,7 +10,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from kanso.data.closures import US_EQUITY
+from kanso.data.closures import US_EQUITY, Calendar
 from kanso.schemas.screen import TurnOfMonth
 from kanso.screen import demean
 
@@ -73,6 +73,24 @@ def test_turn_of_month_third_friday_week_and_pre_holiday_read_the_calendar() -> 
     assert closed[:, 1].tolist() == [0.0], "a closed day is no trading day of its month"
     sunday = demean.design([date(2024, 3, 17)], items[1:2], {}, US_EQUITY)[0]
     assert sunday[:, 1].tolist() == [1.0], "the week runs Monday to Sunday"
+
+
+def test_the_third_friday_s_week_is_monday_to_sunday_on_a_market_open_on_sundays() -> None:
+    # A market closed on Saturdays alone: March 2024's third Friday is the 15th, so its week runs
+    # from Monday the 11th to Sunday the 17th, and neither Sunday the 10th nor Monday the 18th.
+    sundays = Calendar(
+        authority="a market closed on Saturdays",
+        first=date(2024, 1, 1),
+        last=date(2024, 12, 31),
+        weekend=frozenset({5}),
+        closures=frozenset(),
+    )
+    days = [date(2024, 3, 10), date(2024, 3, 11), date(2024, 3, 17), date(2024, 3, 18)]
+
+    matrix, names = demean.design(days, ["third_friday_week"], {}, sundays)
+
+    assert names == ["intercept", "third_friday_week"]
+    assert matrix[:, 1].tolist() == [0.0, 1.0, 1.0, 0.0]
 
 
 def test_a_control_enters_as_its_value_and_a_copy_or_a_constant_is_dropped_by_name() -> None:

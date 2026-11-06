@@ -159,6 +159,31 @@ def test_one_read_a_day_answers_every_signal_of_a_type(
     # Three UTC days to the last instant asked, read once for both signals, and nothing after it.
 
 
+def test_signals_of_one_type_filed_under_two_instruments_are_read_together(
+    held: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[list[str]] = []
+    real = backtest._custom_points
+
+    def counted(catalog: Any, cls: type, universe: Any, start: int, end: int) -> Any:
+        asked.append(list(universe))
+        return real(catalog, cls, universe, start, end)
+
+    monkeypatch.setattr("kanso.screen.signals.backtest._custom_points", counted)
+    two = screen(
+        here={"type": TAPE_ID, "field": "level", "instrument": "AAA.XNAS"},
+        there={"type": TAPE_ID, "field": "level", "instrument": "BBB.XNAS"},
+    )
+    last = np.asarray([ns("2026-03-04T15:00:00+00:00")], dtype=np.int64)
+
+    found = signals.asof(held, two, {"here": last, "there": last}, WINDOW)
+
+    # Each reads the points filed under its own instrument, from one read a day for both.
+    assert found["here"].value.tolist() == [-1.0] and found["there"].value.tolist() == [7.0]
+    assert found["there"].ts_init.tolist() == [ns("2026-03-03T13:00:00+00:00")]
+    assert asked == [["AAA.XNAS", "BBB.XNAS"]] * 3
+
+
 def test_nothing_is_read_for_no_instant_or_past_the_window(
     held: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

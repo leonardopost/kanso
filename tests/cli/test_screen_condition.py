@@ -8,13 +8,17 @@ result's shape and its rendering — and the unit suite reads the arithmetic.
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
+from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
+from kanso.data.closures import US_EQUITY
 from kanso.errors import Exit
 from kanso.schemas import parse_yaml
 from kanso.schemas.screen import Cell, ScreenResult
@@ -152,10 +156,53 @@ def test_a_run_reads_the_tape_as_of_each_decision_and_judges_by_shifts(
     assert found.critical_t is not None and found.mde_bp is not None
     assert found.long_flat_bp is not None and found.control_r2 is not None
     assert cell.response.unfilled == 0 and cell.response.hurdle_bp > 0
+    # Each cell is judged as a cell that trades is: thin under the verdict's sessions, else on
+    # its p and on its positions' margin and events a day. The fixed holds, flat between
+    # onsets, contrast fewer sessions than the verdict asks.
+    for item in rendered.cells:
+        assert item.response is not None
+        missed = [
+            item.p > 0.1,
+            item.response.margin_bp < 0,
+            item.response.events_per_day < 0,
+        ]
+        expected = "thin" if item.sessions < 40 else "fail" if any(missed) else "pass"
+        assert item.judged == expected, item.key
+        assert (item.reason is None) == (expected == "pass")
+    assert [item.judged == "thin" for item in rendered.cells] == [False, False, True, True]
     held = shown(runner, taped, "tape_state", "condition/up_cc/b/circular")
     assert held.response is not None and held.response.unfilled == 1, "no close before the first"
     again = run_screen(runner, taped, STATE)
     assert again["stored"] is True
+
+
+@pytest.mark.parametrize(
+    ("calendar", "held"),
+    [
+        (None, "none is on file"),
+        (
+            dataclasses.replace(US_EQUITY, last=date(2024, 3, 15)),
+            "the one on file holds 2003-09-10..2024-03-15",
+        ),
+    ],
+)
+def test_a_calendar_control_no_calendar_on_file_covers_is_refused_before_anything_is_measured(
+    runner: CliRunner,
+    taped: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    calendar: Any,
+    held: str,
+) -> None:
+    monkeypatch.setattr("kanso.screen.condition._calendar", lambda definition: calendar)
+
+    result = at(runner, taped, "screen", "run", write_screen(taped, STATE), "--json")
+
+    assert result.exit_code == Exit.PRECONDITION, result.stdout
+    assert (
+        "measures.0.demean: turn_of_month and pre_holiday read a's market calendar over every "
+        f"month the window touches, 2024-01-01..2024-03-31, and {held}"
+    ) in payload(result)["error"]
+    assert "supply them as 0/1 controls" in payload(result)["remedy"]
 
 
 def test_two_workspaces_holding_the_same_bytes_measure_the_same_result(

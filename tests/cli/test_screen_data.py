@@ -283,6 +283,29 @@ def test_a_signal_no_file_or_adapter_supplies_is_unserved_naming_the_file_load(
     assert "kanso data load --loader csv_parquet" in payload(refused)["remedy"]
 
 
+def test_a_snapshot_pins_a_screen_only_when_it_covers_the_signal_s_series(
+    runner: CliRunner, taped: Path
+) -> None:
+    ws = find(taped)
+    for manifest in ws.path("catalog", "manifests").glob("*.yaml"):
+        text = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        if text["type"] == "kanso_state_tape":
+            text["publication"] = "unknown"
+            manifest.write_text(yaml.safe_dump(text, sort_keys=False), encoding="utf-8")
+    bars_only = {key: value for key, value in TAPED.items() if key != "signals"}
+
+    refused = at(runner, taped, "screen", "run", write_screen(taped, TAPED), "--json")
+    admitted = at(runner, taped, "screen", "run", write_screen(taped, bars_only), "--json")
+
+    # The bars are covered either way; the tape, of a publication nobody declared, covers nothing.
+    assert refused.exit_code == Exit.PRECONDITION, refused.stdout
+    assert (
+        "no snapshot covers DEMO.SIM bar 1h, DEMO.SIM kanso_state_tape"
+        in (payload(refused)["error"])
+    )
+    assert admitted.exit_code == Exit.OK, admitted.stdout
+
+
 @pytest.mark.parametrize(
     ("signal", "message", "remedy"),
     [

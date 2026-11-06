@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from math import sqrt
+from math import floor, sqrt
 
 from hypothesis import strategies as st
 
@@ -96,6 +96,7 @@ from kanso.schemas.screen import (
     Trigger,
     TurnOfMonth,
     disjoint,
+    p_floor,
 )
 
 SAFE_TEXT = st.text(
@@ -982,7 +983,8 @@ def screens(draw: st.DrawFn) -> Screen:
         signals["s_switch"] = Signal(
             type="kanso_state_tape", field="switch", instrument=draw(SCREEN_INSTRUMENTS)
         )
-        measures.append(draw(conditions(names[1], judged=verdict is not None)))
+        condition, verdict = draw(conditions(names[1], verdict))
+        measures.append(condition)
     bound = draw(st.booleans())
     start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
     return Screen(
@@ -1035,20 +1037,20 @@ def comparisons(draw: st.DrawFn) -> tuple[Comparison, Comparison]:
 
 
 @st.composite
-def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
-    """A condition over the screen's signals, a bool among them: either payoff, either hold,
-    either null, every operator of a comparison, `rest` or a disjoint comparison against it —
-    a sign flip of single sessions when a verdict is judged, so no floor refuses it."""
+def conditions(
+    draw: st.DrawFn, follower: str, verdict: ScreenVerdict | None
+) -> tuple[Condition, ScreenVerdict | None]:
+    """A condition over the screen's signals, a bool among them: either payoff, either hold —
+    no longer than the block under a sign flip — either null, every operator of a comparison,
+    `rest` or a disjoint comparison against it; and the verdict, its `min_sessions` raised
+    where the condition's null could not reach its `alpha` on fewer, as the schema refuses."""
     payoff = draw(st.sampled_from(["contrast", "long_flat"]))
-    null_by = "sign_flip" if judged else draw(st.sampled_from(["sign_flip", "circular"]))
-    block = 1 if judged else draw(st.integers(5, 20))
+    null_by = draw(st.sampled_from(["sign_flip", "circular"]))
+    block = draw(st.integers(1, 20))
     tests: dict[str, ConditionTest] = {}
     for name in draw(st.lists(st.sampled_from(["up", "down", "flat"]), min_size=1, unique=True)):
-        hold = (
-            "while"
-            if judged
-            else draw(st.just("while") | st.builds(FixedHold, sessions=st.integers(1, 5)))
-        )
+        longest = min(5, block) if null_by == "sign_flip" else 5
+        hold = draw(st.just("while") | st.builds(FixedHold, sessions=st.integers(1, longest)))
         when, disjoint_from = draw(comparisons())
         tests[name] = ConditionTest(
             signal=draw(st.sampled_from(["s_level", "s_switch"])),
@@ -1076,7 +1078,7 @@ def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
             max_size=5,
         )
     )
-    return Condition(
+    condition = Condition(
         id="condition",
         tests=tests,
         followers=follower,
@@ -1088,6 +1090,17 @@ def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
         latency_ms=draw(st.floats(1, 86_400_000, allow_nan=False)),
         mde_power=draw(st.none() | st.floats(0.5, 0.99)),
     )
+    if verdict is None:
+        return condition, None
+    sessions = verdict.min_sessions
+    if null_by == "circular":
+        sessions = max(sessions, floor(1 / verdict.alpha))
+        while verdict.alpha < 1.0 / sessions:
+            sessions += 1
+    else:
+        while verdict.alpha < p_floor(-(-sessions // block)):
+            sessions += block
+    return condition, verdict.model_copy(update={"min_sessions": sessions})
 
 
 FINITE = st.floats(-1e6, 1e6, allow_nan=False)
