@@ -43,8 +43,12 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    sums share its fitted mean across the blocks it spans, spread less than their total, and
    run the null above its level — measured with weekday and month dummies over 250 sessions in
    blocks of five, contrast positions in runs averaging ten, 6.95% of p fell at or under 0.05,
-   against 3.05% on the weights alone, which overstate the standard error by about
-   `1 / √(1 − R²)` and err conservative. A contrast's `sessions` are those in either state.
+   against 3.05% on the weights alone, which overstate the standard error and err
+   conservative: by about `1 / √(1 − R²)` against `rest` and long or flat, and by less against
+   a comparison, whose R² is taken over the sessions in either state while the residuals are
+   fitted on every held session — measured against `lt: 0` with 30% of sessions in neither
+   state, 1.10 times the estimate's spread over 600 redraws where `1 / √(1 − R²)` was 1.17. A
+   contrast's `sessions` are those in either state.
 5. **Round trips, by position.** A position is a maximal run of held sessions with one
    direction; across sessions it runs on only when its periods are contiguous — the exit of one
    is the entry of the next — so a state held k sessions close to close is one round trip, and

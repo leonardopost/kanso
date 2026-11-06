@@ -389,7 +389,11 @@ spread less than their total does, so the null would run above its level — mea
 and month dummies over 250 sessions in blocks of five, contrast positions in runs averaging ten,
 6.95% of p at or under 0.05, against 3.05% on the weights alone. So under `sign_flip`, `se` and
 `mde_bp` read the weights alone, and where the design shares the state they overstate the
-estimate's own and understate `t` by about 1/√(1 − `control_r2`), and p errs conservative for
+estimate's own and understate `t` — against `rest` and long or flat by about
+1/√(1 − `control_r2`), against a comparison by less, `control_r2` being taken over the sessions
+in either state while the residuals are fitted on every held session (measured against `lt: 0`
+with 30% of sessions in neither state and a `control_r2` of 0.275, `se` was 1.10 times the
+estimate's spread over 600 redraws, where 1/√(1 − 0.275) is 1.17) — and p errs conservative for
 it. Under a contrast judged by circular shifts a session in neither state holds a value too —
 its residualised weight, what the design shares with the contrast, times its residual — and none
 with the intercept alone; `sessions` counts the sessions in either state either way.

@@ -41,8 +41,10 @@ whose variance is that of `(M_X w)·r`: the weights residualised on the design a
 were. `spanned` hands a circular null the design's orthonormal vectors beyond the intercept, so
 the values it reads are `(M_X w)` times the residual, which sum to the same and spread as the
 estimate does; the weights alone would spread as though the design shared nothing with the
-state, and overstate the standard error by about `1 / √(1 − R²)` — which a sign-flip null does,
-conservatively, rather than run above its level (`kanso.screen.condition`).
+state, and overstate the standard error — by about `1 / √(1 − R²)` against `rest` and long or
+flat, and by less against a comparison, whose `r2` is taken over the sessions in either state
+while the residuals are fitted on every held one — which a sign-flip null does, conservatively,
+rather than run above its level (`kanso.screen.condition`).
 
 **No BLAS.** Every inner product is `numpy.add.reduce` of an elementwise product in a fixed
 order: nothing here calls `@`, `numpy.dot` or `numpy.linalg`, so one host gives the same bits
