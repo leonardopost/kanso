@@ -140,6 +140,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         definitions=held,
     )
     cells = _measure(ws, context, window, catalog, held, priced)
+    session, stated = _assumptions(screen)
     result = ScreenResult(
         screen=screen.id,
         sha=valid.sha,
@@ -150,11 +151,8 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         hypothesis_sha=_pinned_sha(store, screen.hyp),
         draws=ws.config.screen.draws,
         folds=ws.config.research.folds,
-        assumption=ASSUMPTION,
-        assumptions=[
-            condition.assumption(measure) if isinstance(measure, Condition) else ASSUMPTION
-            for measure in screen.measures
-        ],
+        assumption=session,
+        assumptions=stated,
         created_at=datetime.now(tz=UTC),
         wall_s=round(time.monotonic() - started, 3),
         peak_mem_gb=round(_peak_gb(), 3),
@@ -164,6 +162,17 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     )
     records.record(store, result, list(screen.instruments))
     return Outcome(result, records.render(ws, result), False, fetched)
+
+
+def _assumptions(screen: Screen) -> tuple[str | None, list[str]]:
+    """The session measures' assumption, `None` when the screen has no session measure, and
+    what each measure's inference rests on, in the order the measures are declared."""
+    stated = [
+        condition.assumption(measure) if isinstance(measure, Condition) else ASSUMPTION
+        for measure in screen.measures
+    ]
+    sessions = any(not isinstance(measure, Condition) for measure in screen.measures)
+    return (ASSUMPTION if sessions else None), stated
 
 
 @dataclass(frozen=True)

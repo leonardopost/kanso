@@ -928,8 +928,8 @@ class ScreenResult(Versioned):
 
     Immutable: the same three pins again return this record rather than a second one.
     `assumptions` states, measure by measure, what that measure's inference rests on;
-    `assumption` is the session measures' one, kept so a result recorded before a measure had
-    its own still reads.
+    `assumption` is the session measures' one, absent from a screen with none — a `condition`
+    states its null's own — kept so a result recorded before a measure had its own still reads.
     """
 
     screen: HypId
@@ -941,7 +941,7 @@ class ScreenResult(Versioned):
     hypothesis_sha: Sha256 | None = None
     draws: int = Field(ge=1)
     folds: int = Field(ge=1)
-    assumption: NonEmpty
+    assumption: NonEmpty | None = None
     assumptions: list[NonEmpty] = Field(default_factory=list)
     created_at: datetime
     wall_s: float = Field(ge=0, allow_inf_nan=False)

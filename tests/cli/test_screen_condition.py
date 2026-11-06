@@ -150,7 +150,7 @@ def test_a_run_reads_the_tape_as_of_each_decision_and_judges_by_shifts(
 
     assert document["cells"] == 4 and document["verdict"]["declared"] is True
     rendered = parse_yaml(ScreenResult, Path(document["result"]).read_text(encoding="utf-8"))
-    assert rendered.assumptions == [CIRCULAR]
+    assert rendered.assumptions == [CIRCULAR] and rendered.assumption is None
     assert [(item.type, item.legs) for item in rendered.series] == [
         ("bar", ["a"]),
         ("bar", ["b"]),

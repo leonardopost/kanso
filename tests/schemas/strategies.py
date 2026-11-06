@@ -1187,7 +1187,7 @@ def screen_results(draw: st.DrawFn) -> ScreenResult:
         hyp=draw(st.none() | HYP_IDS),
         draws=draw(st.integers(99, 99_999)),
         folds=draw(st.integers(2, 8)),
-        assumption="sessions are roughly independent of each other",
+        assumption=draw(st.none() | st.just("sessions are roughly independent of each other")),
         assumptions=draw(
             st.lists(
                 st.sampled_from(

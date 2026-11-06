@@ -1367,6 +1367,30 @@ def test_traded_includes_a_condition_s_followers() -> None:
     assert hurdle.traded(screen(followers="ab")) == ("a", "b")
 
 
+def test_a_result_states_its_assumptions_in_order_and_the_session_one_only_with_one() -> None:
+    from kanso.screen.run import ASSUMPTION, _assumptions
+    from tests.schemas.test_screen import BASE, CONDITION, SIGNALS, build, conditioned
+
+    lead, response = BASE["measures"]
+    flips = {**CONDITION, "null_by": "sign_flip", "block": 5}
+    mixed = build(
+        signals=SIGNALS,
+        groups={**BASE["groups"], "names": ["mara", "riot"]},
+        measures=[lead, flips, response, CONDITION],
+    )
+
+    assert _assumptions(mixed) == (
+        ASSUMPTION,
+        [
+            ASSUMPTION,
+            "blocks of 5 sessions are roughly independent of each other",
+            ASSUMPTION,
+            condition.CIRCULAR,
+        ],
+    )
+    assert _assumptions(conditioned()) == (None, [condition.CIRCULAR])
+
+
 def test_an_assumption_is_stated_for_each_null() -> None:
     circular = screen().measures[0]
     blocks = screen(null_by="sign_flip", block=20).measures[0]

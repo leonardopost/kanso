@@ -1463,8 +1463,10 @@ keyed by. It is a rendering: editing it changes nothing, and `kanso screen show`
 record. The loader specs a run's fetches were made with are kept under `specs/`.
 
 A result lists every series it read in `series` — a signal's under its custom type's id, with the
-signals that read it — states in `assumptions`, one sentence a measure, what each measure's
-inference rests on, and holds one entry per cell:
+signals that read it — states in `assumptions`, one sentence a measure in the order declared,
+what each measure's inference rests on, and in `assumption` the session measures' one, absent
+when the screen has none, since a `condition` states its null's own — and holds one entry per
+cell:
 
 | field | what it is |
 |---|---|
