@@ -329,7 +329,8 @@ def load(
     overlapping write into unpinned data needs `replace`, and one into a dataset a
     snapshot pins is refused outright unless `supersedes` names that dataset: the new one
     then takes its place, recorded as its successor, and every snapshot naming the old one
-    stops supporting a certification. A spec that discovers several datasets may supersede
+    stops supporting a certification, only when the successor's id differs
+    (`docs/backlog.md` row 232). A spec that discovers several datasets may supersede
     only the one named; the rest are written as any load writes them.
 
     A loader declaring `chunk_days` has each discovered dataset written as one dataset per
