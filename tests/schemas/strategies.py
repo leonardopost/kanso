@@ -1055,7 +1055,6 @@ def conditions(draw: st.DrawFn, follower: str, judged: bool) -> Condition:
         payoff=payoff,
         null_by=null_by,
         block=block if null_by == "sign_flip" else None,
-        min_shift=draw(st.integers(1, 40)) if null_by == "circular" else None,
         demean=demean,
         controls=draw(st.sampled_from([[], ["s_flag"]])),
         latency_ms=draw(st.floats(1, 86_400_000, allow_nan=False)),

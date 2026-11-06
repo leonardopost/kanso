@@ -10,7 +10,6 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from kanso.errors import PreconditionError
 from kanso.screen import nulls
 
 
@@ -151,29 +150,62 @@ def planted(sessions: int, seed: int, effect: float = 0.0) -> tuple[np.ndarray, 
     return runs[None, :], returns[None, :]
 
 
+def persistent(rng: np.random.Generator, sessions: int, mean: float) -> np.ndarray:
+    """Positions of one sign for runs of geometric length averaging `mean` sessions."""
+    found = np.empty(sessions)
+    at, side = 0, float(rng.choice([-1.0, 1.0]))
+    while at < sessions:
+        length = int(rng.geometric(1 / mean))
+        found[at : at + length] = side
+        at, side = at + length, -side
+    return found
+
+
+def rejected(ps: np.ndarray, alpha: float, nominal: float) -> None:
+    """The share of `ps` at or under `alpha` lies within binomial 99.9% bounds of `nominal`."""
+    se = math.sqrt(nominal * (1 - nominal) / len(ps))
+    share = float(np.mean(ps <= alpha))
+    assert nominal - 3.3 * se <= share <= nominal + 3.3 * se, (alpha, share, nominal)
+
+
 def test_an_alignment_no_shift_reaches_reads_the_floor_of_its_shifts() -> None:
     positions, returns = planted(60, 1, effect=50.0)
 
-    found = nulls.circular(positions, returns, True, 10, 999, 7)
+    found = nulls.circular(positions, returns, True, 999, 7)
 
-    assert found.exact is True and len(found.maxima) == 60 - 2 * 10 + 1
-    assert found.p[0] == pytest.approx(1 / (41 + 1))
+    assert found.exact is True and len(found.maxima) == 60 - 1
+    assert found.p[0] == pytest.approx(1 / 60)
     assert found.t[0] > 5 and found.sessions[0] == 60
     assert found.mean[0] == pytest.approx(
         float(np.mean(returns[0][positions[0] > 0]) - np.mean(returns[0][positions[0] < 0]))
     )
 
 
-def test_shifts_more_than_the_draws_are_drawn_only_from_the_admissible_ones() -> None:
-    positions, returns = planted(80, 2, effect=50.0)
-    every = nulls.circular(positions, returns, False, 15, 9999, 3)
+def test_every_shift_is_taken_once_when_they_are_no_more_than_the_draws() -> None:
+    assert nulls._shifts(7, 6, 1).tolist() == [1, 2, 3, 4, 5, 6]
+    assert nulls._shifts(7, 9999, 1).tolist() == [1, 2, 3, 4, 5, 6]
+    assert nulls._shifts(1, 9999, 1).tolist() == [] and nulls._shifts(0, 9999, 1).tolist() == []
 
-    drawn = nulls.circular(positions, returns, False, 15, 20, 3)
+
+def test_shifts_more_than_the_draws_are_drawn_from_every_one_but_the_identity() -> None:
+    drawn = [nulls._shifts(9, 5, seeded) for seeded in range(60)]
+
+    for shifts in drawn:
+        assert len(shifts) == 5 and len(set(shifts.tolist())) == 5, "never one twice"
+    assert set(np.concatenate(drawn).tolist()) == set(range(1, 9)), "1 and N - 1 included"
+    assert nulls._shifts(9, 5, 3).tobytes() == drawn[3].tobytes()
+
+
+def test_drawn_shifts_are_a_sample_of_every_shift_s_maxima() -> None:
+    positions, returns = planted(80, 2, effect=50.0)
+    every = nulls.circular(positions, returns, False, 9999, 3)
+
+    drawn = nulls.circular(positions, returns, False, 20, 3)
 
     assert every.exact is True and drawn.exact is False and len(drawn.maxima) == 20
-    assert set(drawn.maxima.tolist()) <= set(every.maxima.tolist())
+    assert drawn.maxima.tolist() == every.maxima[nulls._shifts(80, 20, 3) - 1].tolist()
     assert abs(drawn.t[0]) not in set(every.maxima.tolist()), "the identity is never a draw"
-    again = nulls.circular(positions, returns, False, 15, 20, 3)
+    again = nulls.circular(positions, returns, False, 20, 3)
     assert (
         again.p.tobytes() == drawn.p.tobytes() and again.maxima.tobytes() == drawn.maxima.tobytes()
     )
@@ -182,43 +214,70 @@ def test_shifts_more_than_the_draws_are_drawn_only_from_the_admissible_ones() ->
 def test_one_shift_moves_every_cell_of_the_family_together() -> None:
     positions, returns = planted(50, 3)
     twice = nulls.circular(
-        np.vstack([positions, positions]), np.vstack([returns, returns]), True, 5, 999, 1
+        np.vstack([positions, positions]), np.vstack([returns, returns]), True, 999, 1
     )
-    once = nulls.circular(positions, returns, True, 5, 999, 1)
+    once = nulls.circular(positions, returns, True, 999, 1)
 
     assert twice.t[0] == twice.t[1] == once.t[0]
     assert twice.maxima.tobytes() == once.maxima.tobytes(), "a copy of a cell adds no chance"
     assert twice.p.tolist() == [once.p[0], once.p[0]]
 
 
-def test_too_few_sessions_for_the_shift_are_refused() -> None:
-    positions, returns = planted(19, 4)
+def test_a_family_with_no_session_or_one_reads_nothing_and_two_have_one_shift() -> None:
+    for sessions in (0, 1):
+        found = nulls.circular(np.ones((2, sessions)), np.ones((2, sessions)), False, 99, 1)
+        assert found.sessions.tolist() == [sessions, sessions] and found.p.tolist() == [1.0, 1.0]
+        assert len(found.maxima) == 0 and found.exact is True
 
-    with pytest.raises(PreconditionError, match="19 session") as refused:
-        nulls.circular(positions, returns, True, 10, 999, 1)
+    two = nulls.circular(np.asarray([[1.0, 0.0]]), np.asarray([[3.0, 1.0]]), False, 99, 1)
 
-    assert "lower min_shift below 9.5" in (refused.value.remedy or "")
+    assert len(two.maxima) == 1 and two.sessions.tolist() == [2]
+    assert two.p[0] in (0.5, 1.0), "the observed alignment and the one shift there is"
 
 
 def test_a_family_with_no_cell_reads_nothing() -> None:
-    found = nulls.circular(np.zeros((0, 30)), np.zeros((0, 30)), True, 5, 99, 1)
+    found = nulls.circular(np.zeros((0, 30)), np.zeros((0, 30)), True, 99, 1)
 
     assert len(found.p) == 0 and len(found.maxima) == 0
 
 
-def test_with_nothing_planted_p_is_near_uniform_under_both_nulls() -> None:
-    families = 200
-    flips = shifts = 0
-    for seed in range(families):
+def test_with_nothing_planted_block_sign_flips_hold_their_level() -> None:
+    ps = []
+    for seed in range(400):
         rng = np.random.default_rng(1000 + seed)
-        runs = np.repeat(rng.choice([-1.0, 1.0], size=(3, 21)), 5, axis=1)[:, :100]
+        runs = np.vstack([persistent(rng, 100, 6.0) for _ in range(3)])
         returns = rng.normal(size=(3, 100))
         values = nulls.values_of(runs, returns, contrast=True)
-        flips += int(np.min(nulls.evidence(nulls.blocks(values, 5), 99, seed).p) <= 0.1)
-        shifts += int(np.min(nulls.circular(runs, returns, True, 10, 99, seed).p) <= 0.1)
-    # Binomial 99.9% bounds on 200 families at 0.1 are about 0.030 and 0.170.
-    for hits in (flips, shifts):
-        assert 0.030 <= hits / families <= 0.170, hits
+        ps.append(np.min(nulls.evidence(nulls.blocks(values, 4), 99, seed).p))
+    # Blocks of four never line up with runs averaging six sessions.
+    rejected(np.asarray(ps), 0.1, 0.1)
+
+
+def test_with_nothing_planted_every_shift_holds_the_level_at_a_small_alpha() -> None:
+    # Runs averaging 30 of 150 sessions: a null that left out every shift under 10 either way
+    # was measured on these seeds putting 1.75% of p at or under 0.01; this one puts 0.55%.
+    ps = []
+    for seed in range(2000):
+        rng = np.random.default_rng(seed)
+        runs = persistent(rng, 150, 30.0)
+        returns = rng.normal(size=150)
+        returns -= returns.mean()
+        ps.append(nulls.circular(runs[None, :], returns[None, :], True, 9999, seed).p[0])
+    found = np.asarray(ps)
+    # p is (1 + reaching) / 150: at most 0.01 is reaching none, at most 0.05 reaching six.
+    rejected(found, 0.01, 1 / 150)
+    rejected(found, 0.05, 7 / 150)
+
+
+def test_with_nothing_planted_drawn_shifts_hold_the_level() -> None:
+    ps = []
+    for seed in range(1000):
+        rng = np.random.default_rng(5000 + seed)
+        runs = np.vstack([persistent(rng, 150, 12.0) for _ in range(2)])
+        returns = rng.normal(size=(2, 150))
+        ps.append(np.min(nulls.circular(runs, returns, True, 49, seed).p))
+    # 149 shifts and 49 draws: p is (1 + reaching) / 50, at most 0.1 when four or fewer reach.
+    rejected(np.asarray(ps), 0.1, 5 / 50)
 
 
 def test_the_critical_t_is_the_least_a_cell_must_exceed_for_its_p_to_reach_alpha() -> None:
@@ -253,24 +312,30 @@ def test_rotating_positions_and_returns_together_leaves_an_exact_p_unchanged(
 ) -> None:
     positions, returns = planted(40, seed, effect=float(seed % 3))
 
-    one = nulls.circular(positions, returns, contrast, 6, 999, 1)
+    one = nulls.circular(positions, returns, contrast, 999, 1)
     two = nulls.circular(
-        np.roll(positions, shift, axis=1), np.roll(returns, shift, axis=1), contrast, 6, 999, 1
+        np.roll(positions, shift, axis=1), np.roll(returns, shift, axis=1), contrast, 999, 1
     )
 
+    # Each shift pairs the same positions with the same returns either way, summed in another
+    # order: t and the maxima agree to rounding, and p does wherever no maximum, and no zero,
+    # lies within rounding of |t| — a t of zero reads p one, and one of 1e-17 does not.
     assert one.exact and two.exact
-    assert one.p.tolist() == two.p.tolist()
+    assert np.allclose(one.t, two.t, rtol=0, atol=1e-9)
+    assert np.allclose(one.maxima, two.maxima, rtol=0, atol=1e-9)
+    for row, t in enumerate(np.abs(one.t).tolist()):
+        if t > 1e-9 and not np.any(np.abs(one.maxima - t) <= 1e-9):
+            assert one.p[row] == two.p[row]
 
 
-@given(seed=st.integers(0, 10_000), minimum=st.integers(1, 15), draws=st.sampled_from([9, 99]))
+@given(seed=st.integers(0, 10_000), sessions=st.integers(2, 40), draws=st.sampled_from([9, 99]))
 @settings(max_examples=40, deadline=None)
 def test_every_circular_p_lies_between_its_floor_and_one(
-    seed: int, minimum: int, draws: int
+    seed: int, sessions: int, draws: int
 ) -> None:
-    positions, returns = planted(40, seed, effect=float(seed % 4))
+    positions, returns = planted(sessions, seed, effect=float(seed % 4))
 
-    found = nulls.circular(positions, returns, bool(seed % 2), minimum, draws, seed)
+    found = nulls.circular(positions, returns, bool(seed % 2), draws, seed)
 
-    admissible = 40 - 2 * minimum + 1
-    floor = 1 / (min(admissible, draws) + 1)
+    floor = 1 / (min(sessions - 1, draws) + 1)
     assert all(floor - 1e-12 <= p <= 1.0 for p in found.p.tolist())

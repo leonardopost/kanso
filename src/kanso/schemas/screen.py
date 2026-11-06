@@ -483,9 +483,9 @@ class Condition(KansoModel):
     comparison, after the calendar is taken out, and against the round trip a position pays.
 
     One measure is one family: its cells are its tests by its followers, judged together by the
-    null it declares — session sign flips summed into `block`s, or circular shifts of the
-    positions at least `min_shift` sessions from the observed alignment — and each null states
-    the one parameter it takes and no other. `demean` and `controls` are the design the returns
+    null it declares — session sign flips summed into `block`s, or every circular shift of the
+    positions against the returns — and only the sign flip takes a parameter, its block, which
+    the shifts refuse. `demean` and `controls` are the design the returns
     are demeaned on; `[]` is the window's mean alone. `latency_ms` is how long before the entry
     it orders the decision is made, at least a millisecond, so a point stamped at a fill's own
     instant is never read for it. `mde_power` asks for the minimum detectable effect at that
@@ -498,7 +498,6 @@ class Condition(KansoModel):
     payoff: Literal["contrast", "long_flat"]
     null_by: Literal["sign_flip", "circular"]
     block: int | None = Field(default=None, ge=1)
-    min_shift: int | None = Field(default=None, ge=1)
     demean: list[CalendarControl]
     controls: list[Name]
     latency_ms: float = Field(ge=0, allow_inf_nan=False)
@@ -517,10 +516,10 @@ class Condition(KansoModel):
                     f"tests.{name}.against: a long-or-flat payoff sets the favoured state "
                     "against nothing"
                 )
-        if self.null_by == "sign_flip" and (self.block is None or self.min_shift is not None):
-            raise ValueError("block: a sign-flip null states its block and no min_shift")
-        if self.null_by == "circular" and (self.min_shift is None or self.block is not None):
-            raise ValueError("min_shift: a circular null states its min_shift and no block")
+        if self.null_by == "sign_flip" and self.block is None:
+            raise ValueError("block: a sign-flip null states the block its sessions are summed in")
+        if self.null_by == "circular" and self.block is not None:
+            raise ValueError("block: a circular null takes every shift and sums into no block")
         for name, test in self.tests.items():
             hold = test.hold
             if (
@@ -578,19 +577,12 @@ def _passable(verdict: ScreenVerdict, measure: Condition, index: int) -> None:
                 "min_sessions or alpha, or shorten the block"
             )
         return
-    assert measure.min_shift is not None
-    if sessions < 2 * measure.min_shift:
-        raise ValueError(
-            f"verdict.min_sessions: {sessions} session(s) admit no circular shift of at least "
-            f"measures.{index}'s min_shift {measure.min_shift}; raise min_sessions to "
-            f"{2 * measure.min_shift} or lower min_shift"
-        )
-    floor = 1.0 / (sessions - 2 * measure.min_shift + 2)
+    floor = 1.0 / sessions
     if alpha < floor:
         raise ValueError(
-            f"verdict.alpha: {alpha:g} is below {floor:.3g}, the smallest p {sessions} "
-            f"session(s) can give over shifts of at least measures.{index}'s min_shift "
-            f"{measure.min_shift}; raise min_sessions or alpha, or lower min_shift"
+            f"verdict.alpha: {alpha:g} is below {floor:.3g}, the smallest p a circular shift "
+            f"of measures.{index}'s positions can give over {sessions} session(s), one in "
+            f"their {sessions} rotations; raise min_sessions or alpha"
         )
 
 
@@ -823,8 +815,10 @@ class ConditionStats(KansoModel):
     state's side in and the other side in; `exposure` the share of held sessions with a
     position; `episodes`, `episodes_against` and `longest_run` the runs of each state among the
     decisions; `skipped` the onsets a fixed hold let pass. `blocks` is the blocks a sign-flip
-    null judged the cell on, `shifts` the admissible shifts of a circular one, `exact` whether
-    every one was taken. `raw_bp` is the estimator on returns not demeaned, `drift_bp_day` the
+    null judged the cell on, `shifts` the shifts there are of a circular one, N − 1 over the
+    measure's N sessions, and `exact` whether every assignment the null has was taken once
+    rather than drawn — a statement about the arithmetic, not about how well the null's
+    assumption holds. `raw_bp` is the estimator on returns not demeaned, `drift_bp_day` the
     follower's mean return over the held sessions, and under a contrast `long_flat_bp` and
     `long_flat_ceiling_bp_day` are the long-or-flat realisation of the same test, reported and
     never judged. `control_r2` is the R² of the state on the design the returns were demeaned

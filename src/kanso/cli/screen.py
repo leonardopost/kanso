@@ -336,7 +336,7 @@ def _condition_lines(found: ConditionStats) -> list[str]:
     null = (
         f"sign flips of {found.blocks} block(s)"
         if found.null_by == "sign_flip"
-        else f"circular shifts, {found.shifts} admissible"
+        else f"circular shifts, {found.shifts} of them"
     )
     against = "" if found.sessions_against is None else f", against {found.sessions_against}"
     lines = [

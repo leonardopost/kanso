@@ -354,7 +354,6 @@ CONDITION: dict[str, Any] = {
     "followers": "names",
     "payoff": "contrast",
     "null_by": "circular",
-    "min_shift": 30,
     "demean": ["weekday", "month", {"turn_of_month": [1, 3]}, "third_friday_week"],
     "controls": ["event_day"],
     "latency_ms": 900000,
@@ -391,14 +390,12 @@ def test_a_condition_counts_its_tests_by_its_followers() -> None:
         ),
         ({"tests": {"up": {**TESTED, "against": None}}}, "a contrast states what"),
         ({"payoff": "long_flat"}, "a long-or-flat payoff sets the favoured state against nothing"),
-        ({"block": 20}, "a circular null states its min_shift and no block"),
-        ({"min_shift": None}, "a circular null states its min_shift"),
-        ({"null_by": "sign_flip"}, "a sign-flip null states its block and no min_shift"),
-        ({"null_by": "sign_flip", "min_shift": None}, "a sign-flip null states its block"),
+        ({"block": 20}, "a circular null takes every shift and sums into no block"),
+        ({"min_shift": 30}, "min_shift.*Extra inputs are not permitted"),
+        ({"null_by": "sign_flip"}, "a sign-flip null states the block its sessions are summed"),
         (
             {
                 "null_by": "sign_flip",
-                "min_shift": None,
                 "block": 3,
                 "tests": {"up": {**TESTED, "hold": {"sessions": 5}}},
             },
@@ -427,7 +424,7 @@ def test_a_condition_that_breaks_a_rule_is_refused_by_name(
 
 
 def test_two_condition_measures_making_one_cell_are_refused_and_two_nulls_are_admitted() -> None:
-    blocks = {**CONDITION, "null_by": "sign_flip", "min_shift": None, "block": 20}
+    blocks = {**CONDITION, "null_by": "sign_flip", "block": 20}
     screen = build(
         signals=SIGNALS,
         groups={**BASE["groups"], "names": ["mara", "riot"]},
@@ -445,16 +442,15 @@ def test_two_condition_measures_making_one_cell_are_refused_and_two_nulls_are_ad
 
 def test_a_verdict_no_condition_cell_could_pass_under_its_null_is_refused() -> None:
     verdict = {"alpha": 0.01, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 100}
-    blocks = {**CONDITION, "null_by": "sign_flip", "min_shift": None, "block": 20}
+    blocks = {**CONDITION, "null_by": "sign_flip", "block": 20}
 
     with pytest.raises(ValidationError, match="smallest p 5 block.s. of measures.0's 20"):
         conditioned(blocks, verdict=verdict)
     conditioned({**blocks, "block": 10}, verdict=verdict)
-    with pytest.raises(ValidationError, match="raise min_sessions to 120 or lower min_shift"):
-        conditioned({**CONDITION, "min_shift": 60}, verdict=verdict)
-    with pytest.raises(ValidationError, match="below 0.025, the smallest p 100 session"):
-        conditioned({**CONDITION, "min_shift": 31}, verdict={**verdict, "alpha": 0.02})
-    conditioned(verdict={**verdict, "alpha": 0.03})
+    with pytest.raises(ValidationError, match="below 0.01, the smallest p a circular shift") as e:
+        conditioned(verdict={**verdict, "alpha": 0.009})
+    assert "over 100 session(s), one in their 100 rotations" in str(e.value)
+    conditioned(verdict=verdict)
 
 
 CRITICAL = st.sampled_from([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0])

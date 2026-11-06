@@ -59,7 +59,6 @@ STATE: dict[str, Any] = {
             "followers": "names",
             "payoff": "contrast",
             "null_by": "circular",
-            "min_shift": 10,
             "demean": ["weekday", {"turn_of_month": [1, 2]}, "pre_holiday"],
             "controls": ["event_day"],
             "latency_ms": 900000,
@@ -79,7 +78,6 @@ FLAT: dict[str, Any] = {
             "followers": "a",
             "payoff": "long_flat",
             "null_by": "sign_flip",
-            "min_shift": None,
             "block": 5,
             "demean": [],
             "controls": [],
@@ -176,20 +174,6 @@ def test_show_renders_a_condition_cell_and_its_detail(runner: CliRunner, taped: 
     )
     assert rendered.condition is not None and rendered.condition.blocks
     assert rendered.condition.sessions_against is None and rendered.condition.shifts is None
-
-
-def test_a_family_of_too_few_sessions_for_its_shift_is_refused(
-    runner: CliRunner, taped: Path
-) -> None:
-    measure = {**STATE["measures"][0], "min_shift": 40}
-    document = {key: value for key, value in STATE.items() if key != "verdict"}
-    document = {**document, "id": "tape_short", "measures": [measure]}
-
-    result = at(runner, taped, "screen", "run", write_screen(taped, document), "--json")
-
-    assert result.exit_code == Exit.PRECONDITION, result.stdout
-    assert "admit no circular shift of at least min_shift 40" in payload(result)["error"]
-    assert "lower min_shift below" in payload(result)["remedy"]
 
 
 def test_a_condition_cell_is_not_drafted(runner: CliRunner, taped: Path) -> None:

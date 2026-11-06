@@ -86,8 +86,8 @@ NEITHER: Final = 0
 
 SIGN_FLIP: Final = "blocks of {block} sessions are roughly independent of each other"
 CIRCULAR: Final = (
-    "with no relationship, every admissible circular shift of a cell's positions against its "
-    "demeaned returns is as likely as the one observed"
+    "with no relationship, every circular shift of a cell's positions against its demeaned "
+    "returns is as likely as the one observed"
 )
 
 
@@ -309,10 +309,7 @@ def measure(
         evidence = nulls.evidence(nulls.blocks(values, measure.block), context.draws, seeded)
         counts = np.add.reduce(~np.isnan(values), axis=1)
     else:
-        assert measure.min_shift is not None
-        evidence = nulls.circular(
-            positions_by, residuals_by, contrast, measure.min_shift, context.draws, seeded
-        )
+        evidence = nulls.circular(positions_by, residuals_by, contrast, context.draws, seeded)
         counts = evidence.sessions
     return [
         _cell(context, index, measure, item, evidence, row, int(counts[row]), len(union), fold_of)
@@ -676,7 +673,7 @@ def _cell(
         longest_run=longest,
         skipped=item.skipped,
         blocks=blocks,
-        shifts=None if measure.min_shift is None else union - 2 * measure.min_shift + 1,
+        shifts=None if measure.block is not None else max(union - 1, 0),
         exact=evidence.exact,
         raw_bp=realised.raw,
         drift_bp_day=realised.drift,

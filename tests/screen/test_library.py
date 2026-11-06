@@ -117,7 +117,7 @@ def test_a_catch_up_parameter_outside_its_range_is_refused_naming_it(
 
 def test_a_condition_inside_every_range_is_admitted() -> None:
     check(conditioned())
-    blocks = {**CONDITION, "null_by": "sign_flip", "min_shift": None, "block": 252}
+    blocks = {**CONDITION, "null_by": "sign_flip", "block": 252}
     check(
         conditioned(
             {**blocks, "mde_power": 0.8, "tests": {"up": {**TESTED, "hold": {"sessions": 5}}}}
@@ -130,9 +130,8 @@ def test_a_condition_inside_every_range_is_admitted() -> None:
     [
         ({"latency_ms": 0}, r"measures\.0\.latency_ms: 0 is outside the condition range \[1\.0, "),
         ({"latency_ms": 90_000_000}, r"measures\.0\.latency_ms: 9e\+07 is outside"),
-        ({"min_shift": 2521}, r"measures\.0\.min_shift: 2521 is outside"),
         (
-            {"null_by": "sign_flip", "min_shift": None, "block": 253},
+            {"null_by": "sign_flip", "block": 253},
             r"measures\.0\.block: 253 is outside",
         ),
         ({"demean": [{"turn_of_month": [11, 1]}]}, r"measures\.0\.turn_of_month: 11 is outside"),

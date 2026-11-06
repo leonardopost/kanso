@@ -116,8 +116,8 @@ def _values(measure: LeadLag | Response | CatchUp | Condition) -> dict[str, list
 
 
 def _condition_values(measure: Condition) -> dict[str, list[float]]:
-    """A condition's ranged parameters: how many tests and controls, each fixed hold, its
-    null's one parameter, each end of a turn of the month, its latency and its power."""
+    """A condition's ranged parameters: how many tests and controls, each fixed hold, a
+    sign-flip null's block, each end of a turn of the month, its latency and its power."""
     values: dict[str, list[float]] = {
         "tests": [len(measure.tests)],
         "controls": [len(measure.controls)],
@@ -136,8 +136,6 @@ def _condition_values(measure: Condition) -> dict[str, list[float]]:
     }
     if measure.block is not None:
         values["block"] = [measure.block]
-    if measure.min_shift is not None:
-        values["min_shift"] = [measure.min_shift]
     if measure.mde_power is not None:
         values["mde_power"] = [measure.mde_power]
     return values

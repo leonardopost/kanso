@@ -58,7 +58,6 @@ def screen(tests: Mapping[str, Mapping[str, Any]] | None = None, **changes: Any)
         "followers": "a",
         "payoff": "contrast",
         "null_by": "circular",
-        "min_shift": 5,
         "demean": [],
         "controls": [],
         "latency_ms": 900_000,
@@ -344,7 +343,7 @@ def test_one_family_is_exact_when_its_blocks_admit_every_sign(
 ) -> None:
     sessions = trading(date(2026, 1, 5), date(2026, 1, 23))
     level = {day: (1.0 if n % 2 else -1.0) for n, day in enumerate(sessions)}
-    spec = screen(null_by="sign_flip", min_shift=None, block=5)
+    spec = screen(null_by="sign_flip", block=5)
 
     (cell,) = measured(spec, {"a": walk(sessions, 3)}, {"lvl": daily(level)}, monkeypatch)
 
@@ -363,22 +362,31 @@ def test_one_family_is_exact_when_its_shifts_are_fewer_than_the_draws(
     level = {day: (1.0 if (n // 4) % 2 else -1.0) for n, day in enumerate(sessions)}
     points = {"lvl": daily(level)}
 
-    (every,) = measured(screen(min_shift=5), {"a": walk(sessions, 5)}, points, monkeypatch)
-    (drawn,) = measured(screen(min_shift=5), {"a": walk(sessions, 5)}, points, monkeypatch, draws=9)
+    (every,) = measured(screen(), {"a": walk(sessions, 5)}, points, monkeypatch)
+    (drawn,) = measured(screen(), {"a": walk(sessions, 5)}, points, monkeypatch, draws=9)
 
     assert every.condition is not None and drawn.condition is not None
     assert every.condition.exact is True and drawn.condition.exact is False
-    assert every.condition.shifts == len(sessions) - 2 * 5 + 1
-    assert every.p >= 1 / (every.condition.shifts + 1)
+    assert every.condition.shifts == drawn.condition.shifts == len(sessions) - 1
+    assert every.p >= 1 / len(sessions) and drawn.p >= 1 / (9 + 1)
     assert every.t == drawn.t and every.mean == drawn.mean
 
 
-def test_too_few_sessions_for_min_shift_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_family_whose_signal_holds_no_point_reads_nothing_under_either_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sessions = trading(date(2026, 1, 5), date(2026, 1, 16))
-    level = dict.fromkeys(sessions, 1.0)
+    nothing: dict[str, Points] = {"lvl": []}
 
-    with pytest.raises(PreconditionError, match="admit no circular shift"):
-        measured(screen(min_shift=20), {"a": flat(sessions)}, {"lvl": daily(level)}, monkeypatch)
+    (shifted,) = measured(screen(), {"a": walk(sessions, 4)}, nothing, monkeypatch)
+    (flipped,) = measured(
+        screen(null_by="sign_flip", block=2), {"a": walk(sessions, 4)}, nothing, monkeypatch
+    )
+
+    for cell in (shifted, flipped):
+        assert cell.sessions == 0 and cell.p == 1.0 and cell.t == 0.0
+    assert shifted.condition is not None and shifted.condition.shifts == 0
+    assert flipped.condition is not None and flipped.condition.blocks == 0
 
 
 def test_sessions_before_the_signal_s_first_point_hold_no_value(
@@ -634,7 +642,7 @@ def test_no_mde_when_alpha_is_below_the_floor(monkeypatch: pytest.MonkeyPatch) -
     sessions = trading(date(2026, 1, 5), date(2026, 1, 16))
     level = {day: (1.0 if n % 2 else -1.0) for n, day in enumerate(sessions)}
     verdict = {"alpha": 0.05, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 24}
-    spec = screen(verdict=verdict, mde_power=0.8, null_by="sign_flip", min_shift=None, block=4)
+    spec = screen(verdict=verdict, mde_power=0.8, null_by="sign_flip", block=4)
 
     (cell,) = measured(spec, {"a": walk(sessions, 14)}, {"lvl": daily(level)}, monkeypatch)
 
@@ -736,7 +744,7 @@ def test_traded_includes_a_condition_s_followers() -> None:
 
 def test_an_assumption_is_stated_for_each_null() -> None:
     circular = screen().measures[0]
-    blocks = screen(null_by="sign_flip", min_shift=None, block=20).measures[0]
+    blocks = screen(null_by="sign_flip", block=20).measures[0]
     assert isinstance(circular, Condition) and isinstance(blocks, Condition)
 
     assert "circular shift" in condition.assumption(circular)
@@ -816,7 +824,7 @@ def test_a_sign_flip_family_reads_its_critical_t_off_its_own_maxima(
     sessions = trading()
     level = {day: (1.0 if (n // 3) % 2 else -1.0) for n, day in enumerate(sessions)}
     verdict = {"alpha": 0.1, "min_margin_bp": 0, "min_events_per_day": 0, "min_sessions": 20}
-    spec = screen(verdict=verdict, mde_power=0.9, null_by="sign_flip", min_shift=None, block=3)
+    spec = screen(verdict=verdict, mde_power=0.9, null_by="sign_flip", block=3)
 
     (cell,) = measured(spec, {"a": walk(sessions, 19)}, {"lvl": daily(level)}, monkeypatch)
 
