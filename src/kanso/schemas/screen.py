@@ -815,10 +815,10 @@ class ConditionStats(KansoModel):
     state's side in and the other side in; `exposure` the share of held sessions with a
     position; `episodes`, `episodes_against` and `longest_run` the runs of each state among the
     decisions; `skipped` the onsets a fixed hold let pass. `blocks` is the blocks a sign-flip
-    null judged the cell on, `shifts` the shifts there are of a circular one, N − 1 over the
-    measure's N sessions, and `exact` whether every assignment the null has was taken once
-    rather than drawn — a statement about the arithmetic, not about how well the null's
-    assumption holds. `raw_bp` is the estimator on returns not demeaned, `drift_bp_day` the
+    null judged the cell on, `shifts` the shifts there are of a circular one, N − 1 over the N
+    sessions every cell of the measure holds, and `exact` whether every assignment the null has
+    was taken once rather than drawn — a statement about the arithmetic, not about how well the
+    null's assumption holds. `raw_bp` is the estimator on returns not demeaned, `drift_bp_day` the
     follower's mean return over the held sessions, and under a contrast `long_flat_bp` and
     `long_flat_ceiling_bp_day` are the long-or-flat realisation of the same test, reported and
     never judged. `control_r2` is the R² of the state on the design the returns were demeaned

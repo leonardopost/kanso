@@ -28,6 +28,7 @@ from kanso.screen.hurdle import Hurdles
 from kanso.screen.run import Context, _folds
 from kanso.screen.sessions import Series, days
 from tests.nautilus.backtest.conftest import instrument, perpetual
+from tests.screen.test_nulls import rejected
 
 NEW_YORK = ZoneInfo("America/New_York")
 WINDOW = (date(2026, 1, 5), date(2026, 3, 27))
@@ -506,6 +507,84 @@ def test_one_family_is_exact_when_its_shifts_are_fewer_than_the_draws(
     assert every.condition.shifts == drawn.condition.shifts == len(sessions) - 1
     assert every.p >= 1 / len(sessions) and drawn.p >= 1 / (9 + 1)
     assert every.t == drawn.t and every.mean == drawn.mean
+
+
+def ragged(sessions: Sequence[date], seed: int, held: float) -> dict[str, Prices]:
+    """Two seeded followers, the second holding only the last `held` share of the sessions."""
+    start = sessions[int(len(sessions) * (1 - held))]
+    later = {day: price for day, price in walk(sessions, seed + 10_000).items() if day >= start}
+    return {"a": walk(sessions, seed), "b": later}
+
+
+def test_a_circular_family_is_judged_on_the_sessions_every_cell_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    prices = ragged(sessions, 27, 0.4)
+    level = {day: (1.0 if n % 2 else -1.0) for n, day in enumerate(sessions)}
+    points = {"lvl": daily(level), "flg": []}
+    tests = {
+        "up": TEST,
+        "up_cc": {**TEST, "entry": "close"},
+        "none": {**TEST, "signal": "flg"},
+    }
+    later = [day for day in sessions if day in prices["b"]]
+
+    shifted = measured(screen(tests, followers="ab"), prices, points, monkeypatch)
+    flipped = measured(
+        screen(tests, followers="ab", null_by="sign_flip", block=2), prices, points, monkeypatch
+    )
+
+    # b's close-to-close test holds b's sessions but its first, and so is every cell judged: a
+    # shift rotates one index, and a cell holding part of it would lose its values to the gaps.
+    judged = {cell.key: cell.sessions for cell in shifted}
+    assert judged == {
+        **{
+            f"condition/{test}/{name}/circular": len(later) - 1
+            for test in ("up", "up_cc")
+            for name in "ab"
+        },
+        "condition/none/a/circular": 0,
+        "condition/none/b/circular": 0,
+    }, "a cell holding nothing takes nothing from the rest"
+    for cell in shifted[:4]:
+        assert cell.condition is not None and cell.condition.shifts == len(later) - 2
+    # Sign flips of blocks need no shared index, and each cell keeps its own sessions.
+    assert [cell.sessions for cell in flipped[:4]] == [
+        len(sessions),
+        len(later),
+        len(sessions) - 1,
+        len(later) - 1,
+    ]
+
+
+@pytest.mark.parametrize("null", ["circular", "sign_flip"])
+@pytest.mark.parametrize("held", [1.0, 0.4])
+def test_with_nothing_planted_p_is_near_uniform_across_seeds(
+    monkeypatch: pytest.MonkeyPatch, null: str, held: float
+) -> None:
+    sessions = trading()
+    tests = {"up": TEST, "up_cc": {**TEST, "entry": "close"}}
+    blocks = {} if null == "circular" else {"null_by": "sign_flip", "block": 5}
+    spec = screen(tests, followers="ab", **blocks)
+    smallest, shifts = [], set()
+    for seed in range(200):
+        rng = np.random.default_rng(3000 + seed)
+        side, level = 1.0, {}
+        for day in sessions:  # a state persisting for runs averaging six sessions
+            side = -side if rng.random() < 1 / 6 else side
+            level[day] = side
+        cells = measured(spec, ragged(sessions, seed, held), {"lvl": daily(level)}, monkeypatch, 99)
+        smallest.append(min(cell.p for cell in cells))
+        shifts |= {cell.condition.shifts for cell in cells if cell.condition is not None}
+    # Every shift taken over the N sessions the family shares puts the smallest p at or under
+    # 0.1 exactly floor(0.1 N) / N of the time; 99 drawn sign vectors, (1 + 9) / 100.
+    nominal = 10 / 100
+    if null == "circular":
+        (taken,) = shifts
+        assert taken is not None
+        nominal = math.floor(0.1 * (taken + 1)) / (taken + 1)
+    rejected(np.asarray(smallest), 0.1, nominal)
 
 
 def test_a_family_whose_signal_holds_no_point_reads_nothing_under_either_null(

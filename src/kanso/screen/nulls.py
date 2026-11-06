@@ -55,6 +55,17 @@ the N − 1 shifts are no more than the draws every one is taken once; otherwise
 ones are drawn from the measure's own generator, which keeps p valid by the random-permutation
 argument: under the null the identity and the shifts drawn are exchangeable.
 
+**On the sessions every cell holds.** A rotation is one bijection of one index, so every cell
+of the family holds a position and a return at every session of it, or at none. A cell holding
+only some of them would have its positions shifted off its returns: on most shifts it would
+keep fewer values than it observed, read a t of zero where it holds fewer than two, and the
+family's maxima would fall short of what the observed alignment is ranked against, so p would
+read too small. Measured on two contrast cells over 200 sessions, one of them holding the last
+60, 6.5% of the family's smallest p fell at or under 0.05 and 12.8% at or under 0.10, against
+4.6% and 9.6% when both held all 200. So a condition judged by circular shifts holds only the
+sessions that every one of its cells holding any holds (`kanso.screen.condition`), and
+`circular` takes nothing else.
+
 A cell's p under either null is its rank against the family's maxima, R of which reach its |t|:
 
     sign flips, every vector (2^S <= draws)   R / 2^S,              never below 2^(1 - S held)
@@ -200,11 +211,14 @@ def circular(
     """Each cell's mean, standard error and t of its values, and its max-T p over circular
     shifts of every cell's positions against its returns, one shift shared by the family.
 
-    `positions` and `returns` are cells x sessions, NaN where a cell held nothing. Every shift
+    `positions` and `returns` are cells x sessions, and every cell holds both at every session
+    or at none: a row NaN in part would have its positions shifted off its returns. Every shift
     from 1 to N − 1 is a draw, or `draws` of them when they are more; a family of fewer than
     two sessions has none, and every cell of it reads p one.
     """
     cells, sessions = positions.shape
+    holding = ~np.isnan(positions) & ~np.isnan(returns)
+    assert np.all(holding.all(axis=1) | ~holding.any(axis=1)), "a cell holds every session or none"
     observed = values_of(positions, returns, contrast)
     held = ~np.isnan(observed)
     filled = np.where(held, observed, 0.0)

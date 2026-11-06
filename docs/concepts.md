@@ -409,14 +409,21 @@ position persists for runs of sessions, so its null is declared with it: its val
 blocks of `block` sessions and sign-flipped (`sign_flip`), which assumes the blocks roughly
 independent, or its positions shifted round the calendar against its residuals, one shift
 shared by every cell (`circular`), which keeps the positions' own runs and assumes only that,
-with no relationship, every shift is as likely as the observed alignment. It takes every shift
-from 1 to N − 1 over the measure's N sessions, the whole group of rotations, so the observed
-alignment's rank among the N is uniform and its p is exact as a level, as far as the residuals
-are exchangeable under rotation; a set that left out the shifts near the observed alignment
-would read p too small — measured on one contrast cell with runs averaging 40 sessions over 250,
-leaving out every shift under 60 put 2.9% of p at or under 0.01. A shift of a session or two
-nearly re-aligns a persistent position and so nearly reaches its |t|: persistence costs the
-null power, never level. Lag zero is refused: the same instant's co-movement is not a lead.
+with no relationship, every shift is as likely as the observed alignment. A shift rotates one
+index, so a circular family holds only the N sessions every one of its cells holding any holds:
+a cell holding only some would have its positions shifted off its returns, keep fewer values
+than it observed on most shifts, and pull the family's maxima down — measured on two contrast
+cells over 200 sessions, one holding the last 60, 12.8% of the smallest p fell at or under 0.10,
+against 9.6% when both held all 200. A cell that held more gives the rest up, from its
+residuals to its round trips, so a follower with sessions the others lack keeps them only in a
+measure of its own. The null takes every shift from 1 to N − 1, the whole group of rotations,
+so the observed alignment's rank among the N is uniform and its p is exact as a level, as far
+as the residuals are exchangeable under rotation; a set that left out the shifts near the
+observed alignment would read p too small — measured on one contrast cell with runs averaging 40
+sessions over 250, leaving out every shift under 60 put 2.9% of p at or under 0.01. A shift of a
+session or two nearly re-aligns a persistent position and so nearly reaches its |t|:
+persistence costs the null power, never level. Lag zero is refused: the same instant's
+co-movement is not a lead.
 
 **Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
 judges nothing. Sign flips over S sessions can give no p below 2^(1−S) — the observed signs and their

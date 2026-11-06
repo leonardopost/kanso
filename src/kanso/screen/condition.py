@@ -41,9 +41,12 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    however many sessions apart, and its gross is what a taker made between the two: a quoted
    follower buys the ask and sells the bid it showed. Net is booked by session, the round trip
    on the session the position left in.
-6. **Judge** the measure's cells together on the sessions any of them held: their values summed
-   into declared blocks and sign-flipped, or their positions shifted round the calendar against
-   their residuals (`kanso.screen.nulls`).
+6. **Judge** the measure's cells together: their values summed into declared blocks of the
+   sessions any of them held and sign-flipped, or their positions shifted round the calendar
+   against their residuals (`kanso.screen.nulls`). A shift rotates one index, so a circular
+   family holds only the sessions every one of its cells holding any holds, and a cell that
+   held more gives the rest up, from its residuals to its round trips; a cell that holds none
+   takes none from the others.
 
 NautilusTrader facts relied on (nautilus_trader 1.231.0): a custom point read from the catalog
 arrives wrapped in `CustomData`, and a query filters on `ts_init` inclusively at both ends
@@ -280,21 +283,32 @@ def measure(
         for key in cells(screen, measure)
     ]
     latency = int(round(measure.latency_ms * 1_000_000))
-    found: list[_Found] = []
+    decided: list[tuple[_Plan, _States, np.ndarray, np.ndarray, int]] = []
     for plan, (read, controls) in zip(
         plans, _reads(catalog, context, measure, plans, latency), strict=True
     ):
         states = _states(plan, read, latency)
         gated = _controls(context, measure, plan, controls)
         positions, skipped = _positions(plan.test, states.state, measure.payoff)
+        decided.append((plan, states, gated, positions, skipped))
+    shared = None
+    if measure.block is None:
+        shared = _shared(
+            [
+                {plan.follower.days[at] for at in _holding(plan, positions, gated)}
+                for plan, _, gated, positions, _ in decided
+            ]
+        )
+    found: list[_Found] = []
+    for plan, states, gated, positions, skipped in decided:
         realised = _realise(
-            context, measure, plan, days, positions, gated, hurdles, fold_of, measure.payoff
+            context, measure, plan, days, positions, gated, hurdles, fold_of, measure.payoff, shared
         )
         lone = None
         if measure.payoff == "contrast":
             flat, _ = _positions(plan.test, states.state, "long_flat")
             lone = _realise(
-                context, measure, plan, days, flat, gated, hurdles, fold_of, "long_flat"
+                context, measure, plan, days, flat, gated, hurdles, fold_of, "long_flat", shared
             )
         found.append(_Found(plan, states, skipped, realised, lone))
     union = sorted({day for item in found for day in item.realised.days})
@@ -495,6 +509,23 @@ def _controls(
     return found
 
 
+def _holding(plan: _Plan, positions: np.ndarray, controls: np.ndarray) -> list[int]:
+    """The follower's sessions a cell holds: its period valid, its position and every control
+    defined."""
+    return [
+        position
+        for position, valid in enumerate(plan.valid)
+        if valid and not np.isnan(positions[position]) and not np.isnan(controls[position]).any()
+    ]
+
+
+def _shared(held: Sequence[set[int]]) -> set[int]:
+    """The window's sessions every cell holding any holds: the one index a circular family's
+    shifts rotate, so that no shift moves a cell's positions off its returns."""
+    holding = [days for days in held if days]
+    return set.intersection(*holding) if holding else set()
+
+
 def _realise(
     context: Context,
     measure: Condition,
@@ -505,14 +536,16 @@ def _realise(
     hurdles: Hurdles,
     fold_of: np.ndarray,
     payoff: str,
+    shared: set[int] | None,
 ) -> _Realised:
-    """A cell's held sessions, its demeaned values, its round trips and its net by session."""
+    """A cell's held sessions — under a circular null only those every cell of the family
+    holds — its demeaned values, its round trips and its net by session."""
     contrast = payoff == "contrast"
     follower = plan.follower
     held = [
         position
-        for position, valid in enumerate(plan.valid)
-        if valid and not np.isnan(positions[position]) and not np.isnan(controls[position]).any()
+        for position in _holding(plan, positions, controls)
+        if shared is None or follower.days[position] in shared
     ]
     on = [follower.days[position] for position in held]
     returns = np.asarray([_return(plan, position) for position in held], dtype=np.float64)

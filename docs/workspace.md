@@ -186,8 +186,9 @@ many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a preci
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
 A measure over S sessions whose 2^S vectors of signs are no more than `draws` takes each of them
 once instead, and its p is exact — seven sessions under the default are 128 vectors. A circular
-null over N sessions has N − 1 shifts; when they are no more than `draws` each is taken once and
-no p is below 1/N, and when they are more, `draws` of them are drawn without replacement.
+null over the N sessions every cell of its measure holds has N − 1 shifts; when they are no
+more than `draws` each is taken once and no p is below 1/N, and when they are more, `draws` of
+them are drawn without replacement.
 
 The two top-level keys are written by `init` and read by nothing: `kanso_version` records
 the kanso that scaffolded the workspace, and `schema_version` is not the schema guard —
@@ -1484,7 +1485,7 @@ inference rests on, and holds one entry per cell:
 | `condition.*`, its `response` | a `condition` cell only. Its `response` fields are its positions': `events` the round trips, each a maximal run of held sessions with one direction, joined across sessions only when its periods are contiguous; `gross_bp`, `hurdle_bp` and `margin_bp` a round trip; `ceiling_bp_day` the net a held session; `unfilled` the periods that could not be scored; `drift_adjusted_bp` the demeaned signed move a round trip |
 | `condition.sessions_when`, `sessions_against`, `exposure` | held sessions the position took the favoured side in, and the other (contrast only); the share of held sessions with any position |
 | `condition.episodes`, `episodes_against`, `longest_run`, `skipped` | runs of each state among the decisions, the longest run of `when`, and onsets a fixed hold let pass |
-| `condition.blocks`, `shifts`, `exact` | the blocks a sign-flip null judged the cell on; the shifts a circular one has, N − 1 over the measure's N sessions; and whether every assignment the null has was taken once rather than drawn — a statement about the arithmetic, not about how well the null's assumption holds |
+| `condition.blocks`, `shifts`, `exact` | the blocks a sign-flip null judged the cell on; the shifts a circular one has, N − 1 over the N sessions every cell of the measure holds, the only ones a circular family judges any of its cells on; and whether every assignment the null has was taken once rather than drawn — a statement about the arithmetic, not about how well the null's assumption holds |
 | `condition.raw_bp`, `drift_bp_day` | the estimator on returns not demeaned, and the follower's mean return over the held sessions |
 | `condition.long_flat_bp`, `long_flat_ceiling_bp_day` | under a contrast only: the long-or-flat realisation of the same test, its excess a session and its net a session after its own round trips — reported, never judged |
 | `condition.control_r2`, `dropped` | the R² of the state on the demeaning design, absent when the state never varies: against `rest`, `mean` is exactly the state's least-squares coefficient on the returns beside the design times one less it, long or flat that times f(1 − f) at exposure f, and against a comparison approximately so, its residuals fitted on sessions in neither state too; the design's columns that held nothing, by name |
