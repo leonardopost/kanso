@@ -204,7 +204,13 @@ def test_residualised_on_the_design_the_values_spread_as_the_estimate_does(contr
         naive.append(float(nulls.evidence(plain, 1, 0).se[0]))
     spread = float(np.std(estimates, ddof=1))
     assert 0.94 <= float(np.mean(ses)) / spread <= 1.06
-    assert float(np.mean(naive)) / spread >= 1.25, "the weights alone overstate it"
+    overstated = float(np.mean(naive)) / spread
+    assert overstated >= 1.25, "the weights alone overstate it"
+    inflation = 1 / math.sqrt(1 - r2)
+    if contrast:
+        assert overstated < 0.95 * inflation, "by less than 1 / sqrt(1 - R²) against a comparison"
+    else:
+        assert overstated == pytest.approx(inflation, rel=0.05), "by 1 / sqrt(1 - R²) long or flat"
 
 
 def test_a_contrast_s_flat_session_holds_a_value_only_when_the_design_spans_more() -> None:

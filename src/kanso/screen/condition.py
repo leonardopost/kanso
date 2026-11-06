@@ -46,9 +46,9 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    against 3.05% on the weights alone, which overstate the standard error and err
    conservative: by about `1 / √(1 − R²)` against `rest` and long or flat, and by less against
    a comparison, whose R² is taken over the sessions in either state while the residuals are
-   fitted on every held session — measured against `lt: 0` with 30% of sessions in neither
-   state, 1.10 times the estimate's spread over 600 redraws where `1 / √(1 − R²)` was 1.17. A
-   contrast's `sessions` are those in either state.
+   fitted on every held session — measured on a state with an R² of 0.541 on a weekday design,
+   one session in five in neither state, 1.32 times the estimate's spread over 2,000 redraws
+   where `1 / √(1 − R²)` was 1.48. A contrast's `sessions` are those in either state.
 5. **Round trips, by position.** A position is a maximal run of held sessions with one
    direction; across sessions it runs on only when its periods are contiguous — the exit of one
    is the entry of the next — so a state held k sessions close to close is one round trip, and

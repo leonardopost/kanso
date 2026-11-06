@@ -123,6 +123,45 @@ def test_r2_reads_what_the_design_shares_with_the_state() -> None:
     assert demean.r2(*demean.design([], [], {}, None), np.zeros(0)) is None
 
 
+def switching(seed: int, sessions: int) -> np.ndarray:
+    """A state switching one session in ten, half its switches to neither side."""
+    rng = np.random.default_rng(seed)
+    side, sides = 1.0, []
+    for _ in range(sessions):
+        if rng.random() < 0.1:
+            side = 0.0 if rng.random() < 0.5 else (1.0 if rng.random() < 0.5 else -1.0)
+        sides.append(side)
+    return np.asarray(sides)
+
+
+def test_against_a_comparison_one_less_r2_is_only_roughly_the_attenuation() -> None:
+    # A year of sessions under month dummies, twenty states and a move of one on the sessions
+    # in each, with no noise. Against `rest` the residual contrast is exactly one less the R²;
+    # against the other side it was measured here at a median 1.60 times one less the R² over
+    # the sessions in either state, as `control_r2` is taken, and at 1.03 to 7.28: dividing
+    # `mean` by one less `control_r2` overstates the move, by half or more as often as not.
+    days = weekdays(date(2024, 1, 2), 252)
+    matrix, names = demean.design(days, ["month"], {}, None)
+    ratios, neither = [], []
+    for seed in range(20):
+        state = switching(seed, len(days))
+        when = (state > 0).astype(np.float64)
+        left = demean.residuals(matrix, names, when)[0]
+        either = state != 0
+
+        whole = demean.r2(matrix, names, when)
+        r2 = demean.r2(matrix[either], names, when[either])
+
+        assert whole is not None and r2 is not None and r2 < 1
+        rest = float(np.mean(left[state > 0]) - np.mean(left[state <= 0]))
+        assert rest == pytest.approx(1 - whole, rel=1e-9), "against rest the identity is exact"
+        against = float(np.mean(left[state > 0]) - np.mean(left[state < 0]))
+        ratios.append(against / (1 - r2))
+        neither.append(float(np.mean(~either)))
+    assert 0.4 <= float(np.mean(neither)) <= 0.6, "about half the sessions in neither state"
+    assert min(ratios) > 1.0 and float(np.median(ratios)) > 1.5
+
+
 def test_no_blas_is_reached_and_the_bits_repeat(monkeypatch: pytest.MonkeyPatch) -> None:
     def refused(*_: object, **__: object) -> None:
         raise AssertionError("demeaning calls no BLAS")

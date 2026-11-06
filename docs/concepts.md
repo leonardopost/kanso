@@ -369,14 +369,17 @@ reported — under a contrast, over the sessions in either state.
 Against `rest` the estimate is exactly the state's least-squares coefficient in a regression on
 it and the design, β, times one less that R², and long or flat exactly s·β·f(1 − f)·(1 − R²) at
 exposure f and side s; against a comparison, whose residuals were fitted on the sessions in
-neither state too, the identity is approximate. Long or flat, `mean` is the excess a session;
-under a contrast it is the mean long less the mean short, signed by the side, so a correctly
-signed effect is positive under either. The null ranks |t|, so p is two-sided, and a verdict
-passes a cell only with its `mean` above zero: one whose p clears `alpha` at or under zero fails
-as against the declared side, which over a hold of several sessions its margin would not show,
-a round trip's gross being mostly the follower's drift. Either way the session values the null
-and `se` read weigh each return so the weights sum to zero — long or flat, the position less the
-cell's mean position. A position times its residual alone would overstate `se` by 1/√(1 − f) at exposure f,
+neither state too, the identity is approximate, and dividing `mean` by one less `control_r2`
+overstates the move — by half or more with month dummies and many sessions in neither state:
+measured on twenty states a year long under month dummies, about half the sessions in neither,
+a noise-free move came out a median 1.60 times itself times one less `control_r2`, and 1.03 to
+7.28 times. Long or flat, `mean` is the excess a session; under a contrast it is the mean long
+less the mean short, signed by the side, so a correctly signed effect is positive under either.
+The null ranks |t|, so p is two-sided, and a verdict passes a cell only with its `mean` above
+zero: one whose p clears `alpha` at or under zero fails as against the declared side, which
+over a hold of several sessions its margin would not show, a round trip's gross being mostly the
+follower's drift. Either way the session values the null and `se` read weigh each return so the
+weights sum to zero — long or flat, the position less the cell's mean position. A position times its residual alone would overstate `se` by 1/√(1 − f) at exposure f,
 as though the residuals' mean had not been fitted: measured on a thousand drifting followers held
 half the time, sign flips of it put 1.3% of p at or under 0.05. Under `circular` the weights are
 residualised on the design as the returns were, so `se` is the estimate's own, and every shifted
@@ -391,11 +394,12 @@ and month dummies over 250 sessions in blocks of five, contrast positions in run
 `mde_bp` read the weights alone, and where the design shares the state they overstate the
 estimate's own and understate `t` — against `rest` and long or flat by about
 1/√(1 − `control_r2`), against a comparison by less, `control_r2` being taken over the sessions
-in either state while the residuals are fitted on every held session (measured against `lt: 0`
-with 30% of sessions in neither state and a `control_r2` of 0.275, `se` was 1.10 times the
-estimate's spread over 600 redraws, where 1/√(1 − 0.275) is 1.17) — and p errs conservative for
-it. Under a contrast judged by circular shifts a session in neither state holds a value too —
-its residualised weight, what the design shares with the contrast, times its residual — and none
+in either state while the residuals are fitted on every held session (measured on a state with
+a `control_r2` of 0.541 on a weekday design over 500 sessions, one in five in neither state, `se`
+was 1.32 times the estimate's spread over 2,000 redraws, where 1/√(1 − 0.541) is 1.48; long or
+flat, at an R² of 0.522, 1.47 where it is 1.45) — and p errs conservative for it. Under a
+contrast judged by circular shifts a session in neither state holds a value too — its
+residualised weight, what the design shares with the contrast, times its residual — and none
 with the intercept alone; `sessions` counts the sessions in either state either way.
 Each position — a run of sessions, joined across a boundary only when its periods are contiguous — is charged one round trip struck at its entry and its
 exit, so a state held for days close to close pays once and open to close pays daily.

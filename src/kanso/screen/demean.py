@@ -32,9 +32,12 @@ them is exactly the least-squares coefficient β on the state indicator in a reg
 design, times `1 − R²` of the indicator on the design; long or flat, the mean of position times
 residual is exactly `s·β·f(1 − f)·(1 − R²)` at exposure f and side s. Against a comparison the
 residuals were fitted on the sessions in neither state too, which the contrast does not read
-and `r2` is not taken over, so the identity is approximate. `r2` reports that R², so how much
-the calendar shared with the state is visible, and with the intercept alone the two estimates
-are one.
+and `r2` is not taken over, so the identity is approximate, and the attenuation can be well
+beyond `1 − r2`: under month dummies, with about half the sessions in neither state, a
+noise-free move came out a median 1.60 times itself times `1 − r2` over twenty year-long
+states, 1.03 to 7.28 times, so dividing by `1 − r2` would overstate it by half or more.
+`r2` reports that R², so how much the calendar shared with the state is visible, and with the
+intercept alone the two estimates are one.
 
 **What the estimate's noise is.** The estimate is a weighted sum of the residuals, `w·(M_X r)`,
 whose variance is that of `(M_X w)·r`: the weights residualised on the design as the returns
