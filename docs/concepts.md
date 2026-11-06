@@ -370,11 +370,12 @@ Against `rest` the estimate is exactly the state's least-squares coefficient in 
 it and the design, β, times one less that R², and long or flat exactly s·β·f(1 − f)·(1 − R²) at
 exposure f and side s; against a comparison, whose residuals were fitted on the sessions in
 neither state too, the identity is approximate, and dividing `mean` by one less `control_r2`
-overstates the move — by half or more with month dummies and many sessions in neither state:
-measured on twenty states a year long under month dummies, about half the sessions in neither,
-a noise-free move came out a median 1.60 times itself times one less `control_r2`, and 1.03 to
-7.28 times. Long or flat, `mean` is the excess a session; under a contrast it is the mean long
-less the mean short, signed by the side, so a correctly signed effect is positive under either.
+overstates the move — with month dummies and many sessions in neither state by half or more as
+often as not: measured on twenty states a year long under month dummies, about half the sessions
+in neither, a noise-free move came out a median 1.60 times itself times one less `control_r2`,
+and 1.03 to 7.28 times. Long or flat, `mean` is the excess a session; under a contrast it is the
+mean long less the mean short, signed by the side, so a correctly signed effect is positive
+under either.
 The null ranks |t|, so p is two-sided, and a verdict passes a cell only with its `mean` above
 zero: one whose p clears `alpha` at or under zero fails as against the declared side, which
 over a hold of several sessions its margin would not show, a round trip's gross being mostly the

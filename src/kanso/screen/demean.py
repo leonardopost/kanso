@@ -35,7 +35,8 @@ residuals were fitted on the sessions in neither state too, which the contrast d
 and `r2` is not taken over, so the identity is approximate, and the attenuation can be well
 beyond `1 − r2`: under month dummies, with about half the sessions in neither state, a
 noise-free move came out a median 1.60 times itself times `1 − r2` over twenty year-long
-states, 1.03 to 7.28 times, so dividing by `1 − r2` would overstate it by half or more.
+states, 1.03 to 7.28 times, so dividing by `1 − r2` would overstate it, by half or more as
+often as not.
 `r2` reports that R², so how much the calendar shared with the state is visible, and with the
 intercept alone the two estimates are one.
 
