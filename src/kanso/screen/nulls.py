@@ -1,4 +1,5 @@
-"""A measure's evidence across sessions, and its family-wise null by session sign flips.
+"""A measure's evidence across sessions, and its family-wise null: session sign flips, or
+circular shifts of a condition's positions.
 
 **The session is the unit of replication.** A cell's evidence is one value per session it
 holds — a correlation at a lag, a drift-adjusted response — reported as their mean and the
@@ -28,12 +29,36 @@ no assignment of signs can give less, however the draws fell.
 of the screen's bytes, the snapshot and the measure's index. The same pins give the same
 signs; another cell in one measure changes that measure's family and no other's.
 
+**Circular shifts, for positions that persist.** A position held while a slow state holds is
+the same sign for runs of sessions, so its values are not independent session to session, and
+flipping their signs one at a time would read a run as many chances. A `condition` measure may
+be judged instead by shifting every cell's positions round the calendar against its returns,
+which stay with their dates: one draw moves every position k sessions later, wrapping at the
+end, with one k shared by every cell of the measure, so the cells' dependence is kept, and so is
+each cell's own — its runs, its holds, how long a state persists. Only the alignment of positions
+with returns is redrawn. The identity is never a draw: shifts run from `min_shift` to `N −
+min_shift` over the measure's N sessions, so a draw is always at least `min_shift` sessions from
+the alignment observed. When those K shifts are no more than the draws every one is taken once;
+otherwise the draws are drawn uniformly among them from the measure's own generator.
+
+A cell's p under either null is its rank against the family's maxima, R of which reach its |t|:
+
+    sign flips, every vector (2^S <= draws)   R / 2^S,              never below 2^(1 - S held)
+    sign flips, drawn                         (1 + R) / (draws + 1), never below 2^(1 - S held)
+    circular shifts, every one (K <= draws)   (1 + R) / (K + 1),     so at least 1 / (K + 1)
+    circular shifts, drawn                    (1 + R) / (draws + 1)
+
+The `+ 1` of the shifts is the observed alignment, which no admissible shift is. A cell whose t
+is zero reads p one under both. The maxima are kept, so the |t| a cell would need to reach a
+given p — the null's own critical value — can be read off them (`critical`).
+
 **No BLAS.** Every sum is numpy's own reduction in a fixed order, so one host gives the
 same bytes every time.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
@@ -41,19 +66,27 @@ from typing import Final
 
 import numpy as np
 
+from kanso.errors import PreconditionError
+
 BATCH: Final = 64
 """Draws evaluated at once: bounds the memory of a draw at `BATCH x cells x sessions` values."""
 
 
 @dataclass(frozen=True)
 class Evidence:
-    """Per cell: the mean of its sessions, its standard error, t, the sessions it held, p."""
+    """Per cell: the mean of its sessions, its standard error, t, the sessions it held, p.
+
+    `maxima` are the family's largest |t| under each draw of the null, and `exact` whether the
+    draws were every assignment there is rather than a sample of them.
+    """
 
     mean: np.ndarray
     se: np.ndarray
     t: np.ndarray
     sessions: np.ndarray
     p: np.ndarray
+    maxima: np.ndarray
+    exact: bool
 
 
 def seed(screen_sha: str, snapshot_id: str, index: int) -> int:
@@ -79,9 +112,11 @@ def evidence(values: np.ndarray, draws: int, seeded: int) -> Evidence:
     exceed = np.zeros(len(values), dtype=np.int64)
     exact = 2**sessions <= draws
     vectors = _exhaustive(sessions) if exact else _drawn(sessions, draws, seeded)
+    found: list[np.ndarray] = []
     for signs in vectors if len(values) else ():
         maxima = np.max(np.abs(_t(_sums(signs, filled), squares[None, :], counts[None, :])), axis=1)
         exceed += np.add.reduce(maxima[:, None] >= magnitude[None, :], axis=0)
+        found.append(maxima)
     estimated = exceed / 2**sessions if exact else (1 + exceed) / (draws + 1)
     floor = np.power(2.0, 1.0 - np.maximum(counts, 1))
     mean = np.divide(
@@ -93,7 +128,135 @@ def evidence(values: np.ndarray, draws: int, seeded: int) -> Evidence:
         t=observed_t,
         sessions=counts,
         p=np.where(magnitude > 0, np.maximum(estimated, floor), 1.0),
+        maxima=_joined(found),
+        exact=exact,
     )
+
+
+def values_of(positions: np.ndarray, returns: np.ndarray, contrast: bool) -> np.ndarray:
+    """Each session's value of a cell's positions against its returns, along the last axis.
+
+    NaN where either is. Long or flat, a session's value is its position times its return, a
+    flat session's a zero, so their mean is the excess a session. Under a contrast, a session
+    long is weighted `n / n⁺` and one short `−n / n⁻`, over the `n = n⁺ + n⁻` sessions holding
+    either, so the values' mean is the mean return long less the mean return short; a flat
+    session holds no value, and none does unless both sides hold at least one.
+    """
+    held = ~np.isnan(positions) & ~np.isnan(returns)
+    if not contrast:
+        return np.where(held, np.where(held, positions, 0.0) * returns, np.nan)
+    signed = np.where(held, positions, 0.0)
+    plus, minus = held & (signed > 0), held & (signed < 0)
+    longs = np.add.reduce(plus, axis=-1, keepdims=True)
+    shorts = np.add.reduce(minus, axis=-1, keepdims=True)
+    both = (longs + shorts).astype(np.float64)
+    weight = np.where(plus, both / np.maximum(longs, 1), -both / np.maximum(shorts, 1))
+    usable = (plus | minus) & (longs > 0) & (shorts > 0)
+    return np.where(usable, weight * np.where(usable, returns, 0.0), np.nan)
+
+
+def blocks(values: np.ndarray, size: int) -> np.ndarray:
+    """Each cell's values summed over consecutive blocks of `size` sessions; NaN for a block in
+    which the cell held none."""
+    cells, sessions = values.shape
+    count = -(-sessions // size)
+    padded = np.full((cells, count * size), np.nan, dtype=np.float64)
+    padded[:, :sessions] = values
+    grouped = padded.reshape(cells, count, size)
+    held = ~np.isnan(grouped)
+    sums = np.add.reduce(np.where(held, grouped, 0.0), axis=2)
+    return np.where(held.any(axis=2), sums, np.nan)
+
+
+def circular(
+    positions: np.ndarray,
+    returns: np.ndarray,
+    contrast: bool,
+    min_shift: int,
+    draws: int,
+    seeded: int,
+) -> Evidence:
+    """Each cell's mean, standard error and t of its values, and its max-T p over circular
+    shifts of every cell's positions against its returns, one shift shared by the family.
+
+    `positions` and `returns` are cells x sessions, NaN where a cell held nothing. Refused when
+    the sessions admit no shift of at least `min_shift` either way.
+    """
+    cells, sessions = positions.shape
+    admissible = sessions - 2 * min_shift + 1
+    if admissible < 1:
+        raise PreconditionError(
+            f"{sessions} session(s) admit no circular shift of at least min_shift {min_shift} "
+            "either way",
+            remedy=f"lower min_shift below {sessions / 2:g}, or measure a longer window",
+        )
+    observed = values_of(positions, returns, contrast)
+    held = ~np.isnan(observed)
+    filled = np.where(held, observed, 0.0)
+    counts = held.sum(axis=1)
+    sums = np.add.reduce(filled, axis=1)
+    squares = np.add.reduce(filled * filled, axis=1)
+    observed_t = _t(sums, squares, counts)
+    magnitude = np.abs(observed_t)
+    exact = admissible <= draws
+    if exact:
+        shifts = np.arange(min_shift, sessions - min_shift + 1, dtype=np.int64)
+    else:
+        generator = np.random.Generator(np.random.PCG64(seeded))
+        shifts = generator.integers(min_shift, sessions - min_shift + 1, size=draws)
+    found: list[np.ndarray] = []
+    column = np.arange(sessions, dtype=np.int64)
+    for start in range(0, len(shifts) if cells else 0, BATCH):
+        batch = shifts[start : start + BATCH]
+        moved = positions[:, (column[None, :] - batch[:, None]) % sessions].transpose(1, 0, 2)
+        values = values_of(moved, returns[None, :, :], contrast)
+        inside = ~np.isnan(values)
+        kept = np.where(inside, values, 0.0)
+        drawn_t = _t(
+            np.add.reduce(kept, axis=2), np.add.reduce(kept * kept, axis=2), inside.sum(axis=2)
+        )
+        found.append(np.max(np.abs(drawn_t), axis=1))
+    maxima = _joined(found)
+    exceed = np.add.reduce(maxima[:, None] >= magnitude[None, :], axis=0)
+    mean = np.divide(sums, counts, out=np.zeros(cells), where=counts > 0)
+    return Evidence(
+        mean=mean,
+        se=_se(sums, squares, counts),
+        t=observed_t,
+        sessions=counts,
+        p=np.where(magnitude > 0, (1 + exceed) / (len(shifts) + 1), 1.0),
+        maxima=maxima,
+        exact=exact,
+    )
+
+
+def critical(maxima: np.ndarray, alpha: float, enumerated_flips: bool) -> float | None:
+    """The |t| a cell must exceed for its p to be at most `alpha`, read off the null's maxima;
+    `None` when no |t| can.
+
+    `enumerated_flips` is the rule of an enumeration of every sign vector, whose p is the share
+    of maxima reaching |t|; every other null's p is `(1 + reaching) / (draws + 1)`. A cell above
+    the j-th largest maximum is reached by at most j of them, so j is the most a p of at most
+    `alpha` allows, counted in the arithmetic the verdict compares p in.
+    """
+    ordered = np.sort(maxima)[::-1]
+    total = len(ordered)
+
+    def p(reaching: int) -> float:
+        return reaching / total if enumerated_flips else (1 + reaching) / (total + 1)
+
+    reached = math.floor(alpha * total) if enumerated_flips else math.floor(alpha * (total + 1)) - 1
+    while reached + 1 <= total and p(reached + 1) <= alpha:
+        reached += 1
+    while reached >= 0 and p(reached) > alpha:
+        reached -= 1
+    if reached < 0:
+        return None
+    return float(ordered[reached]) if reached < total else 0.0
+
+
+def _joined(maxima: list[np.ndarray]) -> np.ndarray:
+    return np.concatenate(maxima) if maxima else np.zeros(0, dtype=np.float64)
 
 
 def _sums(signs: np.ndarray, filled: np.ndarray) -> np.ndarray:
