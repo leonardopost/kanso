@@ -9,7 +9,11 @@ of the prints all stay inside a session, where they cannot pass for a relationsh
 sessions are then assumed to be is the null's, and every result states it measure by measure:
 under sign flips, that sessions — or a condition's blocks of them — are roughly independent of
 each other; under circular shifts, that every rotation of a condition's positions against its
-returns is as likely as the one observed.
+returns is as likely as the one observed. Blocks are only roughly so: with few of them and a
+state persisting about a block's length, the null runs slightly above its level — over 250
+sessions in 25 blocks of 10, long or flat on runs averaging 10, 5.3% of p fell at or under 0.05
+and 10.6% at or under 0.10 (20,000 seeds), against 4.7% and 9.6% with positions independent
+session to session.
 
 **Max-T over exactly the declared cells.** Under the null of no relationship a cell's
 per-session values are symmetric about zero, so one draw flips the sign of every session's
@@ -76,7 +80,12 @@ A cell's p under either null is its rank against the family's maxima, R of which
 The `+ 1` of the shifts is the observed alignment, the identity, which is never drawn. A cell
 whose t is zero reads p one under both, as does every cell of a family with fewer than two
 sessions. The maxima are kept, so the |t| a cell would need to reach a given p — the null's own
-critical value — can be read off them (`critical`).
+critical value — can be read off them (`critical`). Under sign flips it is read off the values'
+magnitudes, whatever their signs. Under circular shifts it is made by the observed alignment's
+own neighbours, a shift of a session or two nearly re-aligning a persistent position, so a real
+effect raises it: it is conditional on the data seen, larger the larger the effect — measured
+over 1,000 sessions with runs averaging 40, the median at an alpha of 0.05 over 60 seeds was
+1.85 with nothing planted, 2.17 with 0.2 standard deviations long less short and 2.78 with 0.4.
 
 **No BLAS.** Every sum is numpy's own reduction in a fixed order, so one host gives the
 same bytes every time.

@@ -529,7 +529,8 @@ class Condition(KansoModel):
             ):
                 raise ValueError(
                     f"block: {self.block} session(s) is shorter than tests.{name}'s hold of "
-                    f"{hold.sessions}, so one position's sessions would be flipped apart"
+                    f"{hold.sessions}, so no position of it fits in one block and every one's "
+                    "sessions would be flipped apart"
                 )
         kinds = [item if isinstance(item, str) else "turn_of_month" for item in self.demean]
         _distinct(kinds, "demean")
@@ -565,7 +566,8 @@ def condition_keys(screen: Screen, measure: Condition) -> tuple[str, ...]:
 
 
 def _passable(verdict: ScreenVerdict, measure: Condition, index: int) -> None:
-    """Refuse a verdict no cell of a condition could pass under its own null."""
+    """Refuse a verdict a condition's cell judged on `min_sessions` sessions could not pass
+    under its own null: the worst case, since a cell holding more can reach a lower p."""
     alpha, sessions = verdict.alpha, verdict.min_sessions
     if measure.block is not None:
         blocks = -(-sessions // measure.block)
@@ -580,9 +582,9 @@ def _passable(verdict: ScreenVerdict, measure: Condition, index: int) -> None:
     floor = 1.0 / sessions
     if alpha < floor:
         raise ValueError(
-            f"verdict.alpha: {alpha:g} is below {floor:.3g}, the smallest p a circular shift "
-            f"of measures.{index}'s positions can give over {sessions} session(s), one in "
-            f"their {sessions} rotations; raise min_sessions or alpha"
+            f"verdict.alpha: {alpha:g} is below {floor:.3g}, the smallest p circular shifts "
+            f"give a family of {sessions} session(s), one in its {sessions} rotations, and "
+            f"measures.{index} judges a cell on no fewer; raise min_sessions or alpha"
         )
 
 

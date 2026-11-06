@@ -412,7 +412,11 @@ position persists for runs of sessions, so its null is declared with it: its val
 blocks of `block` sessions and sign-flipped (`sign_flip`), which assumes the blocks roughly
 independent, or its positions shifted round the calendar against its residuals, one shift
 shared by every cell (`circular`), which keeps the positions' own runs and assumes only that,
-with no relationship, every shift is as likely as the observed alignment. A shift rotates one
+with no relationship, every shift is as likely as the observed alignment. Blocks are only
+roughly so: with few of them and a state persisting about a block's length the null runs
+slightly above its level — over 250 sessions in 25 blocks of 10, long or flat on runs averaging
+10, 5.3% of p fell at or under 0.05 and 10.6% at or under 0.10, against 4.7% and 9.6% with
+positions independent session to session. A shift rotates one
 index, so a circular family holds only the N sessions every one of its cells holding any holds:
 a cell holding only some would have its positions shifted off its returns, keep fewer values
 than it observed on most shifts, and pull the family's maxima down — measured on two contrast
@@ -435,10 +439,16 @@ once and p is exact; when they are more, the draws estimate it, and an estimate 
 2^(1−S) reads the floor. So a verdict whose `alpha` is below what its `min_sessions`
 allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. A
 condition's null has its own floor, refused the same way: 2^(1−J) over the J blocks
-`min_sessions` fill under `sign_flip`, and 1/`min_sessions` under `circular`, the observed
-alignment one of that many rotations. Beside a
-verdict, a condition declaring `mde_power` reports the least |t| its null passes at `alpha` and
-the effect that would reach it at that power: a detection threshold, never a forecast. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
+`min_sessions` fill under `sign_flip`, and 1/`min_sessions` under `circular`, the floor of a
+family of `min_sessions` sessions — the fewest a cell is judged on, so the worst case, since a
+family holding more has a lower one. Beside a verdict, a condition declaring `mde_power` reports
+the least |t| its null passes at `alpha` and the effect that would reach it at that power: a
+detection threshold, never a forecast. Under `circular` it is read off maxima the observed data
+make, and a shift of a session or two nearly re-aligns a persistent position, so a real effect
+raises them: the threshold is conditional on the data seen, larger the larger the effect —
+measured over 1,000 sessions with runs averaging 40, the median critical |t| at an `alpha` of
+0.05 was 1.85 with nothing planted, 2.17 with 0.2 standard deviations long less short and 2.78
+with 0.4. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
 judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
 new screen with a new result, beside the old one.
 

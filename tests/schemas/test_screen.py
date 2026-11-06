@@ -399,7 +399,7 @@ def test_a_condition_counts_its_tests_by_its_followers() -> None:
                 "block": 3,
                 "tests": {"up": {**TESTED, "hold": {"sessions": 5}}},
             },
-            "block: 3 session.s. is shorter than tests.up's hold of 5",
+            "block: 3 session.s. is shorter than tests.up's hold of 5, so no position of it fits",
         ),
         ({"demean": ["weekday", "weekday"]}, "demean: a value appears twice"),
         (
@@ -447,9 +447,9 @@ def test_a_verdict_no_condition_cell_could_pass_under_its_null_is_refused() -> N
     with pytest.raises(ValidationError, match="smallest p 5 block.s. of measures.0's 20"):
         conditioned(blocks, verdict=verdict)
     conditioned({**blocks, "block": 10}, verdict=verdict)
-    with pytest.raises(ValidationError, match="below 0.01, the smallest p a circular shift") as e:
+    with pytest.raises(ValidationError, match="below 0.01, the smallest p circular shifts") as e:
         conditioned(verdict={**verdict, "alpha": 0.009})
-    assert "over 100 session(s), one in their 100 rotations" in str(e.value)
+    assert "give a family of 100 session(s), one in its 100 rotations" in str(e.value)
     conditioned(verdict=verdict)
 
 
