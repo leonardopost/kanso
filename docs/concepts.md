@@ -361,8 +361,11 @@ time: re-decided every entry under `while`, or held a fixed number of sessions f
 an onset inside a hold skipped and counted. The returns are demeaned once a cell by least
 squares on declared calendar facts — weekday and month dummies, a declared turn of the month,
 the week of the third Friday, the session before a closure, read off the calendar on file —
-and the workspace's own 0/1 controls, a point dated every session, with the state not in the
-regression, so the null never refits it; the R² of the state on that design is reported.
+and the workspace's own 0/1 controls, each a point every session read as of the period's exit:
+its `ts_init` at or before that exit and its `ts_event` on the session's date in the clock's
+zone, which west of Greenwich a table stamped at midnight UTC on its date is not. The state is
+not in the regression, so the null never refits it; the R² of the state on that design is
+reported.
 Against `rest` the estimate is exactly the state's least-squares coefficient in a regression on
 it and the design, β, times one less that R², and long or flat exactly s·β·f(1 − f)·(1 − R²) at
 exposure f and side s; against a comparison, whose residuals were fitted on the sessions in

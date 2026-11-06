@@ -186,8 +186,12 @@ def test_another_instrument_s_points_and_market_wide_ones_are_no_signal_s() -> N
 
     assert (start, end) == (0, 10)
     assert stamps.tolist() == [3] and values.tolist() == [3.0] and events.tolist() == [3]
-    with pytest.raises(PreconditionError, match="is nan at ts_init 4 on AAA.XNAS"):
-        signals._points(screen(), "lvl", [point("AAA.XNAS", float("nan"), 4)], 0, 10)
+    for value in ("nan", "inf", "-inf"):
+        with pytest.raises(PreconditionError, match=f"is {value} at ts_init 4 on AAA.XNAS") as one:
+            signals._points(screen(), "lvl", [point("AAA.XNAS", float(value), 4)], 0, 10)
+        assert "kanso data load --loader csv_parquet --spec <spec> --replace" in (
+            one.value.remedy or ""
+        )
 
 
 INSTANTS = st.lists(st.integers(-50, 5 * 100 - 1), max_size=40)

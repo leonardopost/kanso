@@ -147,7 +147,8 @@ def _points(screen: Screen, name: str, points: Sequence[object], start: int, end
             raise PreconditionError(
                 f"signals.{name}: {signal.type}.{signal.field} is {value} at ts_init {stamp} "
                 f"on {signal.instrument}; a signal is a finite number",
-                remedy="reload the series with that point's field set, or drop the point",
+                remedy="set that point's field or drop the point, and reload the series with "
+                "`kanso data load --loader csv_parquet --spec <spec> --replace`",
             )
         stamps.append(stamp)
         values.append(value)

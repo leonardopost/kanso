@@ -791,8 +791,12 @@ def test_a_control_not_zero_or_one_is_refused(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(
         PreconditionError, match="controls.evt: 2 on 2026-01-05; a control is 0 or 1"
-    ):
+    ) as refused:
         measured(screen(controls=["evt"]), {"a": flat(sessions)}, points, monkeypatch)
+
+    assert "kanso data load --loader csv_parquet --spec <spec> --replace" in (
+        refused.value.remedy or ""
+    )
 
 
 def test_a_control_describing_another_day_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -800,11 +804,41 @@ def test_a_control_describing_another_day_is_refused(monkeypatch: pytest.MonkeyP
     ones = daily({sessions[0]: 1.0})
     points = {"lvl": daily(dict.fromkeys(sessions, 1.0)), "evt": ones}
 
-    with pytest.raises(PreconditionError, match="is dated 2026-01-05") as refused:
+    with pytest.raises(
+        PreconditionError, match="is dated 2026-01-05 in America/New_York"
+    ) as refused:
         measured(screen(controls=["evt"]), {"a": flat(sessions)}, points, monkeypatch)
 
     assert "session of 2026-01-06" in refused.value.message
-    assert "ts_event on that date" in (refused.value.remedy or "")
+    remedy = refused.value.remedy or ""
+    assert "ts_event on the session's date in America/New_York" in remedy
+    assert "ts_init at or before the period's exit" in remedy
+    assert "kanso data load --loader csv_parquet --spec <spec> --replace" in remedy
+
+
+def test_a_control_is_dated_in_the_clock_s_zone_either_side_of_the_clock_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # New York moves to daylight time on 2026-03-08: 04:00 UTC is 23:00 the day before in EST
+    # and the midnight that opens the day in EDT, and 00:00 UTC is the evening before in both.
+    winter = trading(date(2026, 2, 23), date(2026, 3, 6))
+    summer = trading(date(2026, 3, 9), date(2026, 3, 20))
+    every = [date(2026, 2, 23) + timedelta(days=n) for n in range(26)]
+    level = daily({day: (1.0 if n % 2 else -1.0) for n, day in enumerate(winter + summer)})
+    spec = screen(controls=["evt"])
+
+    def table(hour: int) -> dict[str, Points]:
+        events = [(utc(day, hour), float(n % 3 == 0)) for n, day in enumerate(every)]
+        return {"lvl": level, "evt": events}
+
+    (noon,) = measured(spec, {"a": walk(winter + summer, 28)}, table(12), monkeypatch)
+    (midnight,) = measured(spec, {"a": walk(summer, 28)}, table(4), monkeypatch)
+
+    assert noon.sessions == len(winter + summer) and midnight.sessions == len(summer)
+    with pytest.raises(PreconditionError, match="session of 2026-02-23 is dated 2026-02-22 in Am"):
+        measured(spec, {"a": walk(winter + summer, 28)}, table(4), monkeypatch)
+    with pytest.raises(PreconditionError, match="session of 2026-03-09 is dated 2026-03-08 in Am"):
+        measured(spec, {"a": walk(summer, 28)}, table(0), monkeypatch)
 
 
 def test_a_calendar_control_without_a_calendar_over_the_window_is_refused() -> None:

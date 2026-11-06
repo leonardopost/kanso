@@ -20,8 +20,11 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    one after, and none before the window opened. The state is `when` where the favoured
    comparison holds, else `against` where the contrast's other state does, else neither; it is
    undefined where no point has been published yet, and such a period holds no value — never a
-   zero. A control is read as of the period's exit, because it describes the session the return
-   is scored in, and must be a point dated that session holding exactly 0 or 1.
+   zero. A control is read as of the period's exit — the session's open or close, as the test
+   exits — because it describes the session the return is scored in: the point read, its
+   `ts_init` at or before that instant, must carry its `ts_event` on the session's date in the
+   clock's zone and hold exactly 0 or 1. A table stamped at midnight UTC on its date is dated the
+   day before west of Greenwich, and is refused there.
 3. **One position at a time.** Under `hold: while` the position is re-decided at every entry:
    the test's side while `when` holds, the other side while `against` does, flat otherwise.
    Under `hold: {sessions: k}` an onset — the state beginning, from a defined other one — opens
@@ -482,7 +485,8 @@ def _controls(
     context: Context, measure: Condition, plan: _Plan, reads: Mapping[str, signals.Read]
 ) -> np.ndarray:
     """Each session's controls, sessions by controls, NaN where one has no point yet; a point
-    dated another day, or holding anything but 0 or 1, is refused."""
+    whose `ts_event` falls on another date in the clock's zone, or holding anything but 0 or 1,
+    is refused."""
     found = np.full((len(plan.exits), len(measure.controls)), np.nan, dtype=np.float64)
     zone = zone_of(context.screen)
     for column, name in enumerate(measure.controls):
@@ -497,13 +501,17 @@ def _controls(
             if dated != day:
                 raise PreconditionError(
                     f"controls.{name}: the point read for {plan.key.follower}'s session of {day} "
-                    f"is dated {dated}; a control describes the session it is read for",
-                    remedy=f"give {name} a point every session, its ts_event on that date",
+                    f"is dated {dated} in {zone.key}; a control describes the session it is read "
+                    "for",
+                    remedy=f"give {name} a point every session, its ts_event on the session's "
+                    f"date in {zone.key} and its ts_init at or before the period's exit, and "
+                    "reload it with `kanso data load --loader csv_parquet --spec <spec> --replace`",
                 )
             if value not in (0.0, 1.0):
                 raise PreconditionError(
                     f"controls.{name}: {value:g} on {day}; a control is 0 or 1",
-                    remedy=f"reload {name} with every session's value 0 or 1",
+                    remedy=f"set every session's {name} to 0 or 1, and reload it with "
+                    "`kanso data load --loader csv_parquet --spec <spec> --replace`",
                 )
             found[position, column] = value
     return found
