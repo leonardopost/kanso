@@ -303,7 +303,9 @@ def test_show_renders_a_condition_cell_and_its_detail(runner: CliRunner, taped: 
     assert "condition/up/a/circular  mean" in listed and "exposure" in listed
     for label in ("null", "states", "demeaned", "long_flat", "adjusted", "mde", "signal age"):
         assert label in detail, label
-    assert "circular shifts" in detail and "exact" in detail and "against" in detail
+    exact = shown(runner, taped, "tape_state", CELL).condition
+    assert exact is not None and exact.exact is True
+    assert f"circular shifts, {exact.shifts} of them · exact" in detail and "against" in detail
     assert flat.exit_code == Exit.OK
     assert "sign flips of" in flat.stdout and "long_flat" not in flat.stdout
     assert "mde" not in flat.stdout
@@ -323,6 +325,23 @@ def test_show_renders_a_condition_cell_and_its_detail(runner: CliRunner, taped: 
     )
     assert rendered.condition is not None and rendered.condition.blocks
     assert rendered.condition.sessions_against is None and rendered.condition.shifts is None
+
+
+def test_a_drawn_circular_null_says_how_many_of_its_shifts_it_drew(
+    runner: CliRunner, taped: Path
+) -> None:
+    from kanso.cli.screen import _condition_lines
+
+    run_screen(runner, taped, STATE)
+    found = shown(runner, taped, "tape_state", CELL).condition
+    assert found is not None and found.exact is True and found.shifts is not None
+
+    # The workspace's window has fewer shifts than the 99 draws a workspace may set at the
+    # least, so the drawn case is the same cell's statistics with more shifts than draws.
+    drawn = found.model_copy(update={"shifts": 1249, "exact": False})
+
+    assert f"circular shifts, {found.shifts} of them · exact" in _condition_lines(found, 999)[0]
+    assert "circular shifts, 999 of 1249 · drawn" in _condition_lines(drawn, 999)[0]
 
 
 def test_a_condition_cell_is_not_drafted(runner: CliRunner, taped: Path) -> None:

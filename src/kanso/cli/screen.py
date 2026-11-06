@@ -256,7 +256,7 @@ def _show(ws: Workspace, screen_id: str | None, cell: str | None) -> Report:
                 remedy=f"list them with `kanso screen show {screen_id}`",
             )
         document = match.model_dump(mode="json", exclude_none=True)
-        return Report(data=document, lines=_cell_detail(match))
+        return Report(data=document, lines=_cell_detail(match, found[0].draws))
     data = {
         "screen": screen_id,
         "results": [_result_summary(item) for item in found],
@@ -285,8 +285,9 @@ def _ranked(result: ScreenResult) -> list[Cell]:
     return passing + rest
 
 
-def _cell_detail(cell: Cell) -> tuple[str, ...]:
-    """One cell in full: its line, why it was judged so, its folds and what qualifies it."""
+def _cell_detail(cell: Cell, draws: int) -> tuple[str, ...]:
+    """One cell in full: its line, why it was judged so, its folds and what qualifies it, under
+    the `draws` its result's null took."""
     lines = [field("cell", _cell_line(cell))]
     if cell.reason:
         lines.append(field("reason", cell.reason))
@@ -317,7 +318,7 @@ def _cell_detail(cell: Cell) -> tuple[str, ...]:
     folds = ", ".join("—" if value is None else f"{value:+.4g}" for value in cell.folds)
     lines.append(field("folds", f"{folds} ({unit}) · {cell.folds_same_sign} share the sign"))
     if cell.condition is not None:
-        lines += _condition_lines(cell.condition)
+        lines += _condition_lines(cell.condition, draws)
     if cell.staleness:
         stale = ", ".join(f"{leg} {value:.3g}" for leg, value in sorted(cell.staleness.items()))
         lines.append(field("staleness", stale))
@@ -331,13 +332,15 @@ def _cell_detail(cell: Cell) -> tuple[str, ...]:
     return tuple(lines)
 
 
-def _condition_lines(found: ConditionStats) -> list[str]:
-    """What a condition cell's null, states, demeaning and detection floor came to."""
-    null = (
-        f"sign flips of {found.blocks} block(s)"
-        if found.null_by == "sign_flip"
-        else f"circular shifts, {found.shifts} of them"
-    )
+def _condition_lines(found: ConditionStats, draws: int) -> list[str]:
+    """What a condition cell's null, states, demeaning and detection floor came to: a circular
+    null drawn says how many of its shifts it drew."""
+    if found.null_by == "sign_flip":
+        null = f"sign flips of {found.blocks} block(s)"
+    elif found.exact:
+        null = f"circular shifts, {found.shifts} of them"
+    else:
+        null = f"circular shifts, {draws} of {found.shifts}"
     against = "" if found.sessions_against is None else f", against {found.sessions_against}"
     lines = [
         field("null", f"{null} · {'exact' if found.exact else 'drawn'}"),
