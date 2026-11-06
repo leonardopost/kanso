@@ -54,7 +54,7 @@ measures:                          # lead_lag | response | catch_up | condition,
 #        exit: close               # open | close; close to close runs from the previous session's close
 #        hold: while               # while | {sessions: k}
 #        side: long                # long | short: the position the favoured state takes
-#    followers: follow             # a leg or a group of catalog legs, never a derived leg
+#    followers: mara               # a leg or a group of catalog legs, never a derived leg such as miners
 #    payoff: contrast              # contrast | long_flat
 #    null_by: circular             # circular | sign_flip; never `null:`, a key YAML reads as no value, which is refused
 #    # block: 20                   # sign_flip only: sessions summed into one sign, at least every fixed hold; circular takes every shift and no block
