@@ -433,6 +433,34 @@ def test_with_nothing_planted_every_shift_holds_the_level_at_a_small_alpha() -> 
     rejected(found, 0.05, 7 / 150)
 
 
+def test_under_a_wandering_mean_flips_run_above_their_level_and_shifts_hold_it() -> None:
+    # The returns' mean is an AR(1) of coefficient 0.99 whose stationary standard deviation is
+    # 0.3 of the noise's, so every session of a run of positions shares its excursion. Measured
+    # on these seeds, flips one session at a time put 12.25% of p at or under 0.05 and 19.3% at
+    # or under 0.10, and circular shifts 5.25% and 10.15%.
+    flips, shifts = [], []
+    for seed in range(2000):
+        rng = np.random.default_rng(80000 + seed)
+        runs = persistent(rng, 250, 20.0)
+        level, wandering = rng.normal() * 0.3, np.empty(250)
+        for at in range(250):
+            level = 0.99 * level + 0.3 * math.sqrt(1 - 0.99**2) * rng.normal()
+            wandering[at] = level
+        returns = rng.normal(size=250) + wandering
+        returns -= returns.mean()
+        values = nulls.values_of(runs[None], returns[None], contrast=True)
+        flips.append(nulls.evidence(values, 199, seed).p[0])
+        shifts.append(nulls.circular(runs[None], returns[None], True, 9999, seed).p[0])
+    flipped = np.asarray(flips)
+    # Flips: p is (1 + reaching) / 200, at most 0.05 when nine or fewer reach, 0.10 nineteen.
+    for alpha, nominal in ((0.05, 10 / 200), (0.10, 20 / 200)):
+        bound = nominal + 3.3 * math.sqrt(nominal * (1 - nominal) / len(flipped))
+        assert float(np.mean(flipped <= alpha)) > bound, (alpha, "above the level")
+    # Shifts: every one of the 249 is taken, and p is (1 + reaching) / 250.
+    rejected(np.asarray(shifts), 0.05, 12 / 250)
+    rejected(np.asarray(shifts), 0.10, 25 / 250)
+
+
 def test_with_nothing_planted_drawn_shifts_hold_the_level() -> None:
     ps = []
     for seed in range(1000):

@@ -42,8 +42,9 @@ costs per-session flips nothing: the values are independent given the positions,
 sessions of contrast positions in runs averaging 20, 5.2% of p fell at or under 0.05 and 10.1% at
 or under 0.10 (4,000 seeds). What breaks them is a persistent position meeting a return mean
 that wanders, whose excursion every session of a run shares, so that flips one at a time read a
-run as many chances: with the mean an AR(1) of coefficient 0.99 and a standard deviation 0.3 of
-the noise's, 12.4% and 19.5% fell there, against 5.0% and 10.6% by circular shifts. A
+run as many chances: with the mean an AR(1) of coefficient 0.99 and a stationary standard
+deviation 0.3 of the noise's — its own spread, not its innovation's — 12.3% and 19.3% fell there
+(2,000 seeds), against 5.3% and 10.2% by circular shifts. A
 `condition` measure may be judged by shifting every cell's positions round the calendar against
 its returns, which stay with their dates: one draw moves every position k sessions later,
 wrapping at the end, with one k shared by every cell of the measure, so the cells' dependence is
