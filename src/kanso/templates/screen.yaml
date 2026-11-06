@@ -56,7 +56,7 @@ measures:                          # lead_lag | response | catch_up | condition,
 #        side: long                # long | short: the position the favoured state takes
 #    followers: follow             # a leg or a group of catalog legs, never a derived leg
 #    payoff: contrast              # contrast | long_flat
-#    null_by: circular             # circular | sign_flip; never `null:`, which YAML reads as no key at all
+#    null_by: circular             # circular | sign_flip; never `null:`, a key YAML reads as no value, which is refused
 #    # block: 20                   # sign_flip only: sessions summed into one sign, at least every fixed hold; circular takes every shift and no block
 #    demean: [weekday, month, {turn_of_month: [1, 3]}, third_friday_week, pre_holiday]   # [] for the window's mean alone
 #    controls: [event_day]         # 0/1 signals, each a point dated every session; [] for none

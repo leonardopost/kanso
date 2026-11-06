@@ -113,6 +113,20 @@ def test_validate_counts_tests_by_followers_and_plans_the_tape(
     assert "condition · contrast · circular · 4 cell(s)" in human
 
 
+def test_a_null_spelt_null_is_refused_by_its_place_as_input(runner: CliRunner, taped: Path) -> None:
+    measure = {
+        (None if key == "null_by" else key): value for key, value in STATE["measures"][0].items()
+    }
+    path = write_screen(taped, {**STATE, "id": "tape_null", "measures": [measure]})
+    assert "\n  null: circular\n" in path.read_text(encoding="utf-8")
+
+    result = at(runner, taped, "screen", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION, result.stdout
+    assert "measures.0: the key null is read by YAML as no value" in payload(result)["error"]
+    assert "quote the key" in payload(result)["remedy"]
+
+
 def test_a_run_reads_the_tape_as_of_each_decision_and_judges_by_shifts(
     runner: CliRunner, taped: Path
 ) -> None:
