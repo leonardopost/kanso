@@ -26,7 +26,9 @@ at a time (`catalog.write`, `WRITE_BATCH`), so memory follows the batch and not 
 `load` that fails on a later chunk leaves the chunks before it written, each with its
 manifest, and its refusal names the day it stopped on and the backfill that resumes there.
 
-A dataset a snapshot pins is immutable, which the catalog enforces at the write. Backfill
+A dataset a snapshot pins is refused an overlapping write, which the catalog enforces at the
+write, and only a load naming it in `supersedes` takes its place — under its own id over the
+same span, which the snapshots before it still cover (`docs/backlog.md` row 232). Backfill
 and sync never rewrite one: a backfilled chunk covers days no held dataset covers, and a
 sync writes a successor dataset recording `supersedes`.
 

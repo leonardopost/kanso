@@ -241,8 +241,12 @@ datasets   1 · reproducible
 instrument a2b290ce0b0542b34d8cd512bd338c72615c35201b4e0f5e13d7d8e9fac9b9b1
 ```
 
-A dataset a snapshot pins is immutable: an overlapping write is refused, and `data backfill`
-and `data sync` write successor datasets rather than editing one. The instrument checksum
+A dataset a snapshot pins is never rewritten unasked: an overlapping write is refused,
+`--replace` included, and `data backfill` and `data sync` write successor datasets rather than
+editing one. Only a load naming it in `--supersedes` takes its place, and over the same span
+that successor keeps its id — so it rewrites the pinned dataset under that id, and a snapshot
+taken before it still covers the series until `kanso data snapshot` takes a newer one
+(`docs/backlog.md` row 232). The instrument checksum
 is in the snapshot for the same reason as the data — a tick size reassigned next year must
 not silently rewrite a card that was measured under the old one — and it is read back where
 a run is pinned. The store is resolved before it is frozen: a snapshot over instrument data
