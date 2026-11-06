@@ -12,7 +12,8 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    screen takes across a session boundary. A period is valid when its entry exists, comes
    before its exit, and, across a boundary, no day between the two sessions is one the
    follower's market opened by the calendar on file (`kanso.data.closures`), checked only inside
-   the span the calendar holds; an invalid one is counted `unfilled` and scored nowhere. Its
+   the span the calendar holds and not at all with none on file; an invalid one is counted
+   `unfilled` and scored nowhere. Its
    return is the change of log price, in basis points.
 2. **The decision, as of the latency before the entry.** The signal is read as of the entry's
    instant less `latency_ms` (`kanso.screen.signals`): the newest point published by then, never

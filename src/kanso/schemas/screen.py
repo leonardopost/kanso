@@ -822,11 +822,12 @@ class ConditionStats(KansoModel):
     follower's mean return over the held sessions, and under a contrast `long_flat_bp` and
     `long_flat_ceiling_bp_day` are the long-or-flat realisation of the same test, reported and
     never judged. `control_r2` is the R² of the state on the design the returns were demeaned
-    on — the estimator is attenuated by one less it — and `dropped` the design's columns that
-    held nothing. `folds_adjusted` is the estimator inside each fold. `critical_t` and `mde_bp`
-    are the |t| a cell needs to pass the verdict's alpha under its own null and the effect that
-    reaches it at `mde_power`, a detection threshold and never a forecast. The signal's age is
-    how old the point read was at each decision.
+    on — against `rest` the estimator is exactly the state's own coefficient times one less it,
+    long or flat that times f(1 − f), and against a comparison approximately so — and `dropped`
+    the design's columns that held nothing. `folds_adjusted` is the estimator inside each fold.
+    `critical_t` and `mde_bp` are the |t| a cell needs to pass the verdict's alpha under its own
+    null and the effect that reaches it at `mde_power`, a detection threshold and never a
+    forecast. The signal's age is how old the point read was at each decision.
     """
 
     payoff: Literal["contrast", "long_flat"]

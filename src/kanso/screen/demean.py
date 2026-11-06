@@ -26,10 +26,15 @@ and a control that never varies says nothing the intercept does not. The residua
 returns less their projection on the kept columns.
 
 **What the residuals estimate.** The state is not in the regression, so a null that moves a
-cell's positions never refits it. In sample, a contrast of the residuals between two states is
-the least-squares coefficient on the state indicator in a regression on it and the design,
-times `1 − R²` of the indicator on the design; `r2` reports that R², so how much the calendar
-shared with the state is visible, and with the intercept alone the two estimates are one.
+cell's positions never refits it. In sample, when the two states cover every session the
+residuals were fitted on — a contrast against `rest` — the contrast of the residuals between
+them is exactly the least-squares coefficient β on the state indicator in a regression on it and the
+design, times `1 − R²` of the indicator on the design; long or flat, the mean of position times
+residual is exactly `s·β·f(1 − f)·(1 − R²)` at exposure f and side s. Against a comparison the
+residuals were fitted on the sessions in neither state too, which the contrast does not read
+and `r2` is not taken over, so the identity is approximate. `r2` reports that R², so how much
+the calendar shared with the state is visible, and with the intercept alone the two estimates
+are one.
 
 **No BLAS.** Every inner product is `numpy.add.reduce` of an elementwise product in a fixed
 order: nothing here calls `@`, `numpy.dot` or `numpy.linalg`, so one host gives the same bits

@@ -353,23 +353,27 @@ disjoint comparison, or `rest`), an `entry` and an `exit` at a session's first o
 hold and a side. Its periods are named for their exit session, and `close → close`, `open →
 open` and `close → open` run from the follower's previous session into this one — the one
 measure that takes a return across a session boundary — while no day between them is one the
-market opened. The position is decided from the signal as of `latency_ms` before the entry: the
-newest point published by then, never one after, and none before the window opened, so a
+market opened by the follower's calendar on file; with no calendar on file, or between days
+outside the span it holds, nothing is checked, and every such period is scored. The position is
+decided from the signal as of `latency_ms` before the entry: the newest point published by then, never one after, and none before the window opened, so a
 session before the signal's first point holds no value rather than a zero. One position at a
 time: re-decided every entry under `while`, or held a fixed number of sessions from an onset,
 an onset inside a hold skipped and counted. The returns are demeaned once a cell by least
 squares on declared calendar facts — weekday and month dummies, a declared turn of the month,
 the week of the third Friday, the session before a closure, read off the calendar on file —
 and the workspace's own 0/1 controls, a point dated every session, with the state not in the
-regression, so the null never refits it; the R² of the state on that design, which attenuates
-the estimate by one less it, is reported. Long or flat, `mean` is the excess a session; under a
-contrast it is the mean long less the mean short, signed by the side, so a correctly signed
-effect is positive under either. Either way the session values the null and `se` read weigh each
-return so the weights sum to zero — long or flat, the position less the cell's mean position —
-so `se` is the estimate's own: a position times its residual alone would spread as though the
-residuals' mean had not been fitted, by 1/√(1 − f) at exposure f — measured on a thousand
-drifting followers held half the time, sign flips of it put 1.3% of p at or under 0.05. Each position — a run of sessions, joined across a boundary
-only when its periods are contiguous — is charged one round trip struck at its entry and its
+regression, so the null never refits it; the R² of the state on that design is reported.
+Against `rest` the estimate is exactly the state's least-squares coefficient in a regression on
+it and the design, β, times one less that R², and long or flat exactly s·β·f(1 − f)·(1 − R²) at
+exposure f and side s; against a comparison, whose residuals were fitted on the sessions in
+neither state too, the identity is approximate. Long or flat, `mean` is the excess a session;
+under a contrast it is the mean long less the mean short, signed by the side, so a correctly
+signed effect is positive under either. Either way the session values the null and `se` read
+weigh each return so the weights sum to zero — long or flat, the position less the cell's mean
+position — so `se` is the estimate's own. A position times its residual alone would overstate it
+by 1/√(1 − f) at exposure f, as though the residuals' mean had not been fitted: measured on a
+thousand drifting followers held half the time, sign flips of it put 1.3% of p at or under 0.05.
+Each position — a run of sessions, joined across a boundary only when its periods are contiguous — is charged one round trip struck at its entry and its
 exit, so a state held for days close to close pays once and open to close pays daily.
 
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
@@ -444,8 +448,9 @@ screen read for one of its instruments, a signal's included. Whichever arrives f
 that chose an idea never judges it.
 
 **From a cell to a lane.** `kanso screen draft` writes one `response` or `catch_up` cell as a
-draft hypothesis, registering nothing — a `condition` cell is refused, because its seed would
-read a custom type no template carries, and its hypothesis is written with `kanso hyp new`: its research window is the window the screen read, its
+draft hypothesis, registering nothing (a `condition` cell is refused, because its seed would
+read a custom type no template carries, and its hypothesis is written with `kanso hyp new`).
+The draft's research window is the window the screen read, its
 certification window is the operator's and starts no sooner than the embargo after it, its
 `program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
 sleeve — a catch-up's with its fitted beta, its entry, its close, its stop and its cap. So the lane's first act, the baseline card, re-measures the screened cell through the

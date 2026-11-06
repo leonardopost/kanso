@@ -17,8 +17,9 @@ The order is the contract.
    What a measure fits first — a spread's hedge, a catch-up's response — is fitted before, on
    the sessions of its fit span. A condition keeps each follower's open and close of the
    session, and its signals are read afterwards in a pass of their own, a day at a time, as of
-   each decision (`kanso.screen.condition`); a calendar control no calendar on file can read is
-   refused before anything is.
+   each decision (`kanso.screen.condition`). A calendar control no calendar on file can read is
+   refused once the followers' definitions are held — after step 2's fetch, which may already
+   have backfilled a series and frozen a snapshot, and before the pin or any session is read.
 5. **Judge** each measure's cells across sessions with its max-T null (`kanso.screen.nulls`) —
    session sign flips, or, for a condition, the null it declares — and, when the file declares
    a verdict, each cell against it. Each measure's assumption is stated in the result.
