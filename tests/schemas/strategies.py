@@ -85,6 +85,7 @@ from kanso.schemas.screen import (
     ScreenResult,
     ScreenVerdict,
     SeriesRead,
+    Signal,
     Spread,
     Summary,
     Trigger,
@@ -953,6 +954,11 @@ def screens(draw: st.DrawFn) -> Screen:
             latency_ms=draw(st.floats(0, 1000, allow_nan=False)),
         ),
     ]
+    signals: dict[str, Signal] = {}
+    if draw(st.booleans()):
+        signals["s_level"] = Signal(
+            type="kanso_state_tape", field="level", instrument=draw(SCREEN_INSTRUMENTS)
+        )
     bound = draw(st.booleans())
     start = draw(st.dates(min_value=date(2020, 1, 1), max_value=date(2026, 1, 1)))
     return Screen(
@@ -964,6 +970,7 @@ def screens(draw: st.DrawFn) -> Screen:
         legs=legs,
         derived=derived,
         groups=groups,
+        signals=signals,
         clock=Clock(
             grid="1s",
             hours=draw(
@@ -1049,7 +1056,20 @@ def screen_results(draw: st.DrawFn) -> ScreenResult:
                 resolution="1h",
                 legs=["a"],
                 timestamps="exchange",
-            )
+            ),
+            *draw(
+                st.lists(
+                    st.just(
+                        SeriesRead(
+                            instrument="DEMO.SIM",
+                            type="kanso_state_tape",
+                            legs=["regime"],
+                            timestamps="unknown",
+                        )
+                    ),
+                    max_size=1,
+                )
+            ),
         ],
         cells=cells,
         summary=Summary(

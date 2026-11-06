@@ -1418,6 +1418,7 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `legs` | name → `{instrument, type, resolution?}`: a catalog instrument id, read as `bar` (with its `resolution`), `trade`, `quote` or `book` |
 | `derived` | name → exactly one of `basket` (weights over legs), `spread` (`long`, `short`, `hedge: fixed` with `beta`, or `hedge: ols` with `fit: window` or `fit: first_fold`) or `gap` (`a`, `b`: one asset on two venues) |
 | `groups` | name → a list of legs and derived legs, for a measure to name at once |
+| `signals` | name → `{type, field, instrument}`: one numeric field of a registered custom type, read as a series filed under `instrument` — a file loaded by `csv_parquet` is filed under its entry's instrument and venue. The type must be registered once the workspace's extensions are imported (an unknown one is refused with the remedy `kanso ext show`), and the field one of its own annotated fields, `float`, `int` or `bool` — never `ts_event`, `ts_init` or `instrument_id`; a market type is a leg, not a signal. A signal is read as of an instant, by `ts_init` and never ahead, from the window's first midnight: only points filed under its instrument, never a market-wide one. It shares the namespace of legs, derived legs and groups, joins the data plan, the pin and the embargo as a leg's series does, and in a bound screen is filed under an instrument of the hypothesis's universe at a type the hypothesis requires (exit 3 otherwise) |
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
 | `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`), `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) or `catch_up` (`leader`, a leg or derived leg; `followers`, never the leader alone; `within`, the trailing span the gap is measured over; `fit: window` or `first_fold` and `beta_over`, where and at what return span the follower's response to its leader is fitted; `enter_bp`, the gap and implied move that open a position; `close`, the share of the entry gap at which it has caught up, each at least 0 and under 1; `stop`, the multiple of it at which it has failed, each over 1; `max_hold`, the safety cap; `latency_ms`) |
 | `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a cell that trades — `response` or `catch_up` — `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`, both stated whatever the measures; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3) |
@@ -1450,7 +1451,8 @@ the snapshot and the measure library's version, the three pins its record in `st
 keyed by. It is a rendering: editing it changes nothing, and `kanso screen show` reads the
 record. The loader specs a run's fetches were made with are kept under `specs/`.
 
-A result holds one entry per cell:
+A result lists every series it read in `series` — a signal's under its custom type's id, with the
+signals that read it — and holds one entry per cell:
 
 | field | what it is |
 |---|---|

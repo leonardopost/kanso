@@ -3,12 +3,14 @@
 `screens/<id>/screen.yaml` is the operator's or an agent's statement of what to measure.
 `scaffold` writes it once from the packaged template, bound to a registered hypothesis or
 free; `validate` reads it and refuses it unless every rule holds — the file's own, the
-measure library's ranges, and, for a bound screen, its hypothesis's: the hypothesis must be
-registered, and every leg must be an instrument of its universe read at a type and grain
-the hypothesis requires, because a bound screen measures what that hypothesis's research
-would see and nothing else. A bound screen's window is its hypothesis's research window,
-read from the pinned bytes rather than the workspace file, so an edit nobody has pinned
-does not move what the screen reads.
+measure library's ranges, the custom types its signals read, which the workspace's
+extensions are imported to register first (`kanso.screen.signals`), and, for a bound screen,
+its hypothesis's: the hypothesis must be registered, every leg must be an instrument of its
+universe read at a type and grain the hypothesis requires, and every signal an instrument of
+its universe filed under a type it requires, because a bound screen measures what that
+hypothesis's research would see and nothing else. A bound screen's window is its
+hypothesis's research window, read from the pinned bytes rather than the workspace file, so
+an edit nobody has pinned does not move what the screen reads.
 """
 
 from __future__ import annotations
@@ -22,12 +24,13 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
+from kanso import ext
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import hypothesis_of, read_source, show
 from kanso.hyp.scaffold import render
 from kanso.schemas import HypId, Hypothesis, parse_yaml
 from kanso.schemas.screen import Screen, cells
-from kanso.screen import library
+from kanso.screen import library, signals
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -112,6 +115,9 @@ def validate(ws: Workspace, store: StateStore, path: Path) -> Validated:
     screen = parse_yaml(Screen, text, str(path))
     _check_location(ws, path, screen)
     library.check(screen)
+    if screen.signals:
+        ext.imported(ws)
+        signals.check(screen)
     hypothesis = None if screen.hyp is None else _bound(ws, store, screen)
     if hypothesis is not None:
         window = (hypothesis.windows.research.start, hypothesis.windows.research.end)
@@ -163,5 +169,20 @@ def _bound(ws: Workspace, store: StateStore, screen: Screen) -> Hypothesis:
                 f"legs.{name}: {leg.resolution} bars, where {hypothesis.id} researches "
                 f"{hypothesis.resolution}",
                 remedy=f"set the leg's resolution to {hypothesis.resolution}",
+            )
+    for name, signal in screen.signals.items():
+        if signal.instrument not in hypothesis.universe:
+            raise ValidationError(
+                f"signals.{name}: {signal.instrument} is not in {hypothesis.id}'s universe, "
+                f"and a bound screen reads what that hypothesis's research would read",
+                remedy="file the series under an instrument of the universe, or make the "
+                "screen free",
+            )
+        if signal.type not in hypothesis.data_requirements:
+            raise ValidationError(
+                f"signals.{name}: {hypothesis.id} does not require {signal.type} data, so its "
+                f"research never reads it",
+                remedy=f"add {signal.type} to {hypothesis.id}'s data_requirements, or make the "
+                "screen free",
             )
     return hypothesis

@@ -3,7 +3,8 @@
 A certification window is the data that judges a strategy, so the search that chose the
 strategy may not have read it — and a screen is part of that search: it chooses which ideas
 get a lane. So a free screen's window is refused when it meets, for any registered
-hypothesis that holds one of the screen's instruments, the span from that hypothesis's
+hypothesis that holds one of the screen's instruments — a leg's, or the instrument a signal
+is filed under — the span from that hypothesis's
 certification start less its embargo to its certification end. Retired hypotheses count,
 because `kanso hyp resume` brings one back. A bound screen reads its own hypothesis's
 research window, which the hypothesis's own windows already keep clear of its certification.
@@ -13,9 +14,11 @@ The refusal is made before any point is read, from the pinned hypotheses alone.
 **The embargo binds the other way too.** Data a screen read helped choose an idea, so it may
 not later judge one: `kanso hyp validate`, and so `kanso hyp add`, refuses a hypothesis whose
 certification window, with the embargo before it, meets the window any recorded screen read
-for one of its instruments (`refuse_screened`). Which order the two arrive in does not matter:
-a screen of data a registered hypothesis certifies on is refused at `screen run`, and a
-hypothesis certifying on data a recorded screen read is refused at `hyp validate`.
+for one of its instruments, a signal's among them (`refuse_screened`). Which order the two
+arrive in does not matter: a screen of data a registered hypothesis certifies on is refused at
+`screen run`, and a hypothesis certifying on data a recorded screen read is refused at `hyp
+validate`. An instrument read only for a signal binds as a leg does: the direction that costs a
+refusal rather than a certificate judged on what chose it.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ def refuse_certification_data(
     """Refuse a free screen whose window meets a registered certification span."""
     if screen.hyp is not None:
         return
-    instruments = {leg.instrument for leg in screen.legs.values()}
+    instruments = set(screen.instruments)
     registrations = show(ws, store)
     assert isinstance(registrations, list)
     for registration in registrations:

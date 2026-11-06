@@ -12,17 +12,20 @@ instrument the catalog can hold.
 
 The rules enforced here are local to the file:
 
-* every name — a leg, a derived leg, a group — is declared once, and every reference names
-  one that is declared;
+* every name — a leg, a derived leg, a group, a signal — is declared once, and every reference
+  names one that is declared;
 * a derived leg is a declared function of legs: a `basket` of weights, a `spread` of two legs
   under a fixed or fitted hedge, or a `gap` between two venues' prices of one asset;
 * a lattice is finite and declared: lags are distinct and never zero, because the same
   instant's co-movement is not a lead; thresholds and horizons are distinct, and so are a
   catch-up's entries, closes and stops, each on its own side of the gap it was entered at;
-* a grid exists whenever a measure samples on one, and no bar leg it samples is coarser.
+* a grid exists whenever a measure samples on one, and no bar leg it samples is coarser;
+* a signal is one numeric field of a custom type, filed under one instrument: never a market
+  type, which is a leg, and never a timestamp or the instrument itself, which are no value.
 
-What the instrument store holds, what the measure library permits and what a bound
-screen's hypothesis says are checked where those live (`kanso.screen.files`).
+What the instrument store holds, what the measure library permits, which custom types this
+process has registered and what a bound screen's hypothesis says are checked where those
+live (`kanso.screen.files`, `kanso.screen.signals`).
 """
 
 from __future__ import annotations
@@ -34,9 +37,9 @@ from typing import Annotated, Final, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from kanso.errors import ValidationError
-from kanso.schemas.base import HypId, KansoModel, NonEmpty, Sha256, Versioned
+from kanso.schemas.base import CatalogueId, HypId, KansoModel, NonEmpty, Sha256, Versioned
 from kanso.schemas.duration import Duration, parse_duration
-from kanso.schemas.hypothesis import DateWindow
+from kanso.schemas.hypothesis import MARKET_TYPES, DateWindow
 from kanso.schemas.venue import CostsOverride, VenueCode
 
 SPAN_PATTERN: Final = r"^[0-9]+(ms|s|m|h|d)$"
@@ -49,7 +52,13 @@ Lag = Annotated[str, StringConstraints(pattern=LAG_PATTERN)]
 """A signed span: positive when the first series leads the second."""
 
 Name = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
-"""A leg, derived leg or group name."""
+"""A leg, derived leg, group, signal or test name."""
+
+FieldName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")]
+"""A field of a custom type, spelled as its class annotates it."""
+
+STAMPS: Final = ("ts_event", "ts_init", "instrument_id")
+"""The fields every custom point carries that say when and whose it is, never what."""
 
 LegType = Literal["bar", "trade", "quote", "book"]
 Side = Literal["with", "against"]
@@ -113,6 +122,34 @@ class Leg(KansoModel):
             raise ValueError("resolution: a bar leg names its bar size")
         if self.type != "bar" and self.resolution is not None:
             raise ValueError(f"resolution: a {self.type} leg is unaggregated and has none")
+        return self
+
+
+class Signal(KansoModel):
+    """One numeric field of a registered custom type, filed under one instrument: a series.
+
+    `instrument` is the id the series is filed under in the catalog — a file loaded by
+    `csv_parquet` is filed under its entry's instrument and venue — and only that
+    instrument's points are read. A signal filed under one instrument may condition a
+    follower of another. Whether `type` is registered and `field` one of its numbers is
+    asked of the registry (`kanso.screen.signals`), which this file cannot see.
+    """
+
+    type: CatalogueId
+    field: FieldName
+    instrument: NonEmpty
+
+    @model_validator(mode="after")
+    def _a_custom_value(self) -> Signal:
+        if self.type in MARKET_TYPES:
+            raise ValueError(
+                f"type: {self.type!r} is a market type; a signal is a custom type's field, and "
+                "a market series is read as a leg"
+            )
+        if self.field in STAMPS:
+            raise ValueError(
+                f"field: {self.field!r} says when or whose a point is, not what it holds"
+            )
         return self
 
 
@@ -369,6 +406,7 @@ class Screen(Versioned):
     legs: dict[Name, Leg] = Field(min_length=1)
     derived: dict[Name, Derived] = Field(default_factory=dict)
     groups: dict[Name, list[Name]] = Field(default_factory=dict)
+    signals: dict[Name, Signal] = Field(default_factory=dict)
     clock: Clock
     measures: list[Measure] = Field(min_length=1)
     costs: dict[VenueCode, CostsOverride] | None = None
@@ -389,7 +427,13 @@ class Screen(Versioned):
 
     def _check_names(self) -> None:
         seen: dict[str, str] = {}
-        for kind, names in (("leg", self.legs), ("derived", self.derived), ("group", self.groups)):
+        declared = (
+            ("leg", self.legs),
+            ("derived", self.derived),
+            ("group", self.groups),
+            ("signal", self.signals),
+        )
+        for kind, names in declared:
             for name in names:
                 if name in seen:
                     raise ValueError(f"{kind}s.{name}: already declared as a {seen[name]}")
@@ -449,6 +493,12 @@ class Screen(Versioned):
                         f"clock.grid: {self.clock.grid} is finer than leg {leg}'s "
                         f"{resolution} bars, which cannot move inside one step"
                     )
+
+    @property
+    def instruments(self) -> tuple[str, ...]:
+        """Every instrument the screen reads, its legs' and its signals', sorted."""
+        legs = {leg.instrument for leg in self.legs.values()}
+        return tuple(sorted(legs | {signal.instrument for signal in self.signals.values()}))
 
     def members(self, name: str) -> tuple[str, ...]:
         """The series a name stands for: a group's members, or the leg itself."""
@@ -538,10 +588,11 @@ class Cell(KansoModel):
 
 
 class SeriesRead(KansoModel):
-    """One series a result read: what it is, the legs that read it, what its clock is."""
+    """One series a result read: what it is, the legs or signals that read it, what its clock
+    is. `type` is a leg type, or the id of the custom type a signal reads."""
 
     instrument: NonEmpty
-    type: LegType
+    type: NonEmpty
     resolution: Duration | None = None
     legs: list[Name] = Field(min_length=1)
     timestamps: NonEmpty

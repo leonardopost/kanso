@@ -361,7 +361,10 @@ adapter that declares it serves it, and a snapshot taken; data held but frozen b
 frozen; an instrument no definition resolves is refused, and the remedy is to resolve it — under
 the key the reference adapter files it by, which for a vendor whose keys carry no venue is the
 id's symbol, or by a manual entry; a series that resolves and that no adapter serves is refused,
-and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
+and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks). A
+signal — a registered custom type's numeric field, filed under an instrument — is a series of its
+own and takes the same steps; a workspace usually holds one as a file, so its remedy names the
+`csv_parquet` load first.
 
 **The session is the unit of replication, and the family is the lattice.** A cell's evidence is
 one value per session — for `lead_lag`, the correlation of one series' returns with another's at
@@ -389,13 +392,13 @@ measures differently — a fix shipped before the version moves, a development b
 again rather than being handed what the old arithmetic recorded.
 
 **The embargo holds.** A free screen's window is refused when it meets, for any registered
-hypothesis holding one of its instruments, the span from that hypothesis's certification start
+hypothesis holding one of its instruments — a leg's, or one a signal is filed under — the span from that hypothesis's certification start
 less its embargo to its certification end: a screen chooses ideas, and the data that judges an
 idea may not have chosen it. A bound screen reads its own hypothesis's research window and
 nothing else. The embargo binds the other way as well: `kanso hyp validate`, and so `hyp add`,
 refuses a hypothesis whose certification window, with its embargo, meets a window a recorded
-screen read for one of its instruments. Whichever arrives first, the data that chose an idea
-never judges it.
+screen read for one of its instruments, a signal's included. Whichever arrives first, the data
+that chose an idea never judges it.
 
 **From a cell to a lane.** `kanso screen draft` writes one `response` or `catch_up` cell as a
 draft hypothesis, registering nothing: its research window is the window the screen read, its

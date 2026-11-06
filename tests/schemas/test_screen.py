@@ -231,6 +231,43 @@ def test_hours_are_minutes_after_midnight() -> None:
         hours_minutes("9:30-16:00")
 
 
+SIGNALS: dict[str, Any] = {
+    "regime": {"type": "house_state", "field": "level", "instrument": "IDX.XNAS"},
+    "event_day": {"type": "house_calendar", "field": "flag", "instrument": "MARA.XNAS"},
+}
+
+
+def test_a_signal_is_a_custom_field_and_its_instrument_is_one_the_screen_reads() -> None:
+    screen = build(signals=SIGNALS)
+
+    assert screen.signals["regime"].field == "level"
+    assert screen.instruments == ("BTC-USDT-SWAP.OKX", "IDX.XNAS", "MARA.XNAS", "RIOT.XNAS")
+    assert build().instruments == ("BTC-USDT-SWAP.OKX", "MARA.XNAS", "RIOT.XNAS")
+    assert parse_yaml(Screen, dump_yaml(screen)) == screen
+
+
+@pytest.mark.parametrize(
+    ("signal", "message"),
+    [
+        ({"type": "bar", "field": "close"}, "'bar' is a market type"),
+        ({"type": "house_state", "field": "ts_init"}, "says when or whose a point is"),
+        ({"type": "house_state", "field": "instrument_id"}, "says when or whose a point is"),
+        ({"type": "house_state", "field": "9lives"}, "field"),
+        ({"type": "House", "field": "level"}, "type"),
+    ],
+)
+def test_a_signal_that_is_no_custom_value_is_refused(signal: dict[str, str], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        build(signals={"regime": {**signal, "instrument": "IDX.XNAS"}})
+
+
+def test_a_signal_shares_the_namespace_of_legs_and_groups() -> None:
+    with pytest.raises(ValidationError, match="signals.btc: already declared as a leg"):
+        build(signals={"btc": SIGNALS["regime"]})
+    with pytest.raises(ValidationError, match="signals.lead: already declared as a group"):
+        build(signals={"lead": SIGNALS["regime"]})
+
+
 def test_a_verdict_no_cell_could_pass_is_refused() -> None:
     from kanso.schemas.screen import p_floor
 

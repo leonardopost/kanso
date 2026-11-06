@@ -3,7 +3,8 @@
 The order is the contract.
 
 1. **Validate** the file (`kanso.screen.files`), and refuse a free window that meets a
-   registered certification span (`kanso.screen.embargo`) before anything is read.
+   registered certification span on any instrument it reads, a signal's too
+   (`kanso.screen.embargo`), before anything is read.
 2. **Get the data.** A series no adapter serves is refused, naming the venue and type to
    build an adapter for; every fetchable one is fetched through the adapter that serves it
    and a snapshot taken (`kanso.screen.data`). Nothing is skipped.
@@ -36,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 import numpy as np
 
 from kanso.data.catalog import open_catalog
+from kanso.data.types import BUILTIN_TYPES
 from kanso.errors import PreconditionError
 from kanso.schemas import DateWindow
 from kanso.schemas.screen import (
@@ -64,6 +66,7 @@ from kanso.screen import (
     records,
     response,
     sessions,
+    signals,
 )
 from kanso.screen.files import validate
 from kanso.screen.library import screen_version
@@ -104,7 +107,9 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     fetched = data.fetch(ws, store, screen, window, plans)
     catalog = open_catalog(ws)
     held = sessions.definitions(catalog, screen)
-    snapshot = pin.covering(ws, store, screen, window, held)
+    snapshot = pin.covering(
+        ws, store, screen, window, {**signals.definitions(catalog, screen), **held}
+    )
     version = screen_version()
     stored = records.stored(store, valid.sha, snapshot.snapshot_id, version)
     if stored is not None:
@@ -142,7 +147,7 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         cells=cells,
         summary=_summary(screen.verdict, cells),
     )
-    records.record(store, result, sorted({leg.instrument for leg in screen.legs.values()}))
+    records.record(store, result, list(screen.instruments))
     return Outcome(result, records.render(ws, result), False, fetched)
 
 
@@ -596,10 +601,16 @@ def _refuse_unserved(plans: Sequence[data.LegPlan]) -> None:
     unserved = [item for item in plans if item.state == "unserved"]
     if unserved:
         reasons = "; ".join(item.reason or item.instrument for item in unserved)
+        remedy = "build a data adapter for them as a workspace extension (docs/extensions.md)"
+        if any(item.type not in BUILTIN_TYPES for item in unserved):
+            remedy = (
+                "load each custom series from a file with `kanso data load --loader "
+                "csv_parquet --spec <spec>` over the window, or build a data adapter whose "
+                "`serves` names its type (docs/extensions.md)"
+            )
         raise PreconditionError(
             f"the screen reads series no registered adapter serves: {reasons}",
-            remedy="build a data adapter for them as a workspace extension "
-            "(docs/extensions.md), then run the screen again",
+            remedy=f"{remedy}, then run the screen again",
         )
 
 

@@ -2,9 +2,9 @@
 
 `new` scaffolds `screens/<id>/screen.yaml`, bound to a registered hypothesis or free.
 `validate` says whether the file is admissible and what running it would measure — the legs,
-the window it reads, the cells of every measure, which is the family each measure's
-correction is over, and the data it needs — and changes nothing. `run` gets the data, pins,
-measures and records (`kanso.screen.run`); `show` reads results back.
+the signals, the window it reads, the cells of every measure, which is the family each
+measure's correction is over, and the data it needs — and changes nothing. `run` gets the
+data, pins, measures and records (`kanso.screen.run`); `show` reads results back.
 
 A low result is evidence, not a failure: `run` exits 0 whatever it measured.
 
@@ -160,6 +160,7 @@ def _summary(valid: screen.Validated, path: Path) -> dict[str, Any]:
             name: leg.model_dump(mode="json", exclude_none=True) for name, leg in spec.legs.items()
         },
         "derived": sorted(spec.derived),
+        "signals": {name: signal.model_dump(mode="json") for name, signal in spec.signals.items()},
         "measures": [
             {"id": measure.id, "cells": count}
             for measure, count in zip(spec.measures, valid.cells, strict=True)
@@ -177,6 +178,12 @@ def _summary_lines(valid: screen.Validated, path: Path) -> tuple[str, ...]:
         field("window", f"{valid.window[0]}..{valid.window[1]}"),
         field("legs", ", ".join(f"{name} {leg.instrument}" for name, leg in spec.legs.items())),
     ]
+    if spec.signals:
+        read = [
+            f"{name} {signal.type}.{signal.field} on {signal.instrument}"
+            for name, signal in spec.signals.items()
+        ]
+        lines.append(field("signals", ", ".join(read)))
     for index, (measure, count) in enumerate(zip(spec.measures, valid.cells, strict=True)):
         detail: str
         if isinstance(measure, LeadLag):
