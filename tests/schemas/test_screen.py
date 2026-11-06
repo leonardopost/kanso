@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from typing import Any
 
@@ -481,3 +482,35 @@ def test_a_comparison_holds_where_its_operator_says(
 
     assert comparison.holds(value) is compare[operator](value, bound)
     assert comparison.text == f"{operator} {bound:g}"
+
+
+@given(operator=OPERATOR, bound=st.floats(allow_nan=False, allow_infinity=False))
+def test_a_comparison_s_text_reads_back_as_the_number_it_compares_with(
+    operator: str, bound: float
+) -> None:
+    name, number = Comparison.model_validate({operator: bound}).text.split()
+
+    assert name == operator and float(number) == bound
+
+
+def test_a_comparison_s_text_is_short_where_that_is_exact_and_whole_where_not() -> None:
+    texts = {
+        bound: Comparison.model_validate({"gt": bound}).text
+        for bound in (2.0, 0.5, 2.0000001, 0.1234567, 1234567.0, 1e-7)
+    }
+
+    assert texts == {
+        2.0: "gt 2",
+        0.5: "gt 0.5",
+        2.0000001: "gt 2.0000001",
+        0.1234567: "gt 0.1234567",
+        1234567.0: "gt 1234567.0",
+        1e-7: "gt 1e-07",
+    }
+
+
+@pytest.mark.parametrize("bound", [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("operator", ["gt", "ge", "lt", "le", "eq", "ne"])
+def test_a_comparison_with_no_finite_number_is_refused(operator: str, bound: float) -> None:
+    with pytest.raises(ValidationError, match=f"{operator}: Input should be a finite number"):
+        Comparison.model_validate({operator: bound})

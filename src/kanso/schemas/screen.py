@@ -405,9 +405,12 @@ class Comparison(KansoModel):
 
     @property
     def text(self) -> str:
-        """`gt 0`: the comparison as a cell's parameters spell it."""
+        """`gt 0`: the comparison as a cell's parameters spell it, its number written so that it
+        reads back as the one compared with — shortest by `:g` where that is exact, else in
+        full."""
         name, value = self.operator
-        return f"{name} {value:g}"
+        short = f"{value:g}"
+        return f"{name} {short if float(short) == value else repr(value)}"
 
     def holds(self, value: float) -> bool:
         """Whether `value` meets the comparison, compared exactly."""
