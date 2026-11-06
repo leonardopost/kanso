@@ -364,7 +364,11 @@ and the workspace's own 0/1 controls, a point dated every session, with the stat
 regression, so the null never refits it; the R² of the state on that design, which attenuates
 the estimate by one less it, is reported. Long or flat, `mean` is the excess a session; under a
 contrast it is the mean long less the mean short, signed by the side, so a correctly signed
-effect is positive under either. Each position — a run of sessions, joined across a boundary
+effect is positive under either. Either way the session values the null and `se` read weigh each
+return so the weights sum to zero — long or flat, the position less the cell's mean position —
+so `se` is the estimate's own: a position times its residual alone would spread as though the
+residuals' mean had not been fitted, by 1/√(1 − f) at exposure f — measured on a thousand
+drifting followers held half the time, sign flips of it put 1.3% of p at or under 0.05. Each position — a run of sessions, joined across a boundary
 only when its periods are contiguous — is charged one round trip struck at its entry and its
 exit, so a state held for days close to close pays once and open to close pays daily.
 

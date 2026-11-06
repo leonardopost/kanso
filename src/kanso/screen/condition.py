@@ -27,10 +27,12 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    a position held k sessions of the follower's calendar, valid or not, and an onset while it
    is held is skipped and counted.
 4. **Demean, once a cell.** The held periods' returns are regressed on the declared calendar
-   design and controls, with the state not in it (`kanso.screen.demean`). Long or flat, a
-   session's value is its position times its residual, so the mean is the excess a session
-   over the calendar's mean; under a contrast it is the mean residual long less the mean
-   residual short, so a correctly signed effect is positive under either.
+   design and controls, with the state not in it (`kanso.screen.demean`). Long or flat, the
+   estimate is the mean of position times residual, the excess a session over the calendar's
+   mean, and a session's value is its position less the cell's mean position times its
+   residual, which sums to the same and spreads as the estimate does; under a contrast it is
+   the mean residual long less the mean residual short, so a correctly signed effect is
+   positive under either.
 5. **Round trips, by position.** A position is a maximal run of held sessions with one
    direction; across sessions it runs on only when its periods are contiguous — the exit of one
    is the entry of the next — so a state held k sessions close to close is one round trip, and
@@ -557,8 +559,12 @@ def _return(plan: _Plan, position: int) -> float:
 
 
 def _estimate(signed: np.ndarray, returns: np.ndarray, contrast: bool) -> float | None:
-    """The mean of a cell's values: its excess a session, or long less short; `None` with none."""
-    values = nulls.values_of(signed[None, :], returns[None, :], contrast)[0]
+    """The estimator on these returns: long or flat, the mean of position times return, its
+    excess a session; under a contrast long less short. `None` with no session to read."""
+    if contrast:
+        values = nulls.values_of(signed[None, :], returns[None, :], True)[0]
+    else:
+        values = signed * returns
     held = values[~np.isnan(values)]
     return float(np.add.reduce(held) / len(held)) if len(held) else None
 

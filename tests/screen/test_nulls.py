@@ -109,13 +109,41 @@ def test_a_sign_flip_null_keeps_the_maxima_it_drew() -> None:
     assert np.all(enumerated.maxima >= 0)
 
 
-def test_a_long_or_flat_value_is_the_position_times_the_return() -> None:
-    positions = np.asarray([[1.0, 0.0, -1.0, np.nan]])
-    returns = np.asarray([[2.0, 5.0, 3.0, 1.0]])
+def test_a_long_or_flat_value_is_the_position_less_the_mean_position_times_the_return() -> None:
+    positions = np.asarray([[1.0, 1.0, 1.0, 0.0, np.nan], [-1.0, 0.0, 0.0, 0.0, -1.0]])
+    returns = np.asarray([[2.0, -4.0, 6.0, -4.0, 9.0], [1.0, 2.0, np.nan, 3.0, 4.0]])
 
     found = nulls.values_of(positions, returns, contrast=False)
 
-    assert np.array_equal(found, [[2.0, 0.0, -3.0, np.nan]], equal_nan=True)
+    # Over the four sessions each row holds, the mean position is 3/4 and -1/2.
+    expected = [[0.5, -1.0, 1.5, 3.0, np.nan], [-0.5, 1.0, np.nan, 1.5, -2.0]]
+    assert np.allclose(found, expected, equal_nan=True)
+    # The first row's returns sum to zero, as residuals with an intercept do: the values sum to
+    # the position times the return, so their mean is the excess a session.
+    assert float(np.nansum(found[0])) == pytest.approx(2.0 - 4.0 + 6.0)
+    shifted = nulls.values_of(positions, returns + 7.0, contrast=False)
+    assert np.allclose(np.nansum(shifted, axis=1), np.nansum(found, axis=1)), "nor a constant"
+
+
+def test_with_nothing_planted_long_or_flat_sign_flips_hold_their_level() -> None:
+    # Residuals of a drifting follower sum to zero, so a position times its residual spreads
+    # less than sign flips of it assume: measured on these seeds, uncentred values put 1.3% of
+    # p at or under 0.05 at an exposure of a half, t spreading 0.73, and none at nine tenths,
+    # t spreading 0.32; centred, 5.7% and 4.7%, t spreading 1.03 and 0.99.
+    for exposure in (0.5, 0.9):
+        ps, ts = [], []
+        for seed in range(1000):
+            rng = np.random.default_rng(7000 + seed)
+            positions = (rng.random(200) < exposure).astype(np.float64)
+            returns = 10.0 + rng.normal(size=200) * 30.0
+            residuals = returns - float(np.mean(returns))
+            values = nulls.values_of(positions[None, :], residuals[None, :], contrast=False)
+            assert float(np.sum(values)) == pytest.approx(float(np.sum(positions * residuals)))
+            found = nulls.evidence(nulls.blocks(values, 3), 199, seed)
+            ps.append(found.p[0])
+            ts.append(found.t[0])
+        rejected(np.asarray(ps), 0.05, 10 / 200)
+        assert 0.9 <= float(np.std(ts)) <= 1.1, "t spreads as a t, whatever the exposure"
 
 
 def test_contrast_weights_average_to_the_mean_long_less_the_mean_short() -> None:

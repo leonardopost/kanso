@@ -245,6 +245,34 @@ def test_a_planted_contrast_is_recovered_at_its_size(monkeypatch: pytest.MonkeyP
     assert contrast.p < 0.05 and contrast.t > 0
 
 
+def test_a_long_or_flat_cell_s_se_is_the_spread_of_its_excess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    level = {day: (1.0 if n % 4 else -1.0) for n, day in enumerate(sessions)}
+    prices = {"a": walk(sessions, 21, drift=15.0)}
+    points = {"lvl": daily(level)}
+    test = {"up": {**TEST, "against": None}}
+
+    (shifted,) = measured(screen(test, payoff="long_flat"), prices, points, monkeypatch)
+    (flipped,) = measured(
+        screen(test, payoff="long_flat", null_by="sign_flip", block=1), prices, points, monkeypatch
+    )
+
+    moves = np.asarray([1e4 * math.log(prices["a"][d][1] / prices["a"][d][0]) for d in sessions])
+    residuals = moves - float(np.mean(moves))
+    positions = np.asarray([1.0 if level[day] > 0 else 0.0 for day in sessions])
+    centred = (positions - float(np.mean(positions))) * residuals
+    se = float(np.std(centred, ddof=1)) / math.sqrt(len(sessions))
+    for cell in (shifted, flipped):
+        assert cell.mean == pytest.approx(float(np.mean(positions * residuals)))
+        assert cell.se == pytest.approx(se) and cell.t == pytest.approx(cell.mean / cell.se)
+    # A position times its residual alone spreads as if the mean were not fitted: at an
+    # exposure of three quarters, about twice the excess's own standard error.
+    naive = float(np.std(positions * residuals, ddof=1)) / math.sqrt(len(sessions))
+    assert 1.6 <= naive / se <= 2.4
+
+
 def test_a_point_stamped_at_the_close_is_not_read_at_that_close_and_is_read_at_the_next_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

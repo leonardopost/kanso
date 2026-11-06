@@ -149,16 +149,25 @@ def evidence(values: np.ndarray, draws: int, seeded: int) -> Evidence:
 def values_of(positions: np.ndarray, returns: np.ndarray, contrast: bool) -> np.ndarray:
     """Each session's value of a cell's positions against its returns, along the last axis.
 
-    NaN where either is. Long or flat, a session's value is its position times its return, a
-    flat session's a zero, so their mean is the excess a session. Under a contrast, a session
-    long is weighted `n / n⁺` and one short `−n / n⁻`, over the `n = n⁺ + n⁻` sessions holding
-    either, so the values' mean is the mean return long less the mean return short; a flat
-    session holds no value, and none does unless both sides hold at least one.
+    NaN where either is. Under either payoff a session's return is weighted so that the weights
+    sum to zero over the sessions holding a value: a constant added to every return leaves the
+    values' sum where it was, and their spread is the spread of that sum, so their standard
+    error is the mean's own. Long or flat, the weight is the session's position less the mean
+    position over those sessions, `π − π̄`; on returns that themselves sum to zero there — the
+    residuals of a fit with an intercept — the values sum to `Σ π r`, so their mean is the
+    excess a session, while a position times its return alone would spread as if the returns'
+    own mean were not fitted, overstating the standard error by `1 / √(1 − f)` at exposure `f`.
+    Under a contrast, a session long is weighted `n / n⁺` and one short `−n / n⁻`, over the
+    `n = n⁺ + n⁻` sessions holding either, so the values' mean is the mean return long less the
+    mean return short; a flat session holds no value, and none does unless both sides hold at
+    least one.
     """
     held = ~np.isnan(positions) & ~np.isnan(returns)
-    if not contrast:
-        return np.where(held, np.where(held, positions, 0.0) * returns, np.nan)
     signed = np.where(held, positions, 0.0)
+    if not contrast:
+        counts = np.add.reduce(held, axis=-1, keepdims=True)
+        centre = np.add.reduce(signed, axis=-1, keepdims=True) / np.maximum(counts, 1)
+        return np.where(held, (signed - centre) * np.where(held, returns, 0.0), np.nan)
     plus, minus = held & (signed > 0), held & (signed < 0)
     longs = np.add.reduce(plus, axis=-1, keepdims=True)
     shorts = np.add.reduce(minus, axis=-1, keepdims=True)
