@@ -1992,7 +1992,9 @@ The store is resolved before it is frozen — a snapshot over instrument data is
 the store holds no definition, because a run reads its definitions from the store and a
 snapshot pinning none is a promise no run can keep.
 
-**A dataset a snapshot names cannot be rewritten. At all.**
+**A dataset a snapshot names is never rewritten unasked.** Only a load naming it in
+`--supersedes` takes its place, and over the same span that load keeps its id, so it rewrites
+the pinned dataset under that id (`docs/backlog.md` row 232).
 
 ```
 $ kanso data load --loader synthetic --spec demo.yaml
