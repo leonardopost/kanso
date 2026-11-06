@@ -122,7 +122,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | `kanso init` over an existing `kanso.toml` | 2 · a workspace is scaffolded once |
 | leave a typo in `kanso.toml` | 3 · `unknown key '<section>.<key>'`, from every command |
 | write a ticker that is a YAML boolean — `ON`, `OFF`, `YES`, `NO`, `TRUE`, `FALSE` — bare in a loader spec | 3 · naming the field and the ticker's place in it; quote it, `"ON"` (`catalog/`) |
-| write a key YAML reads as anything but text — `null:` or `~:`, `on:`, `yes:` or `true:`, a bare number or date — in any workspace file | 3 · naming the key's place and what YAML read it as, before any field is checked; quote it, `"on":`, or name the field as the schema does |
+| write a key YAML reads as anything but text — `null:` or `~:`, `on:`, `yes:` or `true:`, a bare number or date — in any workspace file, a loader spec and the mock register's script included | 3 · naming the key's place and what YAML read it as, before any field is checked; quote it, `"on":`, or name the field as the schema does |
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |

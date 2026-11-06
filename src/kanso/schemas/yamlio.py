@@ -39,7 +39,7 @@ def parse_yaml[M: BaseModel](model: type[M], text: str, origin: str = "yaml") ->
         raise ValidationError(
             f"{origin}: expected a mapping at the top level, got {type(data).__name__}"
         )
-    _check_keys(data, origin)
+    check_keys(data, origin)
     if issubclass(model, Versioned):
         _check_schema(data, origin)
     try:
@@ -78,12 +78,12 @@ def write_yaml(obj: BaseModel, path: Path) -> Path:
     return path
 
 
-def _check_keys(node: Any, origin: str, place: tuple[str, ...] = ()) -> None:
+def check_keys(node: Any, origin: str, place: tuple[str, ...] = ()) -> None:
     """Refuse the first mapping key, in the file's order, that YAML read as anything but text,
     naming where it is."""
     if isinstance(node, list):
         for n, item in enumerate(node):
-            _check_keys(item, origin, (*place, str(n)))
+            check_keys(item, origin, (*place, str(n)))
     elif isinstance(node, dict):
         for key, value in node.items():
             if not isinstance(key, str):
@@ -93,7 +93,7 @@ def _check_keys(node: Any, origin: str, place: tuple[str, ...] = ()) -> None:
                     'quote the key, e.g. "on": rather than on:, or name the field as the '
                     "file's schema does",
                 )
-            _check_keys(value, origin, (*place, key))
+            check_keys(value, origin, (*place, key))
 
 
 def _where(place: tuple[str, ...]) -> str:

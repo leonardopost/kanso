@@ -80,6 +80,7 @@ from kanso.data.manifest import (
 )
 from kanso.data.snapshot import Snapshot
 from kanso.errors import KansoError, PreconditionError, ValidationError
+from kanso.schemas.yamlio import check_keys
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -225,7 +226,8 @@ def _dataset_payload(manifest: Manifest) -> dict[str, Any]:
 
 
 def read_spec(path: Path) -> dict[str, object]:
-    """The loader spec at `path`, refused when it is not a YAML mapping."""
+    """The loader spec at `path`, refused when it is not a YAML mapping, or when a key of any
+    mapping in it is one YAML read as anything but text, as in every workspace file."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -239,6 +241,7 @@ def read_spec(path: Path) -> dict[str, object]:
             f"{path}: a loader spec is a mapping, not {type(document).__name__}",
             remedy="write the spec as `loader: <id>` and the keys that loader documents",
         )
+    check_keys(document, str(path))
     return document
 
 

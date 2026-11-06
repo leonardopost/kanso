@@ -16,6 +16,10 @@ ordinal of the call — 1, 2, 3 … per task class — and the mock puts it ther
 of the answer, however deep. A diff that adds a line ending in `# call {{call}}` then
 produces new bytes on every turn of the script.
 
+Every key of the script is text, as in every workspace file: an answer is sent as JSON, whose
+keys are, and a bare `on:` or `yes:` YAML reads as a boolean is refused by its place rather than
+sent as the key `true`.
+
 A task class the script does not list answers `{}`. An empty object satisfies no task
 class's schema, so an unlisted class exercises the whole ladder — retry, escalate, refuse
 — without the script having to spell a malformed answer out.
@@ -38,6 +42,7 @@ from kanso.models.call import Answer, Call
 from kanso.models.ledger import cost_of
 from kanso.models.register import script_path
 from kanso.schemas.models import ModelSpec
+from kanso.schemas.yamlio import check_keys
 
 __all__ = ["CALL", "MockClient", "reset"]
 
@@ -122,6 +127,7 @@ def _script(path: Path) -> dict[str, list[Mapping[str, object]]]:
         return {}
     if not isinstance(loaded, dict):
         raise ValidationError(f"{path}: expected a mapping of task class to answers")
+    check_keys(loaded, str(path))
     out: dict[str, list[Mapping[str, object]]] = {}
     for task, answers in loaded.items():
         if not isinstance(answers, list):
