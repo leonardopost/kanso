@@ -18,7 +18,7 @@ produces new bytes on every turn of the script.
 
 Every key of the script is text, as in every workspace file: an answer is sent as JSON, whose
 keys are, and a bare `on:` or `yes:` YAML reads as a boolean is refused by its place rather than
-sent as the key `true`.
+sent as the key `True`.
 
 A task class the script does not list answers `{}`. An empty object satisfies no task
 class's schema, so an unlisted class exercises the whole ladder — retry, escalate, refuse
