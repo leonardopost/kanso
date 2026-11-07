@@ -585,14 +585,17 @@ def test_the_instruction_names_every_number_a_recent_card_s_digest_carries() -> 
 
 def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None:
     """A signature's mark is per session — the instrument, the side, and whether it was
-    still on at the end — so the same holding moved to another hour of the same session
-    is the same signature. The instruction told the proposer to change the time of day to
-    be in or out of the market, which is advice the rule refuses again, and a refusal the
-    proposer was never told about is the wasted ladder this whole paragraph exists for.
+    still on at the end — and, under a horizon shorter than a day, the hours of the session
+    it was on in. So the same holding moved to another hour is the same signature for a
+    daily hypothesis and another one for an intraday one, and the proposer is told which:
+    an instruction that once told every proposer to change the time of day gave advice the
+    rule refused again, and a refusal the proposer was never told about is the wasted ladder
+    this whole paragraph exists for.
     """
     said = INSTRUCTIONS["propose"]
     assert "a different time of day to be in or out of the market" not in said
-    assert "The reading is by session" in said
+    assert "The reading is by session, and by the hour as well only under a horizon" in said
+    assert "another hour of the session makes it another book" in said
 
 
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
