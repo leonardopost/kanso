@@ -122,6 +122,11 @@ DIGEST: dict[str, Any] = {
     "gross_bps_per_session": 1.5,
     "cost_bps_per_session": 1.6,
     "net_bps_per_session": -0.1,
+    "period": "1d",
+    "filled_periods": 19,
+    "first_fill_s": 0.25,
+    "last_fill_s": 76.0,
+    "active_s": 75.5,
 }
 
 
@@ -144,15 +149,28 @@ def test_a_digest_fills_the_columns_after_the_description() -> None:
         "gross_bps_per_session": "1.5000",
         "cost_bps_per_session": "1.6000",
         "net_bps_per_session": "-0.1000",
+        "first_fill_s": "0.2500",
+        "last_fill_s": "76.0000",
+        "active_s": "75.5000",
     }
+
+
+UNTIMED: dict[str, Any] = {
+    "filled_periods": 0,
+    "first_fill_s": None,
+    "last_fill_s": None,
+    "active_s": None,
+}
+"""When in its periods a run that never filled filled: in none of them, at no offset."""
 
 
 def test_an_absent_digest_number_is_an_empty_cell_and_not_a_zero() -> None:
     quiet = CardDigest.model_validate(
-        {**DIGEST, "fill_ratio": None, "maker_share": None, "fills": 0}
+        {**DIGEST, "fill_ratio": None, "maker_share": None, "fills": 0, **UNTIMED}
     )
     cells = dict(zip(DIGEST_COLUMNS, quiet.cells(), strict=True))
     assert (cells["fill_ratio"], cells["maker_share"]) == ("", "")
+    assert (cells["first_fill_s"], cells["last_fill_s"], cells["active_s"]) == ("", "", "")
 
 
 def test_a_crashed_card_digests_nothing() -> None:
@@ -184,6 +202,20 @@ def test_a_crashed_card_keeps_no_measurement_and_a_card_that_ran_names_one() -> 
         ({"cost_bps_per_session": 2.0}, "gross"),
         ({"hit_rate": 1.5}, "hit_rate"),
         ({"net_bps_per_trade_se": -1.0}, "net_bps_per_trade_se"),
+        ({"filled_periods": 0}, "filled_periods"),
+        ({"filled_periods": 81}, "filled_periods"),
+        ({"filled_periods": -1}, "filled_periods"),
+        ({"fills": 0, "maker_share": None}, "filled_periods"),
+        ({"filled_periods": None}, "period"),
+        ({"period": None}, "period"),
+        ({"period": "a day"}, "period"),
+        ({"filled_periods": None, "period": None}, "filled_periods"),
+        ({"first_fill_s": None}, "first_fill_s"),
+        ({"active_s": None}, "first_fill_s"),
+        ({"fills": 0, "maker_share": None, "filled_periods": 0}, "first_fill_s"),
+        ({"last_fill_s": 0.1}, "last_fill_s"),
+        ({"active_s": 76.5}, "active_s"),
+        ({"first_fill_s": -1.0}, "first_fill_s"),
     ],
 )
 def test_a_digest_states_its_numbers_together_and_they_add_up(
@@ -222,6 +254,40 @@ def test_a_run_that_closed_nothing_digests_its_sessions_alone() -> None:
         ),
     )
     assert idle.net_bps_per_trade is None and idle.hit_rate is None
+
+
+def test_when_a_card_traded_is_appended_after_the_columns_a_reader_took_by_position() -> None:
+    """The twelve digest columns `results.tsv` has carried since 0.17 sit where they sat,
+    and the three that say when in its periods a card filled come after them."""
+    assert DIGEST_COLUMNS == (
+        "trades_per_session",
+        "hit_rate",
+        "median_hold_s",
+        "maker_share",
+        "fill_ratio",
+        "gross_bps_per_trade",
+        "cost_bps_per_trade",
+        "net_bps_per_trade",
+        "net_bps_per_trade_se",
+        "gross_bps_per_session",
+        "cost_bps_per_session",
+        "net_bps_per_session",
+        "first_fill_s",
+        "last_fill_s",
+        "active_s",
+    )
+
+
+def test_a_digest_recorded_before_it_timed_its_fills_reads_back_with_no_timing() -> None:
+    """A card row written before the digest kept when its fills fell holds none of the five
+    keys: it reads back with no timing and three empty cells, and every other cell as it
+    was, rather than refused."""
+    timing = {"period", *UNTIMED}
+    before = CardDigest.model_validate({k: v for k, v in DIGEST.items() if k not in timing})
+
+    assert (before.period, before.filled_periods) == (None, None)
+    assert (before.first_fill_s, before.last_fill_s, before.active_s) == (None, None, None)
+    assert before.cells() == (*CardDigest.model_validate(DIGEST).cells()[:-3], "", "", "")
 
 
 def test_a_crashed_card_measures_nothing() -> None:

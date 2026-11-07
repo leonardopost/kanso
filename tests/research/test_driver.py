@@ -595,6 +595,21 @@ def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None
     assert "The reading is by session" in said
 
 
+def test_the_instruction_says_from_where_a_card_s_timing_is_read() -> None:
+    """An offset is from somewhere: the proposer is told each period is `period` long and cut
+    from midnight UTC, that an offset is seconds into a period from its first point, that
+    `active_s` spans a period's first fill to its last, and that a burst straddling a period's
+    boundary reads as the whole period."""
+    said = INSTRUCTIONS["propose"]
+    for name in ("period", "filled_periods", "first_fill_s", "last_fill_s", "active_s"):
+        assert f"`{name}`" in said
+    assert "each `period` long and cut from midnight UTC whatever the venue" in said
+    assert "the median seconds into each period from its first point" in said
+    assert "`active_s` is the median seconds from a period's first fill to its last" in said
+    assert "A burst that straddles a period's boundary" in said
+    assert "reads as the whole period" in said
+
+
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
     settings = ResearchConfig(local_cards=10, structural_cards=10)
     assert [driver.phase(settings, n) for n in (0, 9, 10, 19, 20, 29, 30)] == [
@@ -690,8 +705,8 @@ def test_each_recent_card_that_ran_shows_its_trades_and_its_edge_per_trade(
 ) -> None:
     """A metric alone cannot say whether it moved because each trade earned more or because
     the strategy traded less, so a card that ran reaches the proposer with its trade count
-    and its digest: the same numbers the card recorded. A crash ran to no result and
-    carries neither a digest nor a trade."""
+    and its digest: the same numbers the card recorded, and the return period its timing is
+    read in. A crash ran to no result and carries neither a digest nor a trade."""
     scripted(ws, propose=[proposal("revert"), proposal("boom"), proposal("weak")])
 
     driver.run(ws, store, prepared_hyp, cards=3)
@@ -703,6 +718,7 @@ def test_each_recent_card_that_ran_shows_its_trades_and_its_edge_per_trade(
     assert kept.n_trades > 0 and kept.digest is not None
     assert shown[1]["digest"]["net_bps_per_trade"] == round(kept.digest.net_bps_per_trade, 4)
     assert shown[1]["digest"]["sessions"] == kept.digest.sessions
+    assert shown[1]["digest"]["period"] == ws.config.research.return_period == "1d"
     assert set(shown[1]["digest"]) == set(type(kept.digest).model_fields)
     assert shown[0]["digest"]["net_bps_per_trade"] is None, "the flat baseline closed nothing"
     assert "digest" not in shown[2] and crashed.digest is None

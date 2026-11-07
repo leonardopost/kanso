@@ -4,13 +4,17 @@ A card is scored on one scalar, and one scalar cannot say how it moved. A per-tr
 rises when every clip earns more and when the clips that lost are dropped; a contribution
 falls when the trades get worse and when the book trades less; and the loop's proposer,
 shown nothing but the number, cannot tell which of the two it caused — so a search scored on
-a contribution "improves" by trading less while the loss per trade gets worse. The digest is
-the rest of the story in a dozen numbers: how often the card traded, how its trades and its
-orders filled, and what each trade and each session earned before and after costs.
+a contribution "improves" by trading less while the loss per trade gets worse. Nor can a
+number struck over a window say when in each day the card traded: a book whose every fill
+lands in the first second of a session, its day ended there by a stop, scores like one that
+trades all day. The digest is the rest of the story: how often the card traded, how its
+trades and its orders filled, when in its periods it filled, and what each trade and each
+session earned before and after costs.
 
-Every number is read off what the card already holds — the `CardRun` the runner extracted
-and the order intents its strategy submitted — so nothing here runs anything, and nothing
-is a second definition of a quantity the toolbox already defines:
+Every number is read off what the card already holds — the `CardRun` the runner extracted,
+the order intents its strategy submitted and the first instant of each return period its
+parent handed it — so nothing here runs anything, and nothing is a second definition of a
+quantity the toolbox already defines:
 
 * a **trade** is a closed position with a notional, as `quantities.edge_series` reads one,
   and its edge is `pnl_net / notional` in basis points; the card's net edge per trade and its
@@ -35,7 +39,20 @@ is a second definition of a quantity the toolbox already defines:
   the order's own events, and under nautilus_trader 1.231.0 an order the emulator released at
   market keeps the events of the order it was made from and fills with no limit; a modify
   that raised a quantity is not in the intent's either, so the ratio is a reading, not an
-  identity, and it can exceed one only through the second.
+  identity, and it can exceed one only through the second;
+* **when it filled** is read on the return periods the runner cut the window into, one after
+  another from the window's first midnight (`CardRun.period_ns`), each fill in the one its
+  instant falls in: over the periods the run filled in, the median seconds from a period's
+  first point — the first point the card was handed in it, which its parent noted as it
+  streamed the window (`kanso.nautilus.backtest.RunResult.firsts_ns`), or its first fill
+  where that came first or no point was noted, which a fill stamped at a data instant never
+  does — to its first fill and to its last, and from its first fill to its last, beside the
+  `period` they were read on. No calendar is consulted: an offset is from a point, so a card
+  handed a session that starts at the same local time every day, and trading it at the same
+  local times, reads the same either side of a change of clocks. Each median is the lower
+  middle value over an even count, an offset some period filled at. A run with no first
+  points noted, one run in process (`backtest.run`, `backtest.execute`) rather than as a
+  card, reads `None` for all five.
 
 Funding is a payment on what was held, not a fill cost, so it stays in gross and in net
 alike; a run with none of something reads `None` for what that something measures.
@@ -46,7 +63,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Sequence
 from math import fsum, sqrt
-from statistics import median
+from statistics import median, median_low
 from typing import Final
 
 from kanso.criteria.objectives import net_edge_bps
@@ -121,8 +138,9 @@ def session_edge(run: CardRun) -> tuple[float, float | None, int, int] | None:
     return edge, sqrt(variance), sessions, len(traded)
 
 
-def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
-    """Every number of the digest, read off `run` and the orders its strategy submitted."""
+def digest(run: CardRun, intents: Sequence[Intent] = (), firsts: Sequence[int] = ()) -> CardDigest:
+    """Every number of the digest, read off `run`, the orders its strategy submitted and the
+    first instant of each return period it was handed (`RunResult.firsts_ns`)."""
     traded = [t for t in run.trades if t.notional > 0]
     per_trade: dict[str, float | None] = dict.fromkeys(
         (
@@ -163,11 +181,17 @@ def digest(run: CardRun, intents: Sequence[Intent] = ()) -> CardDigest:
             "cost_bps_per_session": cost_session,
             "net_bps_per_session": net_session,
         }
+    filled, first, last, active = _timing(run, firsts)
     return CardDigest(
         sessions=sessions,
         fills=len(run.fills),
         maker_share=_maker_share(run),
         fill_ratio=_fill_ratio(run, intents),
+        period=None if filled is None else run.period,
+        filled_periods=filled,
+        first_fill_s=first,
+        last_fill_s=last,
+        active_s=active,
         **per_trade,
         **per_session,
     )
@@ -188,3 +212,34 @@ def _fill_ratio(run: CardRun, intents: Sequence[Intent]) -> float | None:
     if submitted <= 0:
         return None
     return fsum(abs(f.qty) for f in run.fills if f.limit is not None) / submitted
+
+
+def _timing(
+    run: CardRun, firsts: Sequence[int]
+) -> tuple[int | None, float | None, float | None, float | None]:
+    """When in its periods the run filled: how many periods it filled in and, over those,
+    the lower median of the nanoseconds from a period's first point to its first fill and to
+    its last, and from its first fill to its last, each in seconds (see the module); nothing
+    at all for a run handed no first points."""
+    if not firsts:
+        return None, None, None, None
+    opens, _ = run.bounds
+    length = run.period_ns
+    starts = {(ts - opens) // length: ts for ts in firsts}
+    spans: dict[int, tuple[int, int]] = {}
+    for fill in run.fills:
+        index = (fill.ts_ns - opens) // length
+        first, last = spans.get(index, (fill.ts_ns, fill.ts_ns))
+        spans[index] = (min(first, fill.ts_ns), max(last, fill.ts_ns))
+    if not spans:
+        return 0, None, None, None
+    offsets = []
+    for index, (first, last) in spans.items():
+        start = min(starts.get(index, first), first)
+        offsets.append((first - start, last - start))
+    return (
+        len(spans),
+        median_low(first for first, _ in offsets) / NS_PER_SECOND,
+        median_low(last for _, last in offsets) / NS_PER_SECOND,
+        median_low(last - first for first, last in offsets) / NS_PER_SECOND,
+    )

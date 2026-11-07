@@ -24,6 +24,15 @@ def test_a_run_reports_its_window_as_a_half_open_span() -> None:
     assert run.bounds == (midnight_ns(date(2024, 1, 1)), midnight_ns(date(2024, 1, 3)))
 
 
+def test_a_run_reports_the_length_of_its_periods_and_refuses_one_of_no_time() -> None:
+    """The length the runner cut the window into, which a period of no time cannot be."""
+    run = build_run((1.0, 2.0))
+    assert run.period_ns == NS_PER_DAY
+    assert replace(run, period="90s").period_ns == 90 * 1_000_000_000
+    with pytest.raises(ValidationError, match="no time at all"):
+        _ = replace(run, period="0s").period_ns
+
+
 def test_a_fill_and_a_trade_report_their_notional() -> None:
     assert fill(date(2024, 1, 1), qty=-100.0, px=12.5).notional == 1250.0
     assert trade(date(2024, 1, 1), pnl=10.0, notional=5_000.0).notional == 5_000.0
