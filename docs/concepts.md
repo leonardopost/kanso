@@ -411,6 +411,37 @@ with the intercept alone; `sessions` counts the sessions in either state either 
 Each position — a run of sessions, joined across a boundary only when its periods are contiguous — is charged one round trip struck at its entry and its
 exit, so a state held for days close to close pays once and open to close pays daily.
 
+**A condition can be set against holding its follower.** A contrast says whether the follower's
+returns differ between two states; it does not say whether trading them beats owning the
+follower, which a strategy that is short or flat where the follower rose has to beat by more than
+the drift it gave up. A `condition` measure that declares `benchmark: hold` asks that of every
+cell beside its contrast — the question a lane scored on `wf_sharpe_vs_hold` is asked — and a
+verdict then judges the cell by it in place of the contrast's p and sign. The positions make,
+each held session, their period's log return times their side less the fills they made there:
+a position's entry on its first session and its exit on its last, the fills its round trip is,
+crossing the touch on a quoted follower. The hold makes the follower's close-to-close return
+each of the same sessions, whatever the test's entry and exit — a hold is long overnight too,
+so an open-to-close test is set against the hold it would replace — less one round trip, a buy
+at the first held session's start and a sale at the last one's close. Each is scored by its
+annualised Sharpe, at a zero rate and one degree of freedom, its periods a year the held
+sessions a year of the window, and the cell by the difference, reported with its paired error
+by Memmel's correction of Jobson–Korkie, widened for serial correlation, the hold's Sharpe, the
+mean excess a session and the difference fold by fold. The hold does not move under a shift, so
+the measure's own circular shifts redraw the positions' Sharpe alone, their fills recomputed
+where the rotated runs begin and end; a cell's p is one-sided and family-wise, the share of the
+N rotations in which the family's largest difference reaches the cell's. Rotation keeps how
+long the positions are short and flat, so the mean difference over the shifts — reported as
+`null_mean` — is what that exposure makes at a random alignment, below zero wherever the
+follower rose and the positions were not long: the null is not symmetric about zero, sign
+flips cannot judge it, and `benchmark` is refused under `sign_flip`. A pass needs both: p at or
+under `alpha`, random timing beaten, and the difference above zero, the hold beaten. The level
+holds as the contrast's does — measured on `kanso.screen.benchmark.judge` over 250 sessions,
+contrast positions independent of returns that drift 5 bp a session on a noise of 100, 2.5 bp a
+fill, every shift taken, 2,000 seeds from 70000: one cell in runs averaging 20 put 5.30% of p at
+or under 0.05 and 9.75% at or under 0.10; a family of two, 4.75% and 10.15%; runs averaging 5
+on a drift of 10, 5.20% and 10.10%; and a family of two over a mean that wanders as an AR(1) of
+coefficient 0.99, 4.35% and 9.40% — all inside binomial 99.9% bounds of 3.4–6.6% and 7.8–12.2%.
+
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
 `basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
 and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only

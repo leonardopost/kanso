@@ -23,7 +23,15 @@ from kanso import screen
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.errors import ValidationError
-from kanso.schemas.screen import CatchUp, Cell, Condition, ConditionStats, LeadLag, ScreenResult
+from kanso.schemas.screen import (
+    CatchUp,
+    Cell,
+    Condition,
+    ConditionStats,
+    HoldStats,
+    LeadLag,
+    ScreenResult,
+)
 from kanso.screen import draft, hurdle, records, run
 from kanso.workspace import Workspace
 
@@ -192,6 +200,8 @@ def _summary_lines(valid: screen.Validated, path: Path) -> tuple[str, ...]:
             detail = f"{measure.leader} leads · beta fitted on the {measure.fit.replace('_', ' ')}"
         elif isinstance(measure, Condition):
             detail = f"{measure.payoff} · {measure.null_by}"
+            if measure.benchmark is not None:
+                detail += " · against the hold"
         else:
             detail = measure.side
         lines.append(indent(f"measure {index}  {measure.id} · {detail} · {count} cell(s)"))
@@ -387,7 +397,29 @@ def _condition_lines(found: ConditionStats, draws: int) -> list[str]:
             f"median {found.signal_age_median_s:.4g} s, max {found.signal_age_max_s:.4g} s",
         )
     )
+    if found.hold is not None:
+        lines += _hold_lines(found.hold)
     return lines
+
+
+def _hold_lines(hold: HoldStats) -> list[str]:
+    """A condition cell set against holding its follower: the two Sharpes, their difference and
+    its p, what a random alignment of the same positions makes, and the folds."""
+    critical = "" if hold.critical is None else f" (within alpha above {hold.critical:+.3g})"
+    folds = ", ".join("—" if value is None else f"{value:+.3g}" for value in hold.folds)
+    return [
+        field(
+            "hold",
+            f"Sharpe {hold.sharpe:+.3g} against the hold's {hold.sharpe_hold:+.3g} · difference "
+            f"{hold.difference:+.3g} ± {hold.difference_se:.2g} · p {hold.p:.4g}{critical} · "
+            f"chance {hold.null_mean:+.3g} · excess {hold.excess_bp:+.4g} bp a session",
+        ),
+        field(
+            "hold folds",
+            f"{folds} (the difference) · {hold.folds_same_sign} share the sign · "
+            f"{hold.annualisation:.4g} sessions a year",
+        ),
+    ]
 
 
 def _result_summary(result: ScreenResult) -> dict[str, Any]:
@@ -430,10 +462,17 @@ def _cell_line(cell: Cell) -> str:
     judged = f"{cell.judged} · " if cell.judged else ""
     if cell.condition is not None and cell.response is not None:
         stats = cell.response
+        hold = cell.condition.hold
+        against = (
+            ""
+            if hold is None
+            else f" · Sharpe {hold.sharpe:+.3g} against the hold's {hold.sharpe_hold:+.3g},"
+            f" p {hold.p:.4g}"
+        )
         return (
             f"{judged}{cell.key}  mean {cell.mean:+.4g} ± {cell.se:.2g} bp · t {cell.t:+.2f}"
             f" · p {cell.p:.4g} · net {stats.ceiling_bp_day:+.4g} bp/day · margin "
-            f"{stats.margin_bp:+.4g} bp · exposure {cell.condition.exposure:.3g}"
+            f"{stats.margin_bp:+.4g} bp · exposure {cell.condition.exposure:.3g}{against}"
         )
     if cell.response is not None:
         stats = cell.response

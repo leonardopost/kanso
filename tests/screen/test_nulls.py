@@ -427,18 +427,18 @@ def test_an_alignment_no_shift_reaches_reads_the_floor_of_its_shifts() -> None:
 
 
 def test_every_shift_is_taken_once_when_they_are_no_more_than_the_draws() -> None:
-    assert nulls._shifts(7, 6, 1).tolist() == [1, 2, 3, 4, 5, 6]
-    assert nulls._shifts(7, 9999, 1).tolist() == [1, 2, 3, 4, 5, 6]
-    assert nulls._shifts(1, 9999, 1).tolist() == [] and nulls._shifts(0, 9999, 1).tolist() == []
+    assert nulls.shifts(7, 6, 1).tolist() == [1, 2, 3, 4, 5, 6]
+    assert nulls.shifts(7, 9999, 1).tolist() == [1, 2, 3, 4, 5, 6]
+    assert nulls.shifts(1, 9999, 1).tolist() == [] and nulls.shifts(0, 9999, 1).tolist() == []
 
 
 def test_shifts_more_than_the_draws_are_drawn_from_every_one_but_the_identity() -> None:
-    drawn = [nulls._shifts(9, 5, seeded) for seeded in range(60)]
+    drawn = [nulls.shifts(9, 5, seeded) for seeded in range(60)]
 
     for shifts in drawn:
         assert len(shifts) == 5 and len(set(shifts.tolist())) == 5, "never one twice"
     assert set(np.concatenate(drawn).tolist()) == set(range(1, 9)), "1 and N - 1 included"
-    assert nulls._shifts(9, 5, 3).tobytes() == drawn[3].tobytes()
+    assert nulls.shifts(9, 5, 3).tobytes() == drawn[3].tobytes()
 
 
 def test_drawn_shifts_are_a_sample_of_every_shift_s_maxima() -> None:
@@ -448,7 +448,7 @@ def test_drawn_shifts_are_a_sample_of_every_shift_s_maxima() -> None:
     drawn = nulls.circular(positions, returns, False, 20, 3)
 
     assert every.exact is True and drawn.exact is False and len(drawn.maxima) == 20
-    assert drawn.maxima.tolist() == every.maxima[nulls._shifts(80, 20, 3) - 1].tolist()
+    assert drawn.maxima.tolist() == every.maxima[nulls.shifts(80, 20, 3) - 1].tolist()
     assert abs(drawn.t[0]) not in set(every.maxima.tolist()), "the identity is never a draw"
     again = nulls.circular(positions, returns, False, 20, 3)
     assert (

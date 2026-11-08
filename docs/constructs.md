@@ -384,6 +384,11 @@ warmup are the strategy's own arithmetic. The bootstrap band a certificate and a
 record for it is the resampled Sharpe of the strategy's trades less the hold's fold-wise
 Sharpe, a band of differences; the paper and live gates compare a realised difference with
 the band they strike from the expectation's value — a difference — and its paired error.
+A screen asks the same question before a lane exists: a `condition` measure that declares
+`benchmark: hold` sets each cell's positions against holding its follower by the difference of
+the two Sharpes over the window, with the paired error this objective's is, the difference fold
+by fold beside it, and judges it by circular shifts of the positions (`docs/concepts.md`,
+Screen).
 
 ## Adding one
 

@@ -395,6 +395,11 @@ def test_a_condition_counts_its_tests_by_its_followers() -> None:
         ({"min_shift": 30}, "min_shift.*Extra inputs are not permitted"),
         ({"null_by": "sign_flip"}, "a sign-flip null states the block its sessions are summed"),
         (
+            {"null_by": "sign_flip", "block": 20, "benchmark": "hold"},
+            "benchmark: a hold is judged by circular shifts of the positions",
+        ),
+        ({"benchmark": "market"}, "benchmark.*Input should be 'hold'"),
+        (
             {
                 "null_by": "sign_flip",
                 "block": 3,
