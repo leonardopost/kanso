@@ -38,11 +38,13 @@ drift it gave up.
    + 1)`, every shift from 1 to N − 1 taken when they are no more than `[screen] draws`, so the
    observed alignment's rank among the N is uniform when every rotation is as likely as it.
    Rotation keeps how long the positions are short and flat, so `null_mean` — the cell's mean
-   difference over the shifts — is what that exposure makes at a random alignment: below zero
-   by about the follower's drift on every session not long, which is why the null is not
-   symmetric about zero and sign flips cannot judge it. A verdict passes a cell whose p is at
-   or under `alpha` and whose difference is above zero: random timing is beaten, and so is the
-   hold.
+   difference over the shifts — is what that exposure makes at a random alignment: close to
+   close, below zero where the follower rose and the positions were not long, each such session
+   giving up its drift flat and twice it short; open to close the positions earn the session
+   alone and the hold the night too, so it sits where the two series' Sharpes put it. Either way
+   the null is not symmetric about zero, and sign flips cannot judge it. A verdict passes a
+   cell whose p is at or under `alpha` and whose difference is above zero: random timing is
+   beaten, and so is the hold.
 
 **No BLAS.** Every sum is numpy's own reduction in a fixed order, and the observed alignment is
 struck by the same arithmetic as every shift, so ties are ties.
