@@ -541,7 +541,7 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     zero is the state working against that side, which the margin need not show, since over a
     hold of several sessions a round trip's gross is mostly the follower's drift. A condition
     cell set against the hold (`benchmark: hold`) is judged by that instead of its contrast: its
-    p against the hold at or under `alpha`, and its Sharpe above the hold's. A cell under
+    p against random timing and its `p_above_hold` both at or under `alpha`. A cell under
     `min_sessions` is `thin`; otherwise every clause it misses is named in its reason, so a
     cell that fails on p and on events a day says both.
     """
@@ -554,10 +554,11 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     hold = None if cell.condition is None else cell.condition.hold
     if hold is not None:
         if hold.p > verdict.alpha:
-            missed.append(f"p {hold.p:.4g} against the hold above alpha {verdict.alpha:g}")
-        if hold.difference <= 0:
+            missed.append(f"p {hold.p:.4g} against random timing above alpha {verdict.alpha:g}")
+        if hold.p_above_hold > verdict.alpha:
             missed.append(
-                f"Sharpe {hold.sharpe:.4g} does not beat the hold's {hold.sharpe_hold:.4g}"
+                f"p {hold.p_above_hold:.4g} that its Sharpe {hold.sharpe:.4g} beats the hold's "
+                f"{hold.sharpe_hold:.4g} above alpha {verdict.alpha:g}"
             )
     else:
         if cell.p > verdict.alpha:

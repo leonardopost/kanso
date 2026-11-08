@@ -13,6 +13,7 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 from datetime import date
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -137,7 +138,8 @@ def test_an_always_long_cell_held_close_to_close_is_the_hold_and_beats_nothing(
     assert hold.difference == 0.0 and hold.excess_bp == 0.0
     assert hold.sharpe == hold.sharpe_hold and hold.sharpe > 0
     assert hold.p == 1.0, "every rotation of a constant position is the observed one"
-    assert hold.null_mean == 0.0 and hold.critical is None
+    assert hold.null_mean == 0.0 and hold.null_sd == 0.0 and hold.critical is None
+    assert hold.p_above_hold >= 0.5, "a difference of zero is no evidence it beats the hold"
     assert cell.params["benchmark"] == "hold"
 
 
@@ -223,13 +225,27 @@ def test_p_is_each_difference_s_rank_among_the_family_s_largest_at_every_shift(
                 for k in range(1, len(positions))
             ]
         )
-    maxima = [max(a, b) for a, b in zip(*by_shift, strict=True)]
-    for cell, difference, shifted in zip(found, differences, by_shift, strict=True):
+    # Each cell's differences studentised by their own mean and spread over every alignment,
+    # the observed among them; the family's largest z at each shift is the bar.
+    centres = [statistics.fmean([d, *s]) for d, s in zip(differences, by_shift, strict=True)]
+    spreads = [statistics.pstdev([d, *s]) for d, s in zip(differences, by_shift, strict=True)]
+    z = [(d - m) / s for d, m, s in zip(differences, centres, spreads, strict=True)]
+    maxima = [
+        max((a - centres[0]) / spreads[0], (b - centres[1]) / spreads[1])
+        for a, b in zip(*by_shift, strict=True)
+    ]
+    for cell, difference, centre, spread, mine in zip(
+        found, differences, centres, spreads, z, strict=True
+    ):
         hold = held(cell)
         assert hold.difference == pytest.approx(difference, abs=1e-9)
-        reaching = sum(value >= difference - 1e-9 for value in maxima)
+        assert hold.null_mean == pytest.approx(centre, abs=1e-9)
+        assert hold.null_sd == pytest.approx(spread, abs=1e-9)
+        reaching = sum(value >= mine - 1e-9 for value in maxima)
         assert hold.p == pytest.approx((1 + reaching) / (len(maxima) + 1))
-        assert hold.null_mean == pytest.approx(statistics.fmean(shifted), abs=1e-9)
+        cells = 2
+        expected = min(1.0, cells * (1 - NormalDist().cdf(difference / hold.difference_se)))
+        assert hold.p_above_hold == pytest.approx(expected, rel=1e-12)
     assert found[0].condition is not None and found[0].condition.exact
 
 
@@ -252,6 +268,7 @@ def test_a_short_through_the_falls_beats_the_hold_and_passes_the_verdict(
 
     hold = held(cell)
     assert hold.difference > 0 and hold.p <= 0.05 and hold.excess_bp > 0
+    assert hold.p_above_hold <= 0.05
     assert hold.critical is not None and hold.difference > hold.critical
     assert hold.null_mean < hold.critical < hold.difference
     assert judged.judged == "pass", judged.reason
@@ -295,7 +312,7 @@ def stated(hold: HoldStats | None, p: float = 0.001, mean: float = 5.0) -> Cell:
     )
 
 
-def against(p: float, difference: float) -> HoldStats:
+def against(p: float, difference: float, above: float = 0.01) -> HoldStats:
     return HoldStats(
         sharpe=0.5 + difference,
         sharpe_hold=0.5,
@@ -303,7 +320,9 @@ def against(p: float, difference: float) -> HoldStats:
         difference_se=0.3,
         excess_bp=difference,
         p=p,
+        p_above_hold=above,
         null_mean=-0.2,
+        null_sd=0.1,
         annualisation=252.0,
         folds=[difference, difference],
         folds_same_sign=2,
@@ -315,11 +334,11 @@ def against(p: float, difference: float) -> HoldStats:
     [
         (stated(against(0.01, 0.4), p=0.9, mean=-3.0), "pass", None),
         (
-            stated(against(0.01, -0.1)),
+            stated(against(0.01, 0.1, above=0.4)),
             "fail",
-            "Sharpe 0.4 does not beat the hold's 0.5",
+            "p 0.4 that its Sharpe 0.6 beats the hold's 0.5 above alpha 0.05",
         ),
-        (stated(against(0.2, 0.4)), "fail", "p 0.2 against the hold above alpha 0.05"),
+        (stated(against(0.2, 0.4)), "fail", "p 0.2 against random timing above alpha 0.05"),
         (
             stated(None, p=0.01, mean=-3.0),
             "fail",
@@ -380,6 +399,7 @@ def test_a_cell_that_holds_nothing_reads_a_p_of_one_beside_one_that_holds(
     empty = held(found[1])
     assert found[1].sessions == 0
     assert (empty.p, empty.sharpe, empty.difference, empty.difference_se) == (1.0, 0.0, 0.0, 0.0)
+    assert (empty.p_above_hold, empty.null_sd) == (1.0, 0.0)
     assert empty.folds == [None, None] and empty.folds_same_sign == 0
     assert held(found[0]).p < 1.0
 
@@ -440,6 +460,7 @@ def test_a_family_of_fewer_than_two_sessions_has_no_shift_and_reads_a_p_of_one()
 
     assert judged.p.tolist() == [1.0] and judged.maxima.size == 0
     assert judged.sharpe.tolist() == [0.0] and judged.null_mean.tolist() == [0.0]
+    assert judged.varying.tolist() == [False]
 
 
 def test_a_difference_whose_series_does_not_vary_sums_the_two_errors() -> None:
@@ -524,3 +545,29 @@ def test_a_fold_holding_fewer_than_two_sessions_has_no_difference() -> None:
     assert found[1] is None and found[2] is None
     expected = hand_sharpe(own[:4].tolist(), 252.0) - hand_sharpe(returns[:4].tolist(), 252.0)
     assert found[0] == pytest.approx(expected, abs=1e-12)
+
+
+def test_a_gap_in_the_held_sessions_costs_the_hold_what_it_costs_the_positions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = trading()
+    level = dict.fromkeys(sessions, 1.0)
+    level[sessions[20]] = math.nan  # the next session's decision reads no state
+    spec = screen({"up": {**CLOSE, "against": None}}, payoff="long_flat", benchmark="hold")
+
+    (cell,) = measured(
+        spec, {"a": walk(sessions, 18, drift=8.0)}, {"lvl": daily(level)}, monkeypatch
+    )
+
+    hold = held(cell)
+    assert cell.sessions == len(sessions) - 2, "the first session and the one after the gap"
+    assert cell.response is not None and cell.response.events == 2
+    assert hold.difference == 0.0 and hold.excess_bp == 0.0, "two round trips each"
+
+
+def test_a_cell_close_to_its_hold_is_not_said_to_beat_it_on_a_sign() -> None:
+    assert benchmark.above_hold(0.1, 0.5, 1) == pytest.approx(1 - NormalDist().cdf(0.2))
+    assert benchmark.above_hold(0.1, 0.5, 2) == pytest.approx(2 * (1 - NormalDist().cdf(0.2)))
+    assert benchmark.above_hold(0.1, 0.5, 4) == 1.0, "capped at one"
+    assert benchmark.above_hold(-3.0, 0.1, 9) == 1.0
+    assert benchmark.above_hold(0.4, 0.0, 1) == 1.0

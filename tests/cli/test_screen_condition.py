@@ -225,7 +225,7 @@ def test_a_run_against_the_hold_judges_each_cell_by_its_sharpe_over_the_hold(
         assert hold is not None and item.params["benchmark"] == "hold"
         assert 0 < hold.p <= 1 and hold.annualisation > 0 and hold.critical is not None
         assert len(hold.folds) == rendered.folds
-        missed = [hold.p > 0.1, hold.difference <= 0, item.response.margin_bp < 0]
+        missed = [hold.p > 0.1, hold.p_above_hold > 0.1, item.response.margin_bp < 0]
         expected = "thin" if item.sessions < 40 else "fail" if any(missed) else "pass"
         assert item.judged == expected, item.key
         assert "against the declared side" not in (item.reason or ""), "the contrast is not judged"
@@ -233,6 +233,7 @@ def test_a_run_against_the_hold_judges_each_cell_by_its_sharpe_over_the_hold(
     assert names["a"].sharpe_hold != names["b"].sharpe_hold, "each name's own hold"  # type: ignore[union-attr]
     detail = at(runner, taped, "screen", "show", "tape_hold", "--cell", CELL).stdout
     assert "against the hold's" in detail and "hold folds" in detail
+    assert "against random timing" in detail and "p above the hold" in detail
     assert "sessions a year" in detail
 
 

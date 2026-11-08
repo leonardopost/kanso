@@ -831,11 +831,14 @@ class HoldStats(KansoModel):
     sessions — its close-to-close return each session, one round trip over them — and
     `difference` the first less the second, with `difference_se` its paired error by Memmel's
     correction of Jobson–Korkie. `excess_bp` is the mean a session of the positions' net less
-    the hold's. `p` is family-wise and one-sided: `(1 + R) / (shifts + 1)`, R the measure's circular
-    shifts in which the family's largest difference reaches this cell's. `null_mean` is the cell's
-    difference averaged over the shifts — what the same positions make at a random alignment —
-    and `critical` the difference a cell must exceed for its p to be at or under the verdict's
-    alpha, with a verdict only.
+    the hold's. `null_mean` and `null_sd` are the cell's difference's mean and spread over every
+    alignment its circular null takes, the observed among them — what the same positions make at
+    random. `p` is family-wise and one-sided against random timing: `(1 + R) / (shifts + 1)`, R
+    the measure's shifts in which the family's largest difference studentised by its cell's own
+    `null_mean` and `null_sd` reaches this cell's. `p_above_hold` is the one-sided p of the
+    difference over its paired error, times the family's cells holding any session, capped at
+    one. `critical` is the difference a cell must exceed for its p to be at or under the
+    verdict's alpha, with a verdict only.
     `annualisation` is the held sessions per year of the window, every Sharpe's; `folds` the
     difference inside each calendar fold, `None` for a fold holding fewer than two sessions.
     """
@@ -846,7 +849,9 @@ class HoldStats(KansoModel):
     difference_se: float = Field(ge=0, allow_inf_nan=False)
     excess_bp: float = Field(allow_inf_nan=False)
     p: float = Field(gt=0, le=1)
+    p_above_hold: float = Field(ge=0, le=1)
     null_mean: float = Field(allow_inf_nan=False)
+    null_sd: float = Field(ge=0, allow_inf_nan=False)
     critical: float | None = Field(default=None, allow_inf_nan=False)
     annualisation: float = Field(ge=0, allow_inf_nan=False)
     folds: list[Annotated[float, Field(allow_inf_nan=False)] | None]

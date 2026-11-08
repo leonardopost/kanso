@@ -22,8 +22,12 @@ drift it gave up.
    session, its close-to-close return — from the previous session's last point it has, or the
    session's own first on the first session it has — whatever the test's entry and exit, since
    a hold is long overnight as well: an open-to-close test is set against the hold it would
-   replace. It pays one round trip: a buy at the first held session's start, booked there, and a
-   sale at the last one's close, booked there.
+   replace. It is booked as a position of one held through every held session (`held`), joined
+   across contiguous sessions as any position is: a buy at a run's first session's start and a
+   sale at its last one's close. Over a window whose held sessions have no gap that is one round
+   trip; where the cell's sessions do have one — a state undefined, a session another cell of a
+   circular family lacks — the hold pays at the gap as the positions do, so a cell held long
+   close to close throughout is the hold, fill for fill.
 3. **Sharpe, as the toolbox defines it.** Annualised at a zero risk-free rate,
    `mean / sd × √A` with one degree of freedom, `A` the held sessions per year of the window
    (`kanso.criteria.quantities`); zero for a series that does not vary. `difference` is the
@@ -33,18 +37,31 @@ drift it gave up.
    so a shift redraws the positions' Sharpe alone: the positions are rotated against the
    sessions as the measure's own null rotates them (`kanso.screen.nulls.circular`), one shift
    shared by the family, its fills recomputed where the rotated runs now begin and end, and
-   each cell's difference struck again. A cell's p is one-sided and family-wise:
-   `(1 + #{shifts whose largest difference across the family reaches this cell's}) / (shifts
-   + 1)`, every shift from 1 to N − 1 taken when they are no more than `[screen] draws`, so the
-   observed alignment's rank among the N is uniform when every rotation is as likely as it.
-   Rotation keeps how long the positions are short and flat, so `null_mean` — the cell's mean
-   difference over the shifts — is what that exposure makes at a random alignment: close to
-   close, below zero where the follower rose and the positions were not long, each such session
-   giving up its drift flat and twice it short; open to close the positions earn the session
-   alone and the hold the night too, so it sits where the two series' Sharpes put it. Either way
-   the null is not symmetric about zero, and sign flips cannot judge it. A verdict passes a
-   cell whose p is at or under `alpha` and whose difference is above zero: random timing is
-   beaten, and so is the hold.
+   each cell's difference struck again. Rotation keeps how long the positions are short and
+   flat, so a cell's differences over the alignments are what that exposure makes at random:
+   their mean, `null_mean`, is close to close below zero where the follower rose and the
+   positions were not long, each such session giving up its drift flat and twice it short, and
+   open to close, the positions earning the session alone and the hold the night too, wherever
+   the two series' Sharpes put it. The null is not symmetric about zero, so sign flips cannot
+   judge it, and its centre and spread differ from cell to cell, so a family is judged on each
+   cell's difference **studentised** by its own: `z = (difference − null_mean) / null_sd`, the
+   two taken over every alignment the null takes, the observed among them, so the observed is
+   standardised exactly as every shift is. A cell's p is one-sided and family-wise, its z's rank
+   against the family's largest z under each shift: `(1 + #{shifts whose largest z reaches this
+   cell's}) / (shifts + 1)` — Romano and Wolf's studentised step, where the largest raw
+   difference would let one cell's chance level set every other's bar. With every shift from 1
+   to N − 1 taken, when they are no more than `[screen] draws`, the observed alignment's rank
+   among the N is uniform when every rotation is as likely as it. A cell whose differences do
+   not vary — held long throughout, every alignment the same — has no spread to judge and reads
+   a p of one.
+5. **Against the hold, by its own error.** The hold does not move under a shift, so p says the
+   positions beat random timing, not that they beat the hold: a strategy whose Sharpe equals
+   the hold's can beat random timing that gives up the drift. The difference is therefore also
+   judged against zero by its paired error: `p_above_hold` is the one-sided normal p of
+   `difference / difference_se`, times the cells of the family that hold any session
+   (Bonferroni, valid however the cells move together), capped at one. A verdict passes a cell
+   whose p and `p_above_hold` are both at or under `alpha`: random timing is beaten, and so is
+   the hold.
 
 **No BLAS.** Every sum is numpy's own reduction in a fixed order, and the observed alignment is
 struck by the same arithmetic as every shift, so ties are ties.
@@ -56,6 +73,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from math import sqrt
+from statistics import NormalDist
 
 import numpy as np
 
@@ -91,14 +109,17 @@ class Book:
 
 @dataclass(frozen=True)
 class Judged:
-    """Per cell of one family: the Sharpes, their difference, p and the mean difference over
-    the shifts; the family's largest difference under each shift; each cell's net a session."""
+    """Per cell of one family: the Sharpes, their difference, p, and the mean and spread of
+    its difference over every alignment taken, `varying` where that spread is not zero; the
+    family's largest studentised difference under each shift; each cell's net a session."""
 
     sharpe: np.ndarray
     sharpe_hold: np.ndarray
     difference: np.ndarray
     p: np.ndarray
     null_mean: np.ndarray
+    null_sd: np.ndarray
+    varying: np.ndarray
     maxima: np.ndarray
     net: list[np.ndarray]
 
@@ -120,6 +141,18 @@ def net(positions: np.ndarray, book: Book) -> np.ndarray:
     entered = np.where(starts, np.where(long, book.buy_in, book.sell_in), 0.0)
     left = np.where(ends, np.where(long, book.sell_out, book.buy_out), 0.0)
     return np.asarray(positions * book.returns - entered - left)
+
+
+def held(
+    returns: np.ndarray, joins: np.ndarray, bought: np.ndarray, sold: np.ndarray
+) -> np.ndarray:
+    """What holding the follower long through these sessions makes each one, net of its fills:
+    a position of one, joined across `joins` as any position is, a buy at a run's first session
+    and a sale at its last."""
+    ones = np.ones(len(returns), dtype=np.float64)
+    unused = np.zeros(len(returns), dtype=np.float64)
+    book = Book(returns, joins, bought, bought, sold, sold, unused, unused.astype(np.int64))
+    return net(ones, book)
 
 
 def sharpe(values: np.ndarray, annualisation: float) -> np.ndarray:
@@ -154,40 +187,58 @@ def judge(
         np.zeros(0) if book is None else net(positions[row], book) for row, book in enumerate(books)
     ]
     own = np.asarray([float(sharpe(values, annualisation)) for values in nets])
-    held = np.asarray(
+    hold = np.asarray(
         [0.0 if book is None else float(sharpe(book.hold, annualisation)) for book in books]
     )
-    difference = own - held
+    difference = own - hold
     holding = [row for row, book in enumerate(books) if book is not None]
     shifts = nulls.shifts(sessions, draws, seeded)
     column = np.arange(sessions, dtype=np.int64)
-    sums = np.zeros(cells, dtype=np.float64)
-    found: list[np.ndarray] = []
+    drawn = np.zeros((len(shifts), cells), dtype=np.float64)
     for start in range(0, len(shifts) if holding else 0, nulls.BATCH):
         batch = shifts[start : start + nulls.BATCH]
         index = (column[None, :] - batch[:, None]) % sessions
-        drawn = np.full((len(batch), cells), -np.inf, dtype=np.float64)
         for row in holding:
             book = books[row]
             assert book is not None
-            values = sharpe(net(positions[row][index], book), annualisation) - held[row]
-            drawn[:, row] = values
-            sums[row] += np.add.reduce(values)
-        found.append(np.max(drawn, axis=1))
-    maxima = np.concatenate(found) if found else np.zeros(0, dtype=np.float64)
-    exceed = np.add.reduce(maxima[:, None] >= difference[None, :], axis=0)
+            moved = sharpe(net(positions[row][index], book), annualisation) - hold[row]
+            drawn[start : start + len(batch), row] = moved
+    every = np.concatenate([difference[None, :], drawn], axis=0)
+    centre = np.add.reduce(every, axis=0) / len(every)
+    deviations = every - centre[None, :]
+    spread = np.sqrt(np.add.reduce(deviations * deviations, axis=0) / len(every))
+    varying = np.zeros(cells, dtype=bool)
+    varying[holding] = True
+    varying &= spread > 1e-12 * np.maximum(np.abs(centre), 1e-300)
+    scale = np.where(varying, spread, 1.0)
+    observed = np.where(varying, (difference - centre) / scale, 0.0)
+    studentised = np.where(varying[None, :], (drawn - centre[None, :]) / scale[None, :], -np.inf)
+    maxima = (
+        np.max(studentised, axis=1)
+        if len(shifts) and varying.any()
+        else np.zeros(0, dtype=np.float64)
+    )
+    exceed = np.add.reduce(maxima[:, None] >= observed[None, :], axis=0)
     p = (1 + exceed) / (len(shifts) + 1)
-    blank = np.ones(cells, dtype=bool)
-    blank[holding] = False
     return Judged(
         sharpe=own,
-        sharpe_hold=held,
+        sharpe_hold=hold,
         difference=difference,
-        p=np.where(blank | (len(maxima) == 0), 1.0, p),
-        null_mean=sums / len(shifts) if len(shifts) and holding else np.zeros(cells),
+        p=np.where(varying & (len(maxima) > 0), p, 1.0),
+        null_mean=centre,
+        null_sd=np.where(varying, spread, 0.0),
+        varying=varying,
         maxima=maxima,
         net=nets,
     )
+
+
+def above_hold(difference: float, se: float, cells: int) -> float:
+    """The one-sided p that a difference of Sharpes is above zero, read off its paired error,
+    times the family's cells holding any session, capped at one; one with no error to read."""
+    if se <= 0.0:
+        return 1.0
+    return min(1.0, cells * (1.0 - NormalDist().cdf(difference / se)))
 
 
 def difference_se(own: np.ndarray, hold: np.ndarray, window: tuple[date, date]) -> float:

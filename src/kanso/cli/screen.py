@@ -411,8 +411,13 @@ def _hold_lines(hold: HoldStats) -> list[str]:
         field(
             "hold",
             f"Sharpe {hold.sharpe:+.3g} against the hold's {hold.sharpe_hold:+.3g} · difference "
-            f"{hold.difference:+.3g} ± {hold.difference_se:.2g} · p {hold.p:.4g}{critical} · "
-            f"chance {hold.null_mean:+.3g} · excess {hold.excess_bp:+.4g} bp a session",
+            f"{hold.difference:+.3g} ± {hold.difference_se:.2g}, p above the hold "
+            f"{hold.p_above_hold:.4g} · excess {hold.excess_bp:+.4g} bp a session",
+        ),
+        field(
+            "timing",
+            f"p {hold.p:.4g} against random timing{critical} · chance {hold.null_mean:+.3g} "
+            f"± {hold.null_sd:.2g}",
         ),
         field(
             "hold folds",
@@ -467,7 +472,7 @@ def _cell_line(cell: Cell) -> str:
             ""
             if hold is None
             else f" · Sharpe {hold.sharpe:+.3g} against the hold's {hold.sharpe_hold:+.3g},"
-            f" p {hold.p:.4g}"
+            f" p {hold.p:.4g} timing, {hold.p_above_hold:.4g} above the hold"
         )
         return (
             f"{judged}{cell.key}  mean {cell.mean:+.4g} ± {cell.se:.2g} bp · t {cell.t:+.2f}"

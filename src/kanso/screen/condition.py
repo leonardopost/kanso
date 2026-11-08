@@ -760,27 +760,33 @@ def _against_hold(
     annualisation = union / years(context.window)
     judged = benchmark.judge(positions, books, annualisation, context.draws, seeded)
     verdict = context.screen.verdict
-    critical = None
+    z = None
     if verdict is not None:
-        critical = nulls.critical(judged.maxima, verdict.alpha, enumerated_flips=False)
+        z = nulls.critical(judged.maxima, verdict.alpha, enumerated_flips=False)
+    holding = sum(book is not None for book in books)
     stats: list[HoldStats | None] = []
     for row, book in enumerate(books):
         own = judged.net[row]
         difference = float(judged.difference[row])
         folds: list[float | None] = [None] * context.folds
+        se = 0.0
         if book is not None:
             folds = benchmark.folds(own, book, annualisation, context.folds)
+            se = benchmark.difference_se(own, book.hold, context.window)
+        critical = None
+        if z is not None and judged.varying[row]:
+            critical = float(judged.null_mean[row] + z * judged.null_sd[row])
         stats.append(
             HoldStats(
                 sharpe=float(judged.sharpe[row]),
                 sharpe_hold=float(judged.sharpe_hold[row]),
                 difference=difference,
-                difference_se=0.0
-                if book is None
-                else benchmark.difference_se(own, book.hold, context.window),
+                difference_se=se,
                 excess_bp=0.0 if book is None else float(np.add.reduce(own - book.hold)) / len(own),
                 p=float(judged.p[row]),
+                p_above_hold=benchmark.above_hold(difference, se, holding),
                 null_mean=float(judged.null_mean[row]),
+                null_sd=float(judged.null_sd[row]),
                 critical=critical,
                 annualisation=annualisation,
                 folds=folds,
@@ -794,7 +800,8 @@ def _book(context: Context, item: _Found, hurdles: Hurdles, fold_of: np.ndarray)
     """A cell's held sessions as its positions book them and as holding its follower does:
     each period's return and fills, and the hold's close-to-close return — from the previous
     session's last point the follower has, or the session's first on its first — net of a buy
-    at the first held session's start and a sale at the last one's close."""
+    at each run of contiguous held sessions' start and a sale at its last close, so a gap in the
+    held sessions costs the hold what it costs the positions."""
     plan, held = item.plan, item.realised.held
     name = plan.key.follower
     touched = context.screen.legs[name].type in TOUCHED
@@ -807,20 +814,17 @@ def _book(context: Context, item: _Found, hurdles: Hurdles, fold_of: np.ndarray)
     exits = [plan.exits[position] for position in held]
     closes = [marks[position][1] for position in held]
     starts = [marks[position - 1][1] if position else marks[position][0] for position in held]
-    hold = _moves(starts, closes)
-    bought, _ = _fills(hurdles, name, starts[:1], touched)
-    _, sold = _fills(hurdles, name, closes[-1:], touched)
-    hold[0] -= bought[0]
-    hold[-1] -= sold[0]
+    contiguous = np.asarray(
+        [at > 0 and held[at - 1] == position - 1 for at, position in enumerate(held)], dtype=bool
+    )
+    bought, _ = _fills(hurdles, name, starts, touched)
+    _, sold = _fills(hurdles, name, closes, touched)
+    hold = benchmark.held(_moves(starts, closes), contiguous, bought, sold)
     buy_in, sell_in = _fills(hurdles, name, entries, touched)
     buy_out, sell_out = _fills(hurdles, name, exits, touched)
-    joins = plan.test.entry == plan.test.exit
     return benchmark.Book(
         returns=_moves(entries, exits),
-        joins=np.asarray(
-            [joins and at > 0 and held[at - 1] == position - 1 for at, position in enumerate(held)],
-            dtype=bool,
-        ),
+        joins=contiguous & (plan.test.entry == plan.test.exit),
         buy_in=buy_in,
         sell_in=sell_in,
         buy_out=buy_out,
