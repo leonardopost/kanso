@@ -297,11 +297,11 @@ def circular(
     observed_t = _t(sums, squares, counts)
     magnitude = np.abs(observed_t)
     exact = sessions - 1 <= draws
-    shifts = _shifts(sessions, draws, seeded)
+    rotations = shifts(sessions, draws, seeded)
     found: list[np.ndarray] = []
     column = np.arange(sessions, dtype=np.int64)
-    for start in range(0, len(shifts) if cells else 0, BATCH):
-        batch = shifts[start : start + BATCH]
+    for start in range(0, len(rotations) if cells else 0, BATCH):
+        batch = rotations[start : start + BATCH]
         moved = positions[:, (column[None, :] - batch[:, None]) % sessions].transpose(1, 0, 2)
         values = values_of(moved, returns[None, :, :], contrast, spanned)
         inside = ~np.isnan(values)
@@ -318,13 +318,13 @@ def circular(
         se=_se(sums, squares, counts),
         t=observed_t,
         sessions=counts,
-        p=np.where(magnitude > 0, (1 + exceed) / (len(shifts) + 1), 1.0),
+        p=np.where(magnitude > 0, (1 + exceed) / (len(rotations) + 1), 1.0),
         maxima=maxima,
         exact=exact,
     )
 
 
-def _shifts(sessions: int, draws: int, seeded: int) -> np.ndarray:
+def shifts(sessions: int, draws: int, seeded: int) -> np.ndarray:
     """The shifts a circular null takes over `sessions`: every one from 1 to `sessions − 1`
     when they are no more than `draws`, else `draws` of them, drawn without replacement from
     the measure's own generator."""

@@ -62,6 +62,7 @@ measures:                          # lead_lag | response | catch_up | condition,
 #    controls: [event_day]         # 0/1 signals, [] for none: a point every session, ts_event on its date in the clock's zone, ts_init by the period's exit
 #    latency_ms: 900000            # how long before the entry it orders the decision is made, at least 1
 #    # mde_power: 0.8              # optional: beside a verdict, the effect a cell would need to pass at this power, in its mean's units
+#    # benchmark: hold             # optional, circular only: also set each cell's positions against holding its follower, by the Sharpe of each net of round trips; a verdict then judges that
 # verdict:                         # optional and never defaulted: declare it before you run, never after reading a result
 #   alpha: 0.05                    # family-wise, over every cell of a measure; a condition's null has its own floor: 2^(1 - blocks) or 1/sessions
 #   min_margin_bp: 1.0             # gross per event less the hurdle

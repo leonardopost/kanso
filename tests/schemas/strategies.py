@@ -82,6 +82,7 @@ from kanso.schemas.screen import (
     ConditionTest,
     Derived,
     FixedHold,
+    HoldStats,
     Hours,
     LeadLag,
     Leg,
@@ -1089,6 +1090,7 @@ def conditions(
         controls=draw(st.sampled_from([[], ["s_flag"]])),
         latency_ms=draw(st.floats(1, 86_400_000, allow_nan=False)),
         mde_power=draw(st.none() | st.floats(0.5, 0.99)),
+        benchmark=draw(st.sampled_from([None, "hold"])) if null_by == "circular" else None,
     )
     if verdict is None:
         return condition, None
@@ -1135,6 +1137,27 @@ def condition_stats(draw: st.DrawFn) -> ConditionStats:
         mde_bp=draw(st.none() | st.floats(0, 1e3)),
         signal_age_median_s=draw(st.floats(0, 1e6)),
         signal_age_max_s=draw(st.floats(0, 1e6)),
+        hold=draw(st.none() | hold_stats()) if circular else None,
+    )
+
+
+@st.composite
+def hold_stats(draw: st.DrawFn) -> HoldStats:
+    folds = draw(st.lists(st.none() | FINITE, min_size=2, max_size=6))
+    return HoldStats(
+        sharpe=draw(FINITE),
+        sharpe_hold=draw(FINITE),
+        difference=draw(FINITE),
+        difference_se=draw(st.floats(0, 1e3)),
+        excess_bp=draw(FINITE),
+        p=draw(st.floats(1e-5, 1.0)),
+        p_above_hold=draw(st.floats(0, 1.0)),
+        null_mean=draw(FINITE),
+        null_sd=draw(st.floats(0, 1e3)),
+        critical=draw(st.none() | FINITE),
+        annualisation=draw(st.floats(0, 400)),
+        folds=folds,
+        folds_same_sign=draw(st.integers(0, len(folds))),
     )
 
 

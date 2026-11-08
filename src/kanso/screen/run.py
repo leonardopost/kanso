@@ -539,7 +539,9 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     needs those and its `mean` above zero: its p ranks |t|, so it is two-sided, and its mean is
     signed so that an effect on the side its test declares is positive. A significant mean below
     zero is the state working against that side, which the margin need not show, since over a
-    hold of several sessions a round trip's gross is mostly the follower's drift. A cell under
+    hold of several sessions a round trip's gross is mostly the follower's drift. A condition
+    cell set against the hold (`benchmark: hold`) is judged by that instead of its contrast: its
+    p against random timing and its `p_above_hold` both at or under `alpha`. A cell under
     `min_sessions` is `thin`; otherwise every clause it misses is named in its reason, so a
     cell that fails on p and on events a day says both.
     """
@@ -549,10 +551,20 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
         reason = f"{cell.sessions} session(s), under min_sessions {verdict.min_sessions}"
         return cell.model_copy(update={"judged": "thin", "reason": reason})
     missed: list[str] = []
-    if cell.p > verdict.alpha:
-        missed.append(f"p {cell.p:.4g} above alpha {verdict.alpha:g}")
-    if cell.condition is not None and cell.mean <= 0:
-        missed.append(f"mean {cell.mean:.4g} bp is against the declared side")
+    hold = None if cell.condition is None else cell.condition.hold
+    if hold is not None:
+        if hold.p > verdict.alpha:
+            missed.append(f"p {hold.p:.4g} against random timing above alpha {verdict.alpha:g}")
+        if hold.p_above_hold > verdict.alpha:
+            missed.append(
+                f"p {hold.p_above_hold:.4g} that its Sharpe {hold.sharpe:.4g} beats the hold's "
+                f"{hold.sharpe_hold:.4g} above alpha {verdict.alpha:g}"
+            )
+    else:
+        if cell.p > verdict.alpha:
+            missed.append(f"p {cell.p:.4g} above alpha {verdict.alpha:g}")
+        if cell.condition is not None and cell.mean <= 0:
+            missed.append(f"mean {cell.mean:.4g} bp is against the declared side")
     stats = cell.response
     if stats is not None and stats.margin_bp < verdict.min_margin_bp:
         missed.append(

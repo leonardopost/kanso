@@ -492,7 +492,10 @@ class Condition(KansoModel):
     are demeaned on; `[]` is the window's mean alone. `latency_ms` is how long before the entry
     it orders the decision is made, at least a millisecond, so a point stamped at a fill's own
     instant is never read for it. `mde_power` asks for the minimum detectable effect at that
-    power beside a verdict, and reports nothing else.
+    power beside a verdict, and reports nothing else. `benchmark: hold` sets every cell's
+    positions against holding its follower as well, by the Sharpe of each net of its round
+    trips, and a verdict then judges the cell by that (`kanso.screen.benchmark`); only circular
+    shifts judge it, since an excess over a hold is not symmetric about zero under the null.
     """
 
     id: Literal["condition"]
@@ -505,6 +508,7 @@ class Condition(KansoModel):
     controls: list[Name]
     latency_ms: float = Field(ge=0, allow_inf_nan=False)
     mde_power: float | None = Field(default=None, gt=0, lt=1)
+    benchmark: Literal["hold"] | None = None
 
     @model_validator(mode="after")
     def _declared(self) -> Condition:
@@ -523,6 +527,12 @@ class Condition(KansoModel):
             raise ValueError("block: a sign-flip null states the block its sessions are summed in")
         if self.null_by == "circular" and self.block is not None:
             raise ValueError("block: a circular null takes every shift and sums into no block")
+        if self.benchmark is not None and self.null_by != "circular":
+            raise ValueError(
+                "benchmark: a hold is judged by circular shifts of the positions; sign flips "
+                "take a session's value to be symmetric about zero under the null, and an excess "
+                "over holding the follower is not, being short its drift wherever it is not long"
+            )
         for name, test in self.tests.items():
             hold = test.hold
             if (
@@ -813,6 +823,41 @@ class CatchUpStats(KansoModel):
     hold_p90_s: float = Field(ge=0, allow_inf_nan=False)
 
 
+class HoldStats(KansoModel):
+    """A `condition` cell's positions set against holding its follower, under `benchmark: hold`.
+
+    `sharpe` is the annualised Sharpe of what the positions made each held session net of their
+    round trips, `sharpe_hold` that of buying the follower and keeping it over the same
+    sessions — its close-to-close return each session, one round trip over them — and
+    `difference` the first less the second, with `difference_se` its paired error by Memmel's
+    correction of Jobson–Korkie. `excess_bp` is the mean a session of the positions' net less
+    the hold's. `null_mean` and `null_sd` are the cell's difference's mean and spread over every
+    alignment its circular null takes, the observed among them — what the same positions make at
+    random. `p` is family-wise and one-sided against random timing: `(1 + R) / (shifts + 1)`, R
+    the measure's shifts in which the family's largest difference studentised by its cell's own
+    `null_mean` and `null_sd` reaches this cell's. `p_above_hold` is the one-sided p of the
+    difference over its paired error, times the family's cells holding any session, capped at
+    one. `critical` is the difference a cell must exceed for its p to be at or under the
+    verdict's alpha, with a verdict only.
+    `annualisation` is the held sessions per year of the window, every Sharpe's; `folds` the
+    difference inside each calendar fold, `None` for a fold holding fewer than two sessions.
+    """
+
+    sharpe: float = Field(allow_inf_nan=False)
+    sharpe_hold: float = Field(allow_inf_nan=False)
+    difference: float = Field(allow_inf_nan=False)
+    difference_se: float = Field(ge=0, allow_inf_nan=False)
+    excess_bp: float = Field(allow_inf_nan=False)
+    p: float = Field(gt=0, le=1)
+    p_above_hold: float = Field(ge=0, le=1)
+    null_mean: float = Field(allow_inf_nan=False)
+    null_sd: float = Field(ge=0, allow_inf_nan=False)
+    critical: float | None = Field(default=None, allow_inf_nan=False)
+    annualisation: float = Field(ge=0, allow_inf_nan=False)
+    folds: list[Annotated[float, Field(allow_inf_nan=False)] | None]
+    folds_same_sign: int = Field(ge=0)
+
+
 class ConditionStats(KansoModel):
     """What a `condition` cell came to beyond the response its positions make.
 
@@ -837,6 +882,7 @@ class ConditionStats(KansoModel):
     `critical_t` and `mde_bp` are the |t| a cell needs to pass the verdict's alpha under its own
     null and the effect, in the cell's mean's units, that reaches it at `mde_power`, a detection
     threshold and never a forecast. The signal's age is how old the point read was at each decision.
+    `hold` is the cell set against holding its follower, under `benchmark: hold` only.
     """
 
     payoff: Literal["contrast", "long_flat"]
@@ -863,6 +909,7 @@ class ConditionStats(KansoModel):
     mde_bp: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     signal_age_median_s: float = Field(ge=0, allow_inf_nan=False)
     signal_age_max_s: float = Field(ge=0, allow_inf_nan=False)
+    hold: HoldStats | None = None
 
 
 class Cell(KansoModel):

@@ -70,6 +70,9 @@ clock's zone on which the follower has a point, and in each of them two marks ar
    family holds only the sessions every one of its cells holding any holds, and a cell that
    held more gives the rest up, from its residuals to its round trips; a cell that holds none
    takes none from the others.
+7. **Set against the hold**, under `benchmark: hold`: each cell's positions, net of their fills,
+   against buying its follower and keeping it over the same sessions, by the Sharpe of each, and
+   judged by the same circular shifts (`kanso.screen.benchmark`).
 
 NautilusTrader facts relied on (nautilus_trader 1.231.0): a custom point read from the catalog
 arrives wrapped in `CustomData`, and a query filters on `ts_init` inclusively at both ends
@@ -86,6 +89,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
+from kanso.criteria.quantities import years
 from kanso.data import closures
 from kanso.errors import PreconditionError
 from kanso.schemas.screen import (
@@ -95,12 +99,13 @@ from kanso.schemas.screen import (
     ConditionStats,
     ConditionTest,
     FixedHold,
+    HoldStats,
     ResponseStats,
     Screen,
     TurnOfMonth,
     p_floor,
 )
-from kanso.screen import demean, nulls, signals
+from kanso.screen import benchmark, demean, nulls, signals
 from kanso.screen.hurdle import TOUCHED, Hurdles
 from kanso.screen.response import BP, taker_gross
 from kanso.screen.sessions import Series, zone_of
@@ -173,6 +178,8 @@ def cells(screen: Screen, measure: Condition) -> tuple[CellKey, ...]:
                 params["against"] = test.against.text
             elif test.against is not None:
                 params["against"] = test.against
+            if measure.benchmark is not None:
+                params["benchmark"] = measure.benchmark
             key = f"condition/{name}/{follower}/{measure.null_by}"
             found.append(CellKey(key, name, follower, params))
     return tuple(found)
@@ -362,6 +369,9 @@ def measure(
         )
     counts = np.add.reduce(carried, axis=1)
     reported = np.add.reduce(carried & (positions_by != 0), axis=1) if contrast else counts
+    holds: list[HoldStats | None] = [None] * len(found)
+    if measure.benchmark is not None:
+        holds = _against_hold(context, found, positions_by, len(union), hurdles, fold_of, seeded)
     return [
         _cell(
             context,
@@ -373,6 +383,7 @@ def measure(
             (int(counts[row]), int(reported[row])),
             len(union),
             fold_of,
+            holds[row],
         )
         for row, item in enumerate(found)
     ]
@@ -732,6 +743,116 @@ def _round_trip(
     return gross, hurdle
 
 
+def _against_hold(
+    context: Context,
+    found: Sequence[_Found],
+    positions: np.ndarray,
+    union: int,
+    hurdles: Hurdles,
+    fold_of: np.ndarray,
+    seeded: int,
+) -> list[HoldStats | None]:
+    """Every cell of a circular family set against holding its follower, over the family's
+    sessions, at their number a year of the window."""
+    books = [
+        _book(context, item, hurdles, fold_of) if item.realised.held else None for item in found
+    ]
+    annualisation = union / years(context.window)
+    judged = benchmark.judge(positions, books, annualisation, context.draws, seeded)
+    verdict = context.screen.verdict
+    z = None
+    if verdict is not None:
+        z = nulls.critical(judged.maxima, verdict.alpha, enumerated_flips=False)
+    holding = sum(book is not None for book in books)
+    stats: list[HoldStats | None] = []
+    for row, book in enumerate(books):
+        own = judged.net[row]
+        difference = float(judged.difference[row])
+        folds: list[float | None] = [None] * context.folds
+        se = 0.0
+        if book is not None:
+            folds = benchmark.folds(own, book, annualisation, context.folds)
+            se = benchmark.difference_se(own, book.hold, context.window)
+        critical = None
+        if z is not None and judged.varying[row]:
+            critical = float(judged.null_mean[row] + z * judged.null_sd[row])
+        stats.append(
+            HoldStats(
+                sharpe=float(judged.sharpe[row]),
+                sharpe_hold=float(judged.sharpe_hold[row]),
+                difference=difference,
+                difference_se=se,
+                excess_bp=0.0 if book is None else float(np.add.reduce(own - book.hold)) / len(own),
+                p=float(judged.p[row]),
+                p_above_hold=benchmark.above_hold(difference, se, holding),
+                null_mean=float(judged.null_mean[row]),
+                null_sd=float(judged.null_sd[row]),
+                critical=critical,
+                annualisation=annualisation,
+                folds=folds,
+                folds_same_sign=nulls.same_sign(folds, difference),
+            )
+        )
+    return stats
+
+
+def _book(context: Context, item: _Found, hurdles: Hurdles, fold_of: np.ndarray) -> benchmark.Book:
+    """A cell's held sessions as its positions book them and as holding its follower does:
+    each period's return and fills, and the hold's close-to-close return — from the previous
+    session's last point the follower has, or the session's first on its first — net of a buy
+    at each run of contiguous held sessions' start and a sale at its last close, so a gap in the
+    held sessions costs the hold what it costs the positions."""
+    plan, held = item.plan, item.realised.held
+    name = plan.key.follower
+    touched = context.screen.legs[name].type in TOUCHED
+    marks = plan.follower.marks
+    entries: list[Mark] = []
+    for position in held:
+        entry = plan.entries[position]
+        assert entry is not None, "a held period has an entry"
+        entries.append(entry)
+    exits = [plan.exits[position] for position in held]
+    closes = [marks[position][1] for position in held]
+    starts = [marks[position - 1][1] if position else marks[position][0] for position in held]
+    contiguous = np.asarray(
+        [at > 0 and held[at - 1] == position - 1 for at, position in enumerate(held)], dtype=bool
+    )
+    bought, _ = _fills(hurdles, name, starts, touched)
+    _, sold = _fills(hurdles, name, closes, touched)
+    hold = benchmark.held(_moves(starts, closes), contiguous, bought, sold)
+    buy_in, sell_in = _fills(hurdles, name, entries, touched)
+    buy_out, sell_out = _fills(hurdles, name, exits, touched)
+    return benchmark.Book(
+        returns=_moves(entries, exits),
+        joins=contiguous & (plan.test.entry == plan.test.exit),
+        buy_in=buy_in,
+        sell_in=sell_in,
+        buy_out=buy_out,
+        sell_out=sell_out,
+        hold=hold,
+        folds=fold_of[np.asarray(item.realised.days, dtype=np.int64)],
+    )
+
+
+def _moves(entries: Sequence[Mark], exits: Sequence[Mark]) -> np.ndarray:
+    """Each pair's change of log price, in basis points, struck as one array."""
+    start = np.asarray([mark.price for mark in entries], dtype=np.float64)
+    end = np.asarray([mark.price for mark in exits], dtype=np.float64)
+    return np.asarray(BP * (np.log(end) - np.log(start)))
+
+
+def _fills(
+    hurdles: Hurdles, name: str, marks: Sequence[Mark], touched: bool
+) -> tuple[np.ndarray, np.ndarray]:
+    """One taker buy and one taker sell at each mark, crossing the touch a quoted leg shows."""
+    price = np.asarray([mark.price for mark in marks], dtype=np.float64)
+    if not touched:
+        return hurdles.fills(name, price, None, None)
+    bid = np.asarray([mark.bid for mark in marks], dtype=np.float64)
+    ask = np.asarray([mark.ask for mark in marks], dtype=np.float64)
+    return hurdles.fills(name, price, bid, ask)
+
+
 def _cell(
     context: Context,
     index: int,
@@ -742,6 +863,7 @@ def _cell(
     held: tuple[int, int],
     union: int,
     fold_of: np.ndarray,
+    hold: HoldStats | None,
 ) -> Cell:
     """One cell's record. `held` is the sessions holding a value, which `se` is scaled by, and
     the sessions reported: under a contrast those in either state alone."""
@@ -787,6 +909,7 @@ def _cell(
         mde_bp=mde,
         signal_age_median_s=float(np.median(ages)) if len(ages) else 0.0,
         signal_age_max_s=float(np.max(ages)) if len(ages) else 0.0,
+        hold=hold,
     )
     return Cell(
         measure=index,

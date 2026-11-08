@@ -1,5 +1,5 @@
 id: condition
-meaningful_when: "When a follower's session returns are thesised to differ while a declared signal meets a declared comparison: per session, the follower's return from the entry the test names to its exit, a session's first or last point, possibly across one session boundary, with the position decided from the signal as of latency_ms before the entry; demeaned on declared calendar controls; one position at a time against the round trip the venue model charges; judged by session sign flips summed into declared blocks or by every circular shift of the positions against the returns."
+meaningful_when: "When a follower's session returns are thesised to differ while a declared signal meets a declared comparison: per session, the follower's return from the entry the test names to its exit, a session's first or last point, possibly across one session boundary, with the position decided from the signal as of latency_ms before the entry; demeaned on declared calendar controls; one position at a time against the round trip the venue model charges; judged by session sign flips summed into declared blocks or by every circular shift of the positions against the returns; and, with benchmark: hold, the positions' Sharpe net of their round trips against holding the follower, judged by the same shifts."
 ranges:
   tests: [1, 64]
   hold_sessions: [1, 252]
