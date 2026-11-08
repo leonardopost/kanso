@@ -418,8 +418,9 @@ the drift it gave up. A `condition` measure that declares `benchmark: hold` asks
 cell beside its contrast — of a test held a day or more, the question a lane scored on
 `wf_sharpe_vs_hold` is asked, whose hold never sells — and a verdict then judges the cell by it
 in place of the contrast's p and sign. The positions make, each held session, their period's simple
-return times their side — the equity change of one unit of notional, what a card's Sharpe is of —
-less the fills they made there: a position's entry on its first session
+return times their side — the change in equity of one unit of notional re-sized each session, a
+fixed-notional series where a card's hold keeps its quantity (`docs/backlog.md` row 87) — less the
+fills they made there: a position's entry on its first session
 and its exit on its last, the fills its round trip is, crossing the touch on a quoted follower.
 The hold makes the follower's close-to-close simple return each of the same sessions, whatever the
 test's entry and exit — a hold is long overnight too, so an open-to-close test is set against the
@@ -429,8 +430,8 @@ state undefined, a session another cell of a circular family lacks — the round
 positions pay there too, so a cell held long close to close throughout is the hold, fill for
 fill. A simple return and not the log return times the side, because minus a log return is not what
 a short makes: −log(1 + r) exceeds −r by about r²/2 where a long's log(1 + r) falls short of r by as
-much, so a hold long throughout would be set against shorts credited about r² a session — 2 bp a
-short session where a session's return has a spread of 1.4%. Charged once while the positions paid at every gap, such a cell read below its own hold:
+much, so a hold long throughout would be set against shorts credited about r² a session and flat
+sessions about r²/2 — 2 bp a short session where a session's return has a spread of 1.4%. Charged once while the positions paid at every gap, such a cell read below its own hold:
 by 0.17 of Sharpe in a family where the other follower lacked one session in ten. Each is
 scored by its annualised Sharpe, at a zero rate and one degree of freedom, its periods a year
 the held sessions a year of the window, and the cell by the difference, reported with its
@@ -445,7 +446,7 @@ what that exposure makes at random: close to close, `null_mean` is below zero wh
 follower rose and the positions were not long; open to close the positions earn the session
 alone and the hold the night too, and a session's own Sharpe above the hold's puts it above
 zero — measured on `judge` long or flat at 0.8 exposure, a session drifting 10 bp on 80 and a
-close-to-close 5 on 100, above zero in 35 of 40 seeds. The null is not symmetric about zero, so
+close-to-close 5 on 100, above zero in 34 of 40 seeds. The null is not symmetric about zero, so
 sign flips cannot judge it and `benchmark` is refused under `sign_flip`; and its centre and
 spread differ from cell to cell, so a family is judged on each cell's difference studentised by
 its own, `(difference − null_mean) / null_sd`, a single-step studentised max in the manner of

@@ -20,7 +20,7 @@ drift it gave up.
    notional, re-sized to one unit each session — and not its log return times the side, because
    minus a log return is not what a short makes: −log(1 + r) exceeds a short's −r by about r²/2
    where a long's log(1 + r) falls short of r by as much, so a hold, long throughout, would be
-   set against shorts credited about r² a session each.
+   set against shorts credited about r² a session each and flat sessions about r²/2.
 2. **The hold's, on the same sessions.** Buying the follower and keeping it earns, each held
    session, its close-to-close simple return — from the previous session's last point it has, or the
    session's own first on the first session it has — whatever the test's entry and exit, since
@@ -31,9 +31,10 @@ drift it gave up.
    trip; where the cell's sessions do have one — a state undefined, a session another cell of a
    circular family lacks — the hold pays at the gap as the positions do, so a cell held long
    close to close throughout is the hold, fill for fill.
-3. **Sharpe, as the toolbox defines it.** Of equity changes, as a card's is, annualised at a
-   zero risk-free rate, `mean / sd × √A` with one degree of freedom, `A` the held sessions per
-   year of the window (`kanso.criteria.quantities`); zero for a series that does not vary.
+3. **Sharpe, as the toolbox defines it.** Of fixed-notional equity changes — a card's hold keeps
+   its quantity instead (`docs/backlog.md` row 87) — annualised at a zero risk-free rate,
+   `mean / sd × √A` with one degree of freedom, `A` the held sessions per year of the window
+   (`kanso.criteria.quantities`); zero for a series that does not vary.
    `difference` is the positions' less the hold's, and its error is the paired one by Memmel's
    correction of Jobson–Korkie, widened for serial correlation, as `wf_sharpe_vs_hold`'s is.
 4. **Judged by every circular shift of the positions.** The hold does not move under a shift,
