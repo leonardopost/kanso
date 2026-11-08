@@ -100,8 +100,8 @@ class Book:
     `returns` is each period's log return, which `net` books as its simple return; `joins`
     whether a position held into the session from the held session before runs on, its periods
     contiguous; `buy_in`, `sell_in`, `buy_out` and `sell_out` one taker fill at the period's
-    entry and at its exit; `hold` what the hold made each session net of its round trip; `folds`
-    each session's calendar fold.
+    entry and at its exit; `hold` what the hold made each session net of its round trips, one
+    a run of contiguous sessions; `folds` each session's calendar fold.
     """
 
     returns: np.ndarray
