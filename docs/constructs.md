@@ -387,8 +387,8 @@ the band they strike from the expectation's value — a difference — and its p
 A screen asks the same question of a daily state before a lane exists: a `condition` measure that declares
 `benchmark: hold` sets each cell's positions against holding its follower by the difference of
 the two Sharpes over the window, with the paired error this objective's is, the difference fold
-by fold beside it, and judges it by circular shifts of the positions (`docs/concepts.md`,
-Screen).
+by fold beside it, and judges it against random timing by circular shifts of the positions and
+against the hold by the difference over that error (`docs/concepts.md`, Screen).
 
 ## Adding one
 

@@ -444,7 +444,8 @@ zero — measured on `judge` long or flat at 0.8 exposure, a session drifting 10
 close-to-close 5 on 100, above zero in 35 of 40 seeds. The null is not symmetric about zero, so
 sign flips cannot judge it and `benchmark` is refused under `sign_flip`; and its centre and
 spread differ from cell to cell, so a family is judged on each cell's difference studentised by
-its own, `(difference − null_mean) / null_sd`, the step of Romano and Wolf: a cell's p is
+its own, `(difference − null_mean) / null_sd`, a single-step studentised max in the manner of
+Romano and Wolf, the spread read off the null itself: a cell's p is
 one-sided and family-wise, `(1 + R) / (shifts + 1)`, R the shifts in which the family's largest
 studentised difference reaches the cell's — with every shift taken, the share of the N
 rotations. Ranked by the largest raw difference instead, one cell's chance level set every
@@ -460,9 +461,9 @@ also judged against zero by its own paired error: `p_above_hold` is the one-side
 `difference / difference_se`, times the family's cells holding any session — Bonferroni, valid
 however the cells move together — capped at one, and a pass needs both p and `p_above_hold` at
 or under `alpha`, beside `min_sessions`, the margin and the events a day. Measured on `judge`
-over 300 seeds from 0, a cell long or flat at half exposure in runs of ten over 1,000 sessions,
-its edge sized so its expected Sharpe is the hold's: its timing p was at or under 0.05 in 84.3%
-of seeds, and a verdict that took the difference's sign for the second clause passed 37% of them
+over 300 seeds from 0, a cell long or flat at half exposure in runs averaging twenty over 1,000
+sessions, its edge sized to give the hold's Sharpe to first order — its difference averaged
+−0.11, sd 0.35: its timing p was at or under 0.05 in 84.3% of seeds, and a verdict that took the difference's sign for the second clause passed 37% of them
 as beating the hold; with `p_above_hold`, 1.3%. The timing p's level holds as the contrast's
 does — measured on `judge` over 250 sessions, contrast positions independent of returns that
 drift 5 bp a session on a noise of 100, 2.5 bp a fill, every shift taken, 2,000 seeds from 70000:

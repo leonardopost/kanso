@@ -48,8 +48,9 @@ drift it gave up.
    two taken over every alignment the null takes, the observed among them, so the observed is
    standardised exactly as every shift is. A cell's p is one-sided and family-wise, its z's rank
    against the family's largest z under each shift: `(1 + #{shifts whose largest z reaches this
-   cell's}) / (shifts + 1)` — Romano and Wolf's studentised step, where the largest raw
-   difference would let one cell's chance level set every other's bar. With every shift from 1
+   cell's}) / (shifts + 1)` — a single-step studentised max in the manner of Romano and Wolf,
+   the spread read off the null itself, where the largest raw difference would let one cell's
+   chance level set every other's bar. With every shift from 1
    to N − 1 taken, when they are no more than `[screen] draws`, the observed alignment's rank
    among the N is uniform when every rotation is as likely as it. A cell whose differences do
    not vary — held long throughout, every alignment the same — has no spread to judge and reads
@@ -110,7 +111,7 @@ class Book:
 @dataclass(frozen=True)
 class Judged:
     """Per cell of one family: the Sharpes, their difference, p, and the mean and spread of
-    its difference over every alignment taken, `varying` where that spread is not zero; the
+    its difference over every alignment taken, `varying` where that spread is above rounding; the
     family's largest studentised difference under each shift; each cell's net a session."""
 
     sharpe: np.ndarray
