@@ -241,8 +241,12 @@ datasets   1 · reproducible
 instrument a2b290ce0b0542b34d8cd512bd338c72615c35201b4e0f5e13d7d8e9fac9b9b1
 ```
 
-A dataset a snapshot pins is immutable: an overlapping write is refused, and `data backfill`
-and `data sync` write successor datasets rather than editing one. The instrument checksum
+A dataset a snapshot pins is never rewritten unasked: an overlapping write is refused,
+`--replace` included, and `data backfill` and `data sync` write successor datasets rather than
+editing one. Only a load naming it in `--supersedes` takes its place, and over the same span
+that successor keeps its id — so it rewrites the pinned dataset under that id, and a snapshot
+taken before it still covers the series until `kanso data snapshot` takes a newer one
+(`docs/backlog.md` row 232). The instrument checksum
 is in the snapshot for the same reason as the data — a tick size reassigned next year must
 not silently rewrite a card that was measured under the old one — and it is read back where
 a run is pinned. The store is resolved before it is frozen: a snapshot over instrument data
@@ -313,7 +317,9 @@ declared — is marked `clock_bound`: it may be the difference between the clock
 
 **A response is set against the hurdle a card would pay.** A `response` cell fires on a
 trigger — a move of at least `move_bp` within `within`, or a z-score over a trailing `lookback`,
-cut at the session's open because the session is the unit — and enters the follower at its first point after the declared latency, exits at its first
+cut at the session's open because the session is the unit, and taken on the levels less the
+session's first, since a log price's square summed over millions of quotes swamps a window's
+spread of a few basis points — and enters the follower at its first point after the declared latency, exits at its first
 point after the horizon, one position at a time. Its gross is what a taker would have made — a
 quoted follower buys the ask and sells the bid it shows — and its hurdle is the round trip the
 venue model charges, struck by the runner's own `fill_cost`: commission, slippage, the sale's
@@ -343,6 +349,130 @@ The result adds the fitted beta, how many positions closed, stopped and were cap
 median and 90th percentile of the holds — how long the rule holds is something the screen
 measures rather than something it is told.
 
+**A condition is a state read off a declared signal.** A `condition` cell asks whether a
+follower's session returns differ while a signal — one numeric field of a registered custom type
+the workspace holds, declared under `signals` — meets a declared comparison. Each of its tests
+names the signal, the favoured state (`when`), under a contrast the state it is set against (a
+disjoint comparison, or `rest`), an `entry` and an `exit` at a session's first or last point, a
+hold and a side. Its periods are named for their exit session, and `close → close`, `open →
+open` and `close → open` run from the follower's previous session into this one — the one
+measure that takes a return across a session boundary — while no day between them is one the
+market opened by the follower's calendar on file; with no calendar on file, or between days
+outside the span it holds, nothing is checked, and every such period is scored. The position is
+decided from the signal as of `latency_ms` before the entry: the newest point published by then, never one after, and none before the window opened, so a
+session before the signal's first point holds no value rather than a zero. One position at a
+time: re-decided every entry under `while`, or held a fixed number of sessions from an onset,
+an onset inside a hold skipped and counted. The returns are demeaned once a cell by least
+squares on declared calendar facts — weekday and month dummies, a declared turn of the month,
+the week of the third Friday, the session before a closure, read off the calendar on file —
+and the workspace's own 0/1 controls, each a point every session read as of the period's exit:
+its `ts_init` at or before that exit and its `ts_event` on the session's date in the clock's
+zone, which west of Greenwich a table stamped at midnight UTC on its date is not. The state is
+not in the regression, so the null never refits it; the R² of the state on that design is
+reported — under a contrast, over the sessions in either state.
+Against `rest` the estimate is exactly the state's least-squares coefficient in a regression on
+it and the design, β, times one less that R², and long or flat exactly s·β·f(1 − f)·(1 − R²) at
+exposure f and side s; against a comparison, whose residuals were fitted on the sessions in
+neither state too, the identity is approximate, and dividing `mean` by one less `control_r2`
+overstates the move — with month dummies and many sessions in neither state by half or more as
+often as not: measured on twenty states a year long under month dummies, about half the sessions
+in neither, a noise-free move came out a median 1.60 times itself times one less `control_r2`,
+and 1.03 to 7.28 times. Long or flat, `mean` is the excess a session; under a contrast it is the
+mean long less the mean short, signed by the side, so a correctly signed effect is positive
+under either.
+The null ranks |t|, so p is two-sided, and a verdict passes a cell only with its `mean` above
+zero — unless its measure declares a benchmark, below: one whose p clears `alpha` at or under zero fails as against the declared side, which
+over a hold of several sessions its margin would not show, a round trip's gross being mostly the
+follower's drift. Either way the session values the null and `se` read weigh each return so the
+weights sum to zero — long or flat, the position less the cell's mean position. A position times its residual alone would overstate `se` by 1/√(1 − f) at exposure f,
+as though the residuals' mean had not been fitted: measured on a thousand drifting followers held
+half the time, sign flips of it put 1.3% of p at or under 0.05. Under `circular` the weights are
+residualised on the design as the returns were, so `se` is the estimate's own, and every shifted
+position is residualised afresh, so each shift is judged by the statistic the observed alignment
+is; weights not residualised would overstate `se` by about 1/√(1 − R²), as though the design
+shared nothing with the state — measured on a state with an R² of 0.52 on a weekday design, 1.47
+times the estimate's spread over 2,000 redraws, against 1.01 residualised. Under `sign_flip` they
+are not: residualised, a month's block sums share its fitted mean across the blocks it spans and
+spread less than their total does, so the null would run above its level — measured with weekday
+and month dummies over 250 sessions in blocks of five, contrast positions in runs averaging ten,
+6.95% of p at or under 0.05, against 3.05% on the weights alone. So under `sign_flip`, `se` and
+`mde_bp` read the weights alone, and where the design shares the state that overstates the
+estimate's own and understates `t` — against `rest` and long or flat by about
+1/√(1 − `control_r2`), against a comparison by less, `control_r2` being taken over the sessions
+in either state while the residuals are fitted on every held session (measured on a state with
+a `control_r2` of 0.541 on a weekday design over 500 sessions, one in five in neither state, `se`
+was 1.32 times the estimate's spread over 2,000 redraws, where 1/√(1 − 0.541) is 1.48; long or
+flat, at an R² of 0.522, 1.47 where it is 1.45). That does not make `se` or p conservative: the
+block sums decide both, and under month dummies, for a state that changes sign inside the month,
+they understate the estimate's spread on either weighting — below. Under a
+contrast judged by circular shifts a session in neither state holds a value too — its
+residualised weight, what the design shares with the contrast, times its residual — and none
+with the intercept alone; `sessions` counts the sessions in either state either way.
+Each position — a run of sessions, joined across a boundary only when its periods are contiguous — is charged one round trip struck at its entry and its
+exit, so a state held for days close to close pays once and open to close pays daily.
+
+**A condition can be set against holding its follower.** A contrast says whether the follower's
+returns differ between two states; it does not say whether trading them beats owning the
+follower, which a strategy that is short or flat where the follower rose has to beat by more than
+the drift it gave up. A `condition` measure that declares `benchmark: hold` asks that of every
+cell beside its contrast — of a test held a day or more, the question a lane scored on
+`wf_sharpe_vs_hold` is asked, whose hold never sells — and a verdict then judges the cell by it
+in place of the contrast's p and sign. The positions make, each held session, their period's log
+return times their side less the fills they made there: a position's entry on its first session
+and its exit on its last, the fills its round trip is, crossing the touch on a quoted follower.
+The hold makes the follower's close-to-close return each of the same sessions, whatever the
+test's entry and exit — a hold is long overnight too, so an open-to-close test is set against the
+hold it would replace — booked as a position of one held throughout and joined across contiguous
+sessions as any position is: one round trip over held sessions with no gap, and at a gap — a
+state undefined, a session another cell of a circular family lacks — the round trip the
+positions pay there too, so a cell held long close to close throughout is the hold, fill for
+fill. Charged once while the positions paid at every gap, such a cell read below its own hold:
+by 0.17 of Sharpe in a family where the other follower lacked one session in ten. Each is
+scored by its annualised Sharpe, at a zero rate and one degree of freedom, its periods a year
+the held sessions a year of the window, and the cell by the difference, reported with its
+paired error by Memmel's correction of Jobson–Korkie, widened for serial correlation, the
+hold's Sharpe, the mean excess a session and the difference fold by fold.
+
+The hold does not move under a shift, so the measure's own circular shifts redraw the positions'
+Sharpe alone, their fills recomputed where the rotated runs begin and end. Rotation keeps how
+long the positions are short and flat, so a cell's differences over every alignment the null
+takes — their mean `null_mean` and spread `null_sd`, the observed alignment among them — are
+what that exposure makes at random: close to close, `null_mean` is below zero wherever the
+follower rose and the positions were not long; open to close the positions earn the session
+alone and the hold the night too, and a session's own Sharpe above the hold's puts it above
+zero — measured on `judge` long or flat at 0.8 exposure, a session drifting 10 bp on 80 and a
+close-to-close 5 on 100, above zero in 35 of 40 seeds. The null is not symmetric about zero, so
+sign flips cannot judge it and `benchmark` is refused under `sign_flip`; and its centre and
+spread differ from cell to cell, so a family is judged on each cell's difference studentised by
+its own, `(difference − null_mean) / null_sd`, a single-step studentised max in the manner of
+Romano and Wolf, the spread read off the null itself: a cell's p is
+one-sided and family-wise, `(1 + R) / (shifts + 1)`, R the shifts in which the family's largest
+studentised difference reaches the cell's — with every shift taken, the share of the N
+rotations. Ranked by the largest raw difference instead, one cell's chance level set every
+other's bar: beside a cell long or flat a tenth of the time on a follower falling 20 bp a
+session, a contrast with a planted edge of 15 bp over 250 sessions passed at 0.05 in 8.0% of
+seeds, where alone it passed in 73.5% (200 seeds from 0). Studentised, on the same seeds, it
+passes in 64.5% in the family against 64.0% alone at 0.025, what two cells cost by Bonferroni,
+and beside a long-or-flat test of no edge on its own follower in 65.0% against 64.0%.
+
+That p says the positions beat random timing, not that they beat the hold: a strategy whose
+Sharpe equals the hold's can beat random timing that gives up the drift. So the difference is
+also judged against zero by its own paired error: `p_above_hold` is the one-sided normal p of
+`difference / difference_se`, times the family's cells holding any session — Bonferroni, valid
+however the cells move together — capped at one, and a pass needs both p and `p_above_hold` at
+or under `alpha`, beside `min_sessions`, the margin and the events a day. Measured on `judge`
+over 300 seeds from 0, a cell long or flat at half exposure in runs averaging twenty over 1,000
+sessions, its edge sized to give the hold's Sharpe to first order — its difference averaged
+−0.11, sd 0.35: its timing p was at or under 0.05 in 84.3% of seeds, and a verdict that took the difference's sign for the second clause passed 37% of them
+as beating the hold; with `p_above_hold`, 1.3%. The timing p's level holds as the contrast's
+does — measured on `judge` over 250 sessions, contrast positions independent of returns that
+drift 5 bp a session on a noise of 100, 2.5 bp a fill, every shift taken, 2,000 seeds from 70000:
+one cell in runs averaging 20 put 5.30% of p at or under 0.05 and 9.75% at or under 0.10; a
+family of two, 5.25% and 9.95%; runs averaging 5 on a drift of 10, 5.20% and 10.10%; and a
+family of two over a mean that wanders as an AR(1) of coefficient 0.99 and stationary standard
+deviation 0.3 of the noise's, 4.90% and 10.40% — all inside binomial 99.9% bounds of the 4.8% and
+10.0% its 250 sessions allow, 3.2–6.4% and 7.8–12.2%.
+
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
 `basket` is a weighted sum of its legs' log prices, a `spread` is `log long − beta log short`,
 and a `gap` is one asset's price on two venues as a fraction of the second. Each is live only
@@ -359,7 +489,10 @@ adapter that declares it serves it, and a snapshot taken; data held but frozen b
 frozen; an instrument no definition resolves is refused, and the remedy is to resolve it — under
 the key the reference adapter files it by, which for a vendor whose keys carry no venue is the
 id's symbol, or by a manual entry; a series that resolves and that no adapter serves is refused,
-and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks).
+and the remedy is to build one (`docs/adapters.md`, the three declarations a screen asks). A
+signal — a registered custom type's numeric field, filed under an instrument — is a series of its
+own and takes the same steps; a workspace usually holds one as a file, so its remedy names the
+`csv_parquet` load first.
 
 **The session is the unit of replication, and the family is the lattice.** A cell's evidence is
 one value per session — for `lead_lag`, the correlation of one series' returns with another's at
@@ -367,33 +500,88 @@ a lag, on a grid — reported as the mean across sessions and the standard error
 Each measure's cells are judged together by max-T over session sign flips: one shared vector of
 signs per draw, `[screen] draws` draws, seeded from the screen's bytes, the snapshot and the
 measure's index. So forty lags of one pair are one family, not forty chances, and the same pins
-give the same numbers. Every result states the one assumption that rests on: that sessions are
-roughly independent of each other. Lag zero is refused: the same instant's co-movement is not a
-lead.
+give the same numbers. Every result states, measure by measure, the assumption that rests on:
+for the session measures, that sessions are roughly independent of each other. A condition's
+position persists for runs of sessions, so its null is declared with it: its values summed into
+blocks of `block` sessions and sign-flipped (`sign_flip`), which assumes the blocks roughly
+independent, or its positions shifted round the calendar against its residuals, one shift
+shared by every cell (`circular`), which keeps the positions' own runs and assumes only that,
+with no relationship, every shift is as likely as the observed alignment. Blocks are only
+roughly so: with few of them and a state persisting about a block's length the null runs
+slightly above its level — over 250 sessions in 25 blocks of 10, long or flat on runs averaging
+10, 5.3% of p fell at or under 0.05 and 10.6% at or under 0.10, against 4.7% and 9.6% with
+positions independent session to session. Month dummies over a window of a year or two move it
+either way, by how the state falls inside the month: each month's residuals sum to zero, so two
+block sums inside one month covary with the sign opposite to their weights'. Where the
+weights keep one sign across a month's blocks the sums are anti-correlated and the null runs
+below its level — the 3.05% above. Where the state changes sign inside the month at about a
+block's length — its first half, the expiry week, a cycle of about twenty sessions — they are
+positively correlated, and the null runs above its level on the weights alone or residualised,
+with `se` understating the estimate's spread and a `control_r2` near zero that gives no warning:
+contrasting the first half of each month with the rest over 2025 in blocks of 10, `control_r2`
+0.003, 10.7% of p fell at or under 0.05 and 16.9% at or under 0.10 over 1,500 seeds, against
+5.5% and 11.0% with `demean: []`, and `se` was 0.82 times the estimate's spread (0.90 in blocks
+of five). Exactly, the block sums' expected sum of squares is 0.70 of the estimate's variance
+there under either weighting, and the shortfall fades as the window grows: 0.88 over 2024–2025,
+0.98 over 2016–2025. Judge such a state by `circular`, which held its level on it: 5.07% of p at
+or under 0.05 and 10.76% at or under 0.10 over 10,000 seeds from 90000, inside binomial 99.9%
+bounds of the 4.8% and 10.0% its 250 sessions allow. A shift rotates one
+index, so a circular family holds only the N sessions every one of its cells holding any holds:
+a cell holding only some would have its positions shifted off its returns, keep fewer values
+than it observed on most shifts, and pull the family's maxima down — measured on two contrast
+cells over 200 sessions, one holding the last 60, 12.8% of the smallest p fell at or under 0.10,
+against 9.6% when both held all 200. A cell that held more gives the rest up, from its
+residuals to its round trips, so a follower with sessions the others lack keeps them only in a
+measure of its own. The null takes every shift from 1 to N − 1, the whole group of rotations,
+so the observed alignment's rank among the N is uniform and its p is exact as a level, as far
+as the residuals are exchangeable under rotation; a set that left out the shifts near the
+observed alignment would read p too small — measured on one contrast cell with runs averaging 40
+sessions over 250, leaving out every shift under 60 put 2.9% of p at or under 0.01. A shift of a
+session or two nearly re-aligns a persistent position and so nearly reaches its |t|:
+persistence costs the null power, never level. Lag zero is refused: the same instant's
+co-movement is not a lead.
 
 **Thresholds are declared, never defaulted.** A screen with no `verdict` measures everything and
 judges nothing. Sign flips over S sessions can give no p below 2^(1−S) — the observed signs and their
 negation both reach the observed t. When the 2^S vectors are no more than the draws, each is taken
 once and p is exact; when they are more, the draws estimate it, and an estimate that fell below
 2^(1−S) reads the floor. So a verdict whose `alpha` is below what its `min_sessions`
-allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
+allow is refused at validation (exit 3): five sessions cannot clear an alpha of 0.05. A
+condition's null has its own floor, refused the same way: 2^(1−J) over the J blocks
+`min_sessions` fill under `sign_flip`, and 1/`min_sessions` under `circular`, the floor of a
+family of `min_sessions` sessions — the fewest a cell is judged on, so the worst case, since a
+family holding more has a lower one. Beside a verdict, a condition declaring `mde_power` reports
+the least |t| its null passes at `alpha` and the effect that would reach it at that power, in
+`mean`'s units: a detection threshold, never a forecast. Long or flat, `mean` is s·β·f(1 − f) ·
+(1 − R²), so at an exposure of a half and no calendar shared the move a session while the state
+holds would need to be about four times `mde_bp`. Under `circular` it is read off maxima the observed data
+make, and a shift of a session or two nearly re-aligns a persistent position, so a real effect
+raises them: the threshold is conditional on the data seen, larger the larger the effect —
+measured over 1,000 sessions with runs averaging 40, the median critical |t| at an `alpha` of
+0.05 was 1.85 with nothing planted, 2.17 with 0.2 standard deviations long less short and 2.78
+with 0.4. One with a verdict judges each cell `pass`, `fail` or `thin` — too few sessions to
 judge — and the verdict is part of the file's bytes, so loosening it after reading a number is a
 new screen with a new result, beside the old one.
 
 **A result is immutable.** It is keyed by the screen's bytes, the snapshot and the measure
-library's version; the same three again return it as it was.
+library's version; the same three again return it as it was. The version is the package's and
+a digest of the library's files and of the screen package's own modules, so a build that
+measures differently — a fix shipped before the version moves, a development build — measures
+again rather than being handed what the old arithmetic recorded.
 
 **The embargo holds.** A free screen's window is refused when it meets, for any registered
-hypothesis holding one of its instruments, the span from that hypothesis's certification start
+hypothesis holding one of its instruments — a leg's, or one a signal is filed under — the span from that hypothesis's certification start
 less its embargo to its certification end: a screen chooses ideas, and the data that judges an
 idea may not have chosen it. A bound screen reads its own hypothesis's research window and
 nothing else. The embargo binds the other way as well: `kanso hyp validate`, and so `hyp add`,
 refuses a hypothesis whose certification window, with its embargo, meets a window a recorded
-screen read for one of its instruments. Whichever arrives first, the data that chose an idea
-never judges it.
+screen read for one of its instruments, a signal's included. Whichever arrives first, the data
+that chose an idea never judges it.
 
 **From a cell to a lane.** `kanso screen draft` writes one `response` or `catch_up` cell as a
-draft hypothesis, registering nothing: its research window is the window the screen read, its
+draft hypothesis, registering nothing (a `condition` cell is refused, because its seed would
+read a custom type no template carries, and its hypothesis is written with `kanso hyp new`).
+The draft's research window is the window the screen read, its
 certification window is the operator's and starts no sooner than the embargo after it, its
 `program.md` carries the cell's numbers, and its `strategy.py` is the cell's own rule as a
 sleeve — a catch-up's with its fitted beta, its entry, its close, its stop and its cap. So the lane's first act, the baseline card, re-measures the screened cell through the

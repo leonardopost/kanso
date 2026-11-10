@@ -733,3 +733,84 @@ def paired(runner: CliRunner, loaded: Path) -> Path:
     )
     assert at(runner, loaded, "data", "snapshot").exit_code == 0
     return loaded
+
+
+TAPE_FIRST = date(2024, 1, 1)
+TAPE_LAST = date(2024, 6, 30)
+"""The state tape's days: one point a calendar day, weekends too, published at 13:00 UTC."""
+
+
+def tape_level(day: date) -> float:
+    """The tape's level on a day: a slow wave, so its sign holds for runs of days."""
+    import math
+
+    return round(math.sin(day.toordinal() / 2.7), 4)
+
+
+def tape_flag(day: date) -> int:
+    """The tape's flag on a day: one day in five."""
+    return 1 if day.toordinal() % 5 == 0 else 0
+
+
+@pytest.fixture(scope="session")
+def _taped(tmp_path_factory: pytest.TempPathFactory, _prepared: Path) -> Path:
+    """The prepared workspace with a second hourly name and the state tape filed under both.
+
+    The tape is the suite's synthetic custom type, registered by a workspace extension and
+    loaded from a file, as a workspace's own series would be.
+    """
+    from tests.screen.conftest import TAPE, TAPE_ID
+
+    runner = CliRunner()
+    root = tmp_path_factory.mktemp("taped") / "ws"
+    shutil.copytree(_prepared, root, symlinks=True)
+    entries = yaml.safe_load((root / "instruments.yaml").read_text(encoding="utf-8"))
+    entries[OTHER] = {**entries[INSTRUMENT], "nautilus_id": OTHER}
+    (root / "instruments.yaml").write_text(yaml.safe_dump(entries), encoding="utf-8")
+    spec = root / "other.yaml"
+    spec.write_text(yaml.safe_dump({**SPEC, "instruments": ["OTHR"], "seed": 11}), encoding="utf-8")
+    assert at(runner, root, "data", "instruments", "resolve", "--as-of", str(FIRST)).exit_code == 0
+    assert at(runner, root, "data", "load", "--loader", "synthetic", "--spec", spec).exit_code == 0
+    (root / "kanso_ext").mkdir(exist_ok=True)
+    (root / "kanso_ext" / f"{TAPE_ID}.py").write_text(TAPE, encoding="utf-8")
+    rows = ["t,level,flag,switch,label"]
+    day = TAPE_FIRST
+    while day <= TAPE_LAST:
+        switch = "true" if tape_flag(day) else "false"
+        rows.append(f"{day} 13:00:00,{tape_level(day)},{tape_flag(day)},{switch},x")
+        day = date.fromordinal(day.toordinal() + 1)
+    (root / "tape.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    columns = {
+        "ts_event": "t",
+        "level": "level",
+        "flag": "flag",
+        "switch": "switch",
+        "label": "label",
+    }
+    files = [
+        {
+            "path": str(root / "tape.csv"),
+            "instrument": symbol,
+            "venue": VENUE,
+            "type": TAPE_ID,
+            "columns": columns,
+        }
+        for symbol in (SYMBOL, OTHER.split(".")[0])
+    ]
+    tape = root / "tape.yaml"
+    tape.write_text(
+        yaml.safe_dump({"loader": "csv_parquet", "timezone": "UTC", "files": files}),
+        encoding="utf-8",
+    )
+    loaded = at(runner, root, "data", "load", "--loader", "csv_parquet", "--spec", tape)
+    assert loaded.exit_code == 0, loaded.stdout
+    assert at(runner, root, "data", "snapshot").exit_code == 0
+    return root
+
+
+@pytest.fixture
+def taped(_taped: Path, tmp_path: Path) -> Path:
+    """A fresh copy of the workspace holding the state tape."""
+    root = tmp_path / "ws"
+    shutil.copytree(_taped, root, symlinks=True)
+    return root

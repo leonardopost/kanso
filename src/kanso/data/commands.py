@@ -26,7 +26,9 @@ at a time (`catalog.write`, `WRITE_BATCH`), so memory follows the batch and not 
 `load` that fails on a later chunk leaves the chunks before it written, each with its
 manifest, and its refusal names the day it stopped on and the backfill that resumes there.
 
-A dataset a snapshot pins is immutable, which the catalog enforces at the write. Backfill
+A dataset a snapshot pins is refused an overlapping write, which the catalog enforces at the
+write, and only a load naming it in `supersedes` takes its place — under its own id over the
+same span, which the snapshots before it still cover (`docs/backlog.md` row 232). Backfill
 and sync never rewrite one: a backfilled chunk covers days no held dataset covers, and a
 sync writes a successor dataset recording `supersedes`.
 
@@ -80,6 +82,7 @@ from kanso.data.manifest import (
 )
 from kanso.data.snapshot import Snapshot
 from kanso.errors import KansoError, PreconditionError, ValidationError
+from kanso.schemas.yamlio import check_keys
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -225,7 +228,8 @@ def _dataset_payload(manifest: Manifest) -> dict[str, Any]:
 
 
 def read_spec(path: Path) -> dict[str, object]:
-    """The loader spec at `path`, refused when it is not a YAML mapping."""
+    """The loader spec at `path`, refused when it is not a YAML mapping, or when a key of any
+    mapping in it is one YAML read as anything but text, as in every workspace file."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -239,6 +243,7 @@ def read_spec(path: Path) -> dict[str, object]:
             f"{path}: a loader spec is a mapping, not {type(document).__name__}",
             remedy="write the spec as `loader: <id>` and the keys that loader documents",
         )
+    check_keys(document, str(path))
     return document
 
 
@@ -326,7 +331,8 @@ def load(
     overlapping write into unpinned data needs `replace`, and one into a dataset a
     snapshot pins is refused outright unless `supersedes` names that dataset: the new one
     then takes its place, recorded as its successor, and every snapshot naming the old one
-    stops supporting a certification. A spec that discovers several datasets may supersede
+    stops supporting a certification, only when the successor's id differs
+    (`docs/backlog.md` row 232). A spec that discovers several datasets may supersede
     only the one named; the rest are written as any load writes them.
 
     A loader declaring `chunk_days` has each discovered dataset written as one dataset per

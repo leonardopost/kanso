@@ -3,7 +3,8 @@
 The order is the contract.
 
 1. **Validate** the file (`kanso.screen.files`), and refuse a free window that meets a
-   registered certification span (`kanso.screen.embargo`) before anything is read.
+   registered certification span on any instrument it reads, a signal's too
+   (`kanso.screen.embargo`), before anything is read.
 2. **Get the data.** A series no adapter serves is refused, naming the venue and type to
    build an adapter for; every fetchable one is fetched through the adapter that serves it
    and a snapshot taken (`kanso.screen.data`). Nothing is skipped.
@@ -14,9 +15,14 @@ The order is the contract.
 4. **Measure**, one session at a time: every leg of the session is read once through the
    runner's reader, every measure takes its cells' values from it, and the session is let go.
    What a measure fits first — a spread's hedge, a catch-up's response — is fitted before, on
-   the sessions of its fit span.
-5. **Judge** each measure's cells across sessions with its max-T null (`kanso.screen.nulls`),
-   and, when the file declares a verdict, each cell against it.
+   the sessions of its fit span. A condition keeps each follower's open and close of the
+   session, and its signals are read afterwards in a pass of their own, a day at a time, as of
+   each decision (`kanso.screen.condition`). A calendar control no calendar on file can read is
+   refused once the followers' definitions are held — after step 2's fetch, which may already
+   have backfilled a series and frozen a snapshot, and before the pin or any session is read.
+5. **Judge** each measure's cells across sessions with its max-T null (`kanso.screen.nulls`) —
+   session sign flips, or, for a condition, the null it declares — and, when the file declares
+   a verdict, each cell against it. Each measure's assumption is stated in the result.
 6. **Record** the result in `state.db`, render it beside the screen, and append `screened`.
 
 No model is called anywhere here.
@@ -36,12 +42,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 import numpy as np
 
 from kanso.data.catalog import open_catalog
+from kanso.data.types import BUILTIN_TYPES
 from kanso.errors import PreconditionError
 from kanso.schemas import DateWindow
 from kanso.schemas.screen import (
     CatchUp,
     CatchUpStats,
     Cell,
+    Condition,
     LeadLag,
     Response,
     ResponseStats,
@@ -54,6 +62,7 @@ from kanso.schemas.screen import (
 )
 from kanso.screen import (
     catch_up,
+    condition,
     data,
     embargo,
     fit,
@@ -64,6 +73,7 @@ from kanso.screen import (
     records,
     response,
     sessions,
+    signals,
 )
 from kanso.screen.files import validate
 from kanso.screen.library import screen_version
@@ -73,9 +83,10 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.workspace import Workspace
 
 ASSUMPTION: Final = "sessions are roughly independent of each other"
+"""What a session measure's inference rests on, stated in the result; a condition states its
+null's own (`kanso.screen.condition.assumption`)."""
 
 NS_PER_SECOND: Final = 1_000_000_000
-"""What every result's inference rests on, stated in the result."""
 
 GIB: Final = 1024**3
 _MAXRSS_BYTES: Final = 1 if sys.platform == "darwin" else 1024
@@ -104,7 +115,10 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
     fetched = data.fetch(ws, store, screen, window, plans)
     catalog = open_catalog(ws)
     held = sessions.definitions(catalog, screen)
-    snapshot = pin.covering(ws, store, screen, window, held)
+    condition.refuse_uncalendared(screen, held, window)
+    snapshot = pin.covering(
+        ws, store, screen, window, {**signals.definitions(catalog, screen), **held}
+    )
     version = screen_version()
     stored = records.stored(store, valid.sha, snapshot.snapshot_id, version)
     if stored is not None:
@@ -122,8 +136,11 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         stamps=stamps,
         betas=(betas := _fit(ws, screen, window, catalog, held)),
         slopes=_slopes(ws, screen, window, catalog, held, betas),
+        window=window,
+        definitions=held,
     )
     cells = _measure(ws, context, window, catalog, held, priced)
+    session, stated = _assumptions(screen)
     result = ScreenResult(
         screen=screen.id,
         sha=valid.sha,
@@ -134,7 +151,8 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         hypothesis_sha=_pinned_sha(store, screen.hyp),
         draws=ws.config.screen.draws,
         folds=ws.config.research.folds,
-        assumption=ASSUMPTION,
+        assumption=session,
+        assumptions=stated,
         created_at=datetime.now(tz=UTC),
         wall_s=round(time.monotonic() - started, 3),
         peak_mem_gb=round(_peak_gb(), 3),
@@ -142,8 +160,19 @@ def run(ws: Workspace, store: StateStore, path: Path) -> Outcome:
         cells=cells,
         summary=_summary(screen.verdict, cells),
     )
-    records.record(store, result, sorted({leg.instrument for leg in screen.legs.values()}))
+    records.record(store, result, list(screen.instruments))
     return Outcome(result, records.render(ws, result), False, fetched)
+
+
+def _assumptions(screen: Screen) -> tuple[str | None, list[str]]:
+    """The session measures' assumption, `None` when the screen has no session measure, and
+    what each measure's inference rests on, in the order the measures are declared."""
+    stated = [
+        condition.assumption(measure) if isinstance(measure, Condition) else ASSUMPTION
+        for measure in screen.measures
+    ]
+    sessions = any(not isinstance(measure, Condition) for measure in screen.measures)
+    return (ASSUMPTION if sessions else None), stated
 
 
 @dataclass(frozen=True)
@@ -158,6 +187,8 @@ class Context:
     stamps: dict[str, str]
     betas: dict[str, float]
     slopes: dict[int, dict[catch_up.Pair, float | None]]
+    window: tuple[date, date]
+    definitions: dict[str, Any]
 
 
 def _measure(
@@ -191,6 +222,8 @@ def _measure(
                 )
                 columns[index].append(values)
                 stale[index].append(staleness)
+            elif isinstance(measure, Condition):
+                columns[index].append(condition.marks(screen, measure, series))
             elif isinstance(measure, CatchUp):
                 assert hurdles is not None
                 columns[index].append(
@@ -218,6 +251,11 @@ def _measure(
             cells += _lead_lag_cells(context, index, measure, columns[index], stale[index], fold_of)
         elif isinstance(measure, CatchUp):
             cells += _catch_up_cells(context, index, measure, columns[index], fold_of)
+        elif isinstance(measure, Condition):
+            assert hurdles is not None
+            cells += condition.measure(
+                context, index, measure, days, columns[index], fold_of, catalog, hurdles
+            )
         else:
             cells += _response_cells(context, index, measure, columns[index], fold_of)
     return [_judged(screen.verdict, cell) for cell in cells]
@@ -241,7 +279,7 @@ def _lead_lag_cells(
     )
     cells: list[Cell] = []
     for row, key in enumerate(keys):
-        folds = _fold_means(matrix[row], fold_of, context.folds)
+        folds = nulls.fold_means(matrix[row], fold_of, context.folds)
         cells.append(
             Cell(
                 measure=index,
@@ -254,7 +292,7 @@ def _lead_lag_cells(
                 p=float(found.p[row]),
                 sessions=int(found.sessions[row]),
                 folds=folds,
-                folds_same_sign=_same_sign(folds, float(found.mean[row])),
+                folds_same_sign=nulls.same_sign(folds, float(found.mean[row])),
                 staleness=_staleness([day[row] for day in stale]),
                 in_sample_fit="window" in _fits(context.screen, (key.source, key.target)),
                 clock_bound=_clock_bound(context.screen, key, context.stamps),
@@ -346,7 +384,7 @@ def _traded_cells(
             dtype=np.float64,
         )
         stats = _stats(live)
-        folds = _fold_means(margins, fold_of, context.folds)
+        folds = nulls.fold_means(margins, fold_of, context.folds)
         cells.append(
             Cell(
                 measure=index,
@@ -359,7 +397,7 @@ def _traded_cells(
                 p=float(evidence.p[row]),
                 sessions=int(evidence.sessions[row]),
                 folds=folds,
-                folds_same_sign=_same_sign(folds, stats.ceiling_bp_day),
+                folds_same_sign=nulls.same_sign(folds, stats.ceiling_bp_day),
                 in_sample_fit=item.in_sample_fit,
                 response=stats,
                 catch_up=item.exits,
@@ -497,7 +535,13 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
     """The cell with its judgement, when the screen declared floors to judge it by.
 
     Every cell needs `min_sessions` and a p at or under `alpha`; a `response` cell needs its
-    margin over the hurdle and its events a day to clear their floors too. A cell under
+    margin over the hurdle and its events a day to clear their floors too. A `condition` cell
+    needs those and its `mean` above zero: its p ranks |t|, so it is two-sided, and its mean is
+    signed so that an effect on the side its test declares is positive. A significant mean below
+    zero is the state working against that side, which the margin need not show, since over a
+    hold of several sessions a round trip's gross is mostly the follower's drift. A condition
+    cell set against the hold (`benchmark: hold`) is judged by that instead of its contrast: its
+    p against random timing and its `p_above_hold` both at or under `alpha`. A cell under
     `min_sessions` is `thin`; otherwise every clause it misses is named in its reason, so a
     cell that fails on p and on events a day says both.
     """
@@ -507,8 +551,20 @@ def _judged(verdict: ScreenVerdict | None, cell: Cell) -> Cell:
         reason = f"{cell.sessions} session(s), under min_sessions {verdict.min_sessions}"
         return cell.model_copy(update={"judged": "thin", "reason": reason})
     missed: list[str] = []
-    if cell.p > verdict.alpha:
-        missed.append(f"p {cell.p:.4g} above alpha {verdict.alpha:g}")
+    hold = None if cell.condition is None else cell.condition.hold
+    if hold is not None:
+        if hold.p > verdict.alpha:
+            missed.append(f"p {hold.p:.4g} against random timing above alpha {verdict.alpha:g}")
+        if hold.p_above_hold > verdict.alpha:
+            missed.append(
+                f"p {hold.p_above_hold:.4g} that its Sharpe {hold.sharpe:.4g} beats the hold's "
+                f"{hold.sharpe_hold:.4g} above alpha {verdict.alpha:g}"
+            )
+    else:
+        if cell.p > verdict.alpha:
+            missed.append(f"p {cell.p:.4g} above alpha {verdict.alpha:g}")
+        if cell.condition is not None and cell.mean <= 0:
+            missed.append(f"mean {cell.mean:.4g} bp is against the declared side")
     stats = cell.response
     if stats is not None and stats.margin_bp < verdict.min_margin_bp:
         missed.append(
@@ -554,21 +610,6 @@ def _folds(days: Sequence[date], window: tuple[date, date], folds: int) -> np.nd
     return np.asarray([offset * folds // length for offset in offsets], dtype=np.int64)
 
 
-def _fold_means(row: np.ndarray, fold_of: np.ndarray, folds: int) -> list[float | None]:
-    means: list[float | None] = []
-    for fold in range(folds):
-        inside = row[(fold_of == fold) & ~np.isnan(row)]
-        means.append(float(np.add.reduce(inside) / len(inside)) if len(inside) else None)
-    return means
-
-
-def _same_sign(folds: Sequence[float | None], mean: float) -> int:
-    """How many folds' means share the sign of the whole; none when the whole is zero."""
-    if mean == 0.0:
-        return 0
-    return sum(1 for value in folds if value is not None and value * mean > 0)
-
-
 def _staleness(sessions_seen: Sequence[dict[str, float]]) -> dict[str, float]:
     """Each leg's staleness, averaged over the sessions that sampled it."""
     totals: dict[str, list[float]] = {}
@@ -596,10 +637,16 @@ def _refuse_unserved(plans: Sequence[data.LegPlan]) -> None:
     unserved = [item for item in plans if item.state == "unserved"]
     if unserved:
         reasons = "; ".join(item.reason or item.instrument for item in unserved)
+        remedy = "build a data adapter for them as a workspace extension (docs/extensions.md)"
+        if any(item.type not in BUILTIN_TYPES for item in unserved):
+            remedy = (
+                "load each custom series from a file with `kanso data load --loader "
+                "csv_parquet --spec <spec>` over the days its reason names missing, or build a "
+                "data adapter whose `serves` names its type (docs/extensions.md)"
+            )
         raise PreconditionError(
             f"the screen reads series no registered adapter serves: {reasons}",
-            remedy="build a data adapter for them as a workspace extension "
-            "(docs/extensions.md), then run the screen again",
+            remedy=f"{remedy}, then run the screen again",
         )
 
 
