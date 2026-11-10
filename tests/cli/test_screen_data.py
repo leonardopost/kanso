@@ -227,3 +227,134 @@ def test_a_run_fetches_what_it_lacks_and_says_what_it_fetched(
 
     assert result.exit_code == Exit.OK, result.stdout
     assert "fetched    DEMO.SIM bar 1h · 2 chunk(s) · 138 rows" in result.stdout
+
+
+TAPED: dict[str, Any] = {
+    **FREE,
+    "id": "taped_lag",
+    "legs": {"a": FREE["legs"]["a"]},
+    "signals": {
+        "regime": {"type": "kanso_state_tape", "field": "level", "instrument": INSTRUMENT},
+        "event_day": {"type": "kanso_state_tape", "field": "flag", "instrument": INSTRUMENT},
+    },
+    "measures": [{**FREE["measures"][0], "from": "a", "to": "a", "lags": ["1h"]}],
+}
+"""A screen reading the state tape beside one leg: two signals of one series."""
+
+
+def test_a_signal_is_read_as_its_custom_series_held_when_the_catalog_serves_it(
+    runner: CliRunner, taped: Path
+) -> None:
+    result = at(runner, taped, "screen", "validate", write_screen(taped, TAPED), "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    document = payload(result)
+    bars, tape = document["data"]
+    assert bars["legs"] == ["a"] and bars["state"] == "held"
+    assert tape["legs"] == ["regime", "event_day"]
+    assert (tape["instrument"], tape["type"], tape["resolution"]) == (
+        INSTRUMENT,
+        "kanso_state_tape",
+        None,
+    )
+    assert tape["state"] == "held" and tape["missing"] == []
+    assert document["signals"]["regime"] == TAPED["signals"]["regime"]
+    human = at(runner, taped, "screen", "validate", write_screen(taped, TAPED)).stdout
+    assert "regime kanso_state_tape.level on DEMO.SIM" in human
+    assert "regime,event_day  DEMO.SIM kanso_state_tape · held" in human
+
+
+def test_a_signal_no_file_or_adapter_supplies_is_unserved_naming_the_file_load(
+    runner: CliRunner, taped: Path
+) -> None:
+    path = july(taped, a=FREE["legs"]["a"])
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    late = {**TAPED, "window": document["window"]}
+
+    result = at(runner, taped, "screen", "validate", write_screen(taped, late), "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    tape = payload(result)["data"][1]
+    assert tape["state"] == "unserved"
+    days = ", ".join(f"{start}..{end}" for start, end in tape["missing"])
+    assert (
+        "kanso data load --loader csv_parquet --spec <spec>` over the days missing, "
+        in (tape["reason"])
+    )
+    assert days and f"missing, {days} — a load over days already held overlaps" in tape["reason"]
+    assert "whose `serves` names kanso_state_tape" in tape["reason"]
+    refused = at(runner, taped, "screen", "run", write_screen(taped, late), "--json")
+    assert refused.exit_code == Exit.PRECONDITION
+    assert "over the days missing, " + days in payload(refused)["error"]
+    assert "over the days its reason names missing" in payload(refused)["remedy"]
+
+
+def test_a_snapshot_pins_a_screen_only_when_it_covers_the_signal_s_series(
+    runner: CliRunner, taped: Path
+) -> None:
+    ws = find(taped)
+    for manifest in ws.path("catalog", "manifests").glob("*.yaml"):
+        text = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        if text["type"] == "kanso_state_tape":
+            text["publication"] = "unknown"
+            manifest.write_text(yaml.safe_dump(text, sort_keys=False), encoding="utf-8")
+    bars_only = {key: value for key, value in TAPED.items() if key != "signals"}
+
+    refused = at(runner, taped, "screen", "run", write_screen(taped, TAPED), "--json")
+    admitted = at(runner, taped, "screen", "run", write_screen(taped, bars_only), "--json")
+
+    # The bars are covered either way; the tape, of a publication nobody declared, covers nothing.
+    assert refused.exit_code == Exit.PRECONDITION, refused.stdout
+    assert (
+        "no snapshot covers DEMO.SIM bar 1h, DEMO.SIM kanso_state_tape"
+        in (payload(refused)["error"])
+    )
+    assert admitted.exit_code == Exit.OK, admitted.stdout
+
+
+@pytest.mark.parametrize(
+    ("signal", "message", "remedy"),
+    [
+        ({"type": "kanso_nobody", "field": "level"}, "is not a known data type", "kanso ext show"),
+        ({"type": "kanso_state_tape", "field": "label"}, "annotated str", "float, int or bool"),
+        ({"type": "kanso_state_tape", "field": "levels"}, "is not a field", "name one of them"),
+    ],
+)
+def test_a_signal_that_is_no_registered_number_is_refused(
+    runner: CliRunner, taped: Path, signal: dict[str, str], message: str, remedy: str
+) -> None:
+    document = {**TAPED, "signals": {"regime": {**signal, "instrument": INSTRUMENT}}}
+
+    result = at(runner, taped, "screen", "validate", write_screen(taped, document), "--json")
+
+    assert result.exit_code == Exit.VALIDATION, result.stdout
+    assert message in payload(result)["error"] and remedy in payload(result)["remedy"]
+
+
+def test_a_bound_screen_reads_only_signals_its_hypothesis_would(
+    runner: CliRunner, taped: Path
+) -> None:
+    from .conftest import HYP_ID, OTHER, write_hypothesis
+
+    assert at(runner, taped, "hyp", "add", write_hypothesis(taped)).exit_code == Exit.OK
+    requiring = write_hypothesis(
+        taped, id="demo_tape", data_requirements=["bar", "kanso_state_tape"]
+    )
+    added = at(runner, taped, "hyp", "add", requiring)
+    assert added.exit_code == Exit.OK, added.stdout
+    bound = {key: value for key, value in TAPED.items() if key != "window"}
+    outside = {"regime": {**TAPED["signals"]["regime"], "instrument": OTHER}}
+
+    def checked(hyp: str, **changes: Any) -> Any:
+        document = {**bound, "hyp": hyp, **changes}
+        return at(runner, taped, "screen", "validate", write_screen(taped, document), "--json")
+
+    admitted = checked("demo_tape")
+    universe = checked("demo_tape", signals=outside)
+    unrequired = checked(HYP_ID)
+
+    assert admitted.exit_code == Exit.OK, admitted.stdout
+    assert universe.exit_code == Exit.VALIDATION
+    assert "OTHR.SIM is not in demo_tape's universe" in payload(universe)["error"]
+    assert unrequired.exit_code == Exit.VALIDATION
+    assert "demo_mr does not require kanso_state_tape data" in payload(unrequired)["error"]

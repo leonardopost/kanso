@@ -1,8 +1,10 @@
 """The data a screen needs: what the catalog holds, what an adapter can fetch, and the fetch.
 
-**Missing data is fetched or built, never skipped.** Every leg is in one of four states:
+**Missing data is fetched or built, never skipped.** Every series a screen reads — a leg's,
+and a signal's, which is its custom type filed under its instrument with no resolution — is in
+one of four states:
 
-* **held** — the catalog serves the leg's series on every day of the window its market opened;
+* **held** — the catalog serves the series on every day of the window its market opened;
 * **fetchable** — it does not, and a registered adapter declares that it serves the leg's
   instrument at the leg's type: the plan names the adapter and its loader, and `fetch`
   backfills the missing days through that loader, exactly as `kanso data backfill` would;
@@ -12,7 +14,9 @@
   the instrument may well have already;
 * **unserved** — it resolves, and no registered adapter serves it, and the remedy is to build
   one: a data adapter written as a workspace extension against the protocol
-  `docs/extensions.md` states, driven against the live source, then moved upstream.
+  `docs/extensions.md` states, driven against the live source, then moved upstream. A custom
+  type is more often a file the workspace already holds, so a signal's remedy names the
+  `csv_parquet` load first.
 
 **What an adapter declares, and nothing it is asked.** Three optional members of the
 adapter protocol carry a screen's questions, so nothing here names a vendor: `serves`, the
@@ -50,6 +54,7 @@ from kanso import ext
 from kanso.data import closures, commands, registry
 from kanso.data.instruments import current_definitions, resolve_universe
 from kanso.data.manifest import Manifest, contains, manifests
+from kanso.data.types import BUILTIN_TYPES
 from kanso.errors import KansoError
 from kanso.schemas.screen import Leg, Screen
 
@@ -180,7 +185,7 @@ def plan(
                     missing=missing,
                     defined=instrument in defined,
                     timestamps=stamps,
-                    reason=_unserved(instrument, kind, resolution),
+                    reason=_unserved(instrument, kind, resolution, missing),
                 )
             )
             continue
@@ -243,10 +248,12 @@ def resolve_remedy(instruments: Sequence[str]) -> str:
 
 
 def _series(screen: Screen) -> dict[tuple[str, str, str | None], tuple[str, ...]]:
-    """Each distinct series the screen reads, with the legs that read it."""
+    """Each distinct series the screen reads, with the legs or signals that read it."""
     found: dict[tuple[str, str, str | None], list[str]] = {}
     for name, leg in screen.legs.items():
         found.setdefault(_key(leg), []).append(name)
+    for name, signal in screen.signals.items():
+        found.setdefault((signal.instrument, signal.type, None), []).append(name)
     return {key: tuple(names) for key, names in found.items()}
 
 
@@ -301,8 +308,18 @@ def _held_timestamps(
     return kinds.pop() if len(kinds) == 1 else MIXED
 
 
-def _unserved(instrument: str, kind: str, resolution: str | None) -> str:
+def _unserved(
+    instrument: str, kind: str, resolution: str | None, missing: Sequence[tuple[date, date]]
+) -> str:
     grain = f" {resolution}" if resolution else ""
+    if kind not in BUILTIN_TYPES:
+        days = ", ".join(f"{start}..{end}" for start, end in missing) or "the window"
+        return (
+            f"no registered adapter serves {instrument} as {kind}; load it from a file with "
+            f"`kanso data load --loader csv_parquet --spec <spec>` over the days missing, "
+            f"{days} — a load over days already held overlaps them — or build an adapter whose "
+            f"`serves` names {kind} (docs/extensions.md), then run the screen again"
+        )
     return (
         f"no registered adapter serves {instrument} as {kind}{grain}; build one as a workspace "
         "extension (docs/extensions.md, a data adapter), then run the screen again"

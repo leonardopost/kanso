@@ -3,6 +3,11 @@
 Every point here is placed by hand, at an instant a test names, so a test about which
 session a print falls in, or what a grid samples, reads its answer off its own arguments.
 Prices are whole cents.
+
+`TAPE` is a synthetic custom type, written as a workspace extension would write one: a level,
+a flag, a switch and a label filed under an instrument — a float, an int, a bool and a str, so
+every annotation a signal may or may not read is one of its fields. It is kanso's own fixture,
+not an outside party's, and stands for any series a workspace holds that a screen conditions on.
 """
 
 from __future__ import annotations
@@ -12,9 +17,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from nautilus_trader.model.enums import AggressorSide, BookAction, OrderSide
+from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
+from kanso import ext
 from kanso.data.loaders.points import (
     bar_type,
     instrument_id,
@@ -23,9 +31,77 @@ from kanso.data.loaders.points import (
     make_quote,
     make_trade,
 )
+from kanso.data.types import custom_types
 from tests.nautilus.backtest.conftest import catalog, instrument
 
 VENUE = "XNAS"
+
+TAPE_ID = "kanso_state_tape"
+TAPE = """
+from nautilus_trader.core.data import Data
+from nautilus_trader.model.custom import customdataclass
+from nautilus_trader.model.identifiers import InstrumentId
+
+from kanso.data.types import register_custom_type
+
+PROVIDES = {"data_types": ["kanso_state_tape"]}
+
+
+@customdataclass
+class KansoStateTape(Data):
+    instrument_id: InstrumentId
+    level: float
+    flag: int
+    switch: bool
+    label: str
+
+
+register_custom_type("kanso_state_tape", KansoStateTape)
+"""
+"""The extension text; no postponed annotations, which the engine's decorator cannot read."""
+
+
+def tape_type(directory: Path) -> type:
+    """The tape's class, registered in this process once, imported from its extension text."""
+    found = custom_types().get(TAPE_ID)
+    if found is None:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{TAPE_ID}.py").write_text(TAPE, encoding="utf-8")
+        ext.discover(directory.parent, [directory.name])
+        found = custom_types()[TAPE_ID]
+    return found
+
+
+@pytest.fixture(scope="session")
+def tape_cls(tmp_path_factory: pytest.TempPathFactory) -> type:
+    return tape_type(tmp_path_factory.mktemp("tape") / "kanso_ext")
+
+
+def tape(
+    cls: type,
+    instrument: str,
+    rows: Iterable[tuple[int, float, int]],
+    events: Sequence[int] | None = None,
+) -> list[Any]:
+    """Points of the tape filed under `instrument` at (ts_init, level, flag), each published
+    the instant it refers to unless `events` states its `ts_event`; its switch is on where its
+    flag is odd."""
+    ident = InstrumentId.from_str(instrument)
+    found = []
+    for n, (ts, level, flag) in enumerate(rows):
+        event = ts if events is None else events[n]
+        found.append(
+            cls(
+                ts_event=event,
+                ts_init=ts,
+                instrument_id=ident,
+                level=level,
+                flag=flag,
+                switch=bool(flag % 2),
+                label="",
+            )
+        )
+    return found
 
 
 def ns(text: str) -> int:
