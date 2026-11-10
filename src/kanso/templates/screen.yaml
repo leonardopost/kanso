@@ -15,10 +15,13 @@ legs:                              # name: {instrument: <catalog id>, type: bar|
 # groups:                          # names for sets of legs, used by measures
 #   lead:   [btc]
 #   follow: [mara, miners]
+# signals:                         # name: a registered custom type's numeric field, as one series filed under instrument
+#   regime:    {type: house_state, field: level, instrument: SPY.ARCX}
+#   event_day: {type: house_calendar, field: flag, instrument: SPY.ARCX}
 clock:
   grid:                            # <n>(ms|s|m|h): the step a `grid` estimator samples on; no finer than a bar leg
-  hours: overlap                   # overlap | {tz: America/New_York, span: "09:30-16:00"}
-measures:                          # lead_lag | response | catch_up, each parameter within its range (docs/workspace.md, screens/<id>/); every list is a declared, finite lattice
+  hours: overlap                   # overlap | {tz: America/New_York, span: "09:30-16:00"}; 1m bars stamped at their close: span "09:31-16:01"
+measures:                          # lead_lag | response | catch_up | condition, each parameter within its range (docs/workspace.md, screens/<id>/); every list is a declared, finite lattice
 #  - id: lead_lag
 #    from: lead
 #    to: follow
@@ -41,8 +44,27 @@ measures:                          # lead_lag | response | catch_up, each parame
 #    stop: [2]                     # failed: the multiple of the entry gap, over 1
 #    max_hold: 10m                 # a safety, counted when it fires; never the rule
 #    latency_ms: 5
+#  - id: condition                 # a follower's session returns while a declared signal meets a declared comparison; one measure is one family
+#    tests:                        # name: one pre-registered test; the cells are tests x followers
+#      up:
+#        signal: regime
+#        when: {gt: 0}             # exactly one of gt, ge, lt, le, eq, ne: the favoured state
+#        against: {lt: 0}          # contrast only: a comparison disjoint from when, or rest
+#        entry: close              # open | close: the session's first or last point
+#        exit: close               # open | close; close to close runs from the previous session's close
+#        hold: while               # while | {sessions: k}
+#        side: long                # long | short: the position the favoured state takes
+#    followers: mara               # a leg or a group of catalog legs, never a derived leg such as miners
+#    payoff: contrast              # contrast | long_flat
+#    null_by: circular             # circular | sign_flip; never `null:`, a key YAML reads as no value, which is refused
+#    # block: 20                   # sign_flip only: sessions summed into one sign, at least every fixed hold; circular takes every shift and no block
+#    demean: [weekday, month, {turn_of_month: [1, 3]}, third_friday_week, pre_holiday]   # [] for the window's mean alone
+#    controls: [event_day]         # 0/1 signals, [] for none: a point every session, ts_event on its date in the clock's zone, ts_init by the period's exit
+#    latency_ms: 900000            # how long before the entry it orders the decision is made, at least 1
+#    # mde_power: 0.8              # optional: beside a verdict, the effect a cell would need to pass at this power, in its mean's units
+#    # benchmark: hold             # optional, circular only: also set each cell's positions against holding its follower, by the Sharpe of each net of round trips; a verdict then judges that
 # verdict:                         # optional and never defaulted: declare it before you run, never after reading a result
-#   alpha: 0.05                    # family-wise, over every cell of a measure
+#   alpha: 0.05                    # family-wise, over every cell of a measure; a condition's null has its own floor: 2^(1 - blocks) or 1/sessions
 #   min_margin_bp: 1.0             # gross per event less the hurdle
 #   min_events_per_day: 20
 #   min_sessions: 20
