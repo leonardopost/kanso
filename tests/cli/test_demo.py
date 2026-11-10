@@ -32,6 +32,7 @@ from kanso.state import StateStore
 
 from .conftest import at, payload, run
 
+ROOT = Path(__file__).resolve().parents[2]
 DEMO_ID = "demo_mr"
 CARDS = 3
 """What the demo's scripted register has to say before it wraps around."""
@@ -204,6 +205,20 @@ def test_the_demo_reaches_no_provider_and_needs_no_credential(demo: Path) -> Non
     assert all("api_key_env" not in entry for entry in register["models"])
     tiers = {tier for entry in register["models"] for tier in entry["tier"]}
     assert tiers == {"cheap", "mid", "frontier"}
+
+
+def test_the_demo_load_again_is_refused_as_the_readme_and_the_workspace_page_show_it(
+    runner: CliRunner, demo: Path
+) -> None:
+    """Both pages show the refusal of the demo's own load run over its snapshot, line for line
+    as standard error carries it: the remedy is one line there, so it is one line on a page."""
+    again = at(runner, demo, "data", "load", "--loader", "synthetic", "--spec", demo / "demo.yaml")
+
+    assert again.exit_code == Exit.PRECONDITION, again.stderr
+    typed = "$ kanso data load --loader synthetic --spec demo.yaml"
+    shown = "\n".join([typed, *again.stderr.splitlines()])
+    for name in ("README.md", "docs/workspace.md"):
+        assert f"{shown}\n" in (ROOT / name).read_text(encoding="utf-8"), name
 
 
 def test_every_command_of_the_demo_sequence_prints_one_object_under_json(

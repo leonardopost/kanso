@@ -1101,6 +1101,10 @@ def _custom_points(
     A custom series is filed under an instrument id when it has one and under nothing when
     it is market-wide, so both are asked for at once and the ones belonging to another
     universe are dropped.
+
+    A screen reads its signals through this function too (`kanso.screen.signals`), a UTC day
+    at a time, so a signal a screen conditions on is the series a card of the same span is
+    handed.
     """
     _refuse_if_unwanted()
     admissible = {*universe, None}

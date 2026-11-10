@@ -48,7 +48,6 @@ from kanso.schemas import Hypothesis, dump_yaml, embargo_days, parse_yaml, rende
 from kanso.schemas.screen import (
     CatchUp,
     Cell,
-    LeadLag,
     Response,
     Screen,
     ScreenResult,
@@ -113,9 +112,9 @@ def draft(
             f"{screen_id} is bound to {screen.hyp}, which already exists",
             remedy=f"research {screen.hyp}; a draft is written from a free screen",
         )
-    cell = _cell(result, cell_key)
+    cell = _cell(result, cell_key, new_id)
     measure = screen.measures[cell.measure]
-    assert not isinstance(measure, LeadLag)
+    assert isinstance(measure, Response | CatchUp)
     trigger, follower = _leader(measure), str(cell.params["follower"])
     _refuse_untradable(screen, (trigger, follower))
     identity = _free_id(ws, store, new_id)
@@ -151,7 +150,7 @@ def draft(
     return Drafted(identity, directory, screen_id, cell.key)
 
 
-def _cell(result: ScreenResult, key: str) -> Cell:
+def _cell(result: ScreenResult, key: str, new_id: str) -> Cell:
     cell = next((item for item in result.cells if item.key == key), None)
     if cell is None:
         raise ValidationError(
@@ -163,6 +162,13 @@ def _cell(result: ScreenResult, key: str) -> Cell:
             f"{key} is a lead_lag cell, which names no rule to trade",
             remedy="draft from a response or a catch_up cell: each names a rule, a follower "
             "and when it leaves",
+        )
+    if cell.id == "condition":
+        raise ValidationError(
+            f"{key} is a condition cell, whose seed would read a custom type in its own "
+            "strategy, which no template carries",
+            remedy=f"write the hypothesis with `kanso hyp new {new_id}`, the cell's numbers "
+            "beside it",
         )
     return cell
 
@@ -204,7 +210,7 @@ def _hypothesis(
     certify: tuple[date, date],
 ) -> Hypothesis:
     measure = screen.measures[cell.measure]
-    assert not isinstance(measure, LeadLag)
+    assert isinstance(measure, Response | CatchUp)
     trigger = screen.legs[_leader(measure)]
     follower = screen.legs[str(cell.params["follower"])]
     legs = [trigger, follower]
