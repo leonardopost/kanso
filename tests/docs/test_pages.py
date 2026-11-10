@@ -959,17 +959,25 @@ def test_the_screen_ranges_the_docs_state_are_the_library_s() -> None:
     stated = {
         (measure, name): (low, high)
         for measure, name, low, high in re.findall(
-            r"^\| `(lead_lag|response|catch_up)` \| `(\w+)`[^|]*\| `([^`]+)` \| `([^`]+)` \|$",
+            r"^\| `(lead_lag|response|catch_up|condition)` \| `(\w+)`[^|]*"
+            r"\| `([^`]+)` \| `([^`]+)` \|$",
             text,
             re.M,
         )
     }
     declared = {
-        (item.id, name): tuple(str(end) if isinstance(end, str) else f"{end:g}" for end in span)
+        (item.id, name): tuple(_spelled(end) for end in span)
         for item in measures().values()
         for name, span in item.ranges.items()
     }
     assert stated == declared
+
+
+def _spelled(end: float | str) -> str:
+    """A range end as the page writes it: a span as it is, a whole number in full."""
+    if isinstance(end, str):
+        return end
+    return str(int(end)) if float(end).is_integer() else f"{end:g}"
 
 
 def test_every_cost_key_is_described_on_the_workspace_page_and_named_in_the_template() -> None:

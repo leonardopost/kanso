@@ -408,11 +408,14 @@ def snapshots(ws: Workspace) -> list[Snapshot]:
 
 
 def pinned_datasets(ws: Workspace) -> frozenset[str]:
-    """Every dataset a snapshot names, and which is therefore immutable.
+    """Every dataset a snapshot names, and which is therefore never rewritten unasked.
 
     A snapshot is the promise that a pinned run can be replayed against the same bytes,
-    so writing one freezes what it names. There is no separate act of pinning to consult:
-    the promise is the file.
+    so writing one freezes what it names against every write but a load naming it in
+    `supersedes`. Over the dataset's own span that load keeps its id, so it rewrites the
+    pinned dataset under that id, and a snapshot taken before it still covers the series
+    until `kanso data snapshot` takes a newer one (`docs/backlog.md` row 232). There is no
+    separate act of pinning to consult: the promise is the file.
     """
     return frozenset(name for snapshot in snapshots(ws) for name in snapshot.datasets)
 

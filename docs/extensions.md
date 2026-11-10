@@ -86,6 +86,11 @@ for that kind:
 | `exec_clients` | `EXEC_CLIENTS`, a sequence of `ExecutionClientSpec` |
 | `data_types` | a `register_custom_type` call made while the module is imported |
 
+A registered type's numeric field can be a screen's signal (`signals:` in `screen.yaml`,
+`docs/workspace.md`): once the file is parsed and its ranges checked, a screen that declares a
+signal imports the workspace's extensions before it checks the signals, so the type is known by
+then. The measure that reads a signal, `condition`, is still the package's.
+
 Three kinds are **refused**: `gates`, `objectives` and `measures`. No registry reads any of
 them, so declaring one is refused where it is written rather than collected and forgotten —
 the section below says where a gate goes instead, and a screen's measure goes the same way:

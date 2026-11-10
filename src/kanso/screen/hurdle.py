@@ -21,6 +21,10 @@ spread and `slippage_bps`. Under `spread: quotes` that spread is the stated `fix
 width a card's fill with no quote before it pays; a model whose spread comes from quotes and
 states no width, over a leg that has no quotes, is refused (exit 3): nothing could price it.
 
+A condition's position is charged one round trip, struck at its entry and its exit, however
+many sessions apart the two are: a state held for days close to close pays once, as a card
+holding it pays two fills.
+
 A derived follower is traded leg by leg: a basket's legs in its weights, a spread's long leg and
 beta of its short one, both legs of a gap. Its hurdle is the sum of its legs' round trips, each
 weighted by its share, each leg charged its own half spread — measured from its quotes where it
@@ -63,8 +67,8 @@ TOUCHED: Final = frozenset({"quote", "book"})
 
 @dataclass(frozen=True)
 class Hurdles:
-    """The venue model of every leg a response or a catch-up trades, and what one round trip
-    costs."""
+    """The venue model of every leg a response, a catch-up or a condition trades, and what one
+    round trip costs."""
 
     screen: Screen
     models: dict[str, VenueModel]
@@ -109,26 +113,59 @@ class Hurdles:
             halves = self._halves(leg, model, series[leg], at)
         long = direction > 0
         total = 0.0
-        ticks, increment = model.costs.slippage_ticks, self.increment_of.get(leg, 0.0)
         for price, half, sell in ((prices[0], halves[0], not long), (prices[1], halves[1], long)):
-            notional = float(price) * self.multiplier_of[leg]
-            charged = fill_cost(
-                notional,
-                1.0,
-                model.costs.commission_bps,
-                0.0 if quoted else model.costs.slippage_bps,
-                half,
-                model.costs.maker_bps,
-                model.costs.commission_per_share,
-                maker=False,
-                sell=sell,
-                sell_fee_bps=model.costs.sell_fee_bps,
-                sell_fee_per_share=model.costs.sell_fee_per_share,
-                slip=tick_slip(ticks, increment, float(price), None, sell=sell),
-                multiplier=self.multiplier_of[leg],
-            )
-            total += charged / notional
+            total += self._charge(leg, model, float(price), half, sell, quoted)
         return total * BPS
+
+    def fills(
+        self, name: str, price: np.ndarray, bid: np.ndarray | None, ask: np.ndarray | None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """What one taker buy and one taker sell of the catalog leg `name` cost at each of these
+        marks, in basis points of the fill's notional, against its price there.
+
+        The venue model's charge is the one `round_trip` strikes — a round trip's is its entry's
+        and its exit's, as there — and where the leg shows a touch the fill crosses it as well:
+        a buy pays the ask over the price and a sale gets the bid under it, so a position's move
+        from mark to mark less its two fills is what a taker made, as `taker_gross` reads it.
+        A leg read as bars or prints is charged half the model's spread and `slippage_bps`
+        instead, and crosses nothing.
+        """
+        model = self.models[self.venue_of[name]]
+        touched = bid is not None and ask is not None
+        half = 0.0 if touched else fixed_half_spread(model.costs.fixed_bps)
+        buys = np.empty(len(price), dtype=np.float64)
+        sells = np.empty(len(price), dtype=np.float64)
+        for at, value in enumerate(price.tolist()):
+            buys[at] = self._charge(name, model, value, half, False, touched) * BPS
+            sells[at] = self._charge(name, model, value, half, True, touched) * BPS
+        if touched:
+            assert bid is not None and ask is not None
+            buys += BPS * (np.log(ask) - np.log(price))
+            sells += BPS * (np.log(price) - np.log(bid))
+        return buys, sells
+
+    def _charge(
+        self, leg: str, model: VenueModel, price: float, half: float, sell: bool, quoted: bool
+    ) -> float:
+        """One taker fill of one unit of `leg` at `price`, as a fraction of its notional."""
+        ticks, increment = model.costs.slippage_ticks, self.increment_of.get(leg, 0.0)
+        notional = price * self.multiplier_of[leg]
+        charged = fill_cost(
+            notional,
+            1.0,
+            model.costs.commission_bps,
+            0.0 if quoted else model.costs.slippage_bps,
+            half,
+            model.costs.maker_bps,
+            model.costs.commission_per_share,
+            maker=False,
+            sell=sell,
+            sell_fee_bps=model.costs.sell_fee_bps,
+            sell_fee_per_share=model.costs.sell_fee_per_share,
+            slip=tick_slip(ticks, increment, price, None, sell=sell),
+            multiplier=self.multiplier_of[leg],
+        )
+        return charged / notional
 
     def _halves(
         self, leg: str, model: VenueModel, series: Series, at: np.ndarray
@@ -159,11 +196,13 @@ def shares(screen: Screen, name: str, betas: Mapping[str, float]) -> dict[str, f
 
 
 def traded(screen: Screen) -> tuple[str, ...]:
-    """Every catalog leg a response or a catch-up trades, its followers' legs expanded."""
+    """Every catalog leg a response, a catch-up or a condition trades, its followers' legs
+    expanded."""
     found: list[str] = []
     for measure in screen.measures:
         if isinstance(measure, LeadLag):
             continue
+        # A response's followers, or a condition's: every member of the name.
         names = followed(screen, measure) if isinstance(measure, CatchUp) else (measure.followers,)
         for name in names:
             for leg in screen.legs_of(name):
