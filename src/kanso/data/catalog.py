@@ -16,17 +16,20 @@ points actually cover, and the difference from the request comes back on `Writte
 the caller to surface: a manifest that claimed the request would claim coverage the
 dataset lacks, and snapshots are pinned by coverage.
 
-**A dataset a snapshot names is immutable.** A snapshot is a promise that a run can be
-reproduced, so the moment one names a dataset that dataset stops being writable: an
-overlapping write is refused, `--replace` does not lift the refusal, and the way forward
-is a successor dataset that records what it follows in `supersedes`. A successor written
-over the span of the one pinned dataset it names takes its place — the files and the
-manifest go, as a replace's do — and every snapshot naming the old dataset stops
-supporting a certification, since the workspace no longer describes what it pinned; that
-is the one way a pinned mistake is corrected, and it says so in the refusal. Data no snapshot has
-named yet is still refused an overlapping write, but that refusal is lifted by an explicit
-replace, because a destructive default on a command that reads like an import is the
-wrong default.
+**A dataset a snapshot names is never rewritten unasked.** A snapshot is a promise that a
+run can be reproduced, so the moment one names a dataset that dataset stops being writable
+by any write but a successor naming it: an overlapping write is refused, `--replace` does
+not lift the refusal, and the way forward is a successor dataset that records what it
+follows in `supersedes`. A successor written over the span of the one pinned dataset it
+names takes its place — the files and the manifest go, as a replace's do — and every
+snapshot naming the old dataset stops supporting a certification, since the workspace no
+longer describes what it pinned, only when the successor's id differs: over the old
+dataset's own span it keeps that id, so it rewrites the pinned dataset under it, and a
+snapshot taken before it still covers the series until `kanso data snapshot` takes a newer
+one (`docs/backlog.md` row 232). That is the one way a pinned mistake is corrected, and the
+refusal says so. Data no snapshot has named yet is still refused an overlapping write, but
+that refusal is lifted by an explicit replace, because a destructive default on a command
+that reads like an import is the wrong default.
 
 **Availability is checked at the door.** Every point must satisfy `ts_init >= ts_event`,
 and a dataset declaring a delayed publication must carry timestamps a declared rule
@@ -629,7 +632,8 @@ def _clear(
             f"{', '.join(frozen)} {'is' if len(frozen) == 1 else 'are'} named by a snapshot and "
             "cannot be rewritten",
             remedy=f"load it again with --supersedes {frozen[0]} to put this dataset in its "
-            "place; every snapshot naming the old one then stops supporting a certification",
+            "place; every snapshot naming the old one then stops supporting a certification, "
+            "only when the successor's id differs (docs/backlog.md row 232)",
         )
     others = [m for m in clashing if m.dataset_id != supersedes]
     if others and not replace:
@@ -811,7 +815,8 @@ def _unknown_files(
     if dataset == supersedes:
         again += (
             f" without --supersedes {dataset}: every snapshot naming it then stops supporting "
-            "a certification, as after a supersede, and the new dataset records no predecessor"
+            "a certification only when the new dataset's id differs, as after a supersede "
+            "(docs/backlog.md row 232), and the new dataset records no predecessor"
         )
     return PreconditionError(
         f"{dataset}: no run of the files in {filed} hashes to the checksum its manifest "

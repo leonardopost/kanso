@@ -146,6 +146,12 @@ def test_an_answer_that_is_not_a_mapping_is_refused(ws: Workspace) -> None:
         answers(ws, "align_check", 1)
 
 
+def test_a_key_yaml_reads_as_no_text_is_refused_by_its_place(ws: Workspace) -> None:
+    ws.path("mock", "cheap_mock.yaml").write_text("align_check: [{on: 1}]\n", encoding="utf-8")
+    with pytest.raises(ValidationError, match=r"align_check\.0: the key true is read by YAML"):
+        answers(ws, "align_check", 1)
+
+
 def test_broken_yaml_is_refused_rather_than_half_read(ws: Workspace) -> None:
     ws.path("mock", "cheap_mock.yaml").write_text("align_check: [ {a: 1\n", encoding="utf-8")
     with pytest.raises(ValidationError, match="cannot be read as YAML"):

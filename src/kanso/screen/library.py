@@ -5,8 +5,14 @@ measure lives in the package and never in an extension, for the reason a gate do
 verdict means the package's arithmetic or it means nothing, and a result records the
 version of the library that produced it.
 
-`screen_version` is that record: the package version and a digest of the library files,
-so a result measured under one library is never mistaken for one measured under another.
+`screen_version` is that record: the package version and a digest of the library files and
+of this package's own modules, so a result measured under one library, or by one build of the
+arithmetic, is never mistaken for one measured under another. The modules are in it because a
+result is returned as stored under its key: with the package version alone, a development
+build that measures differently, or a fix that ships before the version moves, would be handed
+the old build's numbers for the same screen and snapshot. A change to any module of the package
+moves it, so a result is measured again even when the change was not to its arithmetic; the
+arithmetic a screen borrows from elsewhere — a hurdle's `fill_cost` — moves with the version.
 """
 
 from __future__ import annotations
@@ -19,9 +25,20 @@ from typing import Final
 from kanso import __version__
 from kanso.errors import ValidationError
 from kanso.schemas import parse_yaml
-from kanso.schemas.screen import CatchUp, LeadLag, MeasureItem, Response, Screen, span_ns
+from kanso.schemas.screen import (
+    CatchUp,
+    Condition,
+    FixedHold,
+    LeadLag,
+    MeasureItem,
+    Response,
+    Screen,
+    TurnOfMonth,
+    span_ns,
+)
 
-LIBRARY: Final = Path(__file__).resolve().parent / "library"
+SOURCE: Final = Path(__file__).resolve().parent
+LIBRARY: Final = SOURCE / "library"
 
 
 @cache
@@ -38,9 +55,9 @@ def catalogue() -> dict[str, MeasureItem]:
 
 @cache
 def screen_version() -> str:
-    """The package version and a digest of the library, so a result records what measured it."""
+    """The package version and a digest of the library and the modules that measure with it."""
     digest = sha256()
-    for path in sorted(LIBRARY.glob("*.yaml")):
+    for path in [*sorted(LIBRARY.glob("*.yaml")), *sorted(SOURCE.glob("*.py"))]:
         digest.update(path.name.encode("utf-8"))
         digest.update(path.read_bytes())
     return f"{__version__}+{digest.hexdigest()[:12]}"
@@ -64,8 +81,10 @@ def check(screen: Screen) -> None:
                     )
 
 
-def _values(measure: LeadLag | Response | CatchUp) -> dict[str, list[float]]:
+def _values(measure: LeadLag | Response | CatchUp | Condition) -> dict[str, list[float]]:
     """Each ranged parameter of a measure, as numbers comparable with its range ends."""
+    if isinstance(measure, Condition):
+        return _condition_values(measure)
     if isinstance(measure, LeadLag):
         return {
             "lag": [abs(span_ns(lag)) for lag in measure.lags],
@@ -93,6 +112,32 @@ def _values(measure: LeadLag | Response | CatchUp) -> dict[str, list[float]]:
     if trigger.z is not None and trigger.lookback is not None:
         values["z"] = list(trigger.z)
         values["lookback"] = [span_ns(trigger.lookback)]
+    return values
+
+
+def _condition_values(measure: Condition) -> dict[str, list[float]]:
+    """A condition's ranged parameters: how many tests and controls, each fixed hold, a
+    sign-flip null's block, each end of a turn of the month, its latency and its power."""
+    values: dict[str, list[float]] = {
+        "tests": [len(measure.tests)],
+        "controls": [len(measure.controls)],
+        "hold_sessions": [
+            test.hold.sessions
+            for test in measure.tests.values()
+            if isinstance(test.hold, FixedHold)
+        ],
+        "turn_of_month": [
+            end
+            for item in measure.demean
+            if isinstance(item, TurnOfMonth)
+            for end in item.turn_of_month
+        ],
+        "latency_ms": [measure.latency_ms],
+    }
+    if measure.block is not None:
+        values["block"] = [measure.block]
+    if measure.mde_power is not None:
+        values["mde_power"] = [measure.mde_power]
     return values
 
 
