@@ -199,6 +199,29 @@ def test_a_spec_that_is_not_yaml_is_refused(runner: CliRunner, ready: Path) -> N
     assert "not valid YAML" in payload(result)["error"]
 
 
+def test_a_spec_key_yaml_reads_as_no_text_is_refused_by_its_place(
+    runner: CliRunner, ready: Path
+) -> None:
+    """A loader spec is a workspace file, so a bare `on:` — a boolean to YAML — is refused as
+    in any other, before the loader reads a field and before anything is written."""
+    path = write_spec(ready, name="on.yaml")
+    path.write_text(
+        path.read_text(encoding="utf-8") + "model_args:\n  on: [1, 2]\n", encoding="utf-8"
+    )
+    held = sorted((ready / "catalog").rglob("*"))
+
+    result = at(runner, ready, "data", "load", "--loader", "synthetic", "--spec", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION, result.stdout
+    refused = payload(result)
+    assert refused["error"] == (
+        f"{path}: model_args: the key true is read by YAML as a boolean — a bare on, off, yes, "
+        "no, true or false, and every key of a workspace file is text"
+    )
+    assert refused["remedy"].startswith('quote the key, e.g. "on": rather than on:')
+    assert sorted((ready / "catalog").rglob("*")) == held, "nothing written"
+
+
 def test_a_shortfall_is_stated_rather_than_smoothed_over(runner: CliRunner, ready: Path) -> None:
     """The spec asks into the weekend; coverage is what the sessions actually served."""
     spec = write_spec(ready, start="2024-01-02", end="2024-01-07")

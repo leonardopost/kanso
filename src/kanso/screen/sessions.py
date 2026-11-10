@@ -4,7 +4,8 @@
 UTC under `overlap` — on which a cell's legs printed. A day is never decided by a calendar:
 a leg that did not print on it leaves it out of every cell that leg is in, so a US holiday
 drops out of a BTC-against-MARA cell and stays in a BTC-against-ETH cell. Returns are never
-taken across two sessions.
+taken across two sessions, except by a `condition` measure, whose periods may run from one
+session's first or last point to the next session's (`kanso.screen.condition`).
 
 **What a session's points are.** Each leg is read with `kanso.nautilus.backtest.market_points`,
 the function a card's window is read with, so a screen is handed the same points at the same

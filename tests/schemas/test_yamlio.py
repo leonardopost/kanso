@@ -143,3 +143,35 @@ def test_a_number_where_a_string_belongs_is_not_called_a_boolean() -> None:
         parse_yaml(Universe, "instruments: [1]\n", "spec.yaml")
     assert caught.value.message == "spec.yaml: instruments.0: Input should be a valid string"
     assert caught.value.remedy is None
+
+
+@pytest.mark.parametrize(
+    ("key", "read"),
+    [
+        ("null", "null is read by YAML as no value — a bare null, ~ or nothing"),
+        ("~", "null is read by YAML as no value"),
+        ("on", "true is read by YAML as a boolean — a bare on, off, yes, no, true or false"),
+        ("No", "false is read by YAML as a boolean"),
+        ("1", "1 is read by YAML as a number"),
+        ("2.5", "2.5 is read by YAML as a number"),
+        ("2024-01-02", "2024-01-02 is read by YAML as a date"),
+    ],
+)
+def test_a_key_yaml_reads_as_anything_but_text_is_refused_by_place(key: str, read: str) -> None:
+    text = f"instruments: [AAA]\nnested:\n  - deeper: {{{key}: x}}\n"
+
+    with pytest.raises(ValidationError) as caught:
+        parse_yaml(Universe, text, "spec.yaml")
+
+    # Refused by its place before the schema reads a field, so `nested` is never called extra.
+    assert caught.value.code is Exit.VALIDATION
+    assert caught.value.message.startswith(f"spec.yaml: nested.0.deeper: the key {read}")
+    assert caught.value.message.endswith(", and every key of a workspace file is text")
+    assert caught.value.remedy is not None and '"on": rather than on:' in caught.value.remedy
+
+
+def test_a_top_level_key_is_refused_without_a_place_and_a_quoted_one_is_text() -> None:
+    with pytest.raises(ValidationError, match=r"^spec\.yaml: the key null is read by YAML"):
+        parse_yaml(Universe, "null: x\ninstruments: [AAA]\n", "spec.yaml")
+    with pytest.raises(ValidationError, match="null: Extra inputs are not permitted"):
+        parse_yaml(Universe, '"null": x\ninstruments: [AAA]\n', "spec.yaml")
