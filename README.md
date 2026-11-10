@@ -5,9 +5,20 @@
 [![python](https://img.shields.io/pypi/pyversions/kanso)](https://pypi.org/project/kanso/)
 [![license](https://img.shields.io/github/license/leonardopost/kanso)](LICENSE)
 
-A minimalist, agent-first quant research workbench. It turns one or many trading theses, across
-asset classes (e.g. equities, crypto), into Karpathy-style autoresearch loops that run
-indefinitely, guarded against overfitting.
+A minimalist, agent-first quant research workbench. It turns a trading thesis into a Karpathy-style
+autoresearch loop that runs indefinitely, with guards against overfitting built in. It supports
+multiple asset classes, including stocks, futures and crypto.
+
+The problem: Quant research can be specified a hundred ways, and choosing between them by hand is
+slow, inconsistent and easy to overfit. kanso makes the choice deterministic. An agent proposes
+each specification, a reproducible backtest scores it net of costs, and only one that beats the
+best so far is kept. The winner is then tested on data the search never saw.
+
+It’s basically having a quant research team working 24/7 to test and validate your trading theses.
+
+The philosophy: Kanso (簡素) is a principle of Zen aesthetics: the maximum effect from the minimum
+means. kanso aims to reduce all the complexity of running trustworthy quant research to a single
+prompt.
 
 ## Concepts
 
