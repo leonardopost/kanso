@@ -143,6 +143,8 @@ def test_a_pinned_dataset_cannot_be_overwritten(ws: FakeWorkspace) -> None:
     assert "named by a snapshot" in raised.value.message
     assert raised.value.remedy is not None
     assert "supersedes" in raised.value.remedy
+    # A successor over the same span keeps the id, so the old snapshots still cover.
+    assert "only when the successor's id differs (docs/backlog.md row 232)" in raised.value.remedy
 
 
 def test_a_supersede_takes_the_place_of_the_pinned_dataset_it_names(ws: FakeWorkspace) -> None:
@@ -1136,6 +1138,7 @@ def test_a_delayed_dataset_recorded_while_another_series_landed_is_refused_until
     assert dataset in str(refused.value)
     assert f"catalog/manifests/{dataset}.yaml" in remedy
     assert (f"without --supersedes {dataset}" in remedy) is supersede
+    assert ("only when the new dataset's id differs" in remedy) is supersede
     assert held_files(ws) == sorted([*definitions, *held.files, *other.files])
     assert m.manifests(ws) == {dataset: recorded, other.manifest.dataset_id: other.manifest}
     assert not (m.catalog_path(ws) / cat.ASIDE_DIR).exists()

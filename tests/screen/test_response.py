@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from kanso.nautilus.costs import fill_cost
 from kanso.schemas.screen import Response, Screen
@@ -161,6 +163,55 @@ def test_a_z_trigger_fires_on_an_excursion_from_its_trailing_mean() -> None:
     spec = screen({"leg": "a", "z": [3.0], "lookback": "20s"})
 
     assert tally(spec, series).events == 1
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    steps=st.lists(st.integers(-20, 20), min_size=1, max_size=300),
+    gaps=st.lists(st.integers(0, 3), min_size=300, max_size=300),
+    lookback=st.integers(1, 60),
+    constant=st.floats(5.0, 7.0),
+)
+def test_a_z_score_does_not_move_when_every_level_moves_by_a_constant(
+    steps: list[int], gaps: list[int], lookback: int, constant: float
+) -> None:
+    # Levels a tenth of a basis point a step apart, some points sharing an instant; a
+    # constant near a log price is added to every one, which no z-score may read.
+    levels = np.cumsum(np.asarray(steps, dtype=np.float64)) * 1e-5
+    times = np.cumsum(np.asarray(gaps[: len(steps)], dtype=np.int64)) * S
+
+    plain = response._z(times, levels, lookback * S)
+    lifted = response._z(times, levels + constant, lookback * S)
+
+    np.testing.assert_allclose(lifted, plain, rtol=0.0, atol=1e-6)
+
+
+def test_a_z_score_over_millions_of_points_is_the_statistic_its_window_holds() -> None:
+    # Two million quote mids at SPY's level, each a tenth of a basis point from the last a
+    # fifth of the time — about the half cent a mid moves at $575 — some 85 a second over a
+    # session, z over three minutes: the raw sums of levels and squares are 0.24 off here.
+    rng = np.random.default_rng(575)
+    count, lookback = 2_000_000, 180 * S
+    steps = rng.choice([-1e-5, 1e-5], count) * (rng.random(count) < 0.2)
+    levels = math.log(575.0) + np.cumsum(steps)
+    times = np.cumsum(rng.integers(1, 23_400, count)) * 1_000
+
+    z = response._z(times, levels, lookback)
+
+    # Directly, window by window and in two passes, on the levels as they are: the points
+    # spread over the session and its last five hundred, where the sums before them are
+    # largest.
+    at = np.unique(np.r_[np.linspace(0, count - 1, 3_000).astype(np.int64), count - 500 : count])
+    first = np.searchsorted(times, times[at] - lookback, side="right")
+    direct = np.zeros(len(at))
+    for k, (i, f) in enumerate(zip(at.tolist(), first.tolist(), strict=True)):
+        window = levels[f : i + 1]
+        mean = window.mean()
+        deviation = math.sqrt(np.mean((window - mean) ** 2))
+        if len(window) >= response.MIN_SCORED and deviation > 0:
+            direct[k] = (levels[i] - mean) / deviation
+    np.testing.assert_allclose(z[at], direct, rtol=0.0, atol=1e-6)
+    assert (np.abs(direct) >= 3.5).any()
 
 
 def test_drift_is_taken_out_of_the_signal_and_left_in_the_gross() -> None:
