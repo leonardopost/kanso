@@ -2006,7 +2006,7 @@ inside the quote, as there, and not on the ones its quotes made; a close at or b
 touch is a fill at the touch like any other, and pays neither. Under `touch` and `through` a taker that lands on the book a print left
 fills at the print's price, and pays the half-spread when that is inside the quote and
 nothing when the print hit the far side. A maker filled at its own price inside the quote — on
-a print through it under the print rules, or on a print at it under `touch` — pays both unless
+a print at or through it under the print rules, or on a print at it under `touch` — pays both unless
 the model states a maker schedule (below). Of several quotes at one instant the one read is
 the last the venue applied there. The harness reads the same quote: the engine hands a sleeve
 a fill before the point the venue made it on, so a fill a quote made arrives against the

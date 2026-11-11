@@ -65,11 +65,15 @@ from pydantic import Field, model_validator
 from kanso.data import closures
 from kanso.data.closures import Closed
 from kanso.data.manifest import (
+    MANIFESTS_DIR,
+    SNAPSHOTS_DIR,
     Manifest,
     contains,
     manifests,
+    sanitise,
     snapshots_path,
 )
+from kanso.data.types.print_terms import TYPE_ID as TERMS_TYPE
 from kanso.errors import PreconditionError, ValidationError
 from kanso.schemas.base import NonEmpty, Sha256, Versioned
 from kanso.schemas.hypothesis import Windows
@@ -255,28 +259,66 @@ def covering(
     )
 
 
-def short_of(
-    ws: Workspace,
-    snapshot: Snapshot,
-    type_id: str,
-    names: Sequence[str],
-    window: tuple[date, date],
-) -> tuple[str, ...]:
-    """The names among `names` whose `type_id` the snapshot does not hold on every day of
-    `window` their market opened, read on each one's own calendar as `covering` reads it — the
-    test a required type is held to, asked of a type nothing requires."""
-    held = manifests(ws)
-    picked = [held[name] for name in snapshot.datasets if name in held]
-    closed = closures.by_instrument(_definitions(ws, names).values())
-    return tuple(
-        name
-        for name in names
-        if not contains(
-            [m.span for m in picked if m.instrument == name and m.type == type_id],
-            window,
-            closed.get(name, closures.never),
-        )
-    )
+TRADE_TYPE: Final = "trade"
+"""The type a name's prints are filed under, whose terms `with_terms` asks after."""
+
+
+def with_terms(
+    catalog: Path, snapshot_id: str, names: Iterable[str], span: tuple[date, date]
+) -> frozenset[str]:
+    """The names among `names` whose prints over `span` the snapshot `snapshot_id` pins the
+    terms of, read off the snapshot and the manifests under `catalog`, the store's root.
+
+    A name is among them when the snapshot pins a `trade` dataset of it that meets `span`, and
+    every day of the span each such dataset serves is served by a `print_terms` dataset of the
+    name the snapshot pins too. A loader writes a day's terms from the very rows it writes that
+    day's prints from, so the terms of every print the run reads are then the pinned bytes; a
+    load of terms the snapshot does not name changes no run pinned to it, and a name short of a
+    day reads every print as lit, as one whose prints carry no terms at all does. The runner
+    reads terms for these names alone (`kanso.nautilus.backtest`) and `research begin` names the
+    rest, so the two agree by construction. A snapshot the store does not hold pins nothing.
+    """
+    path = catalog / SNAPSHOTS_DIR / f"{snapshot_id}.yaml"
+    if not path.is_file():
+        return frozenset()
+    datasets = load_yaml(Snapshot, path).datasets
+    found: set[str] = set()
+    for name in names:
+        trades = [
+            m.span
+            for m in _pinned(catalog, datasets, name, TRADE_TYPE)
+            if m.span[0] <= span[1] and span[0] <= m.span[1]
+        ]
+        served = {
+            day for m in _pinned(catalog, datasets, name, TERMS_TYPE) for day in _days(m.span)
+        }
+        wanted = {
+            day for held in trades for day in _days((max(held[0], span[0]), min(held[1], span[1])))
+        }
+        if trades and wanted <= served:
+            found.add(name)
+    return frozenset(found)
+
+
+def _pinned(catalog: Path, datasets: Sequence[str], name: str, type_id: str) -> list[Manifest]:
+    """The manifests of the datasets of `name`'s `type_id` among `datasets`, found by the prefix
+    their ids begin with, so no other series' manifest is opened."""
+    prefix = f"{sanitise(name)}-{sanitise(type_id)}-"
+    found: list[Manifest] = []
+    for dataset in datasets:
+        if not dataset.startswith(prefix):
+            continue
+        path = catalog / MANIFESTS_DIR / f"{dataset}.yaml"
+        if path.is_file():
+            manifest = load_yaml(Manifest, path)
+            if manifest.instrument == name and manifest.type == type_id:
+                found.append(manifest)
+    return found
+
+
+def _days(span: tuple[date, date]) -> range:
+    """The days of an inclusive span, as ordinals."""
+    return range(span[0].toordinal(), span[1].toordinal() + 1)
 
 
 @dataclass(frozen=True, slots=True)

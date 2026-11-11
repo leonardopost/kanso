@@ -890,7 +890,8 @@ def window_data(
     held = _held(catalog, hyp)
     opens, closes = request.delivered
     scope = _scope_days(catalog, hyp, opens, closes - 1)
-    groups, loaded = _window_points(request, catalog, held, scope, opens, closes - 1)
+    pinned = _with_terms(request, catalog_path)
+    groups, loaded = _window_points(request, catalog, held, scope, pinned, opens, closes - 1)
     _refuse_missing_grain(request, loaded)
     ordered = tuple(held[name] for name in sorted(hyp.universe))
     return ordered, groups
@@ -901,6 +902,7 @@ def _window_points(
     catalog: Any,
     held: Mapping[str, Any],
     scope: Scope | None,
+    with_terms: frozenset[str],
     start: int,
     end: int,
 ) -> tuple[tuple[tuple[object, ...], ...], dict[str, int]]:
@@ -909,7 +911,6 @@ def _window_points(
 
     groups: list[tuple[object, ...]] = []
     loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
-    taped = _taped(request)
     for requirement, name, resolution in _series(request):
         if name is None:
             custom = _custom_points(
@@ -919,7 +920,7 @@ def _window_points(
                 groups.append(custom)
             continue
         found = market_points(catalog, requirement, held[name], resolution, start, end)
-        if taped and requirement == "trade":
+        if requirement == "trade" and name in with_terms:
             found = termed(catalog, held[name], start, end, found)
         found = _in_scope(found, name, scope)
         if found:
@@ -929,14 +930,19 @@ def _window_points(
     return tuple(groups), loaded
 
 
-def _taped(request: RunRequest) -> bool:
-    """Whether the request's venue fills by a print rule, the one place a print's terms move a
-    fill (`kanso.nautilus.tape`)."""
+def _with_terms(request: RunRequest, catalog_path: Path) -> frozenset[str]:
+    """The names whose prints are read with their terms: under a print rule, the one place a
+    print's terms move a fill (`kanso.nautilus.tape`), each whose terms over the days fed the
+    request's snapshot pins (`kanso.data.snapshot.with_terms`); under any other, none. So a
+    load of terms after the snapshot moves no card pinned to it."""
+    from kanso.data.snapshot import with_terms
     from kanso.nautilus.venue import PRINT_SIZE
 
     held = request.venue_model
     model = held if isinstance(held, VenueModel) else VenueModel.model_validate(dict(held))
-    return model.costs.limit_fill in PRINT_SIZE
+    if model.costs.limit_fill not in PRINT_SIZE:
+        return frozenset()
+    return with_terms(catalog_path, request.snapshot_id, sorted(request.hyp.universe), request.span)
 
 
 def termed(
@@ -944,7 +950,8 @@ def termed(
 ) -> tuple[object, ...]:
     """One instrument's prints with `start <= ts_init <= end`, in file order, with each that its
     terms in the catalog mark not lit handed on as a `kanso.nautilus.tape.Unlit` and every other
-    as it was: a lit one, and one whose terms the catalog does not hold.
+    as it was: a lit one, and one whose terms the catalog does not hold. The runner asks it only
+    of a name whose terms the run's snapshot pins (`_with_terms`).
 
     A print's terms are the `print_terms` point of its instrument at its `ts_init` under its
     trade id (`kanso.data.types.print_terms`); an id two terms of one instant claim with
@@ -3063,7 +3070,7 @@ def window_chunks(
     been read. Every caller re-checks each chunk as it runs it.
     """
     catalog, held, instruments, scope = _opened(request, catalog_path)
-    return instruments, _chunked(request, catalog, held, scope)
+    return instruments, _chunked(request, catalog, held, scope, _with_terms(request, catalog_path))
 
 
 def _opened(
@@ -3087,7 +3094,11 @@ def _opened(
 
 
 def _chunked(
-    request: RunRequest, catalog: Any, held: Mapping[str, Any], scope: Scope | None
+    request: RunRequest,
+    catalog: Any,
+    held: Mapping[str, Any],
+    scope: Scope | None,
+    with_terms: frozenset[str],
 ) -> Iterator[tuple[tuple[object, ...], ...]]:
     """The delivered span as chunks, read from the catalog only as they are asked for.
 
@@ -3117,7 +3128,7 @@ def _chunked(
     edge = first + (opens - first) // step * step
     counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1), edge, step)
     for start, end in _reads(counted, edge, step, (opens, closes), cap):
-        groups, counts = _window_points(request, catalog, held, scope, start, end)
+        groups, counts = _window_points(request, catalog, held, scope, with_terms, start, end)
         for grain, count in counts.items():
             loaded[grain] += count
         yield from _cut(groups, CHUNK_POINTS)

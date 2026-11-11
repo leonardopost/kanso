@@ -15,8 +15,9 @@ the instant it became public, so a point of this type and its print are one reco
 under the print rules the runner hands the venue each print whose terms say it is not lit as a
 `kanso.nautilus.tape.Unlit`, which fills no resting order and moves no queue, and every other
 print, one it holds no terms for among them, as a plain print, which the venue reads as lit
-(`kanso.nautilus.backtest`). A hypothesis may also require the type, and is then handed the
-points in `on_data`.
+(`kanso.nautilus.backtest`) — and reads them only for a name whose terms the run's snapshot
+pins over the days it is fed (`kanso.data.snapshot.with_terms`). A hypothesis may also
+require the type, and is then handed the points in `on_data`.
 
 NautilusTrader facts (`nautilus_trader 1.231.0`) are those `kanso.data.types.funding` records
 for any type built with `@customdataclass`, and so is the reason **this module must not use

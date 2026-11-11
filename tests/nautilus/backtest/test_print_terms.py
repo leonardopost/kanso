@@ -3,12 +3,14 @@
 Under `print_through` and `print_through_whole` the runner hands the venue each print its
 `print_terms` mark not lit as a `kanso.nautilus.tape.Unlit`, which fills no resting order and
 moves no queue; a print they mark lit, and one they say nothing of, is the print it always was.
-Under `touch` and `through` the terms are not read at all. A sleeve that rests no order reads
-a tape with terms exactly as one without.
+Under `touch` and `through` the terms are not read at all, and neither are terms the run's
+snapshot does not pin. A sleeve that rests no order reads a tape with terms exactly as one
+without.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -19,10 +21,13 @@ from nautilus_trader.model.identifiers import InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import midnight_ns
+from kanso.data import manifest as m
+from kanso.data import snapshot as snap
 from kanso.data.types import PrintTerms
-from kanso.nautilus.backtest import execute, window_chunks, window_data
+from kanso.nautilus.backtest import RunRequest, execute, window_chunks, window_data
 from kanso.nautilus.tape import Unlit
 from kanso.schemas import Hypothesis
+from kanso.schemas.yamlio import write_yaml
 
 from .conftest import INSTRUMENT, RESEARCH, catalog, hypothesis, instrument
 
@@ -119,6 +124,40 @@ def terms(readings: dict[str, bool]) -> list[PrintTerms]:
 READINGS = {"P1": True, "P2": False, "P3": True}
 
 
+def pinned(root: Path, request: RunRequest, types: tuple[str, ...]) -> RunRequest:
+    """`request` pinned to a snapshot of `root` naming a dataset of each of `types` over the
+    tape's day, its manifest beside it."""
+    ids = []
+    for directory in (m.MANIFESTS_DIR, m.SNAPSHOTS_DIR):
+        (root / directory).mkdir(exist_ok=True)
+    for type_ in types:
+        dataset = m.dataset_id(INSTRUMENT, type_, None, False, DAY)
+        manifest = m.Manifest(
+            dataset_id=dataset,
+            source="synthetic",
+            instrument=INSTRUMENT,
+            type=type_,
+            span=(DAY, DAY),
+            row_count=1,
+            checksum=f"{len(ids)}" * 64,
+        )
+        write_yaml(manifest, root / m.MANIFESTS_DIR / f"{dataset}.yaml")
+        ids.append(dataset)
+    checksums = [f"{n}" * 64 for n in range(len(ids))]
+    held = snap.Snapshot(
+        snapshot_id=snap.snapshot_id(checksums, "f" * 64),
+        datasets=ids,
+        checksums=checksums,
+        instruments_checksum="f" * 64,
+        created_at="2024-01-03T00:00:00Z",
+    )
+    write_yaml(held, root / m.SNAPSHOTS_DIR / f"{held.snapshot_id}.yaml")
+    return replace(request, snapshot_id=held.snapshot_id)
+
+
+TAPED = ("trade", "print_terms")
+
+
 def taped(rule: str) -> Hypothesis:
     document = hypothesis(data_requirements=("quote", "trade"), resolution="tick").model_dump(
         mode="json"
@@ -138,7 +177,7 @@ def test_a_print_its_terms_mark_not_lit_is_handed_on_unlit_under_a_print_rule(
     tmp_path: Path, request_for, rule: str
 ) -> None:
     root = catalog(tmp_path / "catalog", [*tape(), *terms(READINGS)], [instrument()])
-    request = request_for(RESEARCH, source=POSTING, hypothesis_=taped(rule))
+    request = pinned(root, request_for(RESEARCH, source=POSTING, hypothesis_=taped(rule)), TAPED)
 
     _, whole = window_data(request, root)
     _, chunks = window_chunks(request, root)
@@ -154,8 +193,25 @@ def test_under_the_engine_s_rules_no_print_is_read_for_its_terms(
     tmp_path: Path, request_for, rule: str
 ) -> None:
     root = catalog(tmp_path / "catalog", [*tape(), *terms(READINGS)], [instrument()])
-    _, whole = window_data(request_for(RESEARCH, source=POSTING, hypothesis_=taped(rule)), root)
+    request = pinned(root, request_for(RESEARCH, source=POSTING, hypothesis_=taped(rule)), TAPED)
+    _, whole = window_data(request, root)
     assert kinds(whole) == ["TradeTick"] * 4
+
+
+@pytest.mark.parametrize("types", [(), ("trade",)])
+def test_terms_the_run_s_snapshot_does_not_pin_are_not_read(
+    tmp_path: Path, request_for, types: tuple[str, ...]
+) -> None:
+    """Terms loaded after the snapshot a run is pinned to, or with no snapshot held at all,
+    move none of its fills: every print is handed on as the print it was."""
+    root = catalog(tmp_path / "catalog", [*tape(), *terms(READINGS)], [instrument()])
+    request = request_for(RESEARCH, source=POSTING, hypothesis_=taped("print_through"))
+    if types:
+        request = pinned(root, request, types)
+    _, whole = window_data(request, root)
+    _, chunks = window_chunks(request, root)
+    assert kinds(whole) == ["TradeTick"] * 4
+    assert [kinds(chunk) for chunk in chunks] == [kinds(whole)]
 
 
 def test_terms_that_read_one_print_two_ways_are_held_for_neither(
@@ -163,7 +219,9 @@ def test_terms_that_read_one_print_two_ways_are_held_for_neither(
 ) -> None:
     twice = [*terms({"P1": True, "P2": False}), *terms({"P2": True})]
     root = catalog(tmp_path / "catalog", [*tape(), *twice], [instrument()])
-    request = request_for(RESEARCH, source=POSTING, hypothesis_=taped("print_through"))
+    request = pinned(
+        root, request_for(RESEARCH, source=POSTING, hypothesis_=taped("print_through")), TAPED
+    )
     _, whole = window_data(request, root)
     assert kinds(whole) == ["TradeTick"] * 4
 
@@ -175,6 +233,8 @@ def fills_of(tmp_path: Path, request_for, source: bytes, held: bool) -> object:
         [instrument()],
     )
     request = request_for(RESEARCH, source=source, hypothesis_=taped("print_through"))
+    if held:
+        request = pinned(root, request, TAPED)
     instruments, groups = window_data(request, root)
     return execute(request, instruments, groups)
 

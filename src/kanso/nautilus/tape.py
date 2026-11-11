@@ -27,9 +27,10 @@ under either rule.
 the size the quote in force shows at the order's price, less what the sleeve's own takers have
 taken there since that quote; nothing, when the order's price is better than the quote's side
 of the book, as an order inside the spread is alone at its price; and unknown, when the price is
-behind the touch or no quote is in force, when only a print through the order fills it. Each
-later quote cuts the estimate to the size it shows at the order's price, so a size cancelled
-there is taken from behind the order first and the estimate never exceeds what the price shows:
+behind the touch or no quote is in force, and then, until a quote shows the price, only a print
+through the order fills it. Each later quote cuts the estimate to the size it shows at the
+order's price, so a size cancelled there is taken from behind the order first and the estimate
+never exceeds what the price shows:
 a quote whose side has moved away from the order's price — a bid under a resting buy — shows
 nothing there and leaves nothing ahead, one whose side is better than the order's price leaves
 the estimate as it was, and one whose side is at a price whose size ahead was unknown starts it

@@ -105,7 +105,7 @@ from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
 from kanso.data.instruments import run_definitions
 from kanso.data.manifest import catalog_path
-from kanso.data.snapshot import Snapshot, covering, short_of
+from kanso.data.snapshot import Snapshot, covering, with_terms
 from kanso.env import read as read_envelope
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.hyp import (
@@ -1306,7 +1306,7 @@ def begin(
     begun: dict[str, object] = {"run_id": run.run_id, "tag": run.tag, "lane": lane}
     if reseeded is not None:
         begun[RESEED_FROM] = reseeded
-    bare = _without_terms(ws, hyp, snapshot, setup.venue_model)
+    bare = _without_terms(ws, hyp, snapshot, setup)
     if bare is not None:
         begun[WITHOUT_TERMS] = list(bare)
     store.event(BEGUN, hyp_id, begun)
@@ -1331,20 +1331,21 @@ def begin(
 
 
 def _without_terms(
-    ws: Workspace, hyp: Hypothesis, snapshot: Snapshot, model: VenueModel
+    ws: Workspace, hyp: Hypothesis, snapshot: Snapshot, setup: Setup
 ) -> tuple[str, ...] | None:
-    """Under a print rule, each name the hypothesis asks for `trade` whose `print_terms` the
-    pinned snapshot does not hold on every day of the research window its market opened: its
-    resting orders fill on every print the tape holds, lit or not (`kanso.nautilus.tape`).
+    """Under a print rule, each name the hypothesis asks for `trade` whose prints over the days
+    a card is fed — the research window and its warmup — the pinned snapshot holds no terms
+    for, by the rule the runner reads terms by (`kanso.data.snapshot.with_terms`): its resting
+    orders fill on every print the tape holds, each read as lit (`kanso.nautilus.tape`).
     `None` under any other rule, where a print's terms move no fill."""
-    from kanso.data.types.print_terms import TYPE_ID
     from kanso.nautilus.venue import PRINT_SIZE
 
-    if model.costs.limit_fill not in PRINT_SIZE:
+    if setup.venue_model.costs.limit_fill not in PRINT_SIZE:
         return None
     names = [name for name in sorted(hyp.universe) if "trade" in hyp.required_of(name)]
-    window = (hyp.windows.research.start, hyp.windows.research.end)
-    return short_of(ws, snapshot, TYPE_ID, names, window)
+    span = (setup.window[0] if setup.prefix is None else setup.prefix[0], setup.window[1])
+    termed = with_terms(catalog_path(ws), snapshot.snapshot_id, names, span)
+    return tuple(name for name in names if name not in termed)
 
 
 def _base_source(

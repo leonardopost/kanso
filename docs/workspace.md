@@ -1086,11 +1086,11 @@ estimated from the quotes, since a top-of-book tape shows no queue. When the ord
 place it is what the quote in force shows at the order's price, less what the sleeve's own
 takers have taken there since that quote; nothing when the order's price is better than the
 quote's side, inside the spread; and unknown when it rests behind the touch or no quote is in
-force, so only a print through it fills it. Each later quote cuts the estimate to what it shows
-at the order's price — a size cancelled there is taken from behind the order first, and the
+force, and then, until a quote shows its price, only a print through it fills it. Each later
+quote cuts the estimate to what it shows at the order's price — a size cancelled there is taken from behind the order first, and the
 estimate never exceeds what the price shows — a quote whose side has moved away from the price,
-a bid under a resting buy, leaves nothing ahead, one better than the price leaves the estimate
-as it was, and one at a price whose estimate was unknown starts it at the size shown. A print at
+a bid under a resting buy, leaves nothing ahead, one whose side is better than the price leaves
+the estimate as it was, and one at a price whose estimate was unknown starts it at the size shown. A print at
 the price cuts it by what of the print is left once the orders it is through have taken their
 share, a taker of the sleeve's own filled at that price cuts it by what it took, and a print
 through the price leaves nothing ahead. The sleeve's own orders at one price queue by the time
@@ -1182,12 +1182,13 @@ take a snapshot. Under either print rule a print its terms mark not lit — off-
 late, out of sequence, a correction, an auction print — fills no resting order and moves no
 queue; it still reaches the sleeve as a print, and still ends the quote in force when it trades
 outside it, so a taker is decided as before. This is the venue's own rule and not a choice a
-hypothesis states: measured over the regular sessions of twenty names on 139 days of the
-vendor's flat files, 18.4 % of the 992.5 million prints were lit — 34.4 % of the shares — and
-41.4 % traded off any exchange, prints no displayed order there could have been part of. A print
-whose terms the catalog does not hold is read as lit, and
-`research begin` names each name whose prints the run's snapshot holds no terms for over the
-research window (`docs/cli.md`).
+hypothesis states: measured on 2026-10-29 over the regular sessions of twenty names on 139 days
+of the vendor's flat files, 18.4 % of the 992.5 million prints were lit — 34.4 % of the shares — and
+41.4 % traded off any exchange, prints no displayed order there could have been part of. A run reads
+a name's prints with their terms only when its snapshot pins them — a `print_terms` dataset
+serving every day each print dataset of the name it pins serves over the days a card is fed —
+so terms loaded after the snapshot move no card pinned to it. Every print of any other name is
+read as lit, and `research begin` names each such name (`docs/cli.md`).
 
 Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
 clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
