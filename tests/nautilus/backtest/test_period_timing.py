@@ -6,8 +6,11 @@ signal fires at the first points a session hands it and whose day a stop ends a 
 — scores like any other, and its trades, holds and edges say nothing of when it traded. Its
 digest says it in seconds from each period's first point, which the parent notes as it
 streams the card its window (`RunResult.firsts_ns`): so a session that opens at 09:30 in New
-York reads the same in winter, when that is 14:30Z, and in summer, when it is 13:30Z, and no
-calendar is consulted to make it so.
+York reads the same in winter, when that is 14:30Z, and in summer, when it is 13:30Z, so long
+as its period opens on its own first point — as each session here does, the after-hours print
+past a midnight standing in a period no session shares — and no calendar is consulted to make
+it so. Where the evening before reaches into a session's period, that period is read from the
+evening's point (`tests/criteria/test_digest.py`).
 """
 
 from __future__ import annotations

@@ -132,8 +132,9 @@ def test_each_period_s_first_instant_is_noted_however_a_chunk_falls_across_them(
     request_for,
 ) -> None:
     """A chunk inside one period is noted by its earliest instant; one that holds points of
-    several periods, or of the warmup prefix before the window, is read point by point, each
-    period's earliest noted and the prefix's not at all, in whatever order a group holds them."""
+    several periods, or of the warmup prefix before the window, is read point by point, every
+    group of it, each period's earliest noted — a point at the window's opening instant
+    included — and the prefix's not at all, in whatever order a group holds them."""
     from types import SimpleNamespace
 
     from kanso.nautilus import backtest as runner
@@ -149,11 +150,20 @@ def test_each_period_s_first_instant_is_noted_however_a_chunk_falls_across_them(
         (points(-5, 3 * day + 7), points(2 * day + 9, 2 * day + 4)),
         (points(2 * day + 2, 2 * day + 1),),
         (points(3 * day + 8),),
+        (points(day + 6), points(5 * day + 3, 4 * day + 2)),
+        (points(0, day + 5),),
     ]
     firsts: dict[int, int] = {}
 
     assert list(runner._marked_chunks(request, iter(chunks), firsts)) == chunks
-    assert firsts == {2: opens + 2 * day + 1, 3: opens + 3 * day + 7}
+    assert firsts == {
+        0: opens,
+        1: opens + day + 5,
+        2: opens + 2 * day + 1,
+        3: opens + 3 * day + 7,
+        4: opens + 4 * day + 2,
+        5: opens + 5 * day + 3,
+    }
 
 
 def test_the_child_is_given_an_allow_list_and_no_catalog(

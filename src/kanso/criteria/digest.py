@@ -48,8 +48,14 @@ quantity the toolbox already defines:
   where that came first or no point was noted, which a fill stamped at a data instant never
   does — to its first fill and to its last, and from its first fill to its last, beside the
   `period` they were read on. No calendar is consulted: an offset is from a point, so a card
-  handed a session that starts at the same local time every day, and trading it at the same
-  local times, reads the same either side of a change of clocks. Each median is the lower
+  whose every period opens on its own session's first point — a session that starts at the
+  same local time every day and leaves nothing past the next midnight UTC — and that trades
+  at the same local times reads the same either side of a change of clocks. A session that
+  runs past midnight UTC hands the next period its last points, and that period is read from
+  the first of them: where it does so in one season and not the other — New York's evening
+  session, which closes at 20:00 there, does in winter, when that is 01:00Z, and not in
+  summer, when it is 00:00Z — the same local trading reads hours apart either side of the
+  change. Each median is the lower
   middle value over an even count, an offset some period filled at. A run with no first
   points noted, one run in process (`backtest.run`, `backtest.execute`) rather than as a
   card, reads `None` for all five.

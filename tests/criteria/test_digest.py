@@ -227,6 +227,24 @@ def test_when_a_run_filled_is_read_from_the_first_point_of_each_period_it_filled
     assert (made.first_fill_s, made.last_fill_s, made.active_s) == (1.0, 4.0, 2.5)
 
 
+def test_a_period_the_evening_before_reaches_into_is_read_from_the_evening_s_point() -> None:
+    """The same local trading either side of a change of clocks, on a tape that carries New
+    York's evening session: each session fills one second after 09:30 there. A winter period's
+    first point is the evening before's print at 00:30Z, 19:30 in New York, and a summer
+    period's the 04:00 quote at 08:00Z, since that evening closed before the midnight; so the
+    winter offset is 14:00:01 and the summer one 5:30:01. An offset is from a point and not
+    from a session, so where the evening reaches into a period in one season alone the two
+    read hours apart."""
+    winter = build_run((0.0, 0.0), fills=fills_at(*(instant(d, 14.5 * 3600 + 1) for d in (0, 1))))
+    summer = build_run((0.0, 0.0), fills=fills_at(*(instant(d, 13.5 * 3600 + 1) for d in (0, 1))))
+
+    evening = digest(winter, (), tuple(instant(day, 0.5 * 3600) for day in (0, 1)))
+    morning = digest(summer, (), tuple(instant(day, 8.0 * 3600) for day in (0, 1)))
+
+    assert (evening.first_fill_s, evening.last_fill_s, evening.active_s) == (50_401.0,) * 2 + (0.0,)
+    assert (morning.first_fill_s, morning.last_fill_s, morning.active_s) == (19_801.0,) * 2 + (0.0,)
+
+
 def test_a_period_that_filled_before_any_point_of_it_was_noted_reads_from_that_fill() -> None:
     """A fill is stamped at a data instant, so it never precedes its period's first point; a
     run that says otherwise — a fill a second before the first point noted, or a fill in a

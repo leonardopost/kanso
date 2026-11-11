@@ -606,8 +606,10 @@ def test_the_instruction_says_from_where_a_card_s_timing_is_read() -> None:
     assert "each `period` long and cut from midnight UTC whatever the venue" in said
     assert "the median seconds into each period from its first point" in said
     assert "`active_s` is the median seconds from a period's first fill to its last" in said
-    assert "A burst that straddles a period's boundary" in said
-    assert "reads as the whole period" in said
+    assert (
+        "A burst that straddles a period's boundary, as a hold across 00:00Z does on a 24 h "
+        "name at a daily period, reads as the whole period." in said
+    )
 
 
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
