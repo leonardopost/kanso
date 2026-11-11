@@ -31,6 +31,7 @@ non-credentials of this package's suite, and every response is a frozen body.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -141,6 +142,23 @@ def answers(*pages: Any) -> Callable[[str, Mapping[str, str]], Response]:
         return served.pop(0) if len(served) > 1 else served[0]
 
     return answer
+
+
+def held(
+    answer: Callable[[str, Mapping[str, str]], Response], release: threading.Event
+) -> Callable[[str, Mapping[str, str]], Response]:
+    """`answer`, held until `release` is set, so a test acts while the request is out rather
+    than counting on the loop turning before it returns. On Python 3.13 it need not turn: a
+    request that starts its executor's first thread can be answered before `wrap_future`
+    chains it, which then sets the loop's future at once instead of queuing that with
+    `call_soon_threadsafe` as 3.12 did, and the client's await returns without yielding."""
+
+    def answer_once_released(url: str, params: Mapping[str, str]) -> Response:
+        if not release.wait(timeout=10):
+            raise TimeoutError("a request held in flight was not released after 10 s")
+        return answer(url, params)
+
+    return answer_once_released
 
 
 def bars_body(*rows: Mapping[str, Any], token: str | None = None) -> Response:
@@ -425,12 +443,13 @@ def test_a_series_dropped_before_a_sweep_reaches_it_is_not_swept(make: Any) -> N
 
 def test_a_series_dropped_while_its_request_was_in_flight_is_not_delivered(make: Any) -> None:
     """Nor left with a mark, which would put it back into the sweep after this one."""
-    bed = make(answers(bars_body(SIP_BAR)), now=SESSION_OPEN_NS - 1)
+    release = threading.Event()
+    bed = make(held(answers(bars_body(SIP_BAR)), release), now=SESSION_OPEN_NS - 1)
     bar_type = subscribed(bed)
 
     async def drop() -> None:
-        await asyncio.sleep(0)
         bed.client._since.pop(bar_type)
+        release.set()
 
     async def both() -> int:
         published, _ = await asyncio.gather(bed.client._advance(bar_type, CLOSE_NS + 1), drop())
@@ -444,12 +463,18 @@ def test_a_series_dropped_while_its_request_was_in_flight_is_not_delivered(make:
 
 def test_a_sweep_that_finds_one_in_flight_stands_down(make: Any) -> None:
     """Two sweeps over one window would spend the quota on an answer already in hand."""
-    bed = make(answers(bars_body(SIP_BAR)))
+    release = threading.Event()
+    bed = make(held(answers(bars_body(SIP_BAR)), release))
     subscribed(bed)
     bed.clock.set_time(CLOSE_NS + 1)
 
+    async def overlapping() -> int:
+        found = await bed.client.poll()
+        release.set()
+        return found
+
     async def both() -> tuple[int, int]:
-        first, second = await asyncio.gather(bed.client.poll(), bed.client.poll())
+        first, second = await asyncio.gather(bed.client.poll(), overlapping())
         return first, second
 
     published, stood_down = bed.run(both())

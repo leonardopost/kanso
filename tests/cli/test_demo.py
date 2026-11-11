@@ -187,7 +187,7 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     # The run is still open, and its lane directory is still the interface.
     assert (demo / "runs" / "op" / DEMO_ID / "strategy.py").is_file()
 
-    # -- and again, as the README says: the script wraps with nothing new to propose ------
+    # -- and again: the script wraps with nothing new to propose ---------------------------
     again = at(runner, demo, "research", "run", DEMO_ID, "--cards", CARDS, "--json")
 
     assert again.exit_code == Exit.OK, again.stdout
@@ -208,18 +208,18 @@ def test_the_demo_reaches_no_provider_and_needs_no_credential(demo: Path) -> Non
     assert tiers == {"cheap", "mid", "frontier"}
 
 
-def test_the_demo_load_again_is_refused_as_the_readme_and_the_workspace_page_show_it(
+def test_the_demo_load_again_is_refused_as_the_workspace_page_shows_it(
     runner: CliRunner, demo: Path
 ) -> None:
-    """Both pages show the refusal of the demo's own load run over its snapshot, line for line
-    as standard error carries it: the remedy is one line there, so it is one line on a page."""
+    """The page shows the refusal of the demo's own load run over its snapshot, line for line
+    as standard error carries it: the remedy is one line there, so it is one line on the page."""
     again = at(runner, demo, "data", "load", "--loader", "synthetic", "--spec", demo / "demo.yaml")
 
     assert again.exit_code == Exit.PRECONDITION, again.stderr
     typed = "$ kanso data load --loader synthetic --spec demo.yaml"
     shown = "\n".join([typed, *again.stderr.splitlines()])
-    for name in ("README.md", "docs/workspace.md"):
-        assert f"{shown}\n" in (ROOT / name).read_text(encoding="utf-8"), name
+    page = (ROOT / "docs" / "workspace.md").read_text(encoding="utf-8")
+    assert f"{shown}\n" in page
 
 
 def test_every_command_of_the_demo_sequence_prints_one_object_under_json(
