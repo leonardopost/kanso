@@ -826,9 +826,11 @@ class CatchUpStats(KansoModel):
 class HoldStats(KansoModel):
     """A `condition` cell's positions set against holding its follower, under `benchmark: hold`.
 
-    `sharpe` is the annualised Sharpe of what the positions made each held session net of their
-    round trips, `sharpe_hold` that of buying the follower and keeping it over the same
-    sessions — its close-to-close return each session, one round trip over them — and
+    `sharpe` is the annualised Sharpe of what the positions made each held session — its simple
+    return times the position, in bp of one unit of notional — net of their round trips,
+    `sharpe_hold` that of buying the follower and keeping it over the same sessions — its
+    close-to-close simple return each session, one round trip over each run of contiguous
+    sessions, so it pays at a gap as the positions do — and
     `difference` the first less the second, with `difference_se` its paired error by Memmel's
     correction of Jobson–Korkie. `excess_bp` is the mean a session of the positions' net less
     the hold's. `null_mean` and `null_sd` are the cell's difference's mean and spread over every
