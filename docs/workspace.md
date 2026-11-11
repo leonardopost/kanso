@@ -1188,7 +1188,8 @@ of the vendor's flat files, 18.4 % of the 992.5 million prints were lit — 34.4
 a name's prints with their terms only when its snapshot pins them — a `print_terms` dataset
 serving every day each print dataset of the name it pins serves over the days a card is fed —
 so terms loaded after the snapshot move no card pinned to it. Every print of any other name is
-read as lit, and `research begin` names each such name (`docs/cli.md`).
+read as lit, and `research begin` names each such name (`docs/cli.md`). A stage's live feed
+carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 235).
 
 Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
 clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
