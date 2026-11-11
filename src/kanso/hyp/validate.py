@@ -142,6 +142,10 @@ OVERLAY: Final = "overlay"
 """The attached construct that places orders of its own, and so carries a budget."""
 """Constructs that place no order of their own, so a sizing rule on them sizes nothing."""
 
+ASKING_MORE: Final = "that asks for more than bar"
+"""The `data_by_instrument` entries a remedy over a host reading bars asks for its kind: a name
+asked for bars alone is a bar signal, which carries no quotes or prints to ask it for."""
+
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
 
@@ -1138,7 +1142,7 @@ def _check_host_pairing(
             "clock of its own",
             remedy=(
                 f"set resolution to {host_hyp.resolution} and bar_resolution to "
-                f"{host_hyp.bar_resolution}, requiring bar"
+                f"{host_hyp.bar_resolution}, requiring bar{_host_kind(host_hyp, ASKING_MORE)}"
                 if host_hyp.bar_resolution is not None
                 else f"set resolution to {host_hyp.resolution}, or attach as an overlay"
                 if hyp.bar_resolution is None
@@ -1152,7 +1156,8 @@ def _check_host_pairing(
             f"{host_hyp.bar_resolution}; a construct's cards run its host reading bars at the "
             "size this file states, and a file at a bar-size resolution states none",
             remedy=f"set resolution to {host_hyp.resolution} and bar_resolution to "
-            f"{host_hyp.bar_resolution}, requiring bar, to match {path}",
+            f"{host_hyp.bar_resolution}, requiring bar{_host_kind(host_hyp, ASKING_MORE)}, "
+            f"to match {path}",
         )
     if hyp.bar_resolution != host_hyp.bar_resolution:
         reason, remedy = _host_bars(host_hyp, hyp, path)
@@ -1238,16 +1243,27 @@ def _host_bars(
             "subscribed"
         ), f"set resolution to {host_hyp.resolution} and drop bar_resolution, to match {path}"
     grain = f"set resolution to {host_hyp.resolution}, " if regrain else ""
-    kind = (
-        f", and require {host_hyp.resolution} in data_requirements and in every "
-        "data_by_instrument entry left"
-        if regrain and host_hyp.resolution != "tick"
-        else ""
-    )
+    kind = _host_kind(host_hyp, "left") if regrain else ""
     return f"reads no bars beside its {host_hyp.resolution} grain {runs}", (
         f"{grain}drop bar_resolution, and bar from data_requirements and from every "
         "data_by_instrument entry, an entry that asked for bar alone dropped with its name from "
         f"the universe{kind}, to match {path}"
+    )
+
+
+def _host_kind(host_hyp: Hypothesis, entries: str) -> str:
+    """The clause a remedy taking a host's `quote` or `trade` resolution adds: that kind required.
+
+    A file at either resolution requires that kind and asks some instrument for it, which a
+    file off that grain need not have done, so a remedy that hands it the host's resolution
+    names the requirement too, in `data_requirements` and in every `data_by_instrument` entry
+    `entries` qualifies; at `tick` there is no one kind to name, and none is added.
+    """
+    if host_hyp.resolution not in ("quote", "trade"):
+        return ""
+    return (
+        f", and require {host_hyp.resolution} in data_requirements and in every "
+        f"data_by_instrument entry {entries}"
     )
 
 

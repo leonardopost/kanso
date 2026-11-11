@@ -2533,6 +2533,101 @@ def test_a_filter_off_a_host_reading_bars_beside_ticks_is_given_its_grain_and_si
     assert (followed.resolution, followed.bar_resolution) == ("tick", "1m")
 
 
+def asking(doc: dict[str, Any], kind: str) -> dict[str, Any]:
+    """`doc` with `kind` required as the grain remedy over a quote or a trade host reading bars
+    words it: in `data_requirements` and in every `data_by_instrument` entry that asks for more
+    than bar — a name asked for bars alone keeps asking for bars alone."""
+    return {
+        **doc,
+        "data_requirements": [*doc["data_requirements"], kind],
+        "data_by_instrument": {
+            name: kinds if kinds == ["bar"] else [*kinds, kind]
+            for name, kinds in doc.get("data_by_instrument", {}).items()
+        },
+    }
+
+
+def quote_or_trade_host_reading_bars(host: str) -> dict[str, Any]:
+    """A host at `host` reading one name's `host` feed beside another's bars at 1m."""
+    return {
+        **TICK_BARS,
+        "resolution": host,
+        "data_requirements": ["bar", host],
+        "data_by_instrument": {"DEMO": [host], "EURO": ["bar"]},
+        "bar_resolution": "1m",
+    }
+
+
+@pytest.mark.parametrize("construct", ["filter", "exit"])
+@pytest.mark.parametrize("size", ["5m", "1m"])
+@pytest.mark.parametrize(
+    ("host", "grain", "kinds"),
+    [("quote", "tick", ["bar", "trade"]), ("trade", "quote", ["bar", "quote"])],
+    ids=["over a quote host", "over a trade host"],
+)
+def test_a_rule_off_a_quote_or_trade_host_reading_bars_is_given_its_grain_size_and_kind(
+    ws: Workspace, construct: str, size: str, host: str, grain: str, kinds: list[str]
+) -> None:
+    """A file at `quote` or `trade` requires that kind and asks some instrument for it, which a
+    rule at another grain need not have done; so over such a host stating `bar_resolution` the
+    grain refusal's one remedy requires the host's kind beside its grain and size — of every
+    name but one asked for bars alone, a bar signal with no feed to ask it for — and the file
+    that follows it as worded is admitted. Without the kind it was refused with no remedy."""
+    host_with(ws, **quote_or_trade_host_reading_bars(host))
+    classification = {**FILTER_CLASSIFICATION, "construct": {"id": construct, "host": HOST_ID}}
+    own = [kind for kind in kinds if kind != "bar"]
+    stating = document(
+        **{
+            **TICK_BARS,
+            "resolution": grain,
+            "data_requirements": kinds,
+            "data_by_instrument": {"DEMO": own, "EURO": ["bar"]},
+        },
+        bar_resolution=size,
+        **classification,
+    )
+
+    failure = refused(ws, stating)
+    followed = accepted(ws, asking({**stating, "resolution": host, "bar_resolution": "1m"}, host))
+
+    assert f"resolution: {grain} is not the host's {host}" in failure.message
+    assert failure.remedy == (
+        f"set resolution to {host} and bar_resolution to 1m, requiring bar, and require {host} "
+        "in data_requirements and in every data_by_instrument entry that asks for more than bar"
+    )
+    assert (followed.resolution, followed.bar_resolution, followed.data_requirements) == (
+        host,
+        "1m",
+        [*kinds, host],
+    )
+    assert followed.data_by_instrument == {"DEMO": [*own, host], "EURO": ["bar"]}
+
+
+@pytest.mark.parametrize("host", ["quote", "trade"])
+def test_an_overlay_on_a_bar_clock_over_a_quote_or_trade_host_reading_bars_requires_its_kind(
+    ws: Workspace, host: str
+) -> None:
+    """The overlay refusal's remedy takes the host's grain and size, and over a host at `quote`
+    or `trade` its kind too, since a file at either resolution requires it; followed as worded
+    it is admitted."""
+    host_with(ws, **quote_or_trade_host_reading_bars(host))
+    clocked = document(resolution="5m", costs=TICK_BARS["costs"], **OVERLAY_CLASSIFICATION)
+
+    failure = refused(ws, clocked)
+    followed = accepted(ws, asking({**clocked, "resolution": host, "bar_resolution": "1m"}, host))
+
+    assert (failure.remedy or "").startswith(
+        f"set resolution to {host} and bar_resolution to 1m, requiring bar, and require {host} "
+        "in data_requirements and in every data_by_instrument entry that asks for more than bar, "
+        "to match "
+    )
+    assert (followed.resolution, followed.bar_resolution, followed.data_requirements) == (
+        host,
+        "1m",
+        ["bar", host],
+    )
+
+
 def test_a_construct_reading_bars_as_its_host_does_is_admissible(ws: Workspace) -> None:
     host_with(ws, **TICK_BARS, bar_resolution="1m")
 
