@@ -19,7 +19,9 @@ from kanso.hyp.registry import hypothesis_of
 from kanso.research import loop, records
 from kanso.schemas import StrategyFile, resolve_venue_model, write_yaml
 from kanso.state import StateStore
+from kanso.strategy import impl
 from kanso.workspace import Workspace
+from tests.own_bar_size import REFUSED, version_remedy
 
 from .conftest import (
     BOOK,
@@ -218,6 +220,35 @@ def test_a_host_that_cannot_run_leaves_nothing_to_measure_against(
     hyp_id = attached(ws, store)
     with pytest.raises(PreconditionError, match="did not run over the research window"):
         loop.begin(ws, store, hyp_id)
+
+
+DECLARING_HOST = REVERTING.replace(
+    b"class Config(KansoConfig):\n",
+    b'class Config(KansoConfig):\n    bar_resolution: str | None = "5m"\n',
+)
+"""The host sleeve with a `Config` giving `bar_resolution` a default of its own: a version an
+earlier kanso composed, before the refusal."""
+
+
+def test_a_host_version_whose_config_gives_bar_resolution_a_default_is_refused_as_the_host_s(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The run under the construct is the host version's certified sleeve, so the refusal
+    names the module the host's implementation holds those bytes in and gives the host's
+    version remedy — its file holds the class — and the host-alone run carries both across the
+    card's process boundary rather than reporting an exception. The construct's own file holds
+    no such field."""
+    assert DECLARING_HOST != REVERTING
+    compose_host(ws, store, DECLARING_HOST)
+    hyp_id = attached(ws, store)
+
+    with pytest.raises(PreconditionError) as refused:
+        loop.begin(ws, store, hyp_id)
+
+    module = impl.module_name(impl.SLEEVE, HOST, DECLARING_HOST)
+    assert f"host: {HOST} version 1 did not run over the research window" in (refused.value.message)
+    assert f"{module}.py: {REFUSED}" in refused.value.message
+    assert refused.value.remedy == version_remedy(HOST)
 
 
 def test_a_host_whose_bytes_this_workspace_lost_is_refused(

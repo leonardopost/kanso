@@ -523,10 +523,14 @@ def _request(
 ) -> backtest.RunRequest:
     """The backtest this card asks for: the sleeve, or the host with this modifier on it."""
     attached: Sequence[tuple[str, bytes, Mapping[str, Any]]] = ()
+    version_source = version_hyp = None
     if setup.host_source is None:
         strategy = source
     else:
         strategy = setup.host_source
+        host = setup.harness.host
+        assert host is not None
+        version_source, version_hyp = host.sleeve_file(strategy), host.sleeve.hyp_id
         params = dict((setup.hyp.construct.params if setup.hyp.construct else None) or {})
         if setup.hyp.sizing is not None:
             params["sizing_budget"] = setup.hyp.sizing.budget
@@ -549,6 +553,8 @@ def _request(
         grains=setup.grains,
         sleeve_budget=setup.sleeve_budget,
         prefix=setup.prefix,
+        version_source=version_source,
+        version_hyp=version_hyp,
     )
 
 
@@ -581,7 +587,10 @@ def _host_run(
     """The host-alone run a relative objective differences against, computed once.
 
     Computed before the card it serves — including before the baseline — so a host that
-    does not run is reported as a host that does not run rather than as a failed card.
+    does not run is reported as a host that does not run rather than as a failed card, with
+    the remedy its failure named when kanso raised it with one — the host's own, for a version
+    whose `Config` gives `bar_resolution` a default (`backtest._sleeve`) — and otherwise to
+    re-certify the host or attach elsewhere.
     """
     host = setup.harness.host
     if not setup.harness.relative or host is None:
@@ -608,8 +617,10 @@ def _host_run(
         if result.crashed:
             raise PreconditionError(
                 f"host: {ref.strategy_id} version {ref.version} did not run over the research "
-                f"window ({result.reason}), so there is nothing to measure against",
-                remedy="re-certify the host, or attach this construct to another one",
+                f"window ({result.reason}: {result.traceback_tail or 'no output'}), so there is "
+                "nothing to measure against",
+                remedy=result.remedy
+                or "re-certify the host, or attach this construct to another one",
             )
         return result.run
 

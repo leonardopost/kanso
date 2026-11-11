@@ -607,10 +607,14 @@ def _request(
     if costs:
         venue_model["costs"] = {**venue_model["costs"], **costs}
     attached: Sequence[tuple[str, bytes, Mapping[str, Any]]] = ()
+    version_source = version_hyp = None
     if subject.host_source is None:
         strategy, own = subject.source, moved
     else:
         strategy, own = subject.host_source, {}
+        host = subject.harness.host
+        assert host is not None
+        version_source, version_hyp = host.sleeve_file(strategy), host.sleeve.hyp_id
         attached = (
             subject.host_modifiers
             if host_only
@@ -636,6 +640,8 @@ def _request(
         grains=subject.grains,
         sleeve_budget=subject.sleeve_budget,
         prefix=subject.prefix_of(window),
+        version_source=version_source,
+        version_hyp=version_hyp,
     )
 
 

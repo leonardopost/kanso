@@ -581,10 +581,13 @@ it, whatever made it — a class body annotating the field with a value, a class
 card's child, where the card fails with `strategy.py: Config gives bar_resolution a default of
 '5m', …` and the remedy to delete the field from `hypotheses/ID/strategy.py` and begin from
 that file with `kanso research begin ID --from-workspace`; where `strat compose` writes a
-version's manifest; where `portfolio deploy` loads a manifest an earlier kanso wrote; and where
-such a version is replayed, on either path, or its expectation struck again at another capital —
-those three naming the generated module, with the remedy to research from that file the same way
-and certify the best it finds.
+version's manifest; where `portfolio deploy` loads a manifest an earlier kanso wrote; where
+such a version is replayed, on either path, or its expectation struck again at another capital;
+and where a construct attached to such a version is carded, certified or replayed, since the
+sleeve under it is that version's — those four naming the generated module, with the remedy to
+research from the file of the hypothesis the version was certified from, the host's under a
+construct, the same way and certify the best it finds. `research begin` of such a construct
+reports its host as not running, with the module, the refusal and that remedy.
 Before any card runs, `strategy_integrity` reads the body of a top-level class of the file that
 names `KansoConfig` among its bases — as itself, through an import alias or as a module's
 attribute — or names a top-level class of the file that does, and discards the file where that

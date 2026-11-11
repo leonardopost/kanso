@@ -386,7 +386,9 @@ def refuse_own_bar_resolution(
     states one. So a default of the class's own would stand on a stage and not on its card. It
     is refused where the class is built — in the card's child (`kanso.nautilus.backtest._sleeve`,
     which a replay's node path builds through too, and which a replay of a version and a
-    version's expectation hand the file its implementation holds the bytes in), where a
+    version's expectation hand the file its implementation holds the bytes in, as a construct's
+    card, certification and replay hand the file its host's version holds them in, with the
+    host's hypothesis as `hyp_id`), where a
     version's manifest is written and where a stage node loads one (`kanso.strategy.impl`) —
     since whatever spelling made the class, the class holds the default: `strategy_integrity`
     reads only the body of a top-level class of the file that names `KansoConfig` among its

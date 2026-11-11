@@ -480,9 +480,12 @@ def test_the_workspace_page_says_which_refuses_a_config_s_own_bar_size_and_where
     assert begun.replace("ID", "demo_mr") in (refused.value.remedy or "")
     assert (
         "where `strat compose` writes a version's manifest; where `portfolio deploy` loads a "
-        "manifest an earlier kanso wrote; and where such a version is replayed, on either path, "
-        "or its expectation struck again at another capital — those three naming the generated "
-        "module" in text
+        "manifest an earlier kanso wrote; where such a version is replayed, on either path, "
+        "or its expectation struck again at another capital; and where a construct attached to "
+        "such a version is carded, certified or replayed, since the sleeve under it is that "
+        "version's — those four naming the generated module, with the remedy to research from "
+        "the file of the hypothesis the version was certified from, the host's under a "
+        "construct" in text
     )
     assert "with the line and the remedy to rename the field; it reads no other class" in text
 

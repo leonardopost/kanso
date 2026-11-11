@@ -446,7 +446,11 @@ class RunRequest:
     in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a
     version's expectation (`kanso.strategy.composition`), so that a `Config` giving
     `bar_resolution` a default of its own is refused there naming that file, with the remedy of
-    a version, whose certified bytes no edit of `strategy.py` changes; None elsewhere.
+    a version, whose certified bytes no edit of `strategy.py` changes; None elsewhere. A card,
+    a certification and a replay of an attached construct set it too, to the file its host's
+    version holds the sleeve in, since the sleeve they run is the host's certified bytes, and
+    `version_hyp` to the host's hypothesis, whose file holds the class, so that the remedy
+    names it rather than the construct's own; None names `hyp`.
     """
 
     hyp: Hypothesis
@@ -467,6 +471,7 @@ class RunRequest:
     settled_ns: int | None = None
     resumes_ns: int | None = None
     version_source: str | None = None
+    version_hyp: str | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -1174,8 +1179,9 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     is built (`kanso.nautilus.strategy.refuse_own_bar_resolution`): a stage builds the sleeve
     from a version's manifest, which carries the field only where the file states one, so
     that default would stand there and not here. The refusal names the request's
-    `version_source`, with a version's remedy, where it carries one, and `strategy.py`, with a
-    card's, where it does not.
+    `version_source`, with a version's remedy for `version_hyp` — a construct's host — or the
+    request's hypothesis, where it carries one, and `strategy.py`, with a card's, where it does
+    not.
     """
     from kanso.nautilus.strategy import KansoStrategy, refuse_own_bar_resolution
 
@@ -1183,7 +1189,10 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
     certified = request.version_source
     refuse_own_bar_resolution(
-        cls.config_cls, certified or "strategy.py", request.hyp.id, certified=certified is not None
+        cls.config_cls,
+        certified or "strategy.py",
+        request.version_hyp or request.hyp.id,
+        certified=certified is not None,
     )
     hyp = request.hyp
     grains = _bar_grains(request)

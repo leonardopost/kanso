@@ -22,6 +22,7 @@ from kanso.strategy import impl, require, restruck
 from kanso.workspace import Workspace
 from tests.own_bar_size import REFUSED, version_remedy
 from tests.replay.conftest import (
+    BLOCKING_FILTER,
     FLAT,
     FORWARD,
     FORWARD_START,
@@ -249,6 +250,37 @@ def test_a_version_whose_config_gives_bar_resolution_a_default_is_refused_as_the
 
     with pytest.raises(ValidationError) as refused:
         rerun(ws, store, carded_hyp)
+
+    module = impl.module_name(impl.SLEEVE, carded_hyp, SIZED)
+    assert refused.value.message == f"{module}.py: {REFUSED}"
+    assert refused.value.remedy == version_remedy(carded_hyp)
+
+
+@pytest.mark.parametrize("mode", ["engine", "node"])
+def test_a_construct_on_such_a_version_is_refused_as_its_host_s_version(
+    ws: Workspace, store: StateStore, carded_hyp: str, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """A construct's card replays on the host version its run pinned, whose certified sleeve
+    holds the class, so the refusal names the module the host's implementation holds those
+    bytes in and gives the host's version remedy — not a card's naming the construct's
+    `strategy.py`, which holds no such field."""
+    with monkeypatch.context() as earlier:
+        earlier.setattr("kanso.nautilus.strategy.refuse_own_bar_resolution", lambda *_, **__: None)
+        composed(ws, store, carded_hyp, sleeve=SIZED)
+    construct = carded(
+        ws,
+        store,
+        doc=document(
+            id="demo_filter",
+            construct={"id": "filter", "host": carded_hyp, "params": {"scope": "time"}},
+            objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 0.5}},
+        ),
+        strategy=BLOCKING_FILTER,
+        host_version=1,
+    )
+
+    with pytest.raises(ValidationError) as refused:
+        replay.run(ws, store, hyp=construct, mode=mode)
 
     module = impl.module_name(impl.SLEEVE, carded_hyp, SIZED)
     assert refused.value.message == f"{module}.py: {REFUSED}"
