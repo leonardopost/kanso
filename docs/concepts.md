@@ -430,16 +430,21 @@ follower, which a strategy that is short or flat where the follower rose has to 
 the drift it gave up. A `condition` measure that declares `benchmark: hold` asks that of every
 cell beside its contrast — of a test held a day or more, the question a lane scored on
 `wf_sharpe_vs_hold` is asked, whose hold never sells — and a verdict then judges the cell by it
-in place of the contrast's p and sign. The positions make, each held session, their period's log
-return times their side less the fills they made there: a position's entry on its first session
+in place of the contrast's p and sign. The positions make, each held session, their period's simple
+return times their side — the change in equity of one unit of notional re-sized each session, a
+fixed-notional series where a card's hold keeps its quantity (`docs/backlog.md` row 87) — less the
+fills they made there: a position's entry on its first session
 and its exit on its last, the fills its round trip is, crossing the touch on a quoted follower.
-The hold makes the follower's close-to-close return each of the same sessions, whatever the
+The hold makes the follower's close-to-close simple return each of the same sessions, whatever the
 test's entry and exit — a hold is long overnight too, so an open-to-close test is set against the
 hold it would replace — booked as a position of one held throughout and joined across contiguous
 sessions as any position is: one round trip over held sessions with no gap, and at a gap — a
 state undefined, a session another cell of a circular family lacks — the round trip the
 positions pay there too, so a cell held long close to close throughout is the hold, fill for
-fill. Charged once while the positions paid at every gap, such a cell read below its own hold:
+fill. A simple return and not the log return times the side, because minus a log return is not what
+a short makes: −log(1 + r) exceeds −r by about r²/2 where a long's log(1 + r) falls short of r by as
+much, so a hold long throughout would be set against shorts credited about r² a session and flat
+sessions about r²/2 — 2 bp a short session where a session's return has a spread of 1.4%. Charged once while the positions paid at every gap, such a cell read below its own hold:
 by 0.17 of Sharpe in a family where the other follower lacked one session in ten. Each is
 scored by its annualised Sharpe, at a zero rate and one degree of freedom, its periods a year
 the held sessions a year of the window, and the cell by the difference, reported with its
@@ -454,7 +459,7 @@ what that exposure makes at random: close to close, `null_mean` is below zero wh
 follower rose and the positions were not long; open to close the positions earn the session
 alone and the hold the night too, and a session's own Sharpe above the hold's puts it above
 zero — measured on `judge` long or flat at 0.8 exposure, a session drifting 10 bp on 80 and a
-close-to-close 5 on 100, above zero in 35 of 40 seeds. The null is not symmetric about zero, so
+close-to-close 5 on 100, above zero in 34 of 40 seeds. The null is not symmetric about zero, so
 sign flips cannot judge it and `benchmark` is refused under `sign_flip`; and its centre and
 spread differ from cell to cell, so a family is judged on each cell's difference studentised by
 its own, `(difference − null_mean) / null_sd`, a single-step studentised max in the manner of
@@ -476,14 +481,14 @@ however the cells move together — capped at one, and a pass needs both p and `
 or under `alpha`, beside `min_sessions`, the margin and the events a day. Measured on `judge`
 over 300 seeds from 0, a cell long or flat at half exposure in runs averaging twenty over 1,000
 sessions, its edge sized to give the hold's Sharpe to first order — its difference averaged
-−0.11, sd 0.35: its timing p was at or under 0.05 in 84.3% of seeds, and a verdict that took the difference's sign for the second clause passed 37% of them
-as beating the hold; with `p_above_hold`, 1.3%. The timing p's level holds as the contrast's
+−0.14, sd 0.35: its timing p was at or under 0.05 in 84.3% of seeds, and a verdict that took the difference's sign for the second clause passed 35% of them
+as beating the hold; with `p_above_hold`, 1.0%. The timing p's level holds as the contrast's
 does — measured on `judge` over 250 sessions, contrast positions independent of returns that
 drift 5 bp a session on a noise of 100, 2.5 bp a fill, every shift taken, 2,000 seeds from 70000:
-one cell in runs averaging 20 put 5.30% of p at or under 0.05 and 9.75% at or under 0.10; a
-family of two, 5.25% and 9.95%; runs averaging 5 on a drift of 10, 5.20% and 10.10%; and a
+one cell in runs averaging 20 put 5.15% of p at or under 0.05 and 9.65% at or under 0.10; a
+family of two, 5.15% and 9.90%; runs averaging 5 on a drift of 10, 5.20% and 10.10%; and a
 family of two over a mean that wanders as an AR(1) of coefficient 0.99 and stationary standard
-deviation 0.3 of the noise's, 4.90% and 10.40% — all inside binomial 99.9% bounds of the 4.8% and
+deviation 0.3 of the noise's, 5.05% and 10.45% — all inside binomial 99.9% bounds of the 4.8% and
 10.0% its 250 sessions allow, 3.2–6.4% and 7.8–12.2%.
 
 **Derived legs are functions of legs, and a fitted one says on what it was fitted.** A
