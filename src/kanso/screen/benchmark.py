@@ -9,17 +9,20 @@ drift it gave up.
 
 1. **The positions' net, a held session at a time.** A session's value is its position — the
    side its state takes, under a contrast the other side against, flat in neither and long or
-   flat flat outside the state — times its period's log return, in basis points, less the
-   fills it made: a position, a run of held sessions with one direction joined across sessions
-   only where its periods are contiguous, as the cell's round trips are (`kanso.screen.
-   condition`), pays its entry's fill on its first session and its exit's on its last. A fill
-   is the venue model's charge, the one `Hurdles.round_trip` strikes, and on a follower that
-   shows a touch the crossing to it as well (`Hurdles.fills`), so a position's sessions sum to
-   what a taker made less its round trip. Summed over the window that is the cell's
-   `ceiling_bp_day` times its sessions, booked where each fill happens rather than all on the
-   session a position left in.
+   flat flat outside the state — times its period's simple return, in basis points of one unit
+   of notional, less the fills it made: a position, a run of held sessions with one direction
+   joined across sessions only where its periods are contiguous, as the cell's round trips are
+   (`kanso.screen.condition`), pays its entry's fill on its first session and its exit's on its
+   last. A fill is the venue model's charge, the one `Hurdles.round_trip` strikes, and on a
+   follower that shows a touch the crossing to it as well (`Hurdles.fills`), booked where each
+   fill happens rather than all on the session a position left in. The return is the period's
+   simple one, its log return exponentiated less one — the equity change of one unit of
+   notional, re-sized to one unit each session — and not its log return times the side, because
+   minus a log return is not what a short makes: −log(1 + r) exceeds a short's −r by about r²/2
+   where a long's log(1 + r) falls short of r by as much, so a hold, long throughout, would be
+   set against shorts credited about r² a session each and flat sessions about r²/2.
 2. **The hold's, on the same sessions.** Buying the follower and keeping it earns, each held
-   session, its close-to-close return — from the previous session's last point it has, or the
+   session, its close-to-close simple return — from the previous session's last point it has, or the
    session's own first on the first session it has — whatever the test's entry and exit, since
    a hold is long overnight as well: an open-to-close test is set against the hold it would
    replace. It is booked as a position of one held through every held session (`held`), joined
@@ -28,11 +31,12 @@ drift it gave up.
    trip; where the cell's sessions do have one — a state undefined, a session another cell of a
    circular family lacks — the hold pays at the gap as the positions do, so a cell held long
    close to close throughout is the hold, fill for fill.
-3. **Sharpe, as the toolbox defines it.** Annualised at a zero risk-free rate,
+3. **Sharpe, as the toolbox defines it.** Of fixed-notional equity changes — a card's hold keeps
+   its quantity instead (`docs/backlog.md` row 87) — annualised at a zero risk-free rate,
    `mean / sd × √A` with one degree of freedom, `A` the held sessions per year of the window
-   (`kanso.criteria.quantities`); zero for a series that does not vary. `difference` is the
-   positions' less the hold's, and its error is the paired one by Memmel's correction of
-   Jobson–Korkie, widened for serial correlation, as `wf_sharpe_vs_hold`'s is.
+   (`kanso.criteria.quantities`); zero for a series that does not vary.
+   `difference` is the positions' less the hold's, and its error is the paired one by Memmel's
+   correction of Jobson–Korkie, widened for serial correlation, as `wf_sharpe_vs_hold`'s is.
 4. **Judged by every circular shift of the positions.** The hold does not move under a shift,
    so a shift redraws the positions' Sharpe alone: the positions are rotated against the
    sessions as the measure's own null rotates them (`kanso.screen.nulls.circular`), one shift
@@ -86,16 +90,18 @@ from kanso.criteria.quantities import (
     sharpe_variance,
 )
 from kanso.screen import nulls
+from kanso.screen.response import BP
 
 
 @dataclass(frozen=True)
 class Book:
     """One cell's held sessions, in order, as its positions and the hold book them, in bp.
 
-    `returns` is each period's log return; `joins` whether a position held into the session
-    from the held session before runs on, its periods contiguous; `buy_in`, `sell_in`,
-    `buy_out` and `sell_out` one taker fill at the period's entry and at its exit; `hold` what
-    the hold made each session net of its round trip; `folds` each session's calendar fold.
+    `returns` is each period's log return, which `net` books as its simple return; `joins`
+    whether a position held into the session from the held session before runs on, its periods
+    contiguous; `buy_in`, `sell_in`, `buy_out` and `sell_out` one taker fill at the period's
+    entry and at its exit; `hold` what the hold made each session net of its round trips, one
+    a run of contiguous sessions; `folds` each session's calendar fold.
     """
 
     returns: np.ndarray
@@ -126,7 +132,8 @@ class Judged:
 
 
 def net(positions: np.ndarray, book: Book) -> np.ndarray:
-    """What these positions make each held session net of their fills, along the last axis.
+    """What these positions make each held session net of their fills, along the last axis: the
+    period's simple return times the position, in bp of one unit of notional.
 
     A position starts where it is not flat and does not run on from the session before — a
     period not contiguous with it, another direction, or flat there — and ends where the next
@@ -141,7 +148,8 @@ def net(positions: np.ndarray, book: Book) -> np.ndarray:
     long = positions > 0
     entered = np.where(starts, np.where(long, book.buy_in, book.sell_in), 0.0)
     left = np.where(ends, np.where(long, book.sell_out, book.buy_out), 0.0)
-    return np.asarray(positions * book.returns - entered - left)
+    gained = np.expm1(book.returns / BP) * BP
+    return np.asarray(positions * gained - entered - left)
 
 
 def held(

@@ -69,9 +69,10 @@ def hand_book(
     sessions: Sequence[date],
     fill: float = FILL,
 ) -> tuple[list[float], list[float], list[float], list[float]]:
-    """Each held session's position, its period's return, the hold's net, and the period's
-    `[entry price, exit price]` contiguity, by hand: a close-to-close session is decided on the
-    level published the session before and holds no first session; open to close, on its own."""
+    """Each held session's position, its period's simple return in bp, the hold's net, and the
+    period's `[entry price, exit price]` contiguity, by hand: a close-to-close session is decided
+    on the level published the session before and holds no first session; open to close, on its
+    own."""
     side = 1.0 if test["side"] == "long" else -1.0
     across = test["entry"] == "close"
     positions, returns, holds = [], [], []
@@ -83,8 +84,8 @@ def hand_book(
         positions.append(side * state)
         before = prices[sessions[at - 1]][1] if at else prices[day][0]
         entry = before if across else prices[day][0]
-        returns.append(1e4 * (math.log(prices[day][1]) - math.log(entry)))
-        holds.append(1e4 * (math.log(prices[day][1]) - math.log(before)))
+        returns.append(1e4 * (prices[day][1] / entry - 1.0))
+        holds.append(1e4 * (prices[day][1] / before - 1.0))
     holds[0] -= fill
     holds[-1] -= fill
     return positions, returns, holds, [float(across)] * len(positions)
@@ -163,10 +164,14 @@ def test_the_positions_and_the_hold_book_what_a_hand_book_makes(
     assert hold.difference == pytest.approx(hold.sharpe - hold.sharpe_hold, abs=1e-12)
     excess = statistics.fmean(a - b for a, b in zip(own, hold_net, strict=True))
     assert hold.excess_bp == pytest.approx(excess, abs=1e-9)
-    # The positions' net, summed, is the cell's own round trips: booked where each fill happens
-    # rather than on the session a position left in, it is the same ceiling.
+    # Booked on log returns instead, the positions' net summed is the cell's own round trips:
+    # each fill booked where it happens rather than on the session a position left in, it is the
+    # same ceiling — the fills are the round trips' and only the return's form differs.
     assert cell.response is not None
-    assert statistics.fmean(own) == pytest.approx(cell.response.ceiling_bp_day, abs=1e-9)
+    logged = [1e4 * math.log1p(move / 1e4) for move in returns]
+    assert statistics.fmean(hand_net(positions, logged, joins)) == pytest.approx(
+        cell.response.ceiling_bp_day, abs=1e-9
+    )
     rho = correlation(own, hold_net)
     assert rho is not None
     factor = max(long_run_factor(own), long_run_factor(hold_net))
@@ -193,7 +198,7 @@ def test_an_open_to_close_cell_is_set_against_the_close_to_close_hold(
     # The hold is long overnight too: from the session's own open only on the first session.
     assert hold.sharpe_hold == pytest.approx(hand_sharpe(hold_net, annualisation), rel=1e-9)
     assert hold_net[0] == pytest.approx(
-        1e4 * math.log(prices[sessions[0]][1] / prices[sessions[0]][0]) - FILL
+        1e4 * (prices[sessions[0]][1] / prices[sessions[0]][0] - 1.0) - FILL
     )
 
 
@@ -442,6 +447,29 @@ def test_a_round_trip_is_its_entry_s_fill_and_its_exit_s() -> None:
     )
     assert touched[0][0] == pytest.approx(1.0 + 1e4 * math.log(100.01 / 100.0))
     assert touched[1][1] == pytest.approx(1.0 + 1e4 * math.log(101.0 / 100.97))
+
+
+def test_a_session_books_its_simple_return_so_a_short_makes_minus_it() -> None:
+    # Two sessions, each its own position (no join), no fills: a rise of 25% then a fall of 20%.
+    moves = np.asarray([1e4 * math.log(1.25), 1e4 * math.log(0.8)])
+    nothing = np.zeros(2)
+    book = benchmark.Book(
+        moves, np.asarray([False, False]), nothing, nothing, nothing, nothing, nothing, nothing
+    )
+
+    short = benchmark.net(np.asarray([-1.0, -1.0]), book)
+    long = benchmark.net(np.asarray([1.0, 1.0]), book)
+    hold = benchmark.held(moves, np.asarray([False, False]), nothing, nothing)
+
+    assert short.tolist() == pytest.approx([-2500.0, 2000.0], rel=1e-12)
+    assert long.tolist() == pytest.approx([2500.0, -2000.0], rel=1e-12)
+    assert hold.tolist() == pytest.approx(long.tolist(), rel=1e-12)
+    # Minus the log return would credit the short −log(1 + r) − (−r) on each session, about r²/2,
+    # where the long's log return falls short of r by as much: r² a session against the hold.
+    assert (-moves - short).tolist() == pytest.approx(
+        [1e4 * (0.25 - math.log(1.25)), 1e4 * (-0.2 - math.log(0.8))], rel=1e-12
+    )
+    assert all(value > 0 for value in (-moves - short).tolist())
 
 
 def test_a_family_of_fewer_than_two_sessions_has_no_shift_and_reads_a_p_of_one() -> None:
