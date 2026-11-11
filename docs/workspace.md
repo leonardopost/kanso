@@ -597,7 +597,7 @@ hands the strategy's own reads of the field a size the file does not state, but 
 the sleeve subscribes them at the size kanso set, on a card, in a book and on a stage alike,
 through the config a book or a stage node rebuilds with other fields replaced. A binding that
 hides another field kanso sets — `resolution` as a tuple's target, say — is read in kanso's
-place (`docs/backlog.md` row 235).
+place (`docs/backlog.md` row 239).
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;
@@ -682,7 +682,7 @@ replay read them so, and `kanso replay parity` holds. A version's manifest recor
 card did — though not only the series its card did: the manifest carries neither
 `data_by_instrument` nor `session_scope`, so a stage sleeve subscribes every required type of
 every name — the signal's quotes and prints, the traded name's bars — as it does for any file
-that narrows what an instrument is asked for (`docs/backlog.md` row 229). A bar is stamped at
+that narrows what an instrument is asked for (`docs/backlog.md` row 233). A bar is stamped at
 its close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches
 the sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
 same instant. The sleeve's sessions — what `warmup` counts — are still the days its quotes or
@@ -690,7 +690,7 @@ prints were printed, not the days a signal's bars were. A signal that trades rou
 a future's twenty-three hours, a coin's twenty-four — moves the sleeve outside the traded
 name's session too: an order sent then is filled at that name's last quote or print, since the
 simulated venue keeps no market hours, and every UTC day that holds a point, a weekend's
-included, is a session of the run's digest and its period ends (`docs/backlog.md` row 231).
+included, is a session of the run's digest and its period ends (`docs/backlog.md` row 235).
 `kanso hyp validate` refuses (exit 3) a tick file that requires `bar` and states no
 `bar_resolution` — before the key existed such a file passed `hyp validate` and `hyp add`, and
 `research begin` refused it for want of a snapshot at `tick` (exit 2), so no card ran — a
@@ -699,9 +699,9 @@ An attached construct states its host's `bar_resolution`, as it states its host'
 because its cards run the host underneath it; so an overlay with a bar clock of its own is
 refused (exit 3) over a host that reads bars beside ticks — a file at a bar-size resolution
 states no size for the host's bars — with the host's resolution and `bar_resolution` as the
-remedy (`docs/backlog.md` row 230), and a filter or an exit rule off such a host's grain is
+remedy (`docs/backlog.md` row 234), and a filter or an exit rule off such a host's grain is
 given that remedy alone — attached as an overlay instead, it is refused with a bar clock and
-raises while subscribing with any other (row 234). A construct that states a `bar_resolution`
+raises while subscribing with any other (row 238). A construct that states a `bar_resolution`
 its host does not is refused (exit 3) naming what the host reads: over a tick host that reads
 no bars the remedy drops the bars with the key — and a name it asked for bars alone, from
 `data_by_instrument` and the universe, since a name left asking for nothing is refused too — and

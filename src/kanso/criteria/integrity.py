@@ -167,7 +167,7 @@ what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211
   one made in a function, one `type()` builds — and a class whose base the scan does not
   resolve to a harness class: one held under an assigned name (`Base = KansoStrategy`) or read
   off an attribute other than its own name (`KansoStrategy.config_cls`). The rules on the
-  base's names and on `bar_resolution` read no such class (`docs/backlog.md` row 236); a
+  base's names and on `bar_resolution` read no such class (`docs/backlog.md` row 240); a
   `Config` default of `bar_resolution` is refused where the runner builds the class, whatever
   its spelling.
 
@@ -559,8 +559,8 @@ stage only where the file states one. A `Config` the scan does not reach is held
 the runner builds the class, and for a default alone
 (`kanso.nautilus.strategy.refuse_own_bar_resolution`). Not every field kanso sets from the file
 is held here: a `Config` default of `depth`, `data_by_instrument` or `session_scope` stands on a
-stage and not on a card too (`docs/backlog.md` row 233), and a binding that hides any other
-field is read in kanso's place (row 235)."""
+stage and not on a card too (`docs/backlog.md` row 237), and a binding that hides any other
+field is read in kanso's place (row 239)."""
 
 BODIED: Final = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 """The nodes whose body binds in a scope of its own, while their decorators, defaults,
@@ -1116,7 +1116,7 @@ def _harness_classes(
     one; every top-level class of the file in that line, a mixin included, is held to the same
     base. A class nested in a block or a function, one `type()` builds and one whose base is
     held under an assigned name or read off another attribute are not reached
-    (`docs/backlog.md` row 236). The bases are the strategy's and the modifier's (`_bases`)
+    (`docs/backlog.md` row 240). The bases are the strategy's and the modifier's (`_bases`)
     unless `roots` names others.
     """
     harness = {base.__name__: base for base in roots or _bases()}
