@@ -29,6 +29,11 @@ jobs:
         # publishes no wheel for an older macOS.
         os: [macos-26, ubuntu-24.04]
         python: ["3.12", "3.13"]
+    # Every uv command of a job runs on the matrix's Python. Without this a `uv run` takes
+    # 3.12 from `.python-version` and rebuilds an environment synced on another Python, so a
+    # `--python` on the sync alone ran every check of a py3.13 job on 3.12.
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +43,7 @@ jobs:
           enable-cache: true
 
       - name: Sync
-        run: uv sync --locked --python ${{ matrix.python }}
+        run: uv sync --locked
 
       - name: Format
         run: uv run ruff format --check
