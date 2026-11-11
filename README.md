@@ -1,140 +1,82 @@
 # kanso
 
 [![ci](https://github.com/leonardopost/kanso/actions/workflows/ci.yml/badge.svg)](https://github.com/leonardopost/kanso/actions/workflows/ci.yml)
+[![pypi](https://img.shields.io/pypi/v/kanso)](https://pypi.org/project/kanso/)
+[![python](https://img.shields.io/pypi/pyversions/kanso)](https://pypi.org/project/kanso/)
+[![license](https://img.shields.io/github/license/leonardopost/kanso)](LICENSE)
 
-A minimal, agent-first quantitative research workbench on
-[NautilusTrader](https://nautilustrader.io): hypotheses → autoresearch → certification →
-strategies → portfolio, in one directory, behind one command.
+A minimalist, agent-first quant research workbench. It turns a trading thesis into a Karpathy-style
+autoresearch loop that runs indefinitely, with guards against overfitting built in. It supports
+multiple asset classes, including stocks, futures and crypto.
 
-You state a thesis in a sentence. kanso decides what kind of thing it is, researches it in a
-loop that never stops to ask you anything, proves or disproves it on data the research was
-never allowed to see, composes what survives into a versioned strategy, deploys that to
-paper and watches it. The one act it will not perform without you is moving real money.
+The problem it solves: Quant research can be specified a hundred ways, and choosing between them by hand is
+slow, inconsistent and easy to overfit. kanso makes the choice deterministic. An agent proposes
+each specification, a reproducible backtest scores it net of costs, and only one that beats the
+best so far is kept. The winner is then tested on data the search never saw.
 
-## What it is
+It’s basically having a quant research team working 24/7 to test and validate your trading theses.
 
-A **workspace** is a plain directory — `kanso.toml`, a few YAML files you own, and one
-SQLite database kanso owns. It may sit inside a git repository or nowhere at all. Every
-command acts on the nearest one, takes `--json`, and exits `0`, `1` (an unexpected fault),
-`2` (a precondition forbids it), `3` (your input is wrong) or `4` (a named approval is
-missing).
+The philosophy: Kanso (簡素) is a principle of Zen aesthetics: the maximum effect from the minimum
+means. kanso aims to reduce all the complexity of running trustworthy quant research to a single
+prompt.
 
-A **hypothesis** is a thesis plus the three windows it will be judged over. kanso classifies
-it into a **construct** — a sleeve, a filter, an overlay, an exit rule, an alpha, an
-execution tactic, an allocation — which decides what shape the code takes and whether it
-attaches to something already deployed. Research then edits exactly one file,
-`strategy.py`, one experiment at a time; each experiment is a **card**, and a card is kept
-only if it beats the current best by the hypothesis's own keep rule.
+## Concepts
 
-When a run stalls, **certification** runs the gates an agent planned for that hypothesis,
-over a window nothing was allowed to backtest. A passing certificate composes a **strategy
-version** and offers it to the paper stage on its own. Paper to live is the one step that
-needs you.
+| term | what it means |
+|---|---|
+| workspace | a plain directory: `kanso.toml`, a few YAML files you own, and the SQLite store kanso owns |
+| hypothesis | one falsifiable thesis plus what testing it needs — universe, holding period, data, risk limits — and three windows: research, certification and forward |
+| construct | what a hypothesis is: a sleeve (a whole strategy), a filter, an overlay, an exit rule, an alpha, an execution tactic or an allocation |
+| objective | the one number a run optimises; every constraint is a gate, never part of it |
+| screen | a measurement, made before any research and with no model call, of whether the relationship an idea rests on exists and clears its costs |
+| run, lane | a run is one research session on one hypothesis; a lane is a concurrent worker with its own directory |
+| card | one experiment: the lane's `strategy.py`, backtested and recorded as kept, discarded or crashed |
+| keep rule | when a card counts as an improvement: it must beat the best by more than its own noise |
+| alignment | a periodic check that research still tests the thesis rather than something easier |
+| snapshot | an immutable, content-addressed set of datasets a run is pinned to |
+| embargo | the gap between the research and certification windows; research can never read the certification window |
+| certification | the gates a model planned for the hypothesis, judged on the certification window; a pass is a certificate |
+| strategy version | the closed record a certificate composes: the code by hash, a verbatim copy of it, the kanso and engine versions it was certified under, and what it is expected to earn |
+| stage | `paper` or `live`: a capital allocation, limits, an execution client, a data client and a kill switch |
+| promotion, demotion | moving a version between stages; paper to live is the one step that needs a named person |
+| escalation | one of six things kanso puts in your inbox: `misaligned`, `cert_failed`, `promotable`, `demoted`, `deploy_blocked`, `explored` |
+| model register | `models.yaml`: the LLMs kanso may call, their cost tiers, and which tier serves each task |
+| adapter | one outside party — a data vendor or a broker — and everything kanso reaches it through; enabled by its credentials |
 
-| moment | who | what |
-|---|---|---|
-| setup | operator | provider keys in `.env`, the data adapters to use (or file exports), portfolio capital and limits |
-| a new idea | operator → agent | you state the thesis; the agent writes `hypothesis.yaml`; `kanso classify` decides the construct, the objective and its keep rule, and the card-stage constraints |
-| research | kanso | one run per lane, indefinitely; stall → certification → paper, all automatic |
-| `misaligned` | operator | research drifted from the thesis. kanso already rewound the lane and carried on — decide whether the drift deserves its own hypothesis |
-| `cert_failed` ×3 | operator | the idea keeps failing certification: retire it or rewrite the thesis |
-| `deploy_blocked` | operator | no capital assignable within your limits; adjust `portfolio.yaml` |
-| `promotable` | operator | the paper period passed. `kanso promote <strategy> --live --as <you>` |
-| `demoted` | operator | live surveillance pulled a version back to paper; read the reason |
-| `explored` | operator | kanso wrote a new hypothesis for a lane that stopped learning; `kanso hyp validate` it, then `kanso hyp add` it if the idea deserves a lane |
-| any time | operator | `kanso status`, `kanso inbox`, `kanso replay run`, `kanso research stop` / `start` |
+## Use cases
 
-Everything not in that table runs without you.
+- **Research a thesis with no one in the loop.** `kanso classify` decides what the idea is — a
+  sleeve, a filter, an overlay, an exit rule, an alpha, an execution tactic or an allocation —
+  and how it will be judged. `kanso research` then has a model edit one file, `strategy.py`, one
+  backtested experiment at a time, and keeps a change only when it beats the best so far.
+- **Screen an idea before it gets a lane.** `kanso screen run` measures whether the relationship
+  an idea rests on exists and clears the round-trip cost, without a model call.
+- **Certify on data research never saw.** `kanso cert plan` has a model choose gates from a
+  declared library — deflated Sharpe and edge, walk-forward, bootstrap, cost and latency stress,
+  capacity, replay parity and more — and `kanso cert run` judges them on an embargoed window.
+  Every search is charged for the trials it ran.
+- **Run many lanes unattended.** `kanso research start` runs a daemon that serves a priority
+  queue of hypotheses across the lanes the host can hold, and certifies a lane when it stalls.
+- **Compose, deploy and watch.** A passing certificate becomes a versioned strategy on the paper
+  stage, within `portfolio.yaml`'s limits; paper promotion and demotion are automatic. Real
+  capital moves only on `kanso promote VERSION --live --as NAME`.
+- **Keep a point-in-time catalog.** Load, backfill and sync from Massive (US stocks, options,
+  futures, forex, indices), OKX's public swap history (bars, trades, funding) or file exports.
+  Every point is stamped with when it became public, and a snapshot pins what each run measured.
+- **Extend it from your workspace.** Loaders, data types, constructs, execution clients and
+  adapters written in `kanso_ext/` use the same interfaces as the built-ins.
 
-## What kanso refuses to do
+The reference is `docs/`: start with `docs/concepts.md`; `docs/cli.md` lists every command.
 
-The refusals are the design. Each one is a thing that would have been easy to allow, and
-each is enforced in code rather than asked for in a prompt.
+## Requirements
 
-**It never invokes git.** Not `init`, not commit, not branch, not tag — no `git` process at
-all, in your workspace or anywhere else. A framework that commits on your behalf is a
-framework that can rewrite your history while you sleep; kanso writes plain files and one
-database, and versions the file research mutates content-addressed in that database. Two
-tests spy on every process launch to keep it true.
+- macOS 26+ on Apple silicon, or Linux x86_64. The pinned NautilusTrader wheel decides the hosts.
+- Python ≥3.12 (CI runs 3.12 and 3.13) and [uv](https://docs.astral.sh/uv/).
+- A model for every decision an agent makes: at least one provider in `models.yaml`, its key in
+  `.env` as `KANSO_<PROVIDER>_API_KEY`.
+- Vendor and broker credentials only for the adapters you use.
 
-**It never moves real money without a named person.** `kanso promote <version> --live --as
-NAME` is the only path to real capital, `--as` has no default and no environment fallback,
-and the approval is recorded against that exact version before anything moves. Editing
-`portfolio.yaml` by hand therefore cannot promote anything: the file says what is deployed,
-the record says what was allowed.
-
-```
-$ kanso promote demo_mr --live
-error: promote: moving demo_mr onto the live stage is a named operator act
-remedy: kanso promote demo_mr --live --as NAME
-$ echo $?
-4
-```
-
-**It never lets research see the certification window.** The embargo is a property of the
-backtest runner, not an instruction to a model. A card runs in a child process with no path
-to any catalog at all: the parent reads the window from the catalog and hands the points
-across, and the child re-checks what it was given against the window it was asked for. A
-prompt that says "do not look" is a prompt that will eventually be ignored, summarised away
-or edited by the loop it constrains.
-
-**It never invents a judgement.** There is no default certification plan, no default
-threshold and no non-LLM fallback for a decision an agent is supposed to make. With no
-model configured, `kanso cert plan` exits 2 rather than certifying against numbers nobody
-chose. The framework's own opinions are structural invariants and nothing else: agents
-decide, the framework evaluates.
-
-```
-$ kanso cert plan demo_mr
-error: models: no model serves the cheap, mid, frontier tier; every tier needs one
-remedy: add a model for that tier to models.yaml, or list an existing one on it
-$ echo $?
-2
-```
-
-**It never dates a point by when it arrived.** Every catalog point carries `ts_event`, its
-economic reference time, and `ts_init`, the instant its information became public;
-`ts_init >= ts_event` always, and the engine orders by `ts_init`. A delayed dataset with no
-declared publication rule is refused at write. Backtesting on ingest time is the most
-comfortable way to be wrong, because it is invisible in every metric.
-
-**It never rewrites data a snapshot pins unless a load names it.** A run is pinned to a
-snapshot, so an overlapping write into the bytes it was measured on is refused, and
-`--replace` does not lift the refusal; only a load with `--supersedes` naming the pinned
-dataset takes its place, and the new one records what it supersedes. Over the same span that
-successor keeps the old dataset's id, so it rewrites the pinned dataset under that id, and a
-snapshot taken before it still covers the series until `kanso data snapshot` takes a newer one
-(`docs/backlog.md` row 232).
-
-```
-$ kanso data load --loader synthetic --spec demo.yaml
-error: DEMO.SIM-bar-1m-raw-20250901 is named by a snapshot and cannot be rewritten
-remedy: load it again with --supersedes DEMO.SIM-bar-1m-raw-20250901 to put this dataset in its place; every snapshot naming the old one then stops supporting a certification, only when the successor's id differs (docs/backlog.md row 232)
-$ echo $?
-2
-```
-
-**It never runs a version under an engine it was not certified under.** A strategy version
-pins the NautilusTrader version it was measured on, and `deploy` refuses a mismatch: running
-it under another engine is running something nobody measured. Re-certifying the same bytes
-after an upgrade is a plain `kanso cert run`.
-
-**Its core knows no vendor and no broker.** Every outside party lives in exactly one adapter
-package, discovered from a directory rather than listed anywhere, enabled by its credentials
-rather than by installation. The whole test suite, `kanso doctor` and the demo are green
-with every vendor and broker credential unset — which is what makes the package usable
-before you have bought anything, and what keeps a second copy of a vendor's wire from
-appearing somewhere nobody is looking.
-
-**It writes you no notes.** No learnings file, no progress report, no design log, in this
-repository or in your workspace. The cards, the certificates, the sessions and the state
-store are the record; anything else is a second version of the truth that drifts from the
-first.
-
-**It has no UI.** `kanso status` is one screen, `--json` is on every command, and every
-number it prints is read back out of the state store — `results.tsv` beside a hypothesis is
-rendered from the cards, not appended to, so deleting it costs nothing and editing it
-changes nothing. A dashboard would be a fourth place the numbers live.
+The demo and the test suite need no model key and no credential.
 
 ## Install
 
@@ -143,14 +85,8 @@ uv tool install kanso          # the CLI
 uv add kanso                   # or, inside a project
 ```
 
-Python ≥3.12 on macOS 26+ arm64 or Linux x86_64 — the pinned NautilusTrader wheel decides
-the hosts, and `kanso doctor` checks the wheel's platform tag against yours.
-
-## A first run, with no credential of any kind
-
-`--demo` renders a workspace whose model register is the shipped `mock` protocol and whose
-data comes from the shipped synthetic loader. It classifies, proposes, aligns, backtests,
-certifies, composes and deploys to paper with no provider key, no vendor key and no network.
+Check it with the demo workspace, which runs on a scripted model and synthetic data with no
+key and no network:
 
 ```bash
 kanso init demo --demo
@@ -165,164 +101,24 @@ kanso research run demo_mr --cards 3
 kanso status
 ```
 
-The last two:
+For your own: `kanso init .`, add your models to `models.yaml` and their keys to `.env`, then
+`kanso doctor`. `docs/workspace.md` says what every file in a workspace is for.
 
-```
-$ kanso research run demo_mr --cards 3
-run        d99f1b6cd8734b278a7c8f1160b32f16 · lane op · cards
-cards      3 proposed · 1 keep · 0 runner_up · 1 discard · 1 crash · 0 repeated · 0 redundant · trial 4
-aligned    0 check(s) · 0 drift(s)
-best       f729a53 at 9.986730
-next       kanso research run demo_mr --cards 3
+## Contributing
 
-$ kanso status                                 # its leading workspace-path line is elided
-daemon     stopped · 0 queued
-lanes      1/2 working
-           l1   idle
-           op   demo_mr · 4 card(s) · best 9.986730
-cards/h    4 in the last hour
-best       1 hypothesis(es)
-           demo_mr             researching  9.986730      4 card(s)
-spend      $0.0000 today · 4 call(s) · 2026-09-06
-inbox      0 unread
-```
+Read `AGENTS.md` first: the invariants the package is built on, and the definition of done.
+`docs/maintainers.md` covers the development loop, upstreaming an extension and releases. In
+short: one branch per change, conventional commits, `docs/` and the tests changed with any
+behaviour they describe, and CI green on both hosts and both Python versions before a merge.
 
-One keep, one discard and one crash is the loop working rather than a fault. A card is
-`keep`, `discard` or `crash`; the last two restore the lane's `strategy.py` from the best,
-and every one of the three stays in state, so the experiment log is complete whatever the
-lane directory looks like afterwards. Run it again and the scripted answers wrap: the first
-no longer fits, and the other two reproduce bytes the run has already carded, which the loop
-refuses rather than backtests twice. Every retry ladder runs out on answers with nothing new
-in them, so each of the three proposals is a `repeated` miss — no card and no trial — and
-the command exits 0 with `3 proposed · 0 keep · 0 runner_up · 0 discard · 0 crash · 3 repeated`. The demo
-has shown what it can; the next step is a real model in `models.yaml`.
-
-A run that stalls certifies itself before it returns, so a daemon left running reaches a
-certificate on every lane with no operator at all. Driven by hand, the same path is:
+## Running tests
 
 ```bash
-kanso research end demo_mr
-kanso cert plan demo_mr     # what would count as proof for this hypothesis
-kanso cert run demo_mr      # whether it holds, on the window research never saw
-kanso portfolio show
+uv sync
+uv run pytest --cov-fail-under=85    # the gate CI runs
+uv run ruff format --check
+uv run ruff check
+uv run mypy src
 ```
-
-```
-$ kanso cert run demo_mr                       # its trailing written/source/next lines are elided
-verdict    demo_mr · f729a53 · pass
-gates      6 judged · 6 pass · 0 fail · 0 skipped
-           pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
-           pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
-           pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
-           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
-objective  net_edge_bps 10.149871 ± 1.322442
-power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
-per trade  net 10.16 bp ± 1.319 by session (t 7.7) · 425 trade(s) on 105 session(s)
-pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
-
-$ kanso portfolio show
-paper      up · exec sandbox (simulated) · data replay · speed 1 · capital 100,000
-           clock 2025-09-01 · catalog to 2025-09-01 · allocated 40,000 · pnl +2,192.07
-           demo_mr@1               40,000  pnl +2,192.07 over 1 window(s)
-live       down · exec sandbox (simulated) · data replay · speed 1 · capital 0
-           clock never run · catalog to nothing · allocated 0 · pnl +0.00
-limits     gross 100% · net 100% · per strategy 40% · daily loss 3%
-```
-
-Nothing composed or deployed that strategy by hand: the passing certificate did both,
-because neither act has a decision left in it. `parity_replay` found both code paths
-released the same 40,950 points — one count, one digest — and compared 850 order intents
-from the live path against 850 from the research one at a tolerance of zero nanoseconds.
-Live is `down` and stays down until a person types `--as`.
-
-A lane spends a model call a card, so whether an idea is worth one is worth measuring first,
-with none. The demo ships a second series, `LAGD`, that takes 0.6 of `DEMO`'s one-minute shock a
-minute late, and a screen that asks whether it does and whether trading on it clears the round
-trip:
-
-```bash
-kanso data load --loader synthetic --spec demo_lag.yaml
-kanso data instruments resolve LAGD.SIM --as-of 2024-01-02
-kanso screen run screens/demo_lag/screen.yaml
-```
-
-```
-$ kanso screen run screens/demo_lag/screen.yaml   # its trailing written line is elided
-screen     demo_lag · d0cf979 · snapshot 48a3092
-window     2024-01-02..2024-03-28
-cells      8
-verdict    worth a lane: yes · 3 pass · 5 fail · 0 thin
-           pass · response/demo/20bp/1m/lagd/1m  ceiling +144.9 bp/day · margin +9.2 bp (gross +14.2, hurdle 5) · 15.7 a day · t +31.41 · p 0.0001
-           pass · response/demo/20bp/1m/lagd/5m  ceiling +111.8 bp/day · margin +8.397 bp (gross +13.4, hurdle 5) · 13.3 a day · t +18.72 · p 0.0001
-           pass · lead_lag/demo>lagd/1m  mean +0.596 ± 0.0041 · t +145.89 · p 0.0001 · 63 session(s)
-cost       0.4s · 0.26 GB
-```
-
-The planted 0.6 reads back as 0.596 at one minute, and following a 20 bp move of `DEMO` in
-`LAGD` clears the 5 bp round trip by 9.2 bp an event, about sixteen times a day. The screen
-froze the snapshot it needed itself; on data the catalog lacks it fetches through whichever
-adapter serves it. `kanso screen draft demo_lag --cell response/demo/20bp/1m/lagd/1m --as
-<id> --certify <window>` writes that cell as a draft hypothesis whose seed strategy is its
-rule (`docs/concepts.md`, Screen).
-
-## Your own workspace
-
-```bash
-kanso init .                   # anywhere; skills linked, envelope detected, no git touched
-$EDITOR models.yaml .env       # your providers; keys as KANSO_<PROVIDER>_API_KEY
-kanso doctor                   # green before anything else
-```
-
-Then resolve instruments, load data, take a snapshot and write your first hypothesis — the
-shipped skills `kanso-data` and `kanso-hypothesis` are the procedures, and
-`docs/workspace.md` says what every file in the directory is for. Instruments come from a
-configured data adapter; a workspace with no adapter loads file exports and declares its
-instruments by hand. Keys live only in environment variables, read from the gitignored
-`.env` and then from your shell, and never appear in anything kanso writes.
-
-## Where to go next
-
-| page | what it answers |
-|---|---|
-| `docs/concepts.md` | the vocabulary: hypothesis, construct, card, keep rule, certification, embargo, version, stage, promotion |
-| `docs/cli.md` | every command, every exit code, every refusal |
-| `docs/workspace.md` | every file a workspace holds, who writes it, and what is refused if you edit one that is not yours |
-| `docs/constructs.md` | the construct catalogue: what each is, what it attaches to, and which are runnable |
-| `docs/adapters.md` | how an outside party reaches kanso, and what `--check` measures rather than declares |
-| `docs/extensions.md` | writing a loader, a data type, a construct, an execution client or an adapter in `kanso_ext/`, what a gate and an objective need instead, and upstreaming one |
-| `docs/maintainers.md` | maintaining and releasing the framework, and running the research daemon as a service |
-| `docs/backlog.md` | the known limitations, honestly, with what each would take |
-| `AGENTS.md` | the standing rules for changing this package |
-
-## What 0.1.0 does not do
-
-- **A wall-clock broker client cannot be deployed.** The declarations, the refusals, the
-  credential handling and `promote --live --as NAME` are all live and tested, but a stage
-  node in this version is a bounded run over the catalog, so `kanso portfolio deploy`
-  refuses a `clock: wall` execution client outright rather than filling its orders in
-  simulation while calling the money the broker's. The long-running node is the last piece
-  between this build and a broker actually trading.
-- **Two first-party adapters** ship: one data vendor and one broker. Everything else is
-  file exports, the synthetic loader, or an adapter you write.
-- Fill-quality drift has no measurement channel yet, so that gate skips honestly on every
-  stage; the execution client polls for fills rather than reading an order stream; and
-  several constructs in the catalogue are declared but not runnable.
-
-`docs/backlog.md` is the full list — every entry with what the build did about it and what
-each would need, the closed ones struck through beside what closed them. It is worth reading
-before you trust a number.
-
-## Maintaining the framework while using it
-
-Two repositories. **Framework**: this one. **Projects**: any directory you `kanso init`,
-depending on the framework by release (`uv add kanso`) or by checkout
-(`uv add --editable ../kanso`). A capability you need before it exists is prototyped inside
-the project as an extension in `kanso_ext/` — constructs, loaders, data types, execution
-clients and adapters use the same interfaces as the built-ins, and a gate or an objective is
-written against the same ones but has to land in the package to judge anything — and moved
-upstream with the `kanso-upstream` skill once it has earned it. `docs/maintainers.md` is the
-whole procedure; `skills/` holds the maintainer skills.
 
 License: Apache-2.0.
