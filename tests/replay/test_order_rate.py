@@ -39,7 +39,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.criteria.run import midnight_ns
 from kanso.nautilus import backtest, node, session
 from kanso.nautilus.backtest import RunRequest, RunResult
-from kanso.nautilus.sizing import ORDER_RATE, Refusal, SizingError
+from kanso.nautilus.sizing import ORDER_RATE, UNFUNDED_ORDER, Refusal, SizingError
 from kanso.schemas import Commands
 from tests.replay.conftest import (
     FORWARD,
@@ -235,7 +235,7 @@ OWED_AT_MARKET = sleeve(
 """Three commands on its first three quotes, then an exit at market once, on the fourth."""
 
 
-def test_an_exit_past_the_rate_is_owed_until_the_bucket_refills_on_both_paths() -> None:
+def test_an_exit_at_market_past_the_rate_is_owed_until_the_bucket_refills_on_both_paths() -> None:
     """At three a minute the three commands empty the bucket to a tenth of a token, and it
     refills a twentieth a second: the exit asked for once on the fourth quote is owed and
     goes out on the first quote that finds a whole token, the twenty-first, twenty seconds of
@@ -1170,7 +1170,8 @@ def test_an_entry_behind_an_owed_exit_is_dropped_and_counted_before_it_is_sized_
     must first cancel the sale resting on the closing side — a stop-limit at 5.00 or a
     take-profit at 20.00 — the bucket holds too few tokens for that cancel, and the exit is owed
     behind it. On the quote the cancel goes on the cancel takes the bucket's last tokens, and
-    the exit owed behind it is asked for after the handler. The bucket is asked first for an
+    the exit owed behind it, asked for again at once, before the handler, finds none and is owed
+    for want of one. The bucket is asked first for an
     entry sent behind such an exit — on the third quote, the fourth, or the quote the cancel
     goes on — before it is sized by the room or funded: it holds no token for it, or a cancel
     waits, so the entry is dropped and counted, every order of the bracket, the card running
@@ -1205,6 +1206,95 @@ def test_an_entry_behind_an_owed_exit_is_dropped_and_counted_before_it_is_sized_
         assert fills == [("BUY", 100.0), ("SELL", 100.0)], per_minute
         assert held.commands is not None
         assert (held.commands.cancels, held.commands.refused_submits) == (len(rested), dropped)
+
+
+AFTER_A_LULL = at(3) + 40 * SECOND_NS
+"""The fourth quote's instant: forty seconds after the third, by which three a minute have
+filled the bucket again."""
+
+
+def lulled(count: int, *, name: InstrumentId = NAME, first: int = 0) -> list[QuoteTick]:
+    """`count` quotes of `name`, a second apart but for forty seconds between the third and the
+    fourth, each `first` nanoseconds off its instant; with `first` given there is none before
+    the fourth, so the fourth is the first point after the lull."""
+    made = [*quoted(3, first=T0 + first, name=name), *quoted(count - 3, first=AFTER_A_LULL)]
+    if first:
+        made[3:] = quoted(count - 4, first=AFTER_A_LULL + SECOND_NS + first, name=name)
+    return made
+
+
+@pytest.mark.parametrize("rest", ["stop_limit", "take_profit"])
+@pytest.mark.parametrize("built", sorted(BUILT_BEHIND_AN_EXIT))
+def test_an_entry_on_the_point_a_deferred_cancel_goes_with_a_token_to_spare_is_dropped(
+    built: str, rest: str
+) -> None:
+    """At three a minute, two requests a cancel, the entry and the resting sale leave a token
+    and a tenth on the third quote, too few for the cancel the exit at market calls for: the
+    cancel is deferred and the exit owed behind it. Forty seconds pass and the bucket is full
+    again on the fourth quote, where the cancel goes, leaving one token. The exit owed behind
+    the cancel is asked for again as soon as it has gone, before the handler: with no latency
+    the venue holds the sale it cancels open no longer, so the exit takes the token. The entry
+    the handler sends finds none and is dropped and counted, every order of the bracket, and
+    never funded against the long the exit has sold, which it would be refused for as
+    `unfunded_order`."""
+    source = (
+        EXITED_THEN.replace(
+            b"REST", {"stop_limit": STOP_LIMIT_AT_5, "take_profit": RESTING_AT_20}[rest].encode()
+        )
+        .replace(b"WHEN", b"4")
+        .replace(b"THEN", BUILT_BEHIND_AN_EXIT[built].encode())
+    )
+    other = lulled(30, name=InstrumentId(Symbol(OTHER), Venue(VENUE)), first=-1)
+    groups: list[tuple[object, ...]] = [tuple(lulled(30)), tuple(other)]
+    request = replace(rated(source, 3, per_cancel=2), hyp=TWO_NAMES, capital=ROOM_CAPITAL)
+    held = both(request, groups, (SYMBOL, OTHER))
+
+    demo = f"{SYMBOL}.{VENUE}"
+    resting = "STOP_LIMIT" if rest == "stop_limit" else "LIMIT"
+    assert [(ts, name, side, kind) for ts, name, side, _, kind, _ in held.intents] == [
+        (at(1), demo, "BUY", "MARKET"),
+        (at(2), demo, "SELL", resting),
+        (AFTER_A_LULL, demo, "SELL", "MARKET"),
+    ]
+    assert [(fill.side, fill.qty) for fill in held.run.fills] == [("BUY", 100.0), ("SELL", 100.0)]
+    assert held.commands is not None
+    dropped = 3 if built == "bracket" else 1
+    assert (held.commands.cancels, held.commands.refused_submits) == (1, dropped)
+
+
+def test_under_a_latency_an_entry_behind_a_cancel_in_flight_is_funded_on_the_long_still_held() -> (
+    None
+):
+    """With a latency stated the stop-limit works until its cancel lands, so the exit owed behind
+    the cancel stays owed behind it in flight, rated or not, and a buy of 50 resting at 9.00 sent
+    then is funded on the long of 100 the book is full of: refused as `unfunded_order`. With no
+    rate stated the cancel goes on the third quote and the buy is sent there; at three a minute,
+    two requests a cancel, the cancel waits for the fourth quote, after the lull, and the buy
+    sent on it is refused alike."""
+    requote = BUILT_BEHIND_AN_EXIT["requote"].encode()
+    other = lulled(30, name=InstrumentId(Symbol(OTHER), Venue(VENUE)), first=-1)
+    groups: list[tuple[object, ...]] = [tuple(lulled(30)), tuple(other)]
+    instruments = [instrument(SYMBOL), instrument(OTHER)]
+    for per_minute, when in ((None, 3), (3, 4)):
+        source = (
+            EXITED_THEN.replace(b"REST", STOP_LIMIT_AT_5.encode())
+            .replace(b"WHEN", str(when).encode())
+            .replace(b"THEN", requote)
+        )
+        model = rated(source, per_minute, latency_ms=20.0, per_cancel=2).venue_model
+        request = replace(
+            rated(source, None), venue_model=model, hyp=TWO_NAMES, capital=ROOM_CAPITAL
+        )
+        with pytest.raises(SizingError) as raised:
+            backtest.execute(request, instruments, groups)
+        node = session.run_node(request, instruments, groups).result
+
+        refusal = raised.value.refusal
+        assert (refusal.rule, refusal.ts_event) == (
+            UNFUNDED_ORDER,
+            at(when) if when == 3 else AFTER_A_LULL,
+        )
+        assert node.crashed and f"sizing: {UNFUNDED_ORDER}" in str(node.traceback_tail)
 
 
 DROPPED_THEN = {
@@ -1833,32 +1923,30 @@ third quote and does `THEN` on its fourth, the next session's first."""
 
 
 @pytest.mark.parametrize(
-    ("then", "sold", "after"),
-    [("pass", 100.0, 0), ('self.submit_entry(name, "BUY", qty=10)', 110.0, 20)],
+    ("then", "dropped"),
+    [("pass", 0), ('self.submit_entry(name, "BUY", qty=10)', 1)],
     ids=["alone", "behind_an_entry"],
 )
-def test_an_exit_owed_behind_a_deferred_cancel_is_asked_for_after_the_handler(
-    then: str, sold: float, after: int
+def test_an_exit_owed_behind_a_deferred_cancel_is_asked_for_once_the_cancel_goes(
+    then: str, dropped: int
 ) -> None:
     """At three a minute, two requests a cancel, the entry and the resting exit leave a token and
     a tenth on the third quote, too few for the cancel the exit at market calls for: the cancel
     is deferred, and the exit owed behind it. The next session opens a day later with the bucket
     full, and the cancel goes before the handler of its first quote, leaving one token. The exit
-    owed behind it is asked for again after that handler: alone it takes the token there, and
-    behind the entry that handler sends, which takes the token first, it goes twenty seconds
-    later, once the next one is back, selling the 10 bought as well."""
+    owed behind it is asked for again at once, before that handler, and takes the token: with no
+    latency the venue holds the sale it cancels open no longer. Behind it the entry the handler
+    sends finds the bucket empty and is dropped and counted."""
     day_two = T0 + 24 * 3_600 * SECOND_NS
     groups: list[tuple[object, ...]] = [(*steady(3), *quoted(30, first=day_two))]
     source = OWED_BEHIND_A_CANCEL_OVERNIGHT.replace(b"THEN", then.encode())
     held = both(rated(source, 3, per_cancel=2), groups)
 
-    entered = [(day_two, "BUY", 10.0, "MARKET")] if after else []
     assert [(ts, side, qty, kind) for ts, _, side, qty, kind, _ in held.intents][2:] == [
-        *entered,
-        (day_two + after * SECOND_NS, "SELL", sold, "MARKET"),
+        (day_two, "SELL", 100.0, "MARKET")
     ]
     assert held.commands is not None
-    assert (held.commands.cancels, held.commands.refused_submits) == (1, 0)
+    assert (held.commands.cancels, held.commands.refused_submits) == (1, dropped)
 
 
 GROWN = sleeve(

@@ -1316,7 +1316,7 @@ venue, both keys and both figures: the bucket never holds more than the rate, so
 first cancel would wait for ever and every entry and modify behind it be dropped. A command
 finds **no token available** to it when the bucket holds fewer than it costs — a list one for
 each of its orders, all or none — or, for an entry or a modify, while a cancel waits for its
-tokens (below). Then:
+tokens or an exit owed for want of a token waits for one (below). Then:
 
 - **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
   quantity given or sized by the room, whatever it does to the position; and an order built by
@@ -1376,9 +1376,22 @@ tokens (below). Then:
 While a cancel waits for its tokens no entry and no modify takes one — an entry finds none and
 is dropped, a modify too — so the handler's entries do not starve a cancel that spends two
 requests, as they would by taking each single token that comes back before the cancel had two.
-An exit takes a token the bucket holds all the same, owed or not, so the rate refuses no exit
-it has a token for, and exits asked for on every point can keep a cancel waiting, while the
-order it would cancel works on and can fill. A sleeve acts only on points, and the venue
+Nor does one while an exit owed for want of a token waits for one: the owed exit is asked for
+again before the handler of each point, and under `depth` from each change once its views have
+been handled, so a view's handler, which runs first and on an instant of its own, would
+otherwise take every token that came back and the exit would never go. An exit takes a token
+the bucket holds all the same, owed or not, so the rate refuses no exit it has a token for, and
+exits asked for on every point can keep a cancel waiting, while the order it would cancel works
+on and can fill. A deferred cancel goes before the handler of the point the bucket holds its
+tokens on, and the exit owed behind it is asked for again as soon as it has gone, before that
+handler too: with no latency stated the venue holds the order no longer once its cancel is
+sent, so the exit takes a token the bucket still holds, or is owed for want of one, and an
+entry the handler sends behind it is dropped and counted, or, with a token left for it, funded
+on what that exit leaves. Under a stated latency the order works until the cancel lands, so the
+exit stays owed behind the cancel in flight, as it is with no rate stated, and an entry the
+handler sends meanwhile is funded on the position still held: where the book cannot fund it
+beside that position, it is refused as `unfunded_order`, as it is behind any cancel in
+flight. A sleeve acts only on points, and the venue
 matches a point before any handler of it runs, on both paths, so **what waits for a token goes
 on a later point, after the venue has matched it**: a cancel deferred on a session's last point
 waits at least for the next session's first, where the order it was meant to cancel can fill,

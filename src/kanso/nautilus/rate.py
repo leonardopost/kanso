@@ -15,7 +15,8 @@ too; the largest of those counts and their 99th percentile over every command, b
 rank. So a cancel and the order that replaces it, sent in one handler, each read the pair. It
 counts apart, by kind, the submits and modifies no token was available to — the bucket holding
 fewer tokens than they cost, an entry's list one for each of its orders, all or none, or a
-cancel waiting for its tokens — which were never sent and so are in no minute's count. It is
+cancel waiting for its tokens, or an exit owed for want of a token waiting for one — which were
+never sent and so are in no minute's count. It is
 a reading of the run and changes nothing the run does, so every card carries it whether or not
 a rate is stated (`kanso.schemas.Commands`). A command is what the sleeve asks
 of the venue: an order the engine's emulator holds is counted when the strategy submits it,
@@ -132,8 +133,9 @@ class Tally:
     busiest minute sent. The commands of one instant are counted once the instant is over,
     each with that instant's whole count. The commands refused because no token was available
     to them — the bucket holding fewer tokens than they cost, an entry's list one for each of
-    its orders, all or none, or a cancel waiting for its tokens — are counted apart (`refuse`),
-    and in no minute: they were never sent.
+    its orders, all or none, or a cancel waiting for its tokens, or an exit owed for want of a
+    token waiting for one — are counted apart (`refuse`), and in no minute: they were never
+    sent.
     """
 
     def __init__(self) -> None:
@@ -162,8 +164,8 @@ class Tally:
     def refuse(self, kind: str, count: int = 1) -> None:
         """Count `count` commands of `kind`, a submit or a modify, no token was available to —
         the bucket holding fewer tokens than they cost, an entry's list one for each of its
-        orders, all or none, or a cancel waiting for its tokens: dropped unsent, so counted in
-        no minute."""
+        orders, all or none, or a cancel waiting for its tokens, or an exit owed for want of a
+        token waiting for one: dropped unsent, so counted in no minute."""
         self._refused[kind] += count
 
     def _count_into(self, seen: dict[int, int]) -> None:

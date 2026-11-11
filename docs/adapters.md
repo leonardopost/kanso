@@ -480,9 +480,9 @@ a burst of 190 and then 190 a minute, a cancel two of them (`docs/workspace.md`,
 `costs.orders_per_minute`) — which is what the client lets through, unless it states its
 plan's figure. Past it a card drops the entries and modifies no request is available to —
 fewer left than they cost, an entry's list one for each of its orders, all or none, or a cancel
-waiting for its two — and counts them on its `commands`, running on; it owes
+waiting for its two or an exit owed waiting for one — and counts them on its `commands`, running on; it owes
 the exits `submit_exit` sized and defers its cancels, and while a cancel waits for its two
-requests no entry or modify takes one that comes back; and it is refused only for an exit kanso
+requests, or an owed exit for one, no entry or modify takes one that comes back; and it is refused only for an exit kanso
 did not size — one the strategy built itself, or an overlay's leg or clip — sent with no
 request left for it. An account on the Elite plan states, beside a
 `requests_per_minute` raised to match,
