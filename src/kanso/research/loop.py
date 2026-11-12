@@ -1125,7 +1125,7 @@ def _judge(
         crash_tail=None,
         directory=directory,
         tags=tags,
-        digest=digest_of(result.run, result.intents),
+        digest=digest_of(result.run, result.intents, result.firsts_ns),
         measured_sha=measured_sha,
         against=against,
     )
@@ -1769,7 +1769,7 @@ def run_batch(
                 peak_mem_gb=result.peak_mem_gb,
                 like=like,
                 measured_sha=measured_sha,
-                digest=digest_of(result.run, result.intents),
+                digest=digest_of(result.run, result.intents, result.firsts_ns),
                 against=against,
             )
         )
