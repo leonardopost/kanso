@@ -149,6 +149,9 @@ BINDINGS = {
     "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
     "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
     "which a NETTING flip or reopen appends to and nothing else changes",
+    "the portfolio hands every closed position to the record_trade it finds on its "
+    "analyzer instance, and a run whose record_trade records nothing leaves the same "
+    "positions, orders and balances",
 }
 """The claims recorded ahead of the work that rests on them; deleting one fails here."""
 
@@ -265,6 +268,38 @@ def test_a_client_whose_quota_holds_no_request_fails_the_quota_claim(
     assert "['RuntimeError']" in evidence
 
 
+@pytest.mark.parametrize(
+    ("keyed_s", "unkeyed_s", "expected"),
+    [(0.0, 0.0, False), (0.1, 0.2, True)],
+    ids=["unmetered", "load-slowed-unkeyed"],
+)
+def test_the_keyed_quota_claim_reads_only_the_keyed_run_s_lower_bound(
+    monkeypatch: pytest.MonkeyPatch, keyed_s: float, unkeyed_s: float, expected: bool
+) -> None:
+    """A stand-in whose requests take as long as their keys say. Failing every request at
+    once holds nothing; holding the keyed run past its 0.45 s floor holds the claim, however
+    much longer load made the unkeyed run take — load only adds time, so the two runs are
+    never compared."""
+    import asyncio
+
+    from nautilus_trader.core import nautilus_pyo3
+
+    class Paced:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def request(self, *_: object, keys: list[str], **__: object) -> object:
+            await asyncio.sleep(keyed_s if "slow" in keys else unkeyed_s)
+            raise RuntimeError("not a URL")
+
+    monkeypatch.setattr(nautilus_pyo3, "HttpClient", Paced)
+
+    holds, evidence = facts._check_http_client_meters_keyed_quotas()
+
+    assert holds is expected, evidence
+    assert "['RuntimeError']" in evidence
+
+
 def test_a_netting_position_is_one_strategy_s_and_the_net_position_the_account_s() -> None:
     """What `KansoStrategy`'s own-position reader rests on, read in the first strategy's
     handler before its sale and again at the end of the run."""
@@ -374,3 +409,24 @@ def test_a_change_no_event_handed_or_a_list_read_anew_fails_its_claim(
     assert not holds
     assert "P-1: 1 -> 1" in evidence
     assert facts._check_every_change_reaches_its_strategy_before_its_next_handler()[0]
+
+
+def test_a_close_kept_unasked_or_a_run_that_moved_fails_the_analyzer_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What `kanso.nautilus.backtest.engine_for` rests on fails when the analyzer kept what
+    was set to record nothing, or when the two runs left different things, and says which."""
+    clean = {
+        recorded: facts._probe_recorded_closes(recorded=recorded) for recorded in (True, False)
+    }
+    trades, handed, _, left = clean[False]
+    found = {True: clean[True], False: (trades, handed, trades, left)}
+    monkeypatch.setattr(facts, "_probe_recorded_closes", lambda *, recorded: found[recorded])
+    holds, evidence = facts._check_the_portfolio_records_a_close_through_its_analyzer_instance()
+    assert not holds
+    assert f"set on the analyzer instance, was handed {handed} and kept {trades};" in evidence
+
+    found[False] = (trades, handed, 0, "another run")
+    holds, evidence = facts._check_the_portfolio_records_a_close_through_its_analyzer_instance()
+    assert not holds
+    assert "against another run" in evidence

@@ -21,7 +21,8 @@ from kanso.schemas import Limits, StrategyFile
 from kanso.state import StateStore
 from kanso.strategy import load as load_impl
 from kanso.workspace import Workspace
-from tests.portfolio.conftest import deployable
+from tests.own_bar_size import hidden_after_its_body
+from tests.portfolio.conftest import REVERTING, deployable
 from tests.replay.conftest import CAPITAL, INSTRUMENT, VENUE, document, hypothesis, venue_model
 
 LIMITS = Limits(max_gross_pct=100, max_net_pct=100, per_strategy_max_pct=40, daily_loss_pct=3)
@@ -400,6 +401,34 @@ def test_a_stage_sleeve_books_the_funding_its_simulated_account_does_not_settle(
         (strategy,) = node._components(built, (placement,))
 
         assert strategy.kanso_config.books_funding is True
+    finally:
+        built.dispose()
+        loop.close()
+
+
+def test_a_stage_sleeve_whose_config_hides_bar_resolution_subscribes_the_file_s_bars(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A stage node rebuilds each sleeve's config with its deployed capital and identity, from
+    the fields as attributes. An attribute the file sets on its `Config` once the class is made
+    hides `bar_resolution` from that read, and is no default, so nothing refuses it; the rebuild
+    carries the size kanso set, and the sleeve subscribes the file's daily bars, as its card did,
+    where the attribute's 5m would have had it subscribe bars no stage-mate need load."""
+    deployable(
+        ws, store, "hidden", sleeve=hidden_after_its_body(REVERTING), doc=document(id="hidden")
+    )
+    placed = a_placement(ws, "hidden")
+    seen: list[str] = []
+    loop = asyncio.new_event_loop()
+    built = TradingNode(config=a_node((placed,)).config(), loop=loop)
+    built.build()
+    try:
+        (strategy,) = node._components(built, (placed,))
+        strategy.subscribe_bars = lambda bar_type, *_, **__: seen.append(str(bar_type))
+        strategy.subscribe_universe()
+
+        assert strategy.kanso_config.bar_resolution == "5m", "the strategy's own read"
+        assert seen == [f"{INSTRUMENT}-1-DAY-LAST-EXTERNAL"]
     finally:
         built.dispose()
         loop.close()

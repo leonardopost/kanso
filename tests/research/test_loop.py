@@ -16,6 +16,7 @@ from typing import ClassVar, Final
 
 import pytest
 
+import kanso
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
 from kanso.criteria.objectives import wf_sharpe_net
@@ -104,7 +105,7 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
     )
     assert run.card_budget_s == max(loop.MIN_CARD_BUDGET_S, loop.HEADROOM * run.baseline_wall_s)
     # The two numbers `docs/concepts.md` states for the card budget, and the `kanso.toml`
-    # template for the memory cap: three times the baseline, never under 60 s.
+    # template for the memory cap: three times a card's wall, never under 60 s.
     assert (loop.MIN_CARD_BUDGET_S, loop.HEADROOM) == (60.0, 3.0)
     assert run.baseline_wall_s > 0.0
 
@@ -137,6 +138,137 @@ def test_begin_pins_the_scope_copies_it_and_runs_the_baseline(
         .splitlines()[1]
         .startswith(baseline.sha7)
     )
+
+
+def test_the_card_budget_is_struck_from_the_run_s_first_card_that_trades(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stub's baseline trades nothing, so until a card trades the budget is three times the
+    baseline's wall; the first card that trades strikes it from its own, the run records that
+    card, and neither a card that trades nothing nor a later one that trades moves it.
+    Without the floor, so the three-times term is the budget on any host."""
+    monkeypatch.setattr(loop, "MIN_CARD_BUDGET_S", 0.0)
+    run = loop.begin(ws, store, registered)
+    assert records.cards_of(store, registered)[0].n_trades == 0
+    assert (run.card_budget_s, run.budget_sha) == (loop.HEADROOM * run.baseline_wall_s, None)
+
+    edit(ws, run, FLAT + b"# still nothing\n")
+    with pytest.raises(loop.RedundantError):  # the flat book again, and judged all the same
+        loop.card(ws, store, registered, "trades nothing")
+    assert records.cards_of(store, registered)[-1].n_trades == 0
+    assert records.require_active(store, registered).budget_sha is None
+
+    edit(ws, run, REVERTING)
+    first = loop.card(ws, store, registered, "trades")
+    struck = records.require_active(store, registered)
+    assert first.n_trades > 0
+    assert (struck.card_budget_s, struck.budget_sha) == (
+        loop.HEADROOM * first.wall_s,
+        first.strategy_sha,
+    )
+
+    edit(ws, run, WEAK)
+    later = loop.card(ws, store, registered, "trades too")
+    assert later.n_trades > 0
+    after = records.require_active(store, registered)
+    assert (after.card_budget_s, after.budget_sha) == (struck.card_budget_s, struck.budget_sha)
+
+
+def test_a_baseline_that_trades_strikes_its_run_s_card_budget(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+
+    run = loop.begin(ws, store, hyp_id)
+
+    baseline = records.cards_of(store, hyp_id)[0]
+    assert baseline.n_trades > 0
+    assert run.budget_sha == run.base_sha == baseline.strategy_sha
+    assert run.card_budget_s == max(loop.MIN_CARD_BUDGET_S, loop.HEADROOM * baseline.wall_s)
+
+
+def test_a_turn_s_first_card_that_trades_in_slot_order_strikes_the_card_budget(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(loop, "MIN_CARD_BUDGET_S", 0.0)
+    loop.begin(ws, store, registered)
+
+    made = loop.run_batch(
+        ws,
+        store,
+        registered,
+        [
+            ("trades nothing", FLAT + b"# still nothing\n", ["refactor"]),
+            ("weak", WEAK, ["refactor"]),
+            ("revert", REVERTING, ["refactor"]),
+        ],
+        slots=3,
+    )
+
+    assert [card.n_trades > 0 for card in made] == [False, True, True]
+    struck = records.require_active(store, registered)
+    assert (struck.card_budget_s, struck.budget_sha) == (
+        loop.HEADROOM * made[1].wall_s,
+        made[1].strategy_sha,
+    )
+
+
+def test_a_baseline_killed_for_its_clock_records_what_it_ran_on_and_one_that_raised_does_not(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a lane compares before it begins the run again (`daemon.parked`): the strategy, the
+    two files, the snapshots, the baseline budget and the kanso, as a begin now reads them."""
+
+    def killed(request: backtest.RunRequest, *_: object, **__: object) -> backtest.RunResult:
+        return backtest.RunResult(
+            run=backtest._empty(request),
+            wall_s=float(request.budget_s or 0.0),
+            peak_mem_gb=0.1,
+            intents=(),
+            crashed=True,
+            reason=backtest.BUDGET,
+            traceback_tail=None,
+        )
+
+    with monkeypatch.context() as patched:
+        patched.setattr(loop.backtest, "run_subprocess", killed)
+        with pytest.raises(loop.OverBudgetError, match="budget: no output"):
+            loop.begin(ws, store, registered)
+    ws.path("hypotheses", registered, "strategy.py").write_bytes(RAISING)
+    with pytest.raises(PreconditionError) as raised:
+        loop.begin(ws, store, registered)
+
+    over, crashed = store.events(kind=loop.BASELINE_FAILED, subject=registered)
+    assert over.detail[loop.INPUTS] == {
+        "strategy": sha256(FLAT).hexdigest(),
+        "hypothesis": sha256(
+            ws.path("hypotheses", registered, "hypothesis.yaml").read_bytes()
+        ).hexdigest(),
+        "program": sha256(PROGRAM).hexdigest(),
+        "snapshots": sorted(path.stem for path in ws.path("catalog", "snapshots").glob("*.yaml")),
+        "budget_s": float(ws.config.research.baseline_budget_s),
+        "kanso": kanso.__version__,
+    }
+    assert not isinstance(raised.value, loop.OverBudgetError)
+    assert loop.INPUTS not in crashed.detail
+    assert loop.baseline_inputs(ws, store, registered)["strategy"] == sha256(RAISING).hexdigest()
+
+
+def test_a_baseline_a_lane_told_to_drain_did_not_start_is_no_failure(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """It leaves what an operator's removal leaves: no run, no lane directory and no
+    `baseline_failed`, which `kanso status` would list until a run began."""
+    backtest.drain()
+    try:
+        with pytest.raises(backtest.DrainedError):
+            loop.begin(ws, store, registered)
+    finally:
+        backtest.resume()
+
+    assert store.events(kind=loop.BASELINE_FAILED, subject=registered) == []
+    assert records.active(store, registered) is None
+    assert not ws.path("runs", "op", registered).exists()
 
 
 def test_the_baseline_discards_when_a_card_gate_fails(ws: Workspace, store: StateStore) -> None:
@@ -445,6 +577,122 @@ def test_a_keep_beats_the_noise_floor_and_a_repeat_of_it_does_not(
     assert event.detail["floor"] > 0.0
     assert f"{event.detail['floor']:.6g}" in refused.value.message
     assert f"{event.detail['floor']:.6g}" in str(refused.value.remedy)
+
+
+PAIRED = document(
+    id="demo_paired",
+    objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    constraints=[
+        {"id": "strategy_integrity"},
+        {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 0.5}},
+    ],
+)
+"""The demo sleeve scored on its contribution, the keep rule at half an error."""
+
+LARGER = REVERTING.replace(b"notional: float = 5_000.0", b"notional: float = 5_500.0")
+"""The trough rule with a tenth more on every trade: the same bets, a tenth more of each."""
+
+
+def compared(store: StateStore, hyp_id: str) -> list[dict[str, object]]:
+    """What the keep rule compared each card with, for the cards it compared with a best."""
+    events = store.events(kind=loop.CARDED, subject=hyp_id)
+    return [event.detail["keep"] for event in events if "keep" in event.detail]  # type: ignore[misc]
+
+
+def test_a_refinement_inside_the_card_s_own_error_is_not_kept_however_well_its_difference_is_known(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Two cards over the same sessions share their day-to-day noise, so the difference
+    between them is known far better than either, and the bar is still struck on the larger
+    of the two errors: the card's own.
+
+    A tenth more on every trade earns about a tenth more each session the trough rule
+    trades, so the gain is real and small against the card's own error, and the two cards'
+    sessions move together, so the difference's own error is about a tenth of either card's.
+    A bar on that error alone would keep it; the rule does not, and it is then the same book
+    inside the same floor, a repeat."""
+    hyp_id = classify(ws, store, PAIRED)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    best = loop.card(ws, store, hyp_id, "the trough rule")
+    assert best.status == "keep" and compared(store, hyp_id) == [], "nothing to beat yet"
+    edit(ws, run, LARGER)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, hyp_id, "a tenth more of the same trade")
+
+    made = records.cards_of(store, hyp_id)[-1]
+    assert made.status == "redundant"
+    gain = made.metric - best.metric
+    assert 0.0 < gain < 0.5 * made.metric_se, "inside the card's own floor"
+    (against,) = compared(store, hyp_id)
+    assert against["best"] == best.sha7
+    assert against["paired"] is True and "unpaired" not in against
+    assert against["difference"] == pytest.approx(gain)
+    assert 0.5 * float(against["se"]) < gain  # type: ignore[arg-type]
+    assert float(against["se"]) < 0.2 * made.metric_se  # type: ignore[arg-type]
+    assert records.best_of(store, hyp_id) == (best.strategy_sha, best.metric)
+
+
+def test_a_best_that_kept_no_measurement_is_compared_on_the_card_s_own_error_and_says_so(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A card recorded before cards kept what they were measured from has nothing to pair
+    with, so the rule reads as it did before it paired — on the candidate's own error — and
+    the record of the comparison says that is what it did, and why."""
+    hyp_id = classify(ws, store, PAIRED)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    best = loop.card(ws, store, hyp_id, "the trough rule")
+    store.connection.execute(
+        "UPDATE cards SET measured_sha = NULL WHERE strategy_sha = ?", (best.strategy_sha,)
+    )
+    edit(ws, run, LARGER)
+
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, hyp_id, "a tenth more of the same trade")
+
+    made = records.cards_of(store, hyp_id)[-1]
+    assert made.status == "redundant", "not kept, then the same book inside the same floor"
+    (against,) = compared(store, hyp_id)
+    assert against == {
+        "best": best.sha7,
+        "difference": made.metric - best.metric,
+        "se": made.metric_se,
+        "paired": False,
+        "unpaired": loop.UNMEASURED,
+    }
+    assert records.best_of(store, hyp_id) == (best.strategy_sha, best.metric)
+
+
+def test_a_hypothesis_held_under_a_day_signs_by_the_hour_and_the_same_bytes_still_repeat(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Read by the hour, a span marks the day with the hours it was open in, and a
+    byte-identical card is still the repeat it was."""
+    hourly = document(
+        id="demo_hourly",
+        horizon="4h",
+        objective={"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    )
+    hyp_id = classify(ws, store, hourly)
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    kept = loop.card(ws, store, hyp_id, "the trough rule")
+    assert kept.status == "keep"
+
+    with pytest.raises(loop.RedundantError, match="result is already known"):
+        loop.card(ws, store, hyp_id, "the very same file")
+
+    assert statuses(store, hyp_id) == ["keep", "keep", "redundant"]
+    (event,) = store.events(kind=loop.REDUNDANT, subject=hyp_id)
+    assert (event.detail["like"], event.detail["pct"]) == (kept.sha7, 100.0)
+    (row,) = store.connection.execute(
+        "SELECT signature FROM signatures WHERE strategy_sha = ?", (kept.strategy_sha,)
+    ).fetchall()
+    stored = json.loads(str(row["signature"]))
+    held = measured_as_scored(store, kept).run
+    assert stored == records.signature(held, hourly=True) != records.signature(held)
 
 
 def test_a_spelling_that_holds_the_same_book_is_redundant_and_the_lane_is_restored(
@@ -1186,10 +1434,10 @@ def test_a_batch_records_a_refusal_and_a_turn_with_nothing_to_run(
 def test_a_turn_s_cards_each_run_on_the_card_budget_times_the_turn_s_width(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The children of a turn share the lane's cores, and the budget was struck from a
-    baseline that had them to itself, so each runs on the card budget times the width and
-    the lane's share divided by it. A child the runner killed for its memory or its clock is
-    a crash carrying the `resources` verdict that says which limit and what it reached."""
+    """The children of a turn share the lane's cores, so each runs on the card budget times
+    the width and the lane's share divided by it. A child the runner killed for its memory or
+    its clock is a crash carrying the `resources` verdict that says which limit and what it
+    reached."""
     from kanso.nautilus.backtest import RunResult
 
     run = loop.begin(ws, store, registered)

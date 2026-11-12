@@ -20,6 +20,7 @@ from kanso.schemas import (
     CardDigest,
     Certificate,
     CertificationPlan,
+    Commands,
     ConstraintRef,
     ConstructItem,
     ConstructRef,
@@ -135,6 +136,7 @@ def durations(draw: st.DrawFn, max_units: int = 99) -> str:
 @st.composite
 def costs(draw: st.DrawFn) -> Costs:
     spread = draw(st.sampled_from(["quotes", "fixed_bps"]))
+    per_cancel = draw(st.none() | st.integers(1, 4))
     return Costs(
         commission_bps=draw(NON_NEGATIVE),
         slippage_bps=draw(NON_NEGATIVE),
@@ -148,6 +150,9 @@ def costs(draw: st.DrawFn) -> Costs:
         limit_fill=draw(
             st.sampled_from(["touch", "through", "print_through", "print_through_whole"])
         ),
+        # never below what a cancel spends, which the model refuses
+        orders_per_minute=draw(st.none() | st.integers(per_cancel or 1, 100_000)),
+        requests_per_cancel=per_cancel,
     )
 
 
@@ -216,6 +221,11 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     )
     if depth is not None:
         required = [*required, "book"]
+    bar_resolution = (
+        None if resolution not in ("tick", "quote", "trade") else draw(st.none() | durations())
+    )
+    if bar_resolution is not None:
+        required = [*required, "bar"]
     horizon = draw(durations())
     if classified is None:
         classified = draw(st.booleans())
@@ -241,6 +251,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         universe=draw(st.lists(VENUE_CODES, min_size=1, max_size=4, unique=True)),
         horizon=horizon,
         resolution=resolution,
+        bar_resolution=bar_resolution,
         data_requirements=required,
         costs=None if override is None else CostsOverride(**override.model_dump()),
         capital=draw(st.none() | POSITIVE),
@@ -300,6 +311,7 @@ def run_records(draw: st.DrawFn) -> RunRecord:
         card_budget_s=draw(POSITIVE),
         baseline_wall_s=draw(NON_NEGATIVE),
         baseline_peak_mem_gb=draw(NON_NEGATIVE),
+        budget_sha=draw(st.none() | SHAS),
         best_sha=best,
         best_metric=draw(FINITE) if best else None,
         started_at=started,
@@ -319,15 +331,40 @@ def gate_results(draw: st.DrawFn) -> GateResult:
 
 
 @st.composite
+def commands(draw: st.DrawFn) -> Commands:
+    """How fast a sleeve sent its orders: a peak no larger than what was sent, a 99th
+    percentile no larger than the peak, and both zero exactly when nothing was sent; and what
+    a rate refused, which bounds none of them, since it was never sent."""
+    submits, modifies, cancels = (draw(st.integers(0, 10**6)) for _ in range(3))
+    sent = submits + modifies + cancels
+    peak = draw(st.integers(1, sent)) if sent else 0
+    return Commands(
+        submits=submits,
+        modifies=modifies,
+        cancels=cancels,
+        peak_60s=peak,
+        p99_60s=draw(st.integers(1, peak)) if sent else 0,
+        refused_submits=draw(st.integers(0, 10**6)),
+        refused_modifies=draw(st.integers(0, 10**6)),
+    )
+
+
+@st.composite
 def digests(draw: st.DrawFn) -> CardDigest:
     """A card digest: per-trade numbers all present or all absent — the edge's error absent
     alone where the trades closed in one period — per-session numbers present exactly when a
-    session was measured, and gross the net plus the cost."""
+    session was measured, and gross the net plus the cost; and when in its periods it filled,
+    absent from one recorded before that was kept, else their length, a period for each fill
+    at most and the offsets exactly when a period was filled in, the last never before the
+    first nor short of the span from a first fill to a last."""
     sessions = draw(st.integers(0, 500))
     fills = draw(st.integers(0, 10000))
     traded = draw(st.booleans())
     net, cost = draw(FINITE), draw(NON_NEGATIVE)
     net_session, cost_session = draw(FINITE), draw(NON_NEGATIVE)
+    filled = draw(st.none() | st.integers(min(fills, 1), fills))
+    first = draw(NON_NEGATIVE)
+    last = first + draw(NON_NEGATIVE)
     return CardDigest(
         sessions=sessions,
         fills=fills,
@@ -336,6 +373,11 @@ def digests(draw: st.DrawFn) -> CardDigest:
         median_hold_s=draw(NON_NEGATIVE) if traded else None,
         maker_share=draw(st.none() | PROBABILITY) if fills else None,
         fill_ratio=draw(st.none() | NON_NEGATIVE),
+        period=None if filled is None else draw(st.sampled_from(("1d", "1h", "90s"))),
+        filled_periods=filled,
+        first_fill_s=first if filled else None,
+        last_fill_s=last if filled else None,
+        active_s=draw(st.floats(0, last)) if filled else None,
         gross_bps_per_trade=net + cost if traded else None,
         cost_bps_per_trade=cost if traded else None,
         net_bps_per_trade=net if traded else None,
@@ -343,6 +385,7 @@ def digests(draw: st.DrawFn) -> CardDigest:
         gross_bps_per_session=net_session + cost_session if sessions else None,
         cost_bps_per_session=cost_session if sessions else None,
         net_bps_per_session=net_session if sessions else None,
+        commands=draw(st.none() | commands()),
     )
 
 
@@ -887,6 +930,7 @@ def sessions(draw: st.DrawFn) -> Session:
         released=draw(st.integers(0, 10**9)),
         stream_sha256=draw(st.none() | SHAS),
         intents=draw(st.integers(0, 10**9)),
+        commands=draw(st.none() | commands()),
         clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
         started_at=draw(TIMESTAMPS),
         ended_at=draw(st.none() | TIMESTAMPS),

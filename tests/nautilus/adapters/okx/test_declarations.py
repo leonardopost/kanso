@@ -111,6 +111,12 @@ def test_nothing_is_configured_in_a_fresh_workspace(ws: Workspace) -> None:
     assert set(BROKER.credential_origins(ws, LIVE).values()) == {None}
 
 
+def test_the_execution_clients_hold_to_no_quota_kanso_reads(ws: Workspace) -> None:
+    """`rate_per_second` meters kanso's own public requests; the engine's client meters its
+    own, so `doctor` has no figure to set a stage's order rates against."""
+    assert BROKER.requests_per_minute(ws) is None
+
+
 def test_an_account_needs_all_three_to_count_as_configured(ws: Workspace) -> None:
     key, secret, passphrase = BROKER.credentials(DEMO)
     path = ws.root / creds.ENV_FILE

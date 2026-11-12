@@ -88,11 +88,12 @@ it, and an order moved that way at the venue sends no modify; which receiver is 
 scan cannot tell, so the word is denied on any. What these routes do is measured where the
 sets are declared (`DENIED_BUS`, `DENIED_EVENTS`).
 
-**The base's names** belong to the base. A class whose instances are a `KansoStrategy` or a
-`KansoModifier` — it names one among its bases, through an alias, a module or a class of the
-file that does, or it is a class of the file such a class names — may not bind a name that
-base owns: not by `def`, not by assigning it in the class body, and not by assigning it on
-the instance a method receives (`self._close = 3`). Python raises nothing for any of them;
+**The base's names** belong to the base. A top-level class of the file whose instances are a
+`KansoStrategy` or a `KansoModifier` — it names one among its bases as itself, through an
+import alias or as a module's attribute, or names a top-level class of the file that does, or
+it is a top-level class such a class names — may not bind a name that base owns: not by
+`def`, not by assigning it in the class body, and not by assigning it on the instance a method
+receives (`self._close = 3`). Python raises nothing for any of them;
 the harness simply reaches the author's value where it expects its own, and the card crashes
 at the first exit, or sizes, gates or books differently, with a traceback that names the
 harness rather than the line. Under a sizing rule an override is also a size knob no
@@ -100,6 +101,22 @@ attribute scan can see. What the base owns is read from the installed classes wh
 runs, never kept as a list: everything `dir` shows of it, the engine's names beneath
 included, and every attribute kanso's own classes set on `self`. What it leaves to its
 author is `AUTHORED`, the dunders and the engine's `on_*` handlers.
+
+**`bar_resolution` is kanso's.** It is set on the strategy's config from its hypothesis: on a
+card always, `None` where the file states none, and on a stage from the version's manifest,
+which carries it only where the file states one. So a `Config` default of that name — an
+annotation with a value — would have a stage read bars at its own size where a card reads
+them at the file's, and a binding that hides the field — an assignment with no annotation, a
+tuple's target, a property — would hand the strategy's own reads of it a size the file does
+not state, though the sleeve subscribes bars at the size kanso set past any such binding
+(`kanso.nautilus.strategy._BAR_RESOLUTION`). A top-level class of the file whose instances
+are a `KansoConfig` — reached as the base classes above are — is refused here for binding the
+name in its body, in a nested block too (`KANSO_FIELDS`, `_class_names`), with the line and
+the remedy to rename it. No other class is read: a default declared by a class this scan does
+not reach (*What the scan does not see*, below) is refused where the runner builds the class,
+in the card's child and wherever a version's sleeve is built
+(`kanso.nautilus.strategy.refuse_own_bar_resolution`), and a binding that hides the field
+there is read past as any other.
 
 **The harness's sends are its own.** A sleeve hands the engine an order through the base's
 `submit_order`, `submit_order_list` and `modify_order`, which record the intent, ask the
@@ -145,7 +162,14 @@ what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211
 * numpy, allowed whole, past its file functions (`DENIED_NUMPY_FILE`): the `open` of
   `numpy.lib.npyio.DataSource` opens a path, or downloads a URL and opens that,
   `numpy.lib.format.open_memmap` maps a file, and `numpy.ctypeslib.load_library` loads a
-  shared library.
+  shared library;
+* a class that is no top-level `class` statement of the file — one under an `if` or a `try`,
+  one made in a function, one `type()` builds — and a class whose base the scan does not
+  resolve to a harness class: one held under an assigned name (`Base = KansoStrategy`) or read
+  off an attribute other than its own name (`KansoStrategy.config_cls`). The rules on the
+  base's names and on `bar_resolution` read no such class (`docs/backlog.md` row 246); a
+  `Config` default of `bar_resolution` is refused where the runner builds the class, whatever
+  its spelling.
 
 **Scope**: the lane directory holds exactly `hypothesis.yaml`, `program.md` and
 `strategy.py`, and the first two still equal the blobs the run pinned. Transient artefacts
@@ -366,6 +390,7 @@ DENIED_DEPTH: Final = frozenset(
         "_depth_shown",
         "_depth_seen_ns",
         "_top_shown",
+        "_top_balance_at_quote",
         "_take_depth",
         "_show_view",
         "_show_book",
@@ -517,6 +542,28 @@ SEND_MARKS: Final = frozenset({"_sending", "_book_ledger"})
 """What a book lets kanso's own order through by: the mark on the order kanso is sending, and
 the book's ledger; denied beside the base's private sends (`sends`)."""
 
+RATE_MARKS: Final = frozenset(
+    {
+        "_command_bucket",
+        "_command_spend",
+        "_command_tally",
+        "_drop_rate",
+        "_lift_rate",
+        "_pay_rated",
+        "_send_deferred",
+    }
+)
+"""What holds a strategy to its account's order rate (`costs.orders_per_minute`): the bucket
+and the tally, what spends them and counts what they refused, and what lifts the bucket and
+sends what it held back, which only a stage's flatten does; denied, read off a strategy,
+beside the sends."""
+
+WHY_RATE: Final = (
+    "it is the harness's hold on the account's order rate, costs.orders_per_minute, which a "
+    "strategy can neither lift, spend nor rewrite; send fewer commands — re-post only when "
+    "the price has moved enough to matter — and give a name of your own another spelling"
+)
+
 ENGINE_SENDS: Final = frozenset({"submit_order", "submit_order_list", "modify_order"})
 """The engine's methods that hand it an order or move one; a private method of kanso's that
 calls one on the instance or on `super()` is a send (`sends`)."""
@@ -527,6 +574,24 @@ WHY_SEND: Final = (
     "submit_entry(instrument_id, side) or submit_exit(instrument_id), and give a name of "
     "your own another spelling"
 )
+
+KANSO_FIELDS: Final = frozenset({"bar_resolution"})
+"""The one field of `KansoConfig` the body of a top-level `Config` may not bind
+(`_config_problems`): `bar_resolution`, which a card sets from the file whatever it states and a
+stage only where the file states one. A `Config` the scan does not reach is held to it where
+the runner builds the class, and for a default alone
+(`kanso.nautilus.strategy.refuse_own_bar_resolution`). Not every field kanso sets from the file
+is held here: a `Config` default of `depth`, `data_by_instrument` or `session_scope` stands on a
+stage and not on a card too (`docs/backlog.md` row 243), and a binding that hides any other
+field is read in kanso's place (row 245)."""
+
+BODIED: Final = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+"""The nodes whose body binds in a scope of its own, while their decorators, defaults,
+annotations and bases run in the scope around them, where a walrus among them binds."""
+
+COMPREHENSIONS: Final = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+"""The nodes whose targets bind in a scope of their own; in a class body a walrus is refused
+anywhere inside one, its first iterable included, so nothing in one binds in the class's."""
 
 SCOPED_FILES: Final = ("hypothesis.yaml", "program.md", "strategy.py")
 """Exactly what a lane directory holds."""
@@ -611,6 +676,7 @@ def scan(
     problems: list[str] = [
         *_sizing_problems(tree, sized=sized, construct=construct),
         *(clash.problem for clash in _clashes(tree)),
+        *_config_problems(tree),
         *_receiver_problems(tree),
     ]
     for node in ast.walk(tree):
@@ -781,6 +847,73 @@ def _bases() -> tuple[type, ...]:
     return (KansoStrategy, KansoModifier)
 
 
+def _config_problems(tree: ast.Module) -> Iterator[str]:
+    """Every binding of a field kanso sets (`KANSO_FIELDS`) in the body of a top-level class of
+    the file whose instances are a `KansoConfig` as `_harness_classes` reaches one, in a nested
+    block too (`_class_names`)."""
+    from kanso.nautilus.strategy import KansoConfig
+
+    for node, _ in _harness_classes(tree, (KansoConfig,)):
+        for line, name in _class_names(node):
+            if name in KANSO_FIELDS:
+                yield (
+                    f"line {line}: '{name}' is a field kanso sets on KansoConfig from the "
+                    "hypothesis, and a Config may not bind it: a value bound there would stand "
+                    "in for the file's on a stage, or, where it hides the field, in what the "
+                    "strategy reads of it; rename yours"
+                )
+
+
+def _class_names(node: ast.ClassDef) -> Iterator[tuple[int, str]]:
+    """`(line, name)` for every name a class body binds in the class's own scope, in order.
+
+    Each statement is walked whole, every block nested in it included: a name stored — any
+    assignment's target, a tuple's, a list's or a star's among them, a `for` or `with`
+    target, a walrus, an annotation with or without a value — the name a `def` or a `class`
+    defines, a name an `import` binds and one a `match` pattern captures. What binds in a
+    scope of its own is not walked: the body of a function, a lambda or a nested class
+    (`BODIED`), whose decorators, defaults, annotations and bases are, and a comprehension
+    (`COMPREHENSIONS`).
+    """
+    pending: list[ast.AST] = list(reversed(node.body))
+    while pending:
+        child = pending.pop()
+        bound = _bound(child)
+        if bound is not None:
+            yield bound
+        pending.extend(reversed(_in_scope(child)))
+
+
+def _in_scope(node: ast.AST) -> list[ast.AST]:
+    """The children of `node` that run in the scope `node` stands in, in order."""
+    if isinstance(node, COMPREHENSIONS):
+        return []
+    if not isinstance(node, BODIED):
+        return list(ast.iter_child_nodes(node))
+    return [
+        child
+        for field, value in ast.iter_fields(node)
+        if field != "body"
+        for child in (value if isinstance(value, list) else [value])
+        if isinstance(child, ast.AST)
+    ]
+
+
+def _bound(node: ast.AST) -> tuple[int, str] | None:
+    """The name `node` binds in the scope it stands in, with its line, if it binds one."""
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+        return node.lineno, node.id
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return node.lineno, node.name
+    if isinstance(node, ast.alias):
+        return node.lineno, (node.asname or node.name).partition(".")[0]
+    if isinstance(node, ast.MatchAs | ast.MatchStar) and node.name is not None:
+        return node.lineno, node.name
+    if isinstance(node, ast.MatchMapping) and node.rest is not None:
+        return node.lineno, node.rest
+    return None
+
+
 def _kanso_classes(base: type) -> list[type]:
     return [klass for klass in base.__mro__ if klass.__module__.partition(".")[0] == "kanso"]
 
@@ -855,9 +988,10 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
     """Every read of the harness's own sends, and of a method it overrides, off a receiver
     that can reach past the harness base.
 
-    A send (`sends`, `SEND_MARKS`) is refused when read off anything but the instance of a
-    method of a class that is not held to the base that owns it, where the name is that
-    class's own; a binding of one is the clash rule's (`_clashes`). An overridden method
+    A send (`sends`, `SEND_MARKS`), and what holds a strategy to its order rate
+    (`RATE_MARKS`), is refused when read off anything but the instance of a method of a class
+    that is not held to the base that owns it, where the name is that class's own; a binding
+    of one is the clash rule's (`_clashes`). An overridden method
     (`overridden`) is refused when read off anything but `self`, the instance a method
     receives, or `super()` with no arguments.
     """
@@ -865,6 +999,7 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
     for node, base in _harness_classes(tree):
         holding.setdefault(id(node), set()).add(base)
     sent = {base: sends(base) | SEND_MARKS for base in _bases()}
+    rated = _bases()[0]
     names = frozenset().union(*(overridden(base) for base in _bases()))
     found: list[str] = []
 
@@ -904,6 +1039,10 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
                         f"{WHY_SEND}"
                     )
                     break
+            if node.attr in RATE_MARKS and not (mine and rated not in owners):
+                found.append(
+                    f"line {node.lineno}: attribute '.{node.attr}' is denied, because {WHY_RATE}"
+                )
         for child in ast.iter_child_nodes(node):
             visit(child, scope, held)
 
@@ -995,14 +1134,21 @@ def _stores(node: ast.AST, owner: str) -> Iterator[ast.Attribute]:
     )
 
 
-def _harness_classes(tree: ast.Module) -> list[tuple[ast.ClassDef, type]]:
-    """Every class of the file whose methods end up on a harness base's subclass, with that base.
+def _harness_classes(
+    tree: ast.Module, roots: tuple[type, ...] | None = None
+) -> list[tuple[ast.ClassDef, type]]:
+    """Every top-level class of the file whose methods end up on a harness base's subclass, with
+    that base.
 
     A class reaches a base by naming it among its bases — as itself, through an import
-    alias or as a module's attribute — or by naming a class of the file that reaches one;
-    every class of the file in that line, a mixin included, is held to the same base.
+    alias or as a module's attribute — or by naming a top-level class of the file that reaches
+    one; every top-level class of the file in that line, a mixin included, is held to the same
+    base. A class nested in a block or a function, one `type()` builds and one whose base is
+    held under an assigned name or read off another attribute are not reached
+    (`docs/backlog.md` row 246). The bases are the strategy's and the modifier's (`_bases`)
+    unless `roots` names others.
     """
-    harness = {base.__name__: base for base in _bases()}
+    harness = {base.__name__: base for base in roots or _bases()}
     aliases = {
         alias.asname: alias.name
         for node in ast.walk(tree)

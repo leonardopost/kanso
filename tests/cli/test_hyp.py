@@ -109,6 +109,71 @@ def test_validate_refuses_a_tick_hypothesis_with_no_latency(
     assert "state costs.latency_ms" in payload(result)["remedy"]
 
 
+TICK_BARS = {
+    "resolution": "tick",
+    "data_requirements": ["trade", "bar"],
+    "costs": {
+        "commission_bps": 0.0,
+        "slippage_bps": 0.0,
+        "spread": "fixed_bps",
+        "fixed_bps": 1.0,
+        "latency_ms": 20,
+    },
+}
+
+
+def test_validate_refuses_bars_beside_ticks_at_no_size_and_names_the_size_once_stated(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The combination that passed validation, and that `research begin` then refused for want
+    of a snapshot at `tick`, is refused here with the remedy, and the file that follows it is
+    reported with the size its bars are read at."""
+    refused = at(runner, loaded, "hyp", "validate", write_hypothesis(loaded, **TICK_BARS), "--json")
+    path = write_hypothesis(loaded, **TICK_BARS, bar_resolution="1m")
+    stated = at(runner, loaded, "hyp", "validate", path, "--json")
+    plain = at(runner, loaded, "hyp", "validate", path)
+
+    assert refused.exit_code == Exit.VALIDATION
+    assert "bar_resolution: resolution 'tick' is no bar size" in payload(refused)["error"]
+    assert payload(refused)["remedy"].startswith("state bar_resolution")
+    assert stated.exit_code == Exit.OK
+    assert (payload(stated)["resolution"], payload(stated)["bar_resolution"]) == ("tick", "1m")
+    assert "tick, bars at 1m · trade, bar" in plain.output
+    clean = at(runner, loaded, "hyp", "validate", write_hypothesis(loaded), "--json")
+    assert payload(clean)["bar_resolution"] is None
+
+
+def test_validate_refuses_a_rate_below_what_a_cancel_spends(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A bucket of one token never holds the two requests a cancel spends: the sleeve's first
+    cancel would wait for ever and every entry and modify behind it be dropped, so the file is
+    refused before anything runs, naming both keys, both figures and the venue."""
+    path = write_hypothesis(
+        loaded,
+        costs={
+            "commission_bps": 0.5,
+            "slippage_bps": 1.0,
+            "spread": "fixed_bps",
+            "fixed_bps": 2,
+            "orders_per_minute": 1,
+            "requests_per_cancel": 2,
+        },
+    )
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert payload(result)["error"].startswith(
+        "costs.orders_per_minute: 1 on SIM is below costs.requests_per_cancel: 2; a bucket of 1 "
+        "token(s) never holds the 2 one cancel spends"
+    )
+    assert payload(result)["remedy"].startswith(
+        "state costs.orders_per_minute of at least 2 — the share of the account's rate this "
+        "sleeve may spend — in the hypothesis costs or under venues.SIM.costs"
+    )
+
+
 def test_a_data_type_a_vendor_adapter_registers_is_admissible(
     runner: CliRunner, loaded: Path
 ) -> None:

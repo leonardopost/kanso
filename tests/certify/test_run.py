@@ -52,8 +52,10 @@ from kanso.schemas import (
     write_yaml,
 )
 from kanso.state import StateStore
+from kanso.strategy import impl
 from kanso.workspace import Workspace
 from tests.criteria.builders import build_run
+from tests.own_bar_size import REFUSED, version_remedy
 from tests.research.conftest import (
     CERTIFICATION,
     DOCUMENT,
@@ -68,7 +70,7 @@ from tests.research.conftest import (
     document,
     load_december,
 )
-from tests.research.test_attached import ALLOWING, FILTER, HOST, compose_host
+from tests.research.test_attached import ALLOWING, DECLARING_HOST, FILTER, HOST, compose_host
 
 NOW = datetime(2024, 2, 1, tzinfo=UTC)
 
@@ -1268,6 +1270,27 @@ def test_an_attached_construct_is_certified_against_its_host(
     assert made.construct.host == HOST
     assert made.objective.id == "marginal_wf_sharpe"
     assert made.objective.value == 0.0, "a filter that allows everything is the host"
+
+
+def test_an_attached_construct_s_certification_runs_its_host_as_the_version_it_is(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The sleeve under a construct's certification is the host version's certified bytes, so a
+    `Config` there giving `bar_resolution` a default is refused naming the module the host's
+    implementation holds them in, with the host's version remedy."""
+    compose_host(ws, store, DECLARING_HOST)
+    classify(ws, store, FILTER, ALLOWING)
+    a_card(ws, store, ALLOWING, hyp_id=str(FILTER["id"]), document=FILTER)
+    subject = run._subject(ws, store, str(FILTER["id"]), None)
+
+    request = run._request(subject, subject.certification)
+    with pytest.raises(ValidationError) as refused:
+        backtest._sleeve(request)
+
+    module = impl.module_name(impl.SLEEVE, HOST, DECLARING_HOST)
+    assert (request.version_source, request.version_hyp) == (f"{module}.py", HOST)
+    assert refused.value.message == f"{module}.py: {REFUSED}"
+    assert refused.value.remedy == version_remedy(HOST)
 
 
 def test_certifying_against_a_host_the_workspace_no_longer_holds_is_refused(

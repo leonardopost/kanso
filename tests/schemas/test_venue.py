@@ -126,6 +126,124 @@ def test_a_latency_is_zero_by_default_and_inherited_like_any_cost() -> None:
             CostsOverride(latency_ms=bad)
 
 
+def test_an_order_rate_is_unstated_by_default_and_inherited_like_any_cost() -> None:
+    """Unstated, no rate holds a sleeve; the broker states its published figure, the venue
+    entry the plan's, and the hypothesis its own share, in that order."""
+    assert resolve_venue_model("XNAS").costs.orders_per_minute is None
+    declared = VenueDeclaration(costs=CostsOverride(orders_per_minute=200))
+    plan = VenueOverride(costs=CostsOverride(orders_per_minute=1_000))
+
+    broker = resolve_venue_model("XNAS", declaration=declared)
+    workspace = resolve_venue_model("XNAS", declaration=declared, override=plan)
+    share = resolve_venue_model(
+        "XNAS",
+        declaration=declared,
+        override=plan,
+        hypothesis_costs=CostsOverride(orders_per_minute=166),
+    )
+
+    assert (broker.costs.orders_per_minute, broker.origins.costs) == (200, "broker")
+    assert (workspace.costs.orders_per_minute, workspace.origins.costs) == (1_000, "venue_override")
+    assert (share.costs.orders_per_minute, share.origins.costs) == (166, "hypothesis")
+    assert VenueModel.model_validate(share.model_dump()) == share
+
+
+def test_what_a_cancel_costs_is_unstated_by_default_and_inherited_key_by_key() -> None:
+    """A broker states the requests its client sends for a cancel beside its rate; a plan's
+    rate stated in the venue entry replaces the rate and keeps the cancel's cost."""
+    assert resolve_venue_model("XNAS").costs.requests_per_cancel is None
+    declared = VenueDeclaration(costs=CostsOverride(orders_per_minute=190, requests_per_cancel=2))
+    plan = VenueOverride(costs=CostsOverride(orders_per_minute=1_000))
+
+    workspace = resolve_venue_model("XNAS", declaration=declared, override=plan)
+
+    assert (workspace.costs.orders_per_minute, workspace.costs.requests_per_cancel) == (1_000, 2)
+    assert VenueModel.model_validate(workspace.model_dump()) == workspace
+
+
+def test_a_rate_below_what_a_cancel_spends_is_refused_where_the_model_is_resolved() -> None:
+    """A bucket of one token never holds the two an Alpaca cancel spends, so the sleeve's first
+    cancel would wait for ever and drop every entry and modify behind it. A workspace stating a
+    share of one a minute under that declaration is refused as the model is resolved, naming
+    the venue, both keys and both figures, with the figure that admits a cancel in the remedy;
+    a share as large as a cancel's cost resolves; and a `Costs`, or a recorded model, stating
+    the pair is refused as well."""
+    declared = VenueDeclaration(costs=CostsOverride(orders_per_minute=190, requests_per_cancel=2))
+    share = VenueOverride(costs=CostsOverride(orders_per_minute=1))
+
+    with pytest.raises(ValidationError) as caught:
+        resolve_venue_model("XNAS", declaration=declared, override=share)
+
+    assert caught.value.code is Exit.VALIDATION
+    assert caught.value.message.startswith(
+        "costs.orders_per_minute: 1 on XNAS is below costs.requests_per_cancel: 2; a bucket of "
+        "1 token(s) never holds the 2 one cancel spends"
+    )
+    assert caught.value.remedy == (
+        "state costs.orders_per_minute of at least 2 — the share of the account's rate this "
+        "sleeve may spend — in the hypothesis costs or under venues.XNAS.costs in portfolio.yaml"
+    )
+    fits = resolve_venue_model(
+        "XNAS", declaration=declared, hypothesis_costs=CostsOverride(orders_per_minute=2)
+    )
+    assert (fits.costs.orders_per_minute, fits.costs.requests_per_cancel) == (2, 2)
+    with pytest.raises(ValidationError, match="is below costs.requests_per_cancel: 2"):
+        Costs(
+            commission_bps=0,
+            slippage_bps=0,
+            spread="quotes",
+            orders_per_minute=1,
+            requests_per_cancel=2,
+        )
+    with pytest.raises(ValidationError, match="is below costs.requests_per_cancel: 3"):
+        VenueModel.model_validate(
+            {**fits.model_dump(), "costs": {**fits.model_dump()["costs"], "requests_per_cancel": 3}}
+        )
+
+
+@pytest.mark.parametrize("key", ["orders_per_minute", "requests_per_cancel"])
+@pytest.mark.parametrize("value", [0, -5, 166.5])
+def test_an_order_rate_that_admits_nothing_or_is_not_a_whole_count_is_refused(
+    key: str, value: float
+) -> None:
+    with pytest.raises(ValidationError, match=key):
+        CostsOverride.model_validate({key: value})
+
+
+def test_a_model_stating_no_rate_dumps_exactly_as_one_did_before_the_key_existed() -> None:
+    """Every card, certificate and version records its venue model, and a run digests it into
+    what a number was measured under: with no rate stated the key is not written at all, so
+    neither moves, and a model recorded without it reads back as stating none."""
+    unstated = resolve_venue_model("XNAS", max_leverage=1.0)
+    stated = resolve_venue_model(
+        "XNAS",
+        max_leverage=1.0,
+        hypothesis_costs=CostsOverride(orders_per_minute=200, requests_per_cancel=2),
+    )
+
+    for key in ("orders_per_minute", "requests_per_cancel"):
+        assert key not in unstated.model_dump()["costs"]
+        assert key not in unstated.model_dump(mode="json")["costs"]
+        assert f'"{key}"' not in unstated.model_dump_json()
+    assert stated.model_dump()["costs"]["orders_per_minute"] == 200
+    assert stated.model_dump()["costs"]["requests_per_cancel"] == 2
+    assert VenueModel.model_validate(unstated.model_dump()) == unstated
+    assert list(unstated.model_dump()["costs"]) == [
+        "commission_bps",
+        "commission_per_share",
+        "slippage_bps",
+        "slippage_ticks",
+        "spread",
+        "fixed_bps",
+        "maker_bps",
+        "maker_per_share",
+        "sell_fee_bps",
+        "sell_fee_per_share",
+        "limit_fill",
+        "latency_ms",
+    ]
+
+
 def test_a_venue_model_recorded_before_the_latency_key_reads_as_no_delay() -> None:
     document = resolve_venue_model("XNAS").model_dump()
     del document["costs"]["latency_ms"]

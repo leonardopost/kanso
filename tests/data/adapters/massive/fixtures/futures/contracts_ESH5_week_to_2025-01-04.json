@@ -1,0 +1,72 @@
+{
+ "status": "OK",
+ "request_id": "eb924f2c6cf74ec39ab923940ec3e571",
+ "results": [
+  {
+   "active": true,
+   "date": "2024-12-29",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  },
+  {
+   "active": true,
+   "date": "2024-12-30",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  },
+  {
+   "active": true,
+   "date": "2024-12-31",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  },
+  {
+   "active": true,
+   "date": "2025-01-01",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  },
+  {
+   "active": true,
+   "date": "2025-01-02",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  },
+  {
+   "active": true,
+   "date": "2025-01-03",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  }
+ ]
+}

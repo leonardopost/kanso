@@ -96,7 +96,7 @@ the market only touched fills here exactly when it fills in a card — every tim
 `limit_fill: touch`, never under `through`, and under `print_through` only from a lit print at
 it past the size ahead of it or through it (`kanso.nautilus.venue`, `kanso.nautilus.tape`). The
 data can still differ: a broker's live feed hands every print on as a plain one, which the venue
-reads as lit, where a card reads the terms its snapshot pins (`docs/backlog.md` row 235).
+reads as lit, where a card reads the terms its snapshot pins (`docs/backlog.md` row 255).
 
 Engine facts this module relies on (nautilus_trader 1.231.0):
 

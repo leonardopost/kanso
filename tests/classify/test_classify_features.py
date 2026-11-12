@@ -298,8 +298,12 @@ def test_the_same_duration_spelled_differently_still_matches(
 
 
 def test_an_unaggregated_resolution_matches_only_itself(ws: Workspace, store: StateStore) -> None:
+    """A tick file reading its bars at the host's very size is still not on the host's 1m
+    grain: the grain is compared, never the bar size."""
     certify(ws, store)
-    candidate = hypothesis(resolution="tick", data_requirements=["bar", "trade"])
+    candidate = hypothesis(
+        resolution="tick", bar_resolution="1m", data_requirements=["bar", "trade"]
+    )
     assert certified(ws, store, candidate)[0]["resolution_match"] is False
 
 

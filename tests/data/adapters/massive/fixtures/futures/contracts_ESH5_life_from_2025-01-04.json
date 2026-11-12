@@ -1,0 +1,70 @@
+{
+ "status": "OK",
+ "request_id": "fed70f9137a84f17ae7a82f45975aafd",
+ "results": [
+  {
+   "active": true,
+   "date": "2025-03-12",
+   "days_to_maturity": 8,
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "max_order_quantity": 3000,
+   "min_order_quantity": 1,
+   "name": "ESH5 Future",
+   "product_code": "ES",
+   "settlement_date": "2025-03-21",
+   "settlement_tick_size": 0.25,
+   "spread_tick_size": 0.01,
+   "ticker": "ESH5",
+   "trade_tick_size": 0.25,
+   "trading_venue": "XCME",
+   "type": "single",
+   "group_code": "ES",
+   "provider_id": "ASCKFERM5HTC",
+   "provider_product_id": "VGQ4V6NVXLBW"
+  },
+  {
+   "active": true,
+   "date": "2025-03-21",
+   "days_to_maturity": -3,
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "max_order_quantity": 3000,
+   "min_order_quantity": 1,
+   "name": "ESH5 Future",
+   "product_code": "ES",
+   "settlement_date": "2025-03-21",
+   "settlement_tick_size": 0.01,
+   "spread_tick_size": 0.01,
+   "ticker": "ESH5",
+   "trade_tick_size": 0.25,
+   "trading_venue": "XCME",
+   "type": "single",
+   "group_code": "ES",
+   "provider_id": "ASCKFERM5HTC",
+   "provider_product_id": "VGQ4V6NVXLBW"
+  },
+  {
+   "active": true,
+   "date": "2025-01-05",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  },
+  {
+   "active": true,
+   "date": "2025-03-11",
+   "first_trade_date": "2022-12-16",
+   "last_trade_date": "2025-03-21",
+   "name": "ESH5",
+   "product_code": "ES",
+   "ticker": "ESH5",
+   "trading_venue": "XCME",
+   "group_code": "ES"
+  }
+ ]
+}

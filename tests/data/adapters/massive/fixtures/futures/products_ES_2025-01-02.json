@@ -1,0 +1,17 @@
+{
+ "status": "OK",
+ "request_id": "b17335eaa65a441989653eb9deb8b2ad",
+ "results": [
+  {
+   "asset_sub_class": "equity",
+   "date": "2025-01-02",
+   "last_updated": "2024-12-29T12:03:56-06:00",
+   "product_code": "ES",
+   "trade_currency_code": "USD",
+   "trading_venue": "XCME",
+   "type": "single",
+   "unit_of_measure": "IPNT",
+   "unit_of_measure_qty": 50.0
+  }
+ ]
+}

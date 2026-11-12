@@ -26,6 +26,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,8 @@ from kanso.data.adapters.massive.loaders.bars import (
     Request,
     aggregate,
     bars_endpoint,
-    futures_year,
+    build_bar,
+    futures_resolution,
     instant,
     numbers,
     shift,
@@ -65,8 +67,11 @@ from kanso.data.publication import check_delayed
 from kanso.errors import PreconditionError, ValidationError
 from kanso.workspace import Workspace, init
 
-from . import WARNING, Replay, bar, definition, nothing, refused, rejected, window_of
+from . import WARNING, Replay, bar, definition, encoded, nothing, refused, rejected, window_of
 from . import served as served_rows
+
+FUTURES = Path(__file__).parent / "fixtures" / "futures"
+"""Futures answers recorded from the live source on 2026-10-29 (`provenance.json` there)."""
 
 TODAY = date(2024, 3, 10)
 """The frozen probe day. Every window in this module is stated against it."""
@@ -197,54 +202,217 @@ def spec(**overrides: Any) -> dict[str, Any]:
     ],
 )
 def test_vendor_ticker_prefixes(symbol: str, asset_class: str, expected: str) -> None:
-    assert vendor_ticker(symbol, asset_class, TODAY) == expected
+    assert vendor_ticker(symbol, asset_class) == expected
 
 
 def test_vendor_ticker_refuses_a_class_the_adapter_does_not_serve() -> None:
     with pytest.raises(MalformedRequestError) as caught:
-        vendor_ticker("BTCUSD", "crypto", TODAY)
+        vendor_ticker("BTCUSD", "crypto")
     assert "crypto" in caught.value.message
 
 
-@pytest.mark.parametrize(
-    ("symbol", "on", "expected"),
-    [
-        ("ESZ4", date(2014, 6, 1), "ESZ14"),
-        ("ESZ4", date(2026, 1, 1), "ESZ24"),
-        ("ESZ4", date(2024, 3, 1), "ESZ24"),
-        ("ESZ24", date(2014, 6, 1), "ESZ24"),
-        ("ESZ2024", date(1999, 1, 1), "ESZ24"),
-        ("ZNZ5", date(2025, 6, 1), "ZNZ25"),
-        ("6EM5", date(2025, 1, 1), "6EM25"),
-        ("esz4", date(2014, 6, 1), "ESZ14"),
-    ],
-)
-def test_futures_year_is_resolved_against_the_window(symbol: str, on: date, expected: str) -> None:
-    """A one-digit year names a decade, and the range asked for is what decides which."""
-    assert vendor_ticker(symbol, "futures", on) == expected
+@pytest.mark.parametrize("symbol", ["ESZ4", "ESH0", "CLZ9", "CLZ30", "CLZ36", "ZNZ5", "6EM5"])
+def test_a_futures_contract_is_asked_for_exactly_as_its_id_spells_it(symbol: str) -> None:
+    """The vendor spells each contract its own way — ES with one year digit, CL with two from
+    2030 (`fixtures/futures/`) — so the id carries its spelling and nothing respells it."""
+    assert vendor_ticker(symbol, "futures") == symbol
 
 
-def test_a_one_digit_futures_year_does_not_follow_the_calendar() -> None:
-    """The same code read against two windows is two contracts, which is the whole point."""
-    assert vendor_ticker("ESZ4", "futures", date(2014, 12, 1)) != vendor_ticker(
-        "ESZ4", "futures", date(2024, 12, 1)
-    )
+def test_a_two_digit_contract_s_minutes_are_asked_where_the_vendor_serves_them() -> None:
+    """CLZ30, December 2030's crude, is served under two year digits, recorded: it is asked for
+    as written. CLZ36 is asked for as CLZ36, so a load of it can never be CLZ6's minutes."""
+    served = json.loads((FUTURES / "aggs_CLZ30_1min_unwindowed.json").read_text("utf-8"))
+    empty = json.loads((FUTURES / "aggs_ESZ24_1min.json").read_text("utf-8"))
+
+    def path_of(symbol: str) -> str:
+        endpoint = bars_endpoint(futures_request(symbol=symbol, ticker=symbol, venue="XNYM"))
+        return endpoint.request(vendor_ticker(symbol, "futures"), (TODAY, TODAY))[0]
+
+    assert {row["ticker"] for row in served["results"]} == {"CLZ30"}
+    assert (empty["status"], empty["results"]) == ("OK", []), "ESZ24, a spelling ES has not"
+    assert path_of("CLZ30") == "/futures/v1/aggs/CLZ30"
+    assert path_of("CLZ36") == "/futures/v1/aggs/CLZ36"
 
 
-@pytest.mark.parametrize(("digits", "expected"), [("69", 2069), ("70", 1970), ("2024", 2024)])
-def test_futures_year_pivots_at_1970(digits: str, expected: int) -> None:
-    assert futures_year(digits, TODAY) == expected
-
-
-def test_a_three_digit_futures_year_is_refused() -> None:
-    with pytest.raises(MalformedRequestError):
-        futures_year("204", TODAY)
-
-
-@pytest.mark.parametrize("symbol", ["ES", "ESA4", "ES4", "TOOLONGZ4"])
+@pytest.mark.parametrize("symbol", ["ES", "ESA4", "ES4", "TOOLONGZ4", "esz4"])
 def test_a_symbol_that_is_not_a_contract_is_refused(symbol: str) -> None:
+    """`esz4` among them: a contract is asked for as written, and the vendor's spelling was
+    measured upper-case, so a lower-case one is refused rather than sent or respelled."""
     with pytest.raises(MalformedRequestError):
-        vendor_ticker(symbol, "futures", TODAY)
+        vendor_ticker(symbol, "futures")
+
+
+# --- futures: the vendor's own aggregates ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("resolution", "expected"), [("1m", "1min"), ("5m", "5min"), ("1h", "1hour"), ("30s", "30sec")]
+)
+def test_a_bar_size_under_a_day_is_the_futures_resolution_it_names(
+    resolution: str, expected: str
+) -> None:
+    assert futures_resolution(resolution) == expected
+
+
+@pytest.mark.parametrize("resolution", ["1d", "1w"])
+def test_a_futures_session_bar_is_refused_before_any_request(resolution: str) -> None:
+    """A session bar opens the day before the session it settles and states no close, so it
+    could be stamped at no instant it was known at without inventing one."""
+    loader, replay = bars_loader(source())
+
+    with pytest.raises(MalformedRequestError) as caught:
+        loader.discover(spec(asset_class="futures", instruments=["ESZ5"], resolution=resolution))
+
+    assert "under a day" in caught.value.message
+    assert (caught.value.remedy or "").startswith("load futures bars at 1m or 1h")
+    assert replay.asked == []
+
+
+def futures_request(**changes: Any) -> Request:
+    base = {
+        "symbol": "ESZ5",
+        "venue": "XCME",
+        "ticker": "ESZ5",
+        "asset_class": "futures",
+        "dataset": "bars",
+        "resolution": "1m",
+        "adjusted": False,
+        "publication": "realtime",
+        "publication_rule": None,
+        "price_precision": 2,
+        "size_precision": 0,
+    }
+    return Request(**{**base, **changes})
+
+
+def test_futures_bars_are_asked_of_the_futures_aggregates_oldest_first_a_full_page_at_a_time() -> (
+    None
+):
+    """Asked with no sort the source answered newest first, measured, so the order is always
+    sent; the page is the largest it serves, since the futures quota is a few a minute."""
+    endpoint = bars_endpoint(futures_request())
+
+    path, params = endpoint.request("ESZ5", (date(2025, 6, 1), date(2025, 6, 3)))
+
+    assert path == "/futures/v1/aggs/ESZ5"
+    assert params == {
+        "resolution": "1min",
+        "window_start.gte": "2025-06-01",
+        "window_start.lte": "2025-06-03",
+        "sort": "window_start.asc",
+        "limit": str(AGGREGATE_LIMIT),
+    }
+    assert (endpoint.timestamp_field, endpoint.timestamp_unit) == ("window_start", "ns")
+    unsorted = json.loads((FUTURES / "aggs_ESZ5_1min_unsorted.json").read_text("utf-8"))
+    starts = [row["window_start"] for row in unsorted["results"]]
+    assert starts == sorted(starts, reverse=True), "the recorded unsorted answer, newest first"
+
+
+def test_a_futures_row_becomes_a_bar_stamped_at_its_close() -> None:
+    """The first minute ESZ5 printed on 2025-06-02, as served: its window opened at 04:51:00
+    UTC and the bar is known at 04:52:00, when the minute closed."""
+    (first, *_) = json.loads((FUTURES / "aggs_ESZ5_1min_2025-06-02.json").read_text())["results"]
+
+    made = build_bar(futures_request(), first)
+
+    assert int(made.ts_event) == int(made.ts_init) == first["window_start"] + 60 * NS
+    assert str(made.bar_type) == "ESZ5.XCME-1-MINUTE-LAST-EXTERNAL"
+    assert (float(made.open), float(made.close), float(made.volume)) == (5992.5, 5992.5, 1.0)
+
+
+def recorded(name: str) -> Response:
+    """One recorded futures answer, its body as served and its status as recorded."""
+    files = json.loads((FUTURES / "provenance.json").read_text("utf-8"))["files"]
+    return Response(status=int(files[name]["status"]), body=(FUTURES / name).read_bytes())
+
+
+def test_a_date_bound_is_its_midnight_so_a_load_widened_a_day_covers_its_last() -> None:
+    """Measured: asked to `window_start.lte=2025-06-03`, newest first, the last minute served
+    opened at 2025-06-02 23:49 — a date bound is the UTC midnight it begins. A load asks a
+    day past its span (`vendor_window`), so every minute of the span's last day is asked."""
+    rows = json.loads(recorded("aggs_ESZ5_1min_lte_desc.json").body)["results"]
+    newest = datetime.fromtimestamp(rows[0]["window_start"] / NS, UTC)
+
+    assert newest == datetime(2025, 6, 2, 23, 49, tzinfo=UTC)
+    assert vendor_window((date(2025, 6, 2), date(2025, 6, 2)), "1m")[1] == date(2025, 6, 3)
+
+
+def test_a_futures_cursor_carries_the_whole_request_it_continues() -> None:
+    """The second page asked by its `next_url` alone, as served, continues the first: the
+    same resolution, the same order and the next minutes."""
+    first = recorded("aggs_ESZ5_1min_2025-06-02.json")
+    following = json.loads(first.body)["next_url"]
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        return recorded("aggs_ESZ5_1min_2025-06-02_page_2.json") if "cursor=" in url else first
+
+    client, replay = client_of(answer)
+    path, params = bars_endpoint(futures_request()).request(
+        "ESZ5", (date(2025, 6, 2), date(2025, 6, 3))
+    )
+    pages = list(islice(client.pages(path, params), 2))
+
+    starts = [row["window_start"] for page in pages for row in page.rows]
+    assert starts == sorted(starts) and len(starts) == 6
+    assert replay.asked[1].url == following and replay.asked[1].params == {}
+    continued = encoded(following)
+    assert (continued["resolution"], continued["sort"]) == ("1min", "window_start.asc")
+
+
+def test_an_hour_of_futures_is_asked_and_served_on_the_hour() -> None:
+    rows = json.loads(recorded("aggs_ESZ5_1hour_2025-06-02.json").body)["results"]
+
+    assert futures_resolution("1h") == "1hour"
+    assert all(row["window_start"] % (3_600 * NS) == 0 for row in rows)
+
+
+def test_a_futures_contract_is_discovered_and_loaded_off_the_answers_the_source_gave() -> None:
+    """ESH5 over 2025-01-02..03, every request the loader made on 2026-10-29 answered as the
+    source answered it: its fortnight empty, the question with no window and the range from
+    1970 served from the plan's floor of 2024-10-29, and the load widened a day each side.
+    The minute that opened at 23:59 on New Year's Day closes on the 2nd and is the first kept;
+    the last is the Friday's close at 22:00."""
+
+    def answer(url: str, params: Mapping[str, str]) -> Response:
+        gte = params.get("window_start.gte")
+        name = {
+            None: "aggs_ESH5_1min_unwindowed.json",
+            "1970-01-01": "aggs_ESH5_1min_from_1970.json",
+            "2026-10-14": "aggs_ESH5_1min_fortnight.json",
+            "2025-01-01": "aggs_ESH5_1min_2025-01-01_2025-01-04.json",
+        }[gte]
+        return recorded(name)
+
+    client, replay = client_of(answer)
+    loader = MassiveBarsLoader(client=client, as_of=date(2026, 10, 29))
+    future = {
+        "asset_class": "futures",
+        "instruments": ["ESH5"],
+        "venue": "XCME",
+        "resolution": "1m",
+        "start": date(2025, 1, 2),
+        "end": date(2025, 1, 3),
+    }
+
+    (ref,) = loader.discover(future)
+    points = list(loader.load(ref, ref.span))
+
+    assert ref.instrument == "ESH5.XCME"
+    assert (ref.request_params or {})["ticker"] == "ESH5"
+    assert (ref.request_params or {})["floor"] == "2024-10-29"
+    assert {item.url.split("?")[0] for item in replay.asked} == {f"{API_HOST}/futures/v1/aggs/ESH5"}
+    assert [datetime.fromtimestamp(int(p.ts_event) / NS, UTC) for p in points] == [
+        datetime(2025, 1, 2, 0, 0, tzinfo=UTC),
+        datetime(2025, 1, 2, 0, 1, tzinfo=UTC),
+        datetime(2025, 1, 3, 22, 0, tzinfo=UTC),
+    ]
+    assert all(str(p.bar_type) == "ESH5.XCME-1-MINUTE-LAST-EXTERNAL" for p in points)
+
+
+def test_a_futures_row_with_no_window_start_is_dropped() -> None:
+    assert (
+        build_bar(futures_request(), {"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}) is None
+    )
 
 
 # --- aggregation, the multiplier and the limit ---------------------------------

@@ -389,7 +389,7 @@ class BulkSpec(KansoModel):
             )
         return self
 
-    def series(self, symbol: str, on: date) -> Series:
+    def series(self, symbol: str) -> Series:
         """The per-dataset record for one of this spec's instruments.
 
         The vendor key is derived from the class the way the request path derives it, so
@@ -401,7 +401,7 @@ class BulkSpec(KansoModel):
             resolution=self.resolution,
             venue=self.venue,
             symbol=symbol,
-            ticker=self.tickers.get(symbol) or vendor_ticker(symbol, self.asset_class, on),
+            ticker=self.tickers.get(symbol) or vendor_ticker(symbol, self.asset_class),
             price_precision=self.price_precision,
             size_precision=self.size_precision,
             publication=self.publication,
@@ -602,9 +602,7 @@ class BulkLoader:
                 f"({served[0]}..{served[1]}) do not meet",
                 remedy=f"ask for a range inside {served[0]}..{served[1]}",
             )
-        return [
-            self._ref(parsed.series(symbol, window[1]), window) for symbol in parsed.instruments
-        ]
+        return [self._ref(parsed.series(symbol), window) for symbol in parsed.instruments]
 
     def load(self, ref: DatasetRef, window: tuple[date, date]) -> Iterable[object]:
         """The ticker's bars over `window`: every object whose windows can close inside it.

@@ -1,0 +1,27 @@
+{
+ "status": "OK",
+ "request_id": "0212eaa8afcc4eefb74f73927699e3f5",
+ "results": [
+  {
+   "active": true,
+   "date": "2026-10-28",
+   "days_to_maturity": 3675,
+   "first_trade_date": "2025-11-21",
+   "last_trade_date": "2036-11-20",
+   "max_order_quantity": 2999,
+   "min_order_quantity": 1,
+   "name": "CLZ36 Future",
+   "product_code": "CL",
+   "settlement_date": "2036-11-20",
+   "settlement_tick_size": 0.01,
+   "spread_tick_size": 0.01,
+   "ticker": "CLZ36",
+   "trade_tick_size": 0.01,
+   "trading_venue": "XNYM",
+   "type": "single",
+   "group_code": "CL",
+   "provider_id": "5TA4TY35QMYO",
+   "provider_product_id": "J6RPLCCJNZSE"
+  }
+ ]
+}

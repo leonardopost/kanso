@@ -116,9 +116,16 @@ def start_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
 
 
 @app.command("stop")
-def stop_command(ctx: typer.Context, as_json: JsonOption = False) -> None:
+def stop_command(
+    ctx: typer.Context,
+    drain: Annotated[
+        bool,
+        typer.Option("--drain", help="Let each lane's card in flight land first; kill nothing."),
+    ] = False,
+    as_json: JsonOption = False,
+) -> None:
     """Stop the daemon. Active runs and their lane directories stay exactly as they are."""
-    emit(as_json or global_json(ctx), lambda: _stop(open_workspace(ctx)))
+    emit(as_json or global_json(ctx), lambda: _stop(open_workspace(ctx), drain))
 
 
 @app.command("status")
@@ -227,13 +234,18 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
         "n_trials": trials,
         "best_sha": run.best_sha,
         "best_metric": run.best_metric,
+        "card_budget_s": run.card_budget_s,
+        "budget_sha": run.budget_sha,
         "results": str(research.results_file(ws, hyp_id)),
     }
+    struck = "the baseline's" if run.budget_sha is None else f"struck by {run.budget_sha[:7]}"
     lines = [
         field("card", f"{card.sha7} · {card.status} · {desc}"),
         field("metric", f"{card.metric:.6f} ± {card.metric_se:.6f} · {card.n_trades} trade(s)"),
         *_digest_lines(card.digest),
+        *_timing_lines(card.digest),
         field("cost", f"{card.wall_s:.1f}s · {card.peak_mem_gb:.2f} GB · trial {trials}"),
+        field("budget", f"{run.card_budget_s:.0f}s · {struck}"),
         field("best", "none yet" if run.best_sha is None else f"{run.best_sha[:7]}"),
     ]
     lines += [
@@ -247,7 +259,9 @@ def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:
 
 def _digest_lines(digest: CardDigest | None) -> list[str]:
     """What a card's trades did, in two lines: how it traded, and what a trade and a session
-    earned. Nothing for a card that never ran to a result."""
+    earned; and a third, how fast it sent its orders, for a card that counted them, ending
+    with what a stated order rate dropped unsent when it dropped any. Nothing for a card that
+    never ran to a result."""
     if digest is None:
         return []
     traded = [
@@ -266,7 +280,21 @@ def _digest_lines(digest: CardDigest | None) -> list[str]:
         f"(gross {_number(digest.gross_bps_per_session, '+.3f')}, "
         f"cost {_number(digest.cost_bps_per_session, '.3f')})"
     )
-    return [field("trades", " · ".join(traded)), field("edge", edge)]
+    lines = [field("trades", " · ".join(traded)), field("edge", edge)]
+    sent = digest.commands
+    if sent is not None:
+        counted = (
+            f"{sent.submits} submit(s) · {sent.modifies} modify(ies) · "
+            f"{sent.cancels} cancel(s) · peak {sent.peak_60s} in 60 s · "
+            f"p99 {sent.p99_60s}"
+        )
+        if sent.refused_submits or sent.refused_modifies:
+            counted += (
+                f" · refused past the rate {sent.refused_submits} submit(s), "
+                f"{sent.refused_modifies} modify(ies)"
+            )
+        lines.append(field("commands", counted))
+    return lines
 
 
 def _number(value: float | None, spec: str) -> str:
@@ -286,6 +314,44 @@ def _seconds(value: float | None) -> str:
     if value < 7200:
         return f"{value / 60:.0f}m"
     return f"{value / 3600:.1f}h"
+
+
+def _timing_lines(digest: CardDigest | None) -> list[str]:
+    """When in its return periods a card filled, in one line: how many it filled in, the
+    offsets of a period's first and last fill from its first point, and the span between
+    them. Nothing for a card that never ran to a result or was recorded before the digest
+    timed its fills."""
+    if digest is None or digest.filled_periods is None:
+        return []
+    return [
+        field(
+            "timing",
+            f"{digest.filled_periods} period(s) filled in · "
+            f"first fill {_offset(digest.first_fill_s)} · last {_offset(digest.last_fill_s)} · "
+            f"active {_span(digest.active_s)}",
+        )
+    ]
+
+
+def _offset(value: float | None) -> str:
+    """An offset into a period as `+H:MM:SS.ss`, cut to the hundredth of a second rather than
+    rounded, so an offset short of a minute, or of a period's length, never reads as it."""
+    if value is None:
+        return "n/a"
+    hours, rest = divmod(round(value * 1e9) // 10_000_000, 360_000)
+    minutes, rest = divmod(rest, 6_000)
+    return f"+{hours}:{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}"
+
+
+def _span(value: float | None) -> str:
+    """A span to the hundredth of a second when that rounds below two minutes, and as a hold
+    reads from there."""
+    if value is None:
+        return "n/a"
+    hundredths = round(value, 2)
+    if hundredths >= 120:
+        return _seconds(hundredths)
+    return f"{hundredths:.2f}s"
 
 
 def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
@@ -355,10 +421,11 @@ def _start(ws: Workspace) -> Report:
     return Report(data=data, lines=lines)
 
 
-def _stop(ws: Workspace) -> Report:
-    stopped = daemon.stop(ws)
+def _stop(ws: Workspace, drain: bool = False) -> Report:
+    stopped = daemon.stop(ws, drain=drain)
     data: dict[str, Any] = stopped.payload()
-    lines = [field("daemon", "stopped" if stopped.pid is None else f"stopped · pid {stopped.pid}")]
+    how = "drained" if stopped.drain else "stopped"
+    lines = [field("daemon", how if stopped.pid is None else f"{how} · pid {stopped.pid}")]
     if stopped.orphans:
         orphans = ", ".join(child.label for child in stopped.orphans)
         lines.append(

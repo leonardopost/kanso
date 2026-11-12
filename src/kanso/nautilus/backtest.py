@@ -57,7 +57,8 @@ supervision rather than by `setrlimit`, which does not bound RSS on Linux and is
 for address space on macOS. The peak comes from the reaped child's own resource usage.
 The child watches back: it ends itself when the process that started it is gone, so a lane
 killed outright never leaves a card running with nobody supervising it, and a process told
-to stop starts no card at all. A caller can also say what the work is for (`wanted`): a
+to stop starts no card at all — nor one told to drain, which lets the cards it watches run to
+their end (`drain`). A caller can also say what the work is for (`wanted`): a
 check asked before every catalog query for points and every `WANTED_POLL_S` while a card
 runs, whose refusal ends the read and kills the card, so work nobody wants any more is
 dropped at the next query rather than after the window and the card have run to their end.
@@ -135,6 +136,7 @@ from decimal import Decimal
 from functools import cache
 from itertools import accumulate, chain
 from math import fsum
+from operator import attrgetter
 from pathlib import Path
 from types import ModuleType
 from typing import IO, Any, Final
@@ -164,13 +166,14 @@ from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.tape import Unlit
 from kanso.nautilus.venue import venue_configs
-from kanso.schemas import Hypothesis, VenueModel, parse_duration
+from kanso.schemas import Commands, Hypothesis, VenueModel, is_duration, parse_duration
 
 __all__ = [
     "ALLOWED_ENV",
     "BUDGET",
     "DEFAULT_PERIOD",
     "DIED",
+    "DrainedError",
     "EXCEPTION",
     "INTERRUPTED",
     "MEMORY",
@@ -181,6 +184,7 @@ __all__ = [
     "checked_chunks",
     "child_env",
     "benchmark",
+    "drain",
     "end_with",
     "execute",
     "handed_down",
@@ -199,7 +203,10 @@ __all__ = [
 ]
 
 SUBMIT_RATE: Final = "1000000/00:00:01"
-"""An order rate no replay or backtest reaches, so no throttle binds on either path."""
+"""An order rate no replay or backtest reaches, so no throttle binds on either path. The
+engine's risk engine throttles on its own clock, a test clock on one path and the wall on the
+other; the rate an account takes is held by the sleeve itself, on the data clock, where both
+paths read the same instants (`costs.orders_per_minute`, `kanso.nautilus.rate`)."""
 
 DEFAULT_PERIOD: Final = "1d"
 """The return period a request that names none is measured over."""
@@ -323,15 +330,31 @@ ORPHANED: Final = 3
 gone; nothing reads it, since whatever would have read it is what went."""
 
 
+_DRAIN = threading.Event()
+"""Set when the process supervising a card has been told to drain: every child it is
+watching runs to its end, and no other is started — `run_subprocess`, `run_subprocesses` and
+`watched` refuse with `DrainedError` instead."""
+
+
+class DrainedError(PreconditionError):
+    """A child not started because the process that would have watched it was told to drain."""
+
+
 def interrupt() -> None:
     """Have every card this process is watching killed at its next poll, and start no
     other."""
     _INTERRUPT.set()
 
 
+def drain() -> None:
+    """Have every child this process is watching run to its end, and start no other."""
+    _DRAIN.set()
+
+
 def resume() -> None:
-    """Forget an interrupt, so a later card in this process runs to its end."""
+    """Forget an interrupt and a drain, so a later card in this process runs to its end."""
     _INTERRUPT.clear()
+    _DRAIN.clear()
 
 
 _WANTED: list[Callable[[], object]] = []
@@ -443,6 +466,16 @@ class RunRequest:
     gap between them: every stage window ends flat, so nothing was held while the version
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
+
+    `version_source` is the file a composed version's implementation holds the sleeve's bytes
+    in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a
+    version's expectation (`kanso.strategy.composition`), so that a `Config` giving
+    `bar_resolution` a default of its own is refused there naming that file, with the remedy of
+    a version, whose certified bytes no edit of `strategy.py` changes; None elsewhere. A card,
+    a certification and a replay of an attached construct set it too, to the file its host's
+    version holds the sleeve in, since the sleeve they run is the host's certified bytes, and
+    `version_hyp` to the host's hypothesis, whose file holds the class, so that the remedy
+    names it rather than the construct's own; None names `hyp`.
     """
 
     hyp: Hypothesis
@@ -462,6 +495,8 @@ class RunRequest:
     cushion: float = 0.0
     settled_ns: int | None = None
     resumes_ns: int | None = None
+    version_source: str | None = None
+    version_hyp: str | None = None
 
     def __post_init__(self) -> None:
         if self.prefix is None:
@@ -543,6 +578,14 @@ class RunResult:
     refused: Refusal | None = None
     """The order the sizing rule refused, when one was: the run stopped there, with no
     numbers, because the card can no longer validate and every bar after it is spend."""
+    commands: Commands | None = None
+    """How fast the strategy sent its orders (`kanso.nautilus.rate.Tally`), counted on the
+    data clock as it sent them; `None` for a run that produced no numbers — a crash, a
+    refusal."""
+    firsts_ns: tuple[int, ...] = ()
+    """The instant of the first point a card was handed in each return period that held one,
+    in time order: noted by the parent as it streams the window (`_marked_chunks`), for the
+    digest to read offsets from. A run made in this process notes none."""
 
 
 def stage_of(hyp: Hypothesis, window: tuple[date, date]) -> str:
@@ -604,8 +647,24 @@ def grains_of(hyp: Hypothesis, host_resolution: str | None) -> tuple[str, ...]:
 
 
 def _bar_grains(request: RunRequest) -> tuple[str, ...]:
-    """The bar sizes this request loads, the sleeve's first."""
+    """The grains this request is clocked on, the sleeve's first."""
     return request.grains or (request.hyp.resolution,)
+
+
+def _bar_sizes(request: RunRequest) -> tuple[str, ...]:
+    """The bar sizes this request reads `bar` at, the sleeve's first: each grain that is one,
+    and in place of a grain that is not — a sleeve clocked on quotes, prints or a book — the
+    `bar_resolution` its hypothesis states. A stage node and a replay are handed the grains a
+    version's manifest records, the sleeve's resolution among them, and read through here
+    with the hypothesis they deploy, so every path reads bars at the sizes a card read them
+    at."""
+    stated = request.hyp.bar_resolution
+    return tuple(
+        dict.fromkeys(
+            stated if stated is not None and not is_duration(grain) else grain
+            for grain in _bar_grains(request)
+        )
+    )
 
 
 LOOKBACK_DOUBLINGS: Final = 5
@@ -636,6 +695,7 @@ def benchmark(request: RunRequest) -> RunRequest:
         overrides={},
         budget_s=None,
         mem_cap_gb=None,
+        version_source=None,
     )
 
 
@@ -810,10 +870,12 @@ def _primary_days(
     """The UTC days the series a session is counted on holds a point in, `start <= ts_init
     <= end`: the sleeve's own grain of its first market type.
 
-    Bars at the sleeve's grain when the hypothesis requires bars, else its quotes, else its
-    trades — one of the three is always required, because a resolution is a bar size or
-    one of the unaggregated grains and the schema requires the type it names. The names
-    are taken together, so a day any of them printed is a session.
+    Bars at the sleeve's grain when it is a bar size and the hypothesis requires bars, else
+    its quotes, else its trades — one of the three is always required, because a resolution
+    is a bar size or one of the unaggregated grains and the schema requires the type it
+    names; a sleeve clocked on quotes or prints counts its sessions on them, whatever bars
+    its signals carry beside them, and reads bars, at its `bar_resolution`, only where it
+    holds neither. The names are taken together, so a day any of them printed is a session.
 
     Bars are read as the window reads them (`market_points`), a bar an instant. Quotes and
     prints are not: only their days are wanted, and a name's quotes over twice the sessions
@@ -826,11 +888,13 @@ def _primary_days(
     """
     from kanso.nautilus.strategy import BAR, QUOTE, TRADE
 
-    requirement = next(kind for kind in (BAR, QUOTE, TRADE) if kind in hyp.data_requirements)
+    order = (BAR, QUOTE, TRADE) if is_duration(grain) else (QUOTE, TRADE, BAR)
+    requirement = next(kind for kind in order if kind in hyp.data_requirements)
+    size = grain if is_duration(grain) else hyp.bar_size
     days: set[date] = set()
     for name in sorted(hyp.universe):
         if requirement == BAR:
-            points = market_points(catalog, requirement, held[name], grain, start, end)
+            points = market_points(catalog, requirement, held[name], size, start, end)
             days.update(day_of(int(point.ts_init)) for point in points)  # type: ignore[attr-defined]
         else:
             days.update(_days_filed(catalog, requirement, held[name], hyp.resolution, start, end))
@@ -910,7 +974,7 @@ def _window_points(
     from kanso.data.types import resolve_type
 
     groups: list[tuple[object, ...]] = []
-    loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
+    loaded: dict[str, int] = {grain: 0 for grain in _bar_sizes(request)}
     for requirement, name, resolution in _series(request):
         if name is None:
             custom = _custom_points(
@@ -1074,7 +1138,10 @@ def _series(request: RunRequest) -> Iterator[tuple[str, str | None, str]]:
     """Every series a span of the window is read as, in the order its groups are handed on:
     each requirement in turn, a custom type once for the universe and the market together
     (its name `None`), and a market type once for each name it is required of, at every
-    grain the request names for bars and at the hypothesis's resolution otherwise."""
+    bar size the request reads for bars (`_bar_sizes`) and at the hypothesis's resolution
+    otherwise. The groups are merged by `ts_init` with a stable sort, so a bar, stamped at
+    its close, reaches the sleeve among the ticks at the instant its period ended, and ahead
+    of a quote or a print of that same instant, since `bar` sorts first."""
     from kanso.data.types import BUILTIN_TYPES
 
     hyp = request.hyp
@@ -1082,7 +1149,7 @@ def _series(request: RunRequest) -> Iterator[tuple[str, str | None, str]]:
         if requirement not in BUILTIN_TYPES:
             yield requirement, None, ""
             continue
-        for resolution in _bar_grains(request) if requirement == "bar" else (hyp.resolution,):
+        for resolution in _bar_sizes(request) if requirement == "bar" else (hyp.resolution,):
             for name in sorted(hyp.universe):
                 if requirement in hyp.required_of(name):
                     yield requirement, name, resolution
@@ -1282,11 +1349,28 @@ def _entry(module: ModuleType, entrypoint: str, base: Any, what: str) -> Any:
 
 
 def _sleeve(request: RunRequest) -> tuple[Any, Any]:
-    """The sleeve class and the configuration the hypothesis injects into it."""
-    from kanso.nautilus.strategy import KansoStrategy
+    """The sleeve class and the configuration the hypothesis injects into it.
+
+    `bar_resolution` is passed whatever the file states, `None` where it states none, and a
+    configuration class that gives the field a default of its own is refused before anything
+    is built (`kanso.nautilus.strategy.refuse_own_bar_resolution`): a stage builds the sleeve
+    from a version's manifest, which carries the field only where the file states one, so
+    that default would stand there and not here. The refusal names the request's
+    `version_source`, with a version's remedy for `version_hyp` — a construct's host — or the
+    request's hypothesis, where it carries one, and `strategy.py`, with a card's, where it does
+    not.
+    """
+    from kanso.nautilus.strategy import KansoStrategy, refuse_own_bar_resolution
 
     module = _module(request.strategy_source, "sleeve")
     cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+    certified = request.version_source
+    refuse_own_bar_resolution(
+        cls.config_cls,
+        certified or "strategy.py",
+        request.version_hyp or request.hyp.id,
+        certified=certified is not None,
+    )
     hyp = request.hyp
     grains = _bar_grains(request)
     extra: tuple[str, ...] = ()
@@ -1299,6 +1383,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             universe=tuple(hyp.universe),
             resolution=grains[0],
             extra_resolutions=extra,
+            bar_resolution=hyp.bar_resolution,
             data_requirements=tuple(hyp.data_requirements),
             data_by_instrument=tuple(
                 (name, tuple(kinds)) for name, kinds in sorted(hyp.data_by_instrument.items())
@@ -1373,12 +1458,22 @@ def _modifier(
 
 
 def engine_for() -> Any:
-    """The backtest engine every run is built in: no logging, no analysis, and an order rate
-    no replay or backtest reaches (`SUBMIT_RATE`)."""
+    """The backtest engine every run is built in: no logging, no analysis, an order rate no
+    replay or backtest reaches (`SUBMIT_RATE`), and a portfolio analyzer that records no
+    closed position.
+
+    The engine's portfolio hands every position it closes to its analyzer's `record_trade`,
+    which copies the whole series of its currency to append one row, so a card's time grew
+    with the square of the trades it closed; `run_analysis=False` turns off only the report
+    the engine reads it back for at the end. kanso reads nothing the analyzer holds — the
+    extraction reads the cache (`_extract`) — so this analyzer's own `record_trade` is one
+    that records nothing (`kanso.nautilus.facts`, where `doctor` re-checks what this rests
+    on).
+    """
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig, RiskEngineConfig
 
-    return BacktestEngine(
+    engine = BacktestEngine(
         config=BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
             risk_engine=RiskEngineConfig(
@@ -1388,6 +1483,13 @@ def engine_for() -> Any:
             run_analysis=False,
         )
     )
+    engine.portfolio.analyzer.record_trade = _unrecorded
+    return engine
+
+
+def _unrecorded(*_: object, **__: object) -> None:
+    """What `engine_for`'s portfolio analyzer does with a position the portfolio closed:
+    nothing."""
 
 
 def add_venue(engine: Any, venue: Any) -> None:
@@ -1533,6 +1635,7 @@ def execute_chunked(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
         )
+        commands = strategy._command_tally.summary()
     finally:
         engine.dispose()
     return RunResult(
@@ -1540,6 +1643,7 @@ def execute_chunked(
         wall_s=time.perf_counter() - started,
         peak_mem_gb=_own_peak_gb(),
         intents=intents,
+        commands=commands,
     )
 
 
@@ -2764,6 +2868,8 @@ def run_subprocess(
     transfer directory, `<workdir>/.card/`, holds only what comes back — the child's report
     and its output — and is emptied before the card and removed after it, so a lane killed
     mid-card leaves at most those two small files behind, and its next card reclaims them.
+    The result carries each return period's first instant as the window passed
+    (`RunResult.firsts_ns`).
     """
     stage = stage_of(request.hyp, request.window)
     if stage != RESEARCH:
@@ -2776,12 +2882,14 @@ def run_subprocess(
         )
     _refuse_if_interrupted()
     room = _card_room(workdir)
+    firsts: dict[int, int] = {}
     try:
-        payload = _payload(request, catalog_path, extensions)
+        payload = _payload(request, catalog_path, extensions, firsts)
         gc.collect()
-        return _supervised(request, room, workdir, payload)
+        result = _supervised(request, room, workdir, payload)
     finally:
         shutil.rmtree(room, ignore_errors=True)
+    return replace(result, firsts_ns=_in_order(firsts))
 
 
 def run_subprocesses(
@@ -2793,7 +2901,8 @@ def run_subprocesses(
     """Run several cards of one window in children of their own, from one read of it.
 
     Each request is one slot: its own strategy bytes, its own budget and its own memory
-    cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once. The points are
+    cap, and its own `<workdir>/.card/<slot>/`. The catalog is read once, and every result
+    carries the first instants that read noted (`RunResult.firsts_ns`). The points are
     written to every child that is still running, and a child killed for its own memory
     or its own clock is a crash of that slot alone. The parent holds the read a chunk is
     cut from and the newest chunk, never the window (`_fan`). An empty list runs nothing.
@@ -2819,34 +2928,65 @@ def run_subprocesses(
         room = root / str(index)
         room.mkdir(parents=True)
         rooms.append(room)
+    firsts: dict[int, int] = {}
     try:
         instruments, chunks = window_chunks(requests[0], catalog_path)
         gc.collect()
-        return _fan(
-            requests, instruments, _marked_chunks(requests[0], chunks), extensions, rooms, workdir
-        )
+        marked = _marked_chunks(requests[0], chunks, firsts)
+        results = _fan(requests, instruments, marked, extensions, rooms, workdir)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+    noted = _in_order(firsts)
+    return [replace(result, firsts_ns=noted) for result in results]
 
 
 def _marked_chunks(
-    request: RunRequest, chunks: Iterator[tuple[tuple[object, ...], ...]]
+    request: RunRequest,
+    chunks: Iterator[tuple[tuple[object, ...], ...]],
+    firsts: dict[int, int],
 ) -> Iterator[tuple[tuple[object, ...], ...]]:
-    """The chunks of `request`, refused when none of them falls inside the measured window."""
-    measured, _ = request.bounds
-    inside = False
+    """The chunks of `request` as they pass, each return period's first instant noted in
+    `firsts` under the period's index, the period cut as `Marks.fold` cuts it; refused when
+    none of them falls inside the measured window, which is when nothing was noted. A period
+    the child refuses, as one of no time, is its to refuse: the window is noted as one.
+
+    A chunk that lies inside one period notes its earliest instant alone, found in three passes
+    the interpreter makes in C: measured on 2026-10-31 on a chunk of 1,000,000 quotes inside
+    one period, under the lanes' load, 0.36 µs a point where reading each point in turn took
+    1.34 µs, beside the 20.7 µs a point the pickle of that chunk took."""
+    measured, closes = request.bounds
+    try:
+        length = request.period_ns
+    except ValidationError:
+        length = closes - measured
     for chunk in chunks:
-        inside = inside or any(
-            int(point.ts_init) >= measured  # type: ignore[attr-defined]
-            for point in chain.from_iterable(chunk)
-        )
+        stamps = list(map(_INSTANT, chain.from_iterable(chunk)))
+        if stamps:
+            low = min(stamps)
+            if low >= measured and (low - measured) // length == (max(stamps) - measured) // length:
+                stamps = [low]
+        for ts in stamps:
+            if ts >= measured:
+                index = (ts - measured) // length
+                held = firsts.get(index)
+                if held is None or ts < held:
+                    firsts[index] = int(ts)
         yield chunk
-    if not inside:
+    if not firsts:
         raise PreconditionError(
             f"data: the catalog holds nothing for {request.hyp.id} over "
             f"{request.window[0]}..{request.window[1]}",
             remedy="run `kanso data load` for the window, then take a snapshot",
         )
+
+
+_INSTANT: Final = attrgetter("ts_init")
+"""A point's `ts_init`, read without a call of the interpreter's own."""
+
+
+def _in_order(firsts: Mapping[int, int]) -> tuple[int, ...]:
+    """The first instants `_marked_chunks` noted, in the order of their periods."""
+    return tuple(firsts[index] for index in sorted(firsts))
 
 
 _NOTHING: Final = memoryview(b"")
@@ -3123,7 +3263,7 @@ def _chunked(
     opens, closes = request.delivered
     step = READ_TICK_NS if TICK_KINDS.intersection(request.hyp.data_requirements) else NS_PER_DAY
     cap = READ_POINTS if coincident(request.hyp) else 0
-    loaded: dict[str, int] = {grain: 0 for grain in _bar_grains(request)}
+    loaded: dict[str, int] = {grain: 0 for grain in _bar_sizes(request)}
     first = midnight_ns(day_of(opens))
     edge = first + (opens - first) // step * step
     counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1), edge, step)
@@ -3252,15 +3392,19 @@ def _row_groups(files: Iterable[str], edge: int, step: int) -> list[tuple[int, i
 
 
 def _payload(
-    request: RunRequest, catalog_path: Path, extensions: Sequence[tuple[str, str]]
+    request: RunRequest,
+    catalog_path: Path,
+    extensions: Sequence[tuple[str, str]],
+    firsts: dict[int, int],
 ) -> Iterator[bytes]:
     """What a card's child is handed, as the pickles it reads in turn: the stream itself is
     `_stream`, and `window_chunks` makes the refusals that come before the child exists, so
     a card refuses with a message an operator can read before any child is spawned. The
-    child re-checks every chunk it is handed.
+    child re-checks every chunk it is handed. Each return period's first instant is noted
+    in `firsts` as its chunk passes (`_marked_chunks`).
     """
     instruments, chunks = window_chunks(request, catalog_path)
-    return _stream(request, instruments, chunks, extensions)
+    return _stream(request, instruments, _marked_chunks(request, chunks, firsts), extensions)
 
 
 def _stream(
@@ -3281,26 +3425,15 @@ def _stream(
     4.8 GB in the parent, and a 45-day window of it 22.8 GB on disk before the card began.
 
     The refusals only the whole window can make are made once it has been read, before
-    `END`: an overlay grain the catalog does not hold, and a window it holds nothing for.
-    A refusal raised here — those, a `wanted` check before a catalog query — reaches the
-    watch on the child, which kills the child before it is raised (`_watch`).
+    `END`, by the chunks as they run out: an overlay grain the catalog does not hold
+    (`_chunked`), and a window it holds nothing for (`_marked_chunks`). A refusal raised
+    here — those, a `wanted` check before a catalog query — reaches the watch on the child,
+    which kills the child before it is raised (`_watch`).
     """
-    measured, _ = request.bounds
-    inside = False
     yield _pickled({"extensions": [list(source) for source in extensions]})
     yield _pickled({"request": request.plain(), "instruments": instruments})
     for chunk in chunks:
-        inside = inside or any(
-            int(point.ts_init) >= measured  # type: ignore[attr-defined]
-            for point in chain.from_iterable(chunk)
-        )
         yield _pickled({"groups": chunk})
-    if not inside:
-        raise PreconditionError(
-            f"data: the catalog holds nothing for {request.hyp.id} over "
-            f"{request.window[0]}..{request.window[1]}",
-            remedy="run `kanso data load` for the window, then take a snapshot",
-        )
     yield _pickled(END)
 
 
@@ -3421,13 +3554,15 @@ def watched(
     Whatever it writes to a stream goes to `errors`. `env` is the environment it starts
     with, the parent's own when `None`. The watch is `_watch`'s: the wall-time and
     resident-memory bounds, this process's stop unless the child is not `stoppable`, and
-    the `wanted` checks it is inside. A card is one child watched this way, a stall's
-    certification another (`kanso.certify.child`), and a monitor's demotion a third that a
-    stop leaves to finish (`kanso.portfolio.child`). `feed`, when given, is written to the
-    child's standard input between the watch's polls (`_Feed`), and anything it raises kills
-    the child first; a child given none reads nothing. The child inherits the descriptors
-    this process hands down (`handed_down`) and no other.
+    the `wanted` checks it is inside; a process told to drain starts none (`DrainedError`).
+    A card is one child watched this way, a stall's certification another
+    (`kanso.certify.child`), and a monitor's demotion a third that a stop leaves to finish
+    (`kanso.portfolio.child`). `feed`, when given, is written to the child's standard input
+    between the watch's polls (`_Feed`), and anything it raises kills the child first; a
+    child given none reads nothing. The child inherits the descriptors this process hands
+    down (`handed_down`) and no other.
     """
+    _refuse_if_drained()
     started = time.monotonic()
     with errors.open("wb") as stream:
         child = subprocess.Popen(
@@ -3522,7 +3657,8 @@ def _interrupted() -> PreconditionError:
 
 
 def _refuse_if_interrupted() -> None:
-    """Start no card in a process that has been told to stop, or for work not wanted.
+    """Start no card in a process that has been told to stop or to drain, or for work not
+    wanted.
 
     Asked before the window is read and again before the child is spawned, because a stop
     that lands while a lane is reading a window, or waiting on a model, is still a stop: a
@@ -3531,7 +3667,18 @@ def _refuse_if_interrupted() -> None:
     """
     if _INTERRUPT.is_set():
         raise _interrupted()
+    _refuse_if_drained()
     _refuse_if_unwanted()
+
+
+def _refuse_if_drained() -> None:
+    """Start no child in a process that has been told to drain."""
+    if _DRAIN.is_set():
+        raise DrainedError(
+            "nothing more was started: the lane was told to drain, so it ran what it had in "
+            "flight to its end and stopped",
+            remedy="start the daemon again; the run resumes from its last card",
+        )
 
 
 def _refuse_if_unwanted() -> None:
@@ -3664,6 +3811,7 @@ def _reported(
         peak_mem_gb=peak_gb,
         intents=reported["intents"],
         refused=None if refused is None else Refusal(**refused),
+        commands=reported.get("commands"),
     )
 
 
@@ -3789,6 +3937,13 @@ def main(argv: Sequence[str]) -> int:
         )
         return 1
     result_path.write_bytes(
-        pickle.dumps({"ok": True, "run": result.run, "intents": result.intents})
+        pickle.dumps(
+            {
+                "ok": True,
+                "run": result.run,
+                "intents": result.intents,
+                "commands": result.commands,
+            }
+        )
     )
     return 0

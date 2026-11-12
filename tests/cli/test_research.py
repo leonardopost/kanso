@@ -25,12 +25,14 @@ from kanso.research import records
 from kanso.schemas import Card, ObjectiveParams, ObjectiveRef, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
+from tests.own_bar_size import card_remedy
 
 from .conftest import (
     BETTER,
     FIRST,
     FLAT,
     HYP_ID,
+    HYPOTHESIS,
     INSTRUMENT,
     RAISING,
     READING,
@@ -181,6 +183,37 @@ def test_a_run_needs_a_snapshot_covering_its_windows(runner: CliRunner, loaded: 
     assert "kanso data snapshot" in payload(result)["remedy"]
 
 
+def test_a_tick_run_whose_bars_are_held_at_no_snapshot_s_size_names_the_size(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """DEMO's prints are held and its bars at an hour; a tick file reading the bars two minutes
+    at a time is refused naming that size, which is the one thing missing, and not only the
+    tick grain the prints are held at."""
+    from kanso.data.snapshot import covering
+    from kanso.schemas import Hypothesis, load_yaml
+
+    prints = write_spec(loaded, name="prints.yaml", types=["trade"])
+    loaded_prints = at(runner, loaded, "data", "load", "--loader", "synthetic", "--spec", prints)
+    assert loaded_prints.exit_code == Exit.OK, loaded_prints.stdout
+    assert at(runner, loaded, "data", "snapshot").exit_code == Exit.OK
+    costs = {**HYPOTHESIS["costs"], "latency_ms": 20}
+    tick = {"resolution": "tick", "data_requirements": ["trade", "bar"], "costs": costs}
+    path = write_hypothesis(loaded, **tick, bar_resolution="2m")
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+
+    result = at(runner, loaded, "research", "begin", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.PRECONDITION
+    assert payload(result)["error"] == (
+        "no snapshot covers DEMO.SIM over the research and certification windows at tick, bars "
+        "at 2m"
+    )
+    hyp = load_yaml(Hypothesis, path)
+    held = covering(find(loaded), hyp.universe, hyp.data_requirements, "1h", hyp.windows)
+    assert held is not None, "the prints and the hourly bars are held"
+
+
 def test_a_run_begins_across_the_weekends_at_its_chunk_edges(
     runner: CliRunner, chunked: Path
 ) -> None:
@@ -209,7 +242,7 @@ def test_a_tag_names_the_run(runner: CliRunner, registered: Path) -> None:
 def test_a_card_that_trades_and_passes_its_constraints_keeps(
     runner: CliRunner, registered: Path
 ) -> None:
-    begin(runner, registered)
+    begun = begin(runner, registered)
     edit(registered, REVERTING)
 
     document = card(runner, registered, "fade the rolling mean")
@@ -219,6 +252,10 @@ def test_a_card_that_trades_and_passes_its_constraints_keeps(
     assert document["metric"] > 0
     assert document["best_sha"] == document["strategy_sha"]
     assert [gate["id"] for gate in document["gate_results"]] == ["strategy_integrity", "min_trades"]
+    # The baseline traded nothing, so this card, the first that traded, struck the budget.
+    assert (begun["baseline"]["n_trades"], begun["budget_sha"]) == (0, None)
+    assert document["budget_sha"] == document["strategy_sha"]
+    assert document["card_budget_s"] == max(60.0, 3.0 * document["wall_s"])
 
 
 def test_a_keep_rewrites_the_workspace_strategy(runner: CliRunner, registered: Path) -> None:
@@ -378,6 +415,9 @@ def test_results_tsv_is_rendered_from_state_and_survives_a_restore(
         "gross_bps_per_session",
         "cost_bps_per_session",
         "net_bps_per_session",
+        "first_fill_s",
+        "last_fill_s",
+        "active_s",
     ]
     assert [row.split("\t")[8] for row in rows[1:]] == [
         "baseline",
@@ -417,6 +457,9 @@ def test_a_card_reads_as_a_few_lines_for_a_human(runner: CliRunner, registered: 
     assert "min_trades: pass" in result.stdout
     assert " a session over " in result.stdout, "how often it traded, beside the metric"
     assert " bp a trade net (gross " in result.stdout, "and what a trade earned"
+    struck = payload(at(runner, registered, "research", "show", HYP_ID, "--json"))["card"]
+    assert f"s · struck by {struck['strategy_sha'][:7]}\n" in result.stdout, "the budget it struck"
+    assert " period(s) filled in · first fill +" in result.stdout, "and when it traded"
 
 
 def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers(
@@ -438,6 +481,53 @@ def test_a_card_reports_what_its_trades_did_and_the_log_carries_the_same_numbers
     cells = dict(zip(rows[0].split("\t"), rows[-1].split("\t"), strict=True))
     assert cells["net_bps_per_trade"] == f"{digest['net_bps_per_trade']:.4f}"
     assert cells["fill_ratio"] == ""
+    assert digest["period"] == "1d", "the workspace's return period"
+    assert 0 < digest["filled_periods"] <= digest["sessions"], "a daily period is a session"
+    assert digest["first_fill_s"] <= digest["last_fill_s"] < 86_400.0
+    for name in ("first_fill_s", "last_fill_s", "active_s"):
+        assert cells[name] == f"{digest[name]:.4f}"
+
+
+def test_when_a_card_traded_reads_as_offsets_into_its_period() -> None:
+    """An offset reads as hours, minutes and seconds, cut to the hundredth, so one a hair short
+    of a minute or of a day reads short of it; a span under two minutes once rounded to the
+    hundredth reads as seconds to the hundredth, and a longer one as a hold reads; a run that
+    filled nothing reads as no time, and a card recorded before the digest kept its timing has
+    no line for it."""
+    from kanso.cli.research import _offset, _span, _timing_lines
+    from kanso.schemas import CardDigest
+
+    timed = CardDigest(
+        sessions=0,
+        fills=5138,
+        period="1d",
+        filled_periods=88,
+        first_fill_s=0.0532,
+        last_fill_s=2.0449,
+        active_s=0.5394,
+    )
+    assert _timing_lines(timed) == [
+        "timing     88 period(s) filled in · first fill +0:00:00.05 · last +0:00:02.04 · "
+        "active 0.54s"
+    ]
+    week = CardDigest(
+        sessions=0,
+        fills=2,
+        period="1w",
+        filled_periods=1,
+        first_fill_s=0.004,
+        last_fill_s=4e5,
+        active_s=4e5,
+    )
+    assert "first fill +0:00:00.00 · last +111:06:40.00 · active 111.1h" in _timing_lines(week)[0]
+    assert (_offset(59.999), _offset(86_399.996)) == ("+0:00:59.99", "+23:59:59.99")
+    assert (_span(119.994), _span(119.996), _span(120.0)) == ("119.99s", "2m", "2m")
+    idle = CardDigest(sessions=0, fills=0, period="1d", filled_periods=0)
+    assert _timing_lines(idle) == [
+        "timing     0 period(s) filled in · first fill n/a · last n/a · active n/a"
+    ]
+    assert _timing_lines(CardDigest(sessions=0, fills=4)) == []
+    assert _timing_lines(None) == []
 
 
 def test_a_digest_reads_as_two_lines_and_a_number_it_lacks_reads_as_none() -> None:
@@ -562,6 +652,45 @@ def test_from_workspace_starts_from_the_workspace_file(runner: CliRunner, regist
 
     assert (lane(registered) / "strategy.py").read_text() == FLAT
     assert payload(at(runner, registered, "hyp", "show", HYP_ID, "--json"))["best_sha"] is None
+
+
+SIZED_IN_AN_IF = FLAT.replace(
+    "class Config(KansoConfig):\n    pass\n",
+    "if True:\n\n"
+    "    class Config(KansoConfig):\n"
+    '        bar_resolution: str | None = "5m"\n'
+    "        every: int = 6\n",
+)
+"""FLAT with a `Config` under an `if`, which `strategy_integrity` does not read, giving
+`bar_resolution` a default of its own: a best card an earlier kanso kept."""
+
+
+def test_a_best_giving_bar_resolution_a_default_is_begun_again_from_the_file_its_remedy_names(
+    runner: CliRunner, registered: Path
+) -> None:
+    """Without `--from-workspace` this run starts from its best card's bytes, so once that best's
+    `Config` gives the field a default of its own, beginning again is refused in the baseline's
+    child however the workspace file has been fixed. The remedy names the flag that begins from
+    that file, and the command it names, run as worded, begins the run."""
+    begin(runner, registered)
+    assert at(runner, registered, "research", "end", HYP_ID).exit_code == Exit.OK
+    with StateStore(registered / "state.db") as store:
+        run = records.runs_of(store, HYP_ID)[-1]
+        records.set_best(store, run, store.put_blob(SIZED_IN_AN_IF.encode()), 1.0)
+    fixed = SIZED_IN_AN_IF.replace('        bar_resolution: str | None = "5m"\n', "")
+    (registered / "hypotheses" / HYP_ID / "strategy.py").write_text(fixed, encoding="utf-8")
+
+    refused = at(runner, registered, "research", "begin", HYP_ID, "--json")
+    remedy = str(payload(refused)["remedy"])
+    named = remedy.split("`")[1].split()
+    followed = at(runner, registered, *named[1:], "--json")
+
+    assert refused.exit_code == Exit.PRECONDITION
+    assert "Config gives bar_resolution a default of '5m'" in str(payload(refused)["error"])
+    assert remedy == card_remedy(HYP_ID)
+    assert named == ["kanso", "research", "begin", HYP_ID, "--from-workspace"]
+    assert followed.exit_code == Exit.OK, followed.stdout
+    assert (lane(registered) / "strategy.py").read_text() == fixed
 
 
 def test_show_prints_the_best_card_s_strategy(runner: CliRunner, registered: Path) -> None:

@@ -304,7 +304,24 @@ the square of the trades a run has made (a quarter of it, measured), and a
 two-instrument sleeve that flips every bar never finishes. That is a design
 constraint kanso cannot repair from outside the engine; what it does is measure it
 here, record it, and tell a researcher that turnover — not per-bar work — is what a
-card's budget buys.
+card's budget buys. Measured once the analyzer below recorded nothing, on 27 sessions of
+two names' 1 s quotes and prints: 10,028 trades in one name took 46.2 s, and the same count
+across both 512.4 s.
+
+**The portfolio's analyzer records every position it closes, each record costing more than
+the last, and the engine a card runs in has it record nothing.** `Portfolio.update_position`
+hands each closed position to `self.analyzer.record_trade` — again when its realised PnL is
+converted to the account's base currency — and `PortfolioAnalyzer.record_trade` appends it
+to its currency's series with `pd.concat`, which copies the series (`portfolio/portfolio.pyx`,
+`analysis/analyzer.py`). Measured on the engine's own analyzer, recording one NETTING
+position's closes: 500, 1,000, 2,000 and 4,000 records took 0.16, 0.53, 1.48 and 6.09 s.
+`run_analysis=False` turns off only the report `BacktestEngine` reads the analyzer for once a
+run has ended. kanso reads nothing the analyzer holds — the extraction reads the cache, and
+`criteria.integrity` denies a strategy the analyzer — so `kanso.nautilus.backtest.engine_for`
+sets a `record_trade` that records nothing on its engine's analyzer instance. That rests on
+two things checked below: `PortfolioAnalyzer` is a plain Python class and the portfolio finds
+the method on the instance at every close, and a run whose analyzer records nothing leaves
+the same positions, orders and balances.
 
 **An order's events grow only at its end, and its strategy is handed each one as it is
 taken.** `Order.apply` appends the event it takes last, once its state machine has accepted
@@ -693,7 +710,12 @@ own event loop, share it. Measured with `default_quota` at
 answered in 0.6 s: naming no key, all twelve arrived within 0.6 s; naming one key,
 two arrived at once and then one every half second; naming `a` and `b` in turn,
 two buckets let through two a second each. So a caller whose default quota is to
-hold names one key on every request.
+hold names one key on every request. A key `keyed_quotas` lists is held at its own
+quota instead: measured on 2026-10-29, five requests naming `slow/v1` and `slow`, with
+`slow` keyed at `rate_per_second(2)` beside a default of `rate_per_second(100)`, took
+1.56 s — two at once, then one every half second — and five naming two unlisted keys
+took 0.14 s. That is what lets one connection hold a vendor's slow endpoints to their
+quota without slowing the rest.
 
 Corporate actions
 -----------------
@@ -795,7 +817,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from itertools import count
-from typing import Any
+from typing import Any, cast
 
 ENGINE_VERSION = "1.231.0"
 """The `nautilus_trader` version every fact in this module was verified against."""
@@ -3844,7 +3866,7 @@ def _check_close_cost_is_flat() -> tuple[bool, str]:
         calls = 0
         pickle.loads = counting
         try:
-            trades = _alternating_closes(bars)
+            trades, _ = _alternating_closes(bars)
         finally:
             pickle.loads = original
         counts.append(calls)
@@ -3858,8 +3880,12 @@ def _check_close_cost_is_flat() -> tuple[bool, str]:
     )
 
 
-def _alternating_closes(bars: int) -> int:
-    """A run closing one position per bar across two instruments; the trades it made."""
+def _alternating_closes(
+    bars: int, engine: Any = None, read: Callable[[Any], object] | None = None
+) -> tuple[int, object]:
+    """A run closing one position per bar across two instruments, in `engine` or in one of
+    the engine's defaults: the trades it made, and what `read` found in the engine once the
+    run had ended."""
     from nautilus_trader.backtest.engine import BacktestEngine
     from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
     from nautilus_trader.model.currencies import USD
@@ -3922,7 +3948,10 @@ def _alternating_closes(bars: int) -> int:
             )
             self.held = target
 
-    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    if engine is None:
+        engine = BacktestEngine(
+            config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True))
+        )
     try:
         engine.add_venue(
             venue=venue,
@@ -3952,9 +3981,76 @@ def _alternating_closes(bars: int) -> int:
         strategy = Flipper()
         engine.add_strategy(strategy)
         engine.run()
-        return strategy.trades
+        return strategy.trades, None if read is None else read(engine)
     finally:
         engine.dispose()
+
+
+def _probe_recorded_closes(*, recorded: bool) -> tuple[int, int, int, object]:
+    """Two instruments closing a position on each of 24 bars in turn, in the engine
+    `kanso.nautilus.backtest.engine_for` builds, its analyzer's `record_trade` the one kanso
+    leaves there or, `recorded`, the engine's own: the closes the run made, the closes the
+    portfolio handed the `record_trade` it found on the analyzer, the closes the analyzer
+    kept, and what the run left — each position, each position's snapshots, each order, and
+    the account's balances."""
+    from kanso.nautilus.backtest import engine_for
+
+    engine = engine_for()
+    analyzer = engine.portfolio.analyzer
+    if recorded:
+        del analyzer.record_trade  # the instance's own; the class's is found again
+    handed = 0
+    inner = analyzer.record_trade
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        nonlocal handed
+        handed += 1
+        return inner(*args, **kwargs)
+
+    analyzer.record_trade = counted
+
+    def read(engine: Any) -> tuple[int, object]:
+        cache = engine.cache
+        kept = engine.portfolio.analyzer.realized_pnls()
+        (account,) = cache.accounts()
+        left = (
+            sorted(
+                (str(p.id), str(p.signed_qty), str(p.realized_pnl), len(p.events))
+                for p in cache.positions()
+            ),
+            sorted(len(cache.position_snapshot_bytes(i)) for i in cache.position_snapshot_ids()),
+            sorted(
+                (str(o.client_order_id), str(o.status), str(o.filled_qty), str(o.avg_px))
+                for o in cache.orders()
+            ),
+            sorted((str(k), str(v)) for k, v in account.balances_total().items()),
+        )
+        return 0 if kept is None else len(kept), left
+
+    trades, found = _alternating_closes(24, engine, read)
+    kept, left = cast("tuple[int, object]", found)
+    return trades, handed, kept, left
+
+
+def _check_the_portfolio_records_a_close_through_its_analyzer_instance() -> tuple[bool, str]:
+    """What `kanso.nautilus.backtest.engine_for` rests on to have its portfolio record no closed
+    position: the portfolio hands each close to the `record_trade` it finds on its analyzer
+    instance, and nothing a run leaves in its cache or its account reads what was recorded."""
+    trades, handed, kept, left = _probe_recorded_closes(recorded=True)
+    trades_, handed_, kept_, left_ = _probe_recorded_closes(recorded=False)
+    holds = (
+        handed == handed_ == trades == trades_ and kept == trades and kept_ == 0 and left == left_
+    )
+    return holds, (
+        f"{trades} closes over 24 bars of two instruments: the engine's own record_trade was "
+        f"handed {handed} and kept {kept}; one that records nothing, set on the analyzer "
+        f"instance, was handed {handed_} and kept {kept_}; the two runs left "
+        + (
+            "the same positions, snapshots, orders and balances"
+            if left == left_
+            else f"different positions, snapshots, orders or balances: {left} against {left_}"
+        )
+    )
 
 
 def _sample_bar(ts_event: int = 1_000, ts_init: int = 2_000, close: float | None = None) -> object:
@@ -5389,6 +5485,42 @@ def _check_http_client_meters_named_keys() -> tuple[bool, str]:
     )
 
 
+def _check_http_client_meters_keyed_quotas() -> tuple[bool, str]:
+    import asyncio
+    import time
+
+    from nautilus_trader.core import nautilus_pyo3
+
+    client = nautilus_pyo3.HttpClient(
+        keyed_quotas=[("slow", nautilus_pyo3.Quota.rate_per_second(4))],
+        default_quota=nautilus_pyo3.Quota.rate_per_second(100),
+    )
+
+    def timed(keys: list[str]) -> tuple[float, set[str]]:
+        async def once() -> str:
+            try:
+                await client.request(nautilus_pyo3.HttpMethod.GET, _NOT_A_URL, keys=keys)
+            except Exception as exc:  # the only outcome: the string is no URL
+                return type(exc).__name__
+            return "answered"  # pragma: no cover - nothing can answer it
+
+        start = time.monotonic()
+        outcomes = {asyncio.run(once()) for _ in range(6)}
+        return time.monotonic() - start, outcomes
+
+    slow, outcomes = timed(["slow/v1", "slow"])
+    fast, _ = timed(["fast/v1", "fast"])
+    # Load only adds time: it can lengthen either run, so the two are never compared, and
+    # only the keyed run's lower bound is read.
+    holds = slow >= 0.45 and "answered" not in outcomes
+    return holds, (
+        f"six requests naming a key with its own quota of four a second beside a default of a "
+        f"hundred took {slow:.2f}s (four at once, then one each 250 ms: 0.5 s of waiting), six "
+        f"naming two keys with none {fast:.2f}s; each ended {sorted(outcomes)} at "
+        f"{_NOT_A_URL!r}"
+    )
+
+
 def _check_http_download() -> tuple[bool, str]:
     import inspect
 
@@ -5827,6 +5959,11 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         _check_http_client_meters_named_keys,
     ),
     (
+        "nautilus_pyo3.HttpClient holds a request that names a key listed in keyed_quotas to "
+        "that key's quota",
+        _check_http_client_meters_keyed_quotas,
+    ),
+    (
         "nautilus_pyo3.http_download streams a URL to a file path",
         _check_http_download,
     ),
@@ -5999,6 +6136,12 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     (
         "closing a position costs the same whatever was closed before it",
         _check_close_cost_is_flat,
+    ),
+    (
+        "the portfolio hands every closed position to the record_trade it finds on its "
+        "analyzer instance, and a run whose record_trade records nothing leaves the same "
+        "positions, orders and balances",
+        _check_the_portfolio_records_a_close_through_its_analyzer_instance,
     ),
     (
         "an order whose cancel was sent is not closed until the cancel lands, and under a "

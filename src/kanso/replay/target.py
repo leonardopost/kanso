@@ -48,7 +48,13 @@ Modifiers = tuple[tuple[str, bytes, Mapping[str, Any]], ...]
 
 @dataclass(frozen=True)
 class Target:
-    """One runnable subject, with the money, the model and the data it is judged under."""
+    """One runnable subject, with the money, the model and the data it is judged under.
+
+    `version_source` is the file a strategy version's implementation holds its sleeve's bytes
+    in, which a refusal of those bytes names (`RunRequest.version_source`) — for an attached
+    construct's card, its host version's, with `version_hyp` the host's hypothesis; None for a
+    sleeve's card.
+    """
 
     label: str
     hyp: Hypothesis
@@ -64,6 +70,8 @@ class Target:
     version: int | None = None
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    version_source: str | None = None
+    version_hyp: str | None = None
 
     @property
     def universe(self) -> tuple[str, ...]:
@@ -89,6 +97,8 @@ class Target:
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
             prefix=warmup_prefix(self.hyp, window, self.catalog, self.grains),
+            version_source=self.version_source,
+            version_hyp=self.version_hyp,
         )
 
 
@@ -169,6 +179,7 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
         version=chosen,
         grains=_manifest_grains(manifest.sleeve.config),
         sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
+        version_source=manifest.sleeve.source,
     )
 
 
@@ -208,11 +219,14 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
         hypothesis, _host(ws, hypothesis.construct.host), version=run.host_version
     )
     source = store.get_blob(chosen)
+    version_source = version_hyp = None
     if harness.host is None:
         sleeve: bytes = source
         modifiers: Modifiers = ()
     else:
         sleeve, attached = _layers(store, harness.host)
+        version_source = harness.host.sleeve_file(sleeve)
+        version_hyp = harness.host.sleeve.hyp_id
         modifiers = (
             *attached,
             (
@@ -236,6 +250,8 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
         sleeve_budget=host_sizing(ws, store, harness.host)
         if harness.host is not None
         else (0.0 if hypothesis.sizing is None else hypothesis.sizing.budget),
+        version_source=version_source,
+        version_hyp=version_hyp,
     )
 
 

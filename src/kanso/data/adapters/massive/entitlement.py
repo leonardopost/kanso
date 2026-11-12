@@ -52,9 +52,11 @@ Option contracts are not in the generic ticker reference — it rejects an optio
 outright, with a client error — so asking it about one answers "unrecognised" for a
 contract the vendor defines perfectly well, and a plan that genuinely excludes option
 ticks is then reported as a wrong prefix, sending an operator to correct a ticker that
-was already right. The control endpoint is therefore chosen by asset class, the way the
-source itself gates; every other class this adapter serves is keyed in the generic
-reference, prefixed forex and index keys among them.
+was already right. Futures contracts are not there either: the vendor keeps them, and
+their aggregates, under `/futures/v1`, and the generic reference answers a futures key with
+a 404. The control endpoint is therefore chosen by asset class, the way the source itself
+gates; every other class this adapter serves is keyed in the generic reference, prefixed
+forex and index keys among them.
 
 **The floor is a measurement, not a constant.** Where a recent window serves rows and the
 requested range does not, the difference is the source's history floor, so the floor is
@@ -110,6 +112,10 @@ __all__ = [
     "BARS",
     "CONTROLS",
     "EARLIEST",
+    "FUTURES_BARS",
+    "FUTURES_CONTRACTS",
+    "FUTURES_PRODUCTS",
+    "FUTURES_REFERENCE",
     "OPTION_CONTRACTS",
     "OPTION_REFERENCE",
     "PER_TICKER",
@@ -119,6 +125,7 @@ __all__ = [
     "REFERENCE",
     "TRADES",
     "Endpoint",
+    "futures_aggregates",
     "Entitlements",
     "Floor",
     "Probe",
@@ -344,8 +351,9 @@ bars endpoint says nothing about them: each is probed on its own endpoint."""
 REFERENCE: Final = Endpoint(dataset="reference", template="/v3/reference/tickers/{ticker}")
 """The control question for every class the vendor keys here: does it recognise this key
 at all? Reference has no history window of its own, so an answer is about the key and
-never about the range. Stocks, futures and the prefixed forex and index keys all answer
-here; an option key does not, and is asked of `OPTION_REFERENCE` instead."""
+never about the range. Stocks and the prefixed forex and index keys answer here; an option
+key does not, and is asked of `OPTION_REFERENCE` instead, nor does a futures key, which is
+asked of `FUTURES_REFERENCE`."""
 
 OPTION_CONTRACTS: Final = "/v3/reference/options/contracts"
 """Where an option contract's definition lives — the one class the vendor keys outside its
@@ -362,7 +370,63 @@ this plan really does exclude, at every date — as a malformed request. That te
 operator their request is broken when the truth is that their plan excludes the series,
 and it is the most expensive wrong answer this adapter can give."""
 
-CONTROLS: Final[dict[str, Endpoint]] = {"options": OPTION_REFERENCE}
+FUTURES_CONTRACTS: Final = "/futures/v1/contracts"
+FUTURES_PRODUCTS: Final = "/futures/v1/products"
+"""Where a futures contract's definition and its product's live: the class the vendor keeps
+under a path of its own, outside the generic ticker reference, which answers a futures key
+with HTTP 404 (measured on 2026-10-29, `ESZ5`). Both are point-in-time listings filtered by
+parameter — `ticker` or `product_code`, and `date` for the day a row describes — with no
+path per key."""
+
+FUTURES_REFERENCE: Final = Endpoint(
+    dataset="reference",
+    template=FUTURES_CONTRACTS,
+    params=(("ticker", "{ticker}"), ("limit", "1")),
+)
+"""The control question for a futures key: does the vendor list a contract under it on any
+day? Asked with no date, it answers with some row it lists under the key, rows of the era
+that states contract terms first — measured, `ESZ5` came back with its row of 2025-03-12,
+though the listing holds earlier ones, and `ESZ4`, whose life ended before that era, with its
+row of 2021-06-04 — which is enough to say whether the key is recognised, an expired
+contract's included."""
+
+
+def futures_aggregates(resolution: str, *, limit: int | None = None) -> Endpoint:
+    """The futures aggregates endpoint at one vendor resolution (`1min`, `1hour`), ascending.
+
+    The window lives in the parameters, as dates the vendor reads as their UTC midnight, and
+    a row's `window_start` is nanoseconds. Measured on 2026-10-29 against `/futures/v1/aggs`:
+    asked with no `sort` the rows came back newest first, so `window_start.asc` is always
+    sent and a straddling request's first row is the floor; `window_start.lte=2025-06-03`
+    ended at 2025-06-02 23:49, the last bar before that midnight; a range from 1970 came back
+    HTTP 200 from the plan's floor (ESZ4 from 2024-10-29 00:00), truncated, not refused; and
+    asked with no window at all an expired contract answered with its oldest rows. `limit`
+    is a page size and never caps a walk: the cursor in `next_url` carries the whole request,
+    resolution, order and window included.
+    """
+    params = [
+        ("resolution", resolution),
+        ("window_start.gte", "{start}"),
+        ("window_start.lte", "{end}"),
+        ("sort", "window_start.asc"),
+    ]
+    if limit is not None:
+        params.append(("limit", str(limit)))
+    return Endpoint(
+        dataset="bars",
+        template="/futures/v1/aggs/{ticker}",
+        params=tuple(params),
+        timestamp_field="window_start",
+        timestamp_unit="ns",
+    )
+
+
+FUTURES_BARS: Final = futures_aggregates("1min")
+"""The futures probe: one-minute aggregates, the grain a plan's futures history is served at
+and the one a lane reads. A plan's daily bars say nothing about it, and `BARS` asks the
+generic aggregates path, which serves no futures contract."""
+
+CONTROLS: Final[dict[str, Endpoint]] = {"options": OPTION_REFERENCE, "futures": FUTURES_REFERENCE}
 """The classes whose keys the generic control does not answer for.
 
 Kept as a table rather than a branch so the exception is visible: the control endpoint is

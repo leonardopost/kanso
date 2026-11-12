@@ -173,7 +173,7 @@ def test_a_bound_screen_measures_only_what_its_hypothesis_researches(
         ({"instrument": INSTRUMENT, "type": "quote"}, "does not require quote data"),
         (
             {"instrument": INSTRUMENT, "type": "bar", "resolution": "5m"},
-            "where demo_mr researches 1h",
+            "where demo_mr reads its bars at 1h",
         ),
     ]
     for leg, message in cases:
@@ -181,3 +181,54 @@ def test_a_bound_screen_measures_only_what_its_hypothesis_researches(
         result = at(runner, registered, "screen", "validate", path, "--json")
         assert result.exit_code == Exit.VALIDATION, (leg, result.stdout)
         assert message in payload(result)["error"]
+
+
+TICK_BARS: dict[str, Any] = {
+    "id": "tick_bars",
+    "universe": [INSTRUMENT, "LEAD.SIM"],
+    "resolution": "tick",
+    "bar_resolution": "1h",
+    "data_requirements": ["quote", "bar"],
+    "data_by_instrument": {INSTRUMENT: ["quote"], "LEAD.SIM": ["bar"]},
+    "costs": {
+        "commission_bps": 0.5,
+        "slippage_bps": 1.0,
+        "spread": "fixed_bps",
+        "fixed_bps": 2,
+        "latency_ms": 20,
+    },
+}
+"""A tick sleeve over DEMO's quotes that reads LEAD's bars an hour at a time."""
+
+
+def test_a_screen_bound_to_a_tick_sleeve_reads_its_bar_legs_at_the_size_it_reads_bars_at(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A bound screen measures what its hypothesis's research sees, and a tick sleeve sees its
+    signal's bars at `bar_resolution`: a leg read there is admitted, and one at another size is
+    refused naming the size, with a remedy that clears it."""
+    from .conftest import INSTRUMENTS, write_hypothesis
+
+    entries = {**INSTRUMENTS, "LEAD.SIM": {**INSTRUMENTS[INSTRUMENT], "nautilus_id": "LEAD.SIM"}}
+    (loaded / "instruments.yaml").write_text(yaml.safe_dump(entries), encoding="utf-8")
+    resolve = ("data", "instruments", "resolve", "LEAD.SIM", "--as-of", "2024-01-02")
+    assert at(runner, loaded, *resolve).exit_code == Exit.OK
+    hypothesis = write_hypothesis(loaded, **TICK_BARS)
+    assert at(runner, loaded, "hyp", "add", hypothesis).exit_code == Exit.OK
+    quoted = {"instrument": INSTRUMENT, "type": "quote"}
+
+    def validated(resolution: str) -> Any:
+        lead = {"instrument": "LEAD.SIM", "type": "bar", "resolution": resolution}
+        document = {**bound(lead=lead, demo=quoted), "hyp": "tick_bars"}
+        document["clock"] = {"grid": "1h", "hours": "overlap"}
+        document["measures"] = [{**FREE["measures"][0], "from": "lead", "to": "demo"}]
+        return at(runner, loaded, "screen", "validate", write_screen(loaded, document), "--json")
+
+    admitted = validated("1h")
+    refused = validated("5m")
+
+    assert admitted.exit_code == Exit.OK, admitted.stdout
+    assert payload(admitted)["hyp"] == "tick_bars"
+    assert refused.exit_code == Exit.VALIDATION
+    assert payload(refused)["error"] == "legs.lead: 5m bars, where tick_bars reads its bars at 1h"
+    assert payload(refused)["remedy"] == "set the leg's resolution to 1h"

@@ -60,6 +60,7 @@ def test_start_reports_the_pid_and_the_lanes_and_stop_keeps_the_run(
     assert payload(ended) == {
         "running": False,
         "pid": running["pid"],
+        "drain": False,
         "orphans": [],
         "ending": [],
     }
@@ -81,6 +82,33 @@ def test_stopping_nothing_is_a_precondition_failure(runner: CliRunner, mocked_ws
 
     assert result.exit_code == Exit.PRECONDITION
     assert "no daemon" in payload(result)["error"]
+
+
+def test_a_drain_stops_the_daemon_and_one_with_nothing_running_is_refused(
+    runner: CliRunner, stopped: Path
+) -> None:
+    """With nothing in flight a drain is a stop that waited for nothing; with no supervisor
+    there is nothing to drain."""
+    refused = at(runner, stopped, "research", "stop", "--drain", "--json")
+    assert refused.exit_code == Exit.PRECONDITION
+    assert "there is nothing to drain" in payload(refused)["error"]
+    assert "kanso research stop" in payload(refused)["remedy"]
+
+    first = payload(at(runner, stopped, "research", "start", "--json"))
+    drained = at(runner, stopped, "research", "stop", "--drain", "--json")
+
+    assert drained.exit_code == Exit.OK, drained.stdout
+    assert payload(drained) == {
+        "running": False,
+        "pid": first["pid"],
+        "drain": True,
+        "orphans": [],
+        "ending": [],
+    }
+    second = payload(at(runner, stopped, "research", "start", "--json"))
+    said = at(runner, stopped, "research", "stop", "--drain")
+    assert said.exit_code == Exit.OK, said.stdout
+    assert f"daemon     drained · pid {second['pid']}\n" in said.stdout
 
 
 def test_status_with_nothing_running_still_reports_the_lanes(
@@ -164,7 +192,13 @@ def test_a_lane_that_outlived_its_daemon_is_reported_refused_past_and_ended(
     )
     assert "kanso research stop" in payload(refused)["remedy"]
     assert ended.exit_code == Exit.OK, ended.stdout
-    assert payload(ended) == {"running": False, "pid": None, "orphans": alive, "ending": []}
+    assert payload(ended) == {
+        "running": False,
+        "pid": None,
+        "drain": False,
+        "orphans": alive,
+        "ending": [],
+    }
     assert lane.returncode == -signal.SIGTERM
 
     again = holding(mocked_ws, "l1")
@@ -211,7 +245,13 @@ def test_a_card_whose_lane_is_gone_is_named_until_it_ends_and_stop_says_when_it_
     assert screen["daemon"] == {"running": False, "pid": None, "children": [], "ending": gone}
     assert "stopped · still running: what lane l1 (pid 4242) started · 0 queued" in one
     assert ended.exit_code == Exit.OK, ended.stdout
-    assert payload(ended) == {"running": False, "pid": None, "orphans": [], "ending": gone}
+    assert payload(ended) == {
+        "running": False,
+        "pid": None,
+        "drain": False,
+        "orphans": [],
+        "ending": gone,
+    }
     assert (
         "ending     what lane l1 (pid 4242) started · still running; it ends itself, "
         "and `kanso research status` names it until it has"

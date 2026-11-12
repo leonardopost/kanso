@@ -34,7 +34,11 @@ about that key alone, because the source gates them by the feed behind each tick
 so a hard-coded one would go stale and come back refused, reporting a plan failure that is
 really a dead key. Both are discovered from the reference endpoints, which carry no
 history window, at one request each; where the discovery finds nothing, that class is
-reported as unprobed rather than as unentitled.
+reported as unprobed rather than as unentitled. A futures key is the front month of a product
+listed every quarter for years ahead, read off the vendor's own futures listing, and its
+aggregates are probed where the vendor serves them, `/futures/v1/aggs`: the generic listing
+and aggregates paths serve no futures contract, so a survey that asked them reported futures
+`unprobed` on a plan that serves them.
 """
 
 from __future__ import annotations
@@ -50,30 +54,31 @@ from kanso.data.adapters.massive.conventions import (
     FOREX,
     FUTURES,
     INDICES,
-    MARKET_OF,
     OPTIONS,
     STOCKS,
 )
 from kanso.data.adapters.massive.corporate_actions import DIVIDENDS_EFFECTIVE, SPLITS
 from kanso.data.adapters.massive.entitlement import (
     BARS,
+    FUTURES_BARS,
     QUOTES,
     TRADES,
     Endpoint,
     Entitlements,
     grain,
+    settled_end,
 )
 from kanso.data.adapters.massive.errors import MassiveError
 from kanso.data.adapters.massive.filings import FILINGS, offered
 from kanso.data.adapters.massive.financials import INCOME_STATEMENTS
-from kanso.data.adapters.massive.reference import CONTRACTS, LISTING
+from kanso.data.adapters.massive.reference import CONTRACTS, front_month
 from kanso.data.registry import Reach, Survey
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.data.adapters.massive.client import Transport
     from kanso.workspace import Workspace
 
-__all__ = ["KEYS", "OPTIONS_UNDERLYING", "TARGETS", "Target", "survey"]
+__all__ = ["FUTURES_PRODUCT", "KEYS", "OPTIONS_UNDERLYING", "TARGETS", "Target", "survey"]
 
 KEYS: Final[dict[str, str]] = {
     STOCKS: CHECK_TICKER,
@@ -90,6 +95,11 @@ the truth is a key that no longer exists.
 
 OPTIONS_UNDERLYING: Final = CHECK_TICKER
 """Whose option chain a probe key is taken from: an underlying that always has one."""
+
+FUTURES_PRODUCT: Final = "ES"
+"""Whose front month a futures probe key is: the E-mini S&P 500, listed every quarter for
+years ahead — 22 single contracts as of 2026-10-28, measured — so a front month always
+exists."""
 
 UNPROBED: Final = "unprobed"
 """The outcome of a class no key could be found for. It is deliberately not one of the
@@ -135,7 +145,7 @@ TARGETS: Final[tuple[Target, ...]] = (
     Target(OPTIONS, BARS),
     Target(OPTIONS, TRADES),
     Target(OPTIONS, QUOTES),
-    Target(FUTURES, BARS),
+    Target(FUTURES, FUTURES_BARS),
     Target(FOREX, BARS),
     Target(FOREX, QUOTES),
     Target(INDICES, BARS),
@@ -160,6 +170,13 @@ MARKET_NOTE: Final = (
     "statements are quarterly and filings episodic, so a fortnight of one issuer holds "
     "nothing in the ordinary case, and only a listing that is refused is a plan"
 )
+FUTURES_FLOOR_NOTE: Final = (
+    "the futures floor is {ticker}'s own first traded minute: a contract listed years ahead "
+    "trades little until it is near, so its floor is later than the plan's, and a load "
+    "measures each contract's own"
+)
+"""Measured on 2026-10-29: the front month ESZ6's first minute inside the plan was
+2025-09-10, while ESZ4's minutes reached back to 2024-10-29, the plan's two-year edge."""
 NO_FLOOR_NOTE: Final = (
     "no history floor is measured for a reference listing: it is a sparse event series, "
     "where a year holding nothing is the issuer's silence rather than the source's edge"
@@ -193,7 +210,7 @@ def survey(
             ),
         )
     memo = Entitlements(client, as_of=as_of)
-    keys, discovery = _keys(client)
+    keys, discovery = _keys(client, memo.as_of)
     reach = tuple(_reach(memo, target, keys) for target in TARGETS)
     return Survey(
         adapter=adapter.id,
@@ -205,24 +222,26 @@ def survey(
     )
 
 
-def _keys(client: MassiveClient) -> tuple[dict[str, str], int]:
+def _keys(client: MassiveClient, as_of: date) -> tuple[dict[str, str], int]:
     """A probe key per class, and how many requests finding them cost.
 
     The permanent keys cost nothing. The two that expire are read from the reference
     endpoints, which have no history window of their own, so a chain that expired before
-    the aggregate floor still lists and a key found here is a key that exists today.
+    the aggregate floor still lists and a key found here is a key that exists today: an
+    option of the underlying's chain, and the futures product's front month on the last
+    settled day.
     """
     found = dict(KEYS)
-    spent = 0
-    for asset_class, path, params in (
-        (OPTIONS, CONTRACTS, {"underlying_ticker": OPTIONS_UNDERLYING, "limit": "1"}),
-        (FUTURES, LISTING, {"market": MARKET_OF[FUTURES], "active": "true", "limit": "1"}),
+    for asset_class, key in (
+        (
+            OPTIONS,
+            _first_key(client, CONTRACTS, {"underlying_ticker": OPTIONS_UNDERLYING, "limit": "1"}),
+        ),
+        (FUTURES, front_month(client, FUTURES_PRODUCT, settled_end(as_of))),
     ):
-        spent += 1
-        key = _first_key(client, path, params)
         if key is not None:
             found[asset_class] = key
-    return found, spent
+    return found, 2
 
 
 def _first_key(client: MassiveClient, path: str, params: Mapping[str, str]) -> str | None:
@@ -292,6 +311,8 @@ def _notes(reach: tuple[Reach, ...], keys: Mapping[str, str]) -> Iterator[str]:
         yield TICKER_GRAIN_NOTE.format(ticker=keys[INDICES])
     yield MARKET_NOTE
     yield NO_FLOOR_NOTE
+    if any(item.asset_class == FUTURES and item.floor is not None for item in reach):
+        yield FUTURES_FLOOR_NOTE.format(ticker=keys[FUTURES])
     for asset_class in sorted({item.asset_class for item in reach if item.outcome == UNPROBED}):
         yield (
             f"{asset_class}: no contract was listed to probe with, so this class was not "

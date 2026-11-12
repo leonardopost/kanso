@@ -126,7 +126,12 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
+| attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution`, and over a host at `quote` or `trade` that kind required in `data_requirements` and in every `data_by_instrument` entry that asks for more than `bar` |
+| attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same, requiring the host's kind too over a host at `quote` or `trade` |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
+| send an exit kanso did not size — one the strategy built itself, at market or at a limit, in any time in force, a stop, an order of a list or a list that closes, the engine's `close_position`, or an overlay's leg or clip — when the venue model's `costs.orders_per_minute` leaves the bucket too few tokens for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is, saying, for an exit the strategy built itself, to close with `submit_exit`, and, for an overlay's leg or clip, to send fewer commands or state the account's own figure. An entry, an entry's list and a modify past the rate are not refused: each is dropped unsent and counted on the card's `commands`, and the card runs on; an exit `submit_exit` sized is owed and a cancel deferred (`costs.orders_per_minute`) |
+| state a `costs.orders_per_minute` below `costs.requests_per_cancel`, at any layer, the broker's declaration among them | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the venue, both keys and both figures: the bucket never holds what one cancel spends, so the sleeve's first cancel would wait for ever and every entry and modify behind it be dropped |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
@@ -180,6 +185,12 @@ it is defined. The sections are `[extensions]`, `[skills]`, `[research]`, `[scre
 commented out, header included, because its two keys — `reference`, naming the adapter that
 resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
 until a vendor is configured, and the table you then append is not declared twice.
+
+`[research] baseline_budget_s` is the wall a baseline card may take. A lane whose baseline was
+killed for it passes the hypothesis over until it, or another of what that baseline ran on,
+moves (`docs/cli.md`, The daemon and the queue), and a lane reads `kanso.toml` when it starts,
+so a budget raised under a running daemon reaches its lanes after `kanso research stop` and
+`kanso research start`.
 
 `[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
 many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
@@ -315,7 +326,8 @@ already moved past it would stamp its own older version over the newer one and l
 `state.db` whose schema no `kanso migrate` could reach again.
 
 **What grows, and the one thing kanso gives back.** Every judged card stores its book — what
-it held, session by session, and the number it earned — so the redundancy rule can refuse
+it held, session by session and, under a horizon shorter than a day, hour by hour within
+each, and the number it earned — so the redundancy rule can refuse
 the next spelling of the same bets (`docs/concepts.md`). A book is read only under the pins
 of the run asking, and nothing deletes one as research moves on, so the books stored under a
 file since re-pinned, an earlier kanso, a snapshot a newer run moved past or a retired
@@ -531,7 +543,24 @@ equity curve strikes at each period end, and one a strategy may size from. Readi
 bar costs what the sleeve's orders gained since the last read, however long they have lived,
 so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
 does not save memory either, since the engine keeps every order's events for the run
-(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
+(`docs/concepts.md`).
+`self.balance_at_quote` is that balance with each open position marked at the mid of its
+name's last quote instead of its last print: the number to hold a strategy's own daily stop or
+target to, since a print outside a valid quote moves `balance` and not it. Under `depth` a
+name's last quote is level one of the harness's copy of its book, which `balance` never marks
+at; otherwise, where every name held last had a valid quote it is `balance` exactly. A name
+whose last quote is not `ask > bid > 0` — locked, crossed or one-sided, as level one is under
+`depth` while a side of the book is empty — or that has none, a bar sleeve's among them, is
+marked at its last trade or bar close and never at an invalid quote's mid, with neither at its
+cost, so a name the sleeve is handed no quotes of is marked
+as `balance` marks it. It is the mid, not the bid of a long or the ask of a short, so a flatten
+at market still pays half the spread past it; nothing kanso sizes or measures reads it. A
+read books the fills the venue has made since the last read, as a read of `balance` does, and
+nothing else: read where a sleeve reads `balance` it changes nothing the sleeve books, and read
+on a point where it reads nothing else it books them there rather than at the next read, as
+`balance` read there would, which can add the same sums in another order and leave the cash a
+unit in its last place apart.
+`strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
 the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
@@ -568,7 +597,36 @@ class Config(KansoConfig):
 
 A name that is not a numeric field of the class is refused when the strategy is built
 (`strategy.py: Config: fixed_params: … is not a numeric field`), so a typo cannot quietly
-fix nothing.
+fix nothing. `bar_resolution` is kanso's: it is set from the hypothesis — on a card always,
+`None` where the file states none, and on a stage from the version's manifest, which carries
+it only where the file states one — so a `Config` that gave it a default of its own would give
+a stage one bar size and its card another. The runner refuses such a class wherever it builds
+it, whatever made it — a class body annotating the field with a value, a class defined under an
+`if`, one deriving from `KansoConfig` held under another name or read off
+`KansoStrategy.config_cls`, one `type()` builds with the field in its `__annotations__`: in a
+card's child, where the card fails with `strategy.py: Config gives bar_resolution a default of
+'5m', …` and the remedy to delete the field from `hypotheses/ID/strategy.py` and begin from
+that file with `kanso research begin ID --from-workspace`; where `strat compose` writes a
+version's manifest; where `portfolio deploy` loads a manifest an earlier kanso wrote; where
+such a version is replayed, on either path, or its expectation struck again at another capital;
+and where a construct attached to such a version is carded, certified or replayed, since the
+sleeve under it is that version's — those four naming the generated module, with the remedy to
+research from the file of the hypothesis the version was certified from, the host's under a
+construct, the same way and certify the best it finds. `research begin` of such a construct
+reports its host as not running, with the module, the refusal and that remedy.
+Before any card runs, `strategy_integrity` reads the body of a top-level class of the file that
+names `KansoConfig` among its bases — as itself, through an import alias or as a module's
+attribute — or names a top-level class of the file that does, and discards the file where that
+body binds `bar_resolution`, however it does it — annotated or assigned, as a tuple's target or
+in a nested block, as a property or an import — though a method's locals are its own, with the
+line and the remedy to rename the field; it reads no other class. A binding that hides the
+field without declaring it — one the gate reads, or one it does not: set on the class after its
+body, by a decorator, or in a class `type()` builds with no annotation — is no default, and
+hands the strategy's own reads of the field a size the file does not state, but not its bars:
+the sleeve subscribes them at the size kanso set, on a card, in a book and on a stage alike,
+through the config a book or a stage node rebuilds with other fields replaced. A binding that
+hides another field kanso sets — `resolution` as a tuple's target, say — is read in kanso's
+place (`docs/backlog.md` row 245).
 
 **`warmup` is yours, and it is scope.** A strategy's indicators start empty, so without it
 the first sessions of every window are spent filling them and the run is measured cold;
@@ -630,6 +688,68 @@ or removing an entry that narrows an instrument clears `best` with a `best_clear
 naming `data_by_instrument`, and a certificate earned under another refuses to compose.
 Listing an instrument with every required type, or reordering a list, changes nothing an
 instrument is shown and clears nothing.
+
+**`bar_resolution` is the size a tick sleeve reads its bars at, and it is scope.** A future,
+an index or a currency pair carries bars where the equity it leads carries quotes and prints.
+At `resolution` `tick`, `quote` or `trade` a sleeve has no bar size of its own, so a file that
+requires `bar` there names the size its bar instruments are read at:
+
+```yaml
+resolution: tick
+bar_resolution: 1m                 # scope: changing it clears `best`
+data_requirements: [quote, trade, bar]
+data_by_instrument:
+  SPY.ARCX: [quote, trade]         # the traded name: its tape
+  ESZ5.XCME: [bar]                 # the signals: a minute at a time
+  NDX.IDX: [bar]
+```
+
+The runner reads every `bar` instrument at that size, the sleeve subscribes them at it and its
+`on_bar` is handed them, and a snapshot must cover them at it; a card, a certificate and a
+replay read them so, and `kanso replay parity` holds. A version's manifest records
+`bar_resolution` where the file states one, so a stage node's sleeve reads bars at the size its
+card did — though not only the series its card did: the manifest carries neither
+`data_by_instrument` nor `session_scope`, so a stage sleeve subscribes every required type of
+every name — the signal's quotes and prints, the traded name's bars — as it does for any file
+that narrows what an instrument is asked for (`docs/backlog.md` row 239). A bar is stamped at
+its close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches
+the sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
+same instant. The sleeve's sessions — what `warmup` counts — are still the days its quotes or
+prints were printed, not the days a signal's bars were. A signal that trades round the clock —
+a future's twenty-three hours, a coin's twenty-four — moves the sleeve outside the traded
+name's session too: an order sent then is filled at that name's last quote or print, since the
+simulated venue keeps no market hours, and every UTC day that holds a point, a weekend's
+included, is a session of the run's digest and its period ends (`docs/backlog.md` row 241).
+`kanso hyp validate` refuses (exit 3) a tick file that requires `bar` and states no
+`bar_resolution` — before the key existed such a file passed `hyp validate` and `hyp add`, and
+`research begin` refused it for want of a snapshot at `tick` (exit 2), so no card ran — a
+`bar_resolution` beside a resolution that is itself a bar size, and one with no `bar` to read.
+An attached construct states its host's `bar_resolution`, as it states its host's `warmup`,
+because its cards run the host underneath it; so an overlay with a bar clock of its own is
+refused (exit 3) over a host that reads bars beside ticks — a file at a bar-size resolution
+states no size for the host's bars — with the host's resolution and `bar_resolution` as the
+remedy (`docs/backlog.md` row 240), and over a host at `quote` or `trade` that kind required in
+`data_requirements` and in every `data_by_instrument` entry that asks for more than `bar`, since
+a file at either resolution requires it and a name asked for bars alone carries no feed to ask
+it for; a filter or an exit rule off such a host's grain is given that remedy alone — attached as an overlay instead, it is refused with a bar clock and
+raises while subscribing with any other (row 244). A construct that states a `bar_resolution`
+its host does not is refused (exit 3) naming what the host reads: over a tick host that reads
+no bars the remedy drops the bars with the key — and a name it asked for bars alone, from
+`data_by_instrument` and the universe, since a name left asking for nothing is refused too — and
+over a host at a bar size, which only an overlay reaches, it takes the host's resolution, since
+dropping the key alone leaves `bar` required at no size, and whatever size the overlay states
+its card would hand the host the overlay's own clock as a bar grain, at which no bar can be
+subscribed. A filter or an exit rule that states one off its host's grain is refused on that
+grain first, naming `resolution`, with the one remedy that takes the host's resolution and does
+the same — and, over a host at `quote` or `trade`, requires that kind in `data_requirements` and
+in every `data_by_instrument` entry that asks for more than `bar` — every entry left where the
+bars are dropped — since a file at either resolution requires it and asks some instrument for
+it. Adopting,
+changing or dropping the key re-pins the hypothesis and clears `best` with a `best_cleared`
+naming `bar_resolution`; a row pinned before it existed reads as stating none. A tick file
+that requires `bar` and was registered before the key existed fails `kanso doctor`'s
+`instruments` check (exit 2), naming `bar_resolution` and the remedy, until it states one and
+`kanso hyp add` re-pins it.
 
 **`session_scope` is yours, and it is scope.** A universe of a thousand names cannot be
 fed to a strategy whole at an intraday grain: the runner reads every name's bars a session
@@ -780,8 +900,9 @@ an instant and never later than it: at the change itself, stamped with it, befor
 point of the feed. Neither is delayed again: an order sent from either reaches the venue
 `costs.latency_ms` after the point that carried the call, as every order does, because the
 latency is the whole round trip, feed and order together. The quote is a signal and moves
-nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
-`spread: quotes` has no quote series to read. What else the strategy may not touch under the
+nothing but `balance_at_quote`: `last_quote` and `last_price` do not read it, `balance` and
+the card mark no position at it, and `spread: quotes` has no quote series to read. What else
+the strategy may not touch under the
 key — the engine's own book subscriptions, beside the message bus, which no strategy may
 touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book
 at all, neither the view nor a subscription of its own — asking for one is refused, and
@@ -831,7 +952,7 @@ read and never traded — the trigger `kanso screen draft` writes as one name's 
 a follower read as another's quotes — is charged nothing either way, and a screen's hurdle
 refuses a leg it trades read so. The block is scope: every metric is net of it, so a best selected under one schedule
 is gross of what another charges, and `hyp add` clears `best` when any key of it moves,
-`latency_ms` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
+`latency_ms`, `orders_per_minute` and `requests_per_cancel` included, as it does for `sizing`. A row pinned before 0.13 recorded no costs
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
 from the state store; only when the store no longer holds those bytes, or this kanso cannot
 read them as a hypothesis, does the missing key read as unchanged.
@@ -1009,7 +1130,7 @@ such name, what it is asked for and why, and each way off the warning: ask every
 `quote` and `trade` and none for `bar` under `data_by_instrument`, each keeping every other
 type it is asked for, since a type no name is asked for is refused — the `funding` a perpetual
 requires, the series a `session_scope` reads — and drop `bar` from `data_requirements` where it
-is there, which resolves to `print_through`; state `print_through`, offered only where no name
+is there, and `bar_resolution` with it, which resolves to `print_through`; state `print_through`, offered only where no name
 is asked for `bar` beside `quote` and fit only when each name short of a feed is a signal the
 strategy never trades; or state `touch`, which keeps the rule. A `screen draft` of a cell
 whose trigger and follower are read as different feeds of different names writes that shape.
@@ -1189,7 +1310,7 @@ a name's prints with their terms only when its snapshot pins them — a `print_t
 serving every day each print dataset of the name it pins serves over the days a card is fed —
 so terms loaded after the snapshot move no card pinned to it. Every print of any other name is
 read as lit, and `research begin` names each such name (`docs/cli.md`). A stage's live feed
-carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 235).
+carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 255).
 
 Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
 clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
@@ -1311,6 +1432,165 @@ different values cannot share one, which is one round trip: `deploy` refuses the
 before it writes the stage (exit 2), naming `venues.<MIC>.costs.latency_ms` and both
 versions.
 
+`costs.orders_per_minute` is the third key that is not a charge: how many of the account's
+requests a minute the sleeve's orders may spend. `costs.requests_per_cancel` is the fourth: how
+many of them a cancel of one order spends, the requests the broker's client sends for one.
+
+```yaml
+costs:
+  orders_per_minute: 166           # unset unless stated: no rate holds the sleeve
+  requests_per_cancel: 2           # one unless stated; a broker states its client's
+```
+
+A command is what the sleeve asks of the venue: a submit of each order — every order of a
+list — a modify, and a cancel of each order, whether by `cancel_order`, `cancel_orders` or
+`cancel_all_orders`. An order the engine's emulator holds is counted when the strategy submits
+it, and its cancel when the strategy sends it, though the emulator sends the venue nothing
+while it holds the order and sends the order itself, uncounted, when it releases it: a
+strategy that cancels emulated orders spends its rate on requests no account received. A
+cancel that would send nothing — of an order closed, or whose cancel is already on its way —
+is no command, and neither is the cancel of a market order, which kanso never sends, nor a
+modify the engine sends nothing for: one that changes nothing, or of an order closed or being
+cancelled, or of one the engine was never handed, which its risk engine denies. Under a stated
+rate a cancel of an order the engine was never handed is no command either — an entry the
+rate dropped, which the strategy may still hold, one a filter refused or one sent in the
+warmup: the venue holds nothing of it, so nothing is sent or held and no token spent, and a
+strategy that cancels its last order on every point, whether or not it went, sends what one
+that cancels only what went does. With neither key stated such a cancel is held back and
+counted, as before the keys existed (below). Under a stated rate each command takes its tokens
+from a bucket of that many — a submit and a modify one, a cancel `requests_per_cancel` — full
+when the run starts and refilled at that many a minute **on the data clock** — `data_time`,
+held so a point published late refills nothing — and never past full: the shape of the quota
+kanso's broker clients hold themselves to, a burst of the rate and the rate after it, so a
+rolling minute can hold up to twice the figure. It is the same code on every path, so a card,
+`kanso replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
+parity` compares the orders that came of it and the commands counted. A rate below what one
+cancel spends — an `orders_per_minute` under `requests_per_cancel` — is refused wherever the
+venue model is resolved, at `hyp validate`, `hyp add` and `research begin` (exit 3), naming the
+venue, both keys and both figures: the bucket never holds more than the rate, so the sleeve's
+first cancel would wait for ever and every entry and modify behind it be dropped. A command
+finds **no token available** to it when the bucket holds fewer than it costs — a list one for
+each of its orders, all or none — or, for an entry or a modify, while a cancel waits for its
+tokens or an exit owed for want of a token waits for one (below). Then:
+
+- **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
+  quantity given or sized by the room, whatever it does to the position; and an order built by
+  hand, or an overlay's hedge leg or clip, that opens or grows the position — inside the
+  handler that sent it: it is not sent, `submit_entry` answers `None` for it as for an entry a
+  filter refused, its hedges are not placed, and a clip dropped so holds nothing. So is **an
+  entry's list** — one whose first order is an entry — short of a token for each of its orders,
+  dropped whole, and **a modify**, whichever order it moves: the order stays as it was, at its
+  own price and quantity, working as before. Each is counted on the card's `commands` as
+  `refused_submits` — one per order — or `refused_modifies`, and the card **runs on** past it,
+  measured on the entries the rate let through; a stage node, running the same code, drops the
+  same commands and does not halt. Whether an order built by hand opens is read against the
+  position the sleeve holds once its market orders in flight have filled and the exits the rate
+  owes it at market have gone — owed for want of a token, or behind a cancel of its own order
+  on the closing side that the rate deferred — as `held` reads it: an exit owed at a price is a
+  limit, and is no more read as filling than a limit resting, an exit owed for part of the
+  position takes that part, and an exit owed at market behind a cancel in flight or an order on
+  its way, with or without a rate, is read as `held` reads it, not as gone. So **the second leg
+  of a flip** — `submit_exit` and then `submit_entry` on the other side, in one handler, behind
+  an exit at market or at a price, whether the exit took the last token or was owed — is an
+  entry, dropped and counted rather than owed as an exit and forgotten once the exit has left
+  the sleeve flat, and so is an order or a list built by hand on the other side behind an exit
+  at market that went or that the rate owes; behind an exit at a price, one built by hand
+  closes the position that limit may never close, and is an exit the strategy built itself
+  (below). The bucket is asked first for an entry `submit_entry` sizes and for an order or a
+  list built by hand, before it is sized by the room or funded: one it would not send is
+  dropped and counted unsized and unfunded, never refused as `unfunded_order` or
+  `one_position`, and the room, what the book can fund and a sized entry's check of what is
+  held are read only for one it lets through, as with no rate stated;
+- **an exit `submit_exit` sized is owed** — the strategy's, an exit rule's, an owed exit's —
+  as it was asked: the whole position when no quantity was given, at the price given, asked
+  for again as `submit_exit` sends one (above, for what an owed exit is). It is the only exit
+  kanso owes, and one is owed a side of a name, so a second `submit_exit` asked past the rate
+  while the first is still owed replaces it rather than adding to it, unless the first was an
+  exit rule's, which its host's ask neither replaces nor adds to: asked twice for half the
+  position, the rate owes one half, and the other stays held (`docs/backlog.md` row 237);
+- **any other exit is refused** — one the strategy built itself, at market or at a limit,
+  good till cancelled, for the day, immediate-or-cancel, fill-or-kill or good till a date, a
+  stop, a post-only or part-displayed limit, an order sized in the quote's currency, an
+  emulated order or one with an execution algorithm, an order of a list or a list whose first
+  order closes, the engine's own `close_position`; and an overlay's leg or clip that closes —
+  inside the handler that sent it, as `order_rate`, when the bucket holds fewer tokens than it
+  needs. Owed, it would go as an order kanso built in its place, which the strategy holds no
+  handle to and so could neither cancel nor move, cut at flat and sent at market or at a
+  good-till-cancelled limit whatever was asked; dropped, it would leave open what the strategy
+  asked to close. The card is a `discard` whose `sizing` gate carries the refusal: what was
+  asked, when, what was held, and in `why` the bucket's level and any cancel waiting for its
+  tokens. A strategy that closes with `submit_exit` is owed instead, and is never refused for
+  the rate;
+- **a cancel is deferred**: the order is working until the cancel is sent and lands, so an
+  exit is sized to what it can still fill and an exit at a price behind it is owed, as behind
+  a cancel in flight. One whose order filled or was cancelled meanwhile, or whose cancel went
+  another way, is dropped and pays nothing, and holds nothing back from the moment its order
+  closed: an entry or a modify sent from the handler of that order's fill finds the bucket as
+  it is, and an exit refused there names no cancel waiting.
+
+While a cancel waits for its tokens no entry and no modify takes one — an entry finds none and
+is dropped, a modify too — so the handler's entries do not starve a cancel that spends two
+requests, as they would by taking each single token that comes back before the cancel had two.
+Nor does one while an exit owed for want of a token waits for one: the owed exit is asked for
+again before the handler of each point, and under `depth` from each change once its views have
+been handled, so a view's handler, which runs first and on an instant of its own, would
+otherwise take every token that came back and the exit would never go. An exit takes a token
+the bucket holds all the same, owed or not, so the rate refuses no exit it has a token for, and
+exits asked for on every point can keep a cancel waiting, while the order it would cancel works
+on and can fill. A deferred cancel goes before the handler of the point the bucket holds its
+tokens on, and the exit owed behind it is asked for again as soon as it has gone, before that
+handler too: with no latency stated the venue holds the order no longer once its cancel is
+sent, so the exit takes a token the bucket still holds, or is owed for want of one, and an
+entry the handler sends behind it is dropped and counted, or, with a token left for it, funded
+on what that exit leaves. Under a stated latency the order works until the cancel lands, so the
+exit stays owed behind the cancel in flight, as it is with no rate stated, and an entry the
+handler sends meanwhile is funded on the position still held: where the book cannot fund it
+beside that position, it is refused as `unfunded_order`, as it is behind any cancel in
+flight. A sleeve acts only on points, and the venue
+matches a point before any handler of it runs, on both paths, so **what waits for a token goes
+on a later point, after the venue has matched it**: a cancel deferred on a session's last point
+waits at least for the next session's first, where the order it was meant to cancel can fill,
+and so does an exit owed there for want of a token. A strategy that must not carry an order
+into the next session cancels it with a token to spare.
+
+A command is counted, and pays its tokens, where the sleeve decides to send it — a cancel
+kanso holds back until the venue has the order, or behind a modify, when it is asked for —
+which both paths reach at the same instants. A stage node's flatten after its window is the
+stage's, not the sleeve's: it lifts the rate and sends every deferred cancel first, so the
+flatten goes out whole; a researched strategy may not lift it, spend it or read the bucket
+(`kanso.criteria.integrity`, rule `RATE_MARKS`). Every card counts its commands whether or
+not a rate is stated, and its digest carries the counts, the busiest 60 s and what the rate
+dropped (`docs/concepts.md`, Card), which is how a rate is chosen: from the `peak_60s` of the
+cards that ran without one, and, under one, from how many entries and modifies it dropped.
+
+The figure is the sleeve's own. A broker states the figure its client holds the account's
+requests to, and what its client sends for a cancel, for the venues it serves —
+`docs/adapters.md` names each — and a workspace states its plan's figure as
+`venues.<MIC>.costs.orders_per_minute` in `portfolio.yaml`; a hypothesis states the share it
+may use. Several sleeves on one account share the account's rate, so each states a share:
+`kanso doctor`'s `order rate` check sets a broker's own throttle, `[adapters.<id>]
+requests_per_minute`, against the sum of the rates every version on a stage was certified
+under, and warns where the throttle is below it — the client would hold back what the cards
+sent at once — saying what it checks where a version states none or the broker's quota is not
+one kanso reads. The figure bounds what the sleeve's orders spend and nothing else: a broker's
+client also spends its quota on the engine's polling of orders and positions and on a feed's
+sweeps, which leave the orders less of it and which neither the bucket nor the check counts.
+Like every cost it is part of the hypothesis's scope, and a re-pin that states or changes
+either key clears `best`; a broker's or `venues.<MIC>` figure moves the venue model every stored
+number is measured under, so no card struck under another rate is matched against one struck
+under this. Where no layer states either key — the broker's declaration included, and
+`alpaca`'s states both — each is left out of the venue model a card, certificate or version
+records, nothing is held back or dropped, and each path, the research engine and the node,
+sends, fills and refuses exactly what it did before the keys existed: a card runs, records
+and digests as it did, its digest's `commands` aside, which every card carries, and a
+replay records and a `parity_replay` gate judges and writes its evidence as before. That
+holds where the two paths already part: a cancel of an order the engine was never handed is
+held back, as the cancel of any order not yet handed to the venue is, and sent once the
+strategy submits that same order, which the research engine answers as not found, the order
+resting and filling, and a node obeys, cancelling it — so a card fills what a replay's or a
+stage's node does not (`docs/backlog.md` row 236). The handling above, where such a cancel is
+neither sent nor held, is a stated rate's.
+
 **A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
 met by four sellers' prints of 100 at its price fills 100, 100, 100 and 20, one part per
 print, and met by one print of 1,000 fills whole (`kanso doctor` re-checks this as an engine
@@ -1398,7 +1678,7 @@ comparable to each other; re-pinning underneath it would silently change the que
 cards were answering.
 
 A re-pin keeps `best` while the file still asks the same question. A change to the
-`universe`, the `resolution`, the `data_requirements`, `data_by_instrument` (an entry that
+`universe`, the `resolution`, `bar_resolution`, the `data_requirements`, `data_by_instrument` (an entry that
 narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
 `warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
 counts, since a draft has no construct and the best was earned as one — and the event log
@@ -1439,10 +1719,12 @@ never loses a row. Deleting it loses nothing. Its columns are `sha7 metric metri
 n_trades wall_s peak_mem_gb status desc`, then the card's digest — `trades_per_session
 hit_rate median_hold_s maker_share fill_ratio gross_bps_per_trade cost_bps_per_trade
 net_bps_per_trade net_bps_per_trade_se gross_bps_per_session cost_bps_per_session
-net_bps_per_session`, what its trades did (`docs/concepts.md`, Card) — appended after `desc` so
-that the first nine columns sit where they always sat. A digest number with nothing to be read
-off, and every digest cell of a crash, of a card refused before or during its backtest and of
-a card recorded before 0.17, is empty.
+net_bps_per_session`, what its trades did, then `first_fill_s last_fill_s active_s`, when in
+its return periods it filled (`docs/concepts.md`, Card) — appended after `desc` so that the
+first nine columns sit where they always sat, and the timing after the twelve that came before
+it. A digest number with nothing to be read off, and every digest cell of a crash, of a card
+refused before or during its backtest and of a card recorded before 0.17, is empty; so are the
+three timing cells of a card recorded before the digest timed its fills.
 
 ## `screens/<id>/`
 
@@ -1465,7 +1747,7 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
 | `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`), `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) or `catch_up` (`leader`, a leg or derived leg; `followers`, never the leader alone; `within`, the trailing span the gap is measured over; `fit: window` or `first_fold` and `beta_over`, where and at what return span the follower's response to its leader is fitted; `enter_bp`, the gap and implied move that open a position; `close`, the share of the entry gap at which it has caught up, each at least 0 and under 1; `stop`, the multiple of it at which it has failed, each over 1; `max_hold`, the safety cap; `latency_ms`) or `condition` (`tests`, name → `{signal, when, against, entry, exit, hold, side}`: a declared signal; `when`, exactly one of `gt`, `ge`, `lt`, `le`, `eq`, `ne` and a number, the favoured state; `against`, under a contrast only, a comparison no number meets together with `when`, or `rest`; `entry` and `exit`, `open` or `close`, the session's first or last point, a period running from the previous session's when they are not `open → close`; `hold`, `while` or `{sessions: k}`; `side`, `long` or `short`, the position the favoured state takes. Then `followers`, a leg or a group of catalog legs, never a derived one; `payoff: contrast` or `long_flat`; `null_by: sign_flip` with `block`, at least every fixed hold, or `circular`, which takes every shift and refuses a `block`; `demean`, a list of `weekday`, `month`, `third_friday_week`, `pre_holiday` and `{turn_of_month: [last, first]}`, `[]` for the window's mean alone; `controls`, declared 0/1 signals, `[]` for none, each read as of the period's exit — the session's open or close, as the test exits — so a point every session, its `ts_init` at or before that exit and its `ts_event` on the session's date in the clock's zone, which a table stamped at midnight UTC on its date is not west of Greenwich; `latency_ms`, how long before the entry the decision is made; and, optional, `mde_power`, and `benchmark: hold`, under `circular` only (exit 3 under `sign_flip`), which sets every cell's positions against buying its follower and keeping it as well and has a verdict judge the cell by that (`condition.hold` below). The null's key is `null_by` and never `null`, which YAML reads as a key that is no value, and a file spelling it so is refused by that key's place (exit 3). Each cell is `condition/<test>/<follower>/<null_by>`, and two measures making one key are refused, so one set of tests can be measured once under each null) |
 | `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a cell that trades — `response` or `catch_up` — `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`, both stated whatever the measures; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3). A `condition` cell trades too, and is judged on its positions' margin and events a day, and on its `mean`, which must be above zero: its p ranks |t| and so is two-sided, and its `mean` is positive when the effect is on the side the test declares, so a cell whose p clears `alpha` with its `mean` at or under zero fails, `mean … bp is against the declared side` — over a hold of several sessions a round trip's gross is mostly the follower's drift, so the margin alone does not catch it; a cell of a measure that declares `benchmark: hold` is judged by the hold in place of its contrast's p and mean, and needs its `condition.hold.p` and `p_above_hold` both at or under `alpha`, failing as `p … against random timing above alpha …` or `p … that its Sharpe … beats the hold's … above alpha …`; its null's own floor refuses an `alpha` below 2^(1 − J) over the J blocks of `block` sessions in `min_sessions`, or under `circular` below 1/`min_sessions`, the floor of a family of `min_sessions` sessions — the fewest a cell is judged on, so the worst case: a family holding more has a lower one |
-| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis |
+| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis. An `orders_per_minute` prices nothing a screen measures, and `kanso screen draft` carries it into the hypothesis as stated |
 
 Each parameter of a measure has the range the measure library declares, and `kanso screen
 validate` refuses one outside it (exit 3):
@@ -2094,6 +2376,7 @@ The lane directories, and the only place research edits anything.
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
+runs/daemon.drains         the same pid, written by a supervisor that answers `research stop --drain`
 runs/<child>.<pid>.lock    held by a lane or the monitor, named for it and its pid, while it lives
 runs/<child>.<pid>.work    held by it and by every card it starts, until the last of them exits
 runs/daemon.log            whatever the daemon and its children write to a stream
@@ -2136,7 +2419,8 @@ ends lets it go: the card in flight is killed within a second and recorded nowhe
 lane takes the next hypothesis without recording a failure. `kanso research stop` removes
 neither: it signals the daemon, waits for it to go and leaves every active run and every lane
 directory exactly where they are, so the next `start` resumes them. Stopping is meant to be
-cheap.
+cheap. `kanso research stop --drain` removes neither as well, and kills nothing: each lane's
+card in flight runs to its end and is recorded before the lane stops.
 
 The pid file is also the lock:
 
@@ -2435,6 +2719,25 @@ leaves nothing in `sessions/`.
 instant tolerance a digest cannot honour — and what a reader opens to find where two paths
 parted. They are what a session costs: 15 KB to 13 MB a session on the same two workspaces,
 by how often the strategy trades.
+
+**Under a stated rate a replay session counts its commands too.** When the venue model it
+runs under states `costs.orders_per_minute`, `commands` in `session.yaml` is what the strategy
+sent on that path — `submits`, `modifies`, `cancels`, and `peak_60s` and `p99_60s`, the
+busiest 60 s of the data clock — and the `refused_submits` and `refused_modifies` the rate
+dropped unsent, counted as a card counts them. `kanso replay parity` carries each path's as
+`node_commands` and `engine_commands` and judges them after the intents: both paths count a
+command where the strategy decides to send it, at the instants both reach alike — which is
+what lets one bucket hold one strategy to one rate on both — and under a rate what one path
+spent decides what it may send next, so two that counted or dropped differently diverge at
+`commands`, the counts, the dropped among them, at any tolerance and the busiest 60 s at
+zero. Where no layer states the rate, the broker's declaration included, a session records
+none, as one an earlier kanso wrote has none, and parity judges the two paths on their
+streams and their intents alone, as it did before kanso counted: a sleeve whose two paths
+already fill apart, and so cancel apart, keeps the verdict it had. Where neither session
+recorded any, `--json` carries neither field, and a `parity_replay` gate's evidence — and the
+certificate that holds it — is written as it was before kanso counted; and a session that
+recorded none is printed by `kanso replay run --json` and `kanso replay show --json` with no
+`commands` field, as it was before.
 
 A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
 stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a

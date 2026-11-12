@@ -1,0 +1,27 @@
+{
+ "status": "OK",
+ "request_id": "66e4c3c4ab0e4b5d84791200f3c7a793",
+ "results": [
+  {
+   "active": true,
+   "date": "2026-10-28",
+   "days_to_maturity": 1483,
+   "first_trade_date": "2019-11-21",
+   "last_trade_date": "2030-11-20",
+   "max_order_quantity": 2999,
+   "min_order_quantity": 1,
+   "name": "CLZ30 Future",
+   "product_code": "CL",
+   "settlement_date": "2030-11-20",
+   "settlement_tick_size": 0.01,
+   "spread_tick_size": 0.01,
+   "ticker": "CLZ30",
+   "trade_tick_size": 0.01,
+   "trading_venue": "XNYM",
+   "type": "single",
+   "group_code": "CL",
+   "provider_id": "XS7M3X6ZWAQL",
+   "provider_product_id": "J6RPLCCJNZSE"
+  }
+ ]
+}

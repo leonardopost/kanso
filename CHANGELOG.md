@@ -11,7 +11,7 @@ One line per user-visible change, newest release first. The format is the one
 - **Takers sent into one quote share the size it shows.** A taker takes what the quote in force shows less what the sleeve's earlier takers took from it; a market order past what is left walks one increment past the touch, and a taker's take at the touch cuts the size ahead of the sleeve's own resting orders there.
 - **A print its terms mark not lit fills no resting order and moves no queue.** New built-in custom type `print_terms` (a print's exchange and condition codes, and `lit`) and loader `massive_print_terms`, which reads the rows `massive_trades` keeps; `csv_parquet` loads the type too. A print with no terms is read as lit, and a run reads terms only where its snapshot pins them, so terms loaded after a snapshot move no run pinned to it.
 - **`research begin` names each name whose prints it reads without terms** under a print rule, on a `prints` line and as `prints_without_terms` under `--json` and on `run_begun`.
-- A stage's live feed carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 235).
+- A stage's live feed carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 255).
 - Skill `kanso-hypothesis` says so; run `kanso skills sync`. The `hypothesis.yaml`, `portfolio.yaml` and `program.md` templates say so too.
 
 ## v0.20.0 — 2026-10-26

@@ -875,7 +875,7 @@ def execute_book(
     The whole window is held in this process, as a stage node holds its own.
     """
     from kanso.nautilus.cross_section import closed, deliver_from, ordered, warm
-    from kanso.nautilus.node import _Engine, _group_key, _StrategyView, agree
+    from kanso.nautilus.node import _Engine, _group_key, _reconfigured, _StrategyView, agree
     from kanso.nautilus.venue import venue_config
 
     _refuse_members(book, members)
@@ -922,7 +922,7 @@ def execute_book(
         strategies = []
         for index, member in enumerate(order):
             cls, config = backtest._sleeve(member.request)
-            config = type(config)(**{**config.dict(), "order_id_tag": f"{index:03d}"})
+            config = _reconfigured(config, order_id_tag=f"{index:03d}")
             strategy = cls(config=config)
             strategy._hold_until_cross_section = True
             deliver_from(strategy, member.request.delivered[0])

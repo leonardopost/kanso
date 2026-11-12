@@ -46,6 +46,7 @@ from kanso.schemas.base import (
     NonEmpty,
     Sha256,
 )
+from kanso.schemas.duration import Duration
 from kanso.schemas.venue import VenueModel
 
 CardStatus = Literal["keep", "discard", "crash", "redundant", "runner_up"]
@@ -97,10 +98,14 @@ DIGEST_COLUMNS: Final = (
     "gross_bps_per_session",
     "cost_bps_per_session",
     "net_bps_per_session",
+    "first_fill_s",
+    "last_fill_s",
+    "active_s",
 )
 """The digest's numbers a `results.tsv` row carries after `desc`: appended rather than
 inserted, so a reader that takes the first nine columns by position reads what it always
-read."""
+read — and when in its periods a card filled after the twelve that came before it, for the
+same reason."""
 
 RESULTS_COLUMNS: Final = (
     "sha7",
@@ -121,20 +126,83 @@ Share = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Positive = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
+class Commands(KansoModel):
+    """How fast a sleeve sent its orders: what it sent of each kind, and how many it sent in
+    the busiest 60 s of the data clock.
+
+    Counted by `kanso.nautilus.rate.Tally` as the sleeve sends them, on both code paths: a
+    submit per order, a modify per modify the engine sends, a cancel per order cancelled, each
+    at the data-clock instant the sleeve sent it. A command is what the sleeve asks of the
+    venue: an order the engine's emulator holds is counted when the strategy submits it, and
+    its cancel when the strategy sends it, though the emulator sends the venue nothing while it
+    holds the order and sends the order itself, uncounted, when it releases it. `peak_60s` is
+    the most commands sent in the 60 s ending at any one of them, that one and every other sent
+    at the same instant included, and `p99_60s` the 99th percentile of that count over every
+    command, by nearest rank — so 99 in 100 of the sleeve's commands were sent in a minute
+    holding no more than it. Both are zero for a sleeve that sent nothing.
+
+    `refused_submits` and `refused_modifies` are what the sleeve dropped unsent under a stated
+    `costs.orders_per_minute` because no token was available to them — the bucket holding
+    fewer tokens than they cost, an entry's list one for each of its orders, all or none, or a
+    cancel waiting for its tokens or an exit owed for want of a token waiting for one, which no
+    entry or modify takes before it — the run
+    going on past them: a submit per order of an entry — every order of an entry's list — and
+    a modify, the order it would have moved staying as it was. They were never sent, so they
+    are in none of the counts above and in no minute. Both are zero under no stated rate, and
+    for a session or a card recorded before they were kept.
+    """
+
+    submits: int = Field(default=0, ge=0)
+    modifies: int = Field(default=0, ge=0)
+    cancels: int = Field(default=0, ge=0)
+    peak_60s: int = Field(default=0, ge=0)
+    p99_60s: int = Field(default=0, ge=0)
+    refused_submits: int = Field(default=0, ge=0)
+    refused_modifies: int = Field(default=0, ge=0)
+
+    @property
+    def sent(self) -> int:
+        """Every command sent, of every kind; the refused ones were not."""
+        return self.submits + self.modifies + self.cancels
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Commands:
+        if self.p99_60s > self.peak_60s:
+            raise ValueError(
+                f"p99_60s: {self.p99_60s} is above the peak {self.peak_60s}, and a percentile "
+                "of the counts is never above the largest of them"
+            )
+        if self.peak_60s > self.sent:
+            raise ValueError(
+                f"peak_60s: {self.peak_60s} commands in 60 s, of {self.sent} sent in all"
+            )
+        if (self.p99_60s == 0) != (self.sent == 0):
+            raise ValueError(
+                "p99_60s: a sleeve that sent a command sent at least one in the 60 s ending "
+                "at it, and one that sent none sent none in any"
+            )
+        return self
+
+
 class CardDigest(KansoModel):
-    """What a card's trades did: how often it traded, how it filled, and what each trade and
-    each session earned before and after costs.
+    """What a card's trades did: how often it traded, how it filled, when in its return
+    periods it filled, and what each trade and each session earned before and after costs.
 
     Computed by `kanso.criteria.digest` from the run the card measured — its fills, its
-    closed trades, its return series — and the orders it submitted, once, in the lane, and
-    recorded with the card. Per trade is in basis points of the position opened, over the
-    closed trades with a notional, as the per-trade objective reads them; per session is in
-    basis points of the capital, over the UTC days the run struck a period end in. Gross is
+    closed trades, its return series — the orders it submitted and the first point it was
+    handed in each return period, once, in the lane, and recorded with the card. Per trade
+    is in basis points of the position opened, over the closed trades with a notional, as
+    the per-trade objective reads them; per session is in basis points of the capital, over
+    the UTC days the run struck a period end in. Gross is
     before fill costs and net after, so gross less cost is net in both; funding, which is a
     payment on what was held and not a fill cost, stays in gross. A number that has nothing
     to be read off — a rate with no trade, a share with no fill, the error of an edge whose
     trades closed in fewer than two periods, which an error read period by period reads as
     zero whatever they did — is `None`, never zero.
+
+    `commands` is how fast the card's strategy sent its orders (`Commands`), read off the run
+    beside its fills, with what a stated order rate dropped unsent; `None` for a card recorded
+    before cards kept it. It is not among the `results.tsv` columns.
     """
 
     sessions: int = Field(ge=0)
@@ -144,6 +212,17 @@ class CardDigest(KansoModel):
     median_hold_s: Positive | None = None
     maker_share: Share | None = None
     fill_ratio: Positive | None = None
+    period: Duration | None = None
+    filled_periods: int | None = Field(default=None, ge=0)
+    """How many of the run's return periods it filled in — each `period` long, cut from the
+    window's first midnight (`kanso.criteria.digest`) — and over them the lower median of the
+    seconds from a period's first point to its first fill (`first_fill_s`) and to its last
+    (`last_fill_s`), and from its first fill to its last (`active_s`), which are `None` when
+    no period was filled in. All five are `None` on a digest recorded before they were kept,
+    and on one of a run whose first points nothing noted."""
+    first_fill_s: Positive | None = None
+    last_fill_s: Positive | None = None
+    active_s: Positive | None = None
     gross_bps_per_trade: Bps | None = None
     cost_bps_per_trade: Bps | None = None
     net_bps_per_trade: Bps | None = None
@@ -151,6 +230,7 @@ class CardDigest(KansoModel):
     gross_bps_per_session: Bps | None = None
     cost_bps_per_session: Bps | None = None
     net_bps_per_session: Bps | None = None
+    commands: Commands | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> CardDigest:
@@ -189,6 +269,50 @@ class CardDigest(KansoModel):
                 scale = max(1.0, abs(gross), abs(cost), abs(net))
                 if not isclose(gross - cost, net, rel_tol=0.0, abs_tol=1e-9 * scale):
                     raise ValueError(f"gross: {gross} less the cost {cost} is not the net {net}")
+        return self._timed()
+
+    def _timed(self) -> CardDigest:
+        """When in its periods the run filled is read off the periods it filled in: stated
+        with their count and their length or not at all, a period for each fill at most, the
+        offsets exactly when one was filled in, and a period's last fill neither before its
+        first nor nearer its first point than the span from its first fill — which their lower
+        medians inherit, since each is the same middle of a list that is no smaller element by
+        element."""
+        if (self.period is None) != (self.filled_periods is None):
+            raise ValueError(
+                "period: the periods a run filled in are counted and their length is stated, "
+                "both or neither"
+            )
+        timing = (self.first_fill_s, self.last_fill_s, self.active_s)
+        if self.filled_periods is None:
+            if any(value is not None for value in timing):
+                raise ValueError(
+                    "filled_periods: when a run filled is read off the periods it filled in, so "
+                    "it is stated with their count or not at all"
+                )
+            return self
+        if (self.filled_periods == 0) != (self.fills == 0) or self.filled_periods > self.fills:
+            raise ValueError(
+                f"filled_periods: {self.filled_periods} period(s) filled in by {self.fills} "
+                "fill(s); every fill lies in one period, and a period is filled in by a fill"
+            )
+        if any((value is None) != (self.filled_periods == 0) for value in timing):
+            raise ValueError(
+                "first_fill_s: the offsets are stated together, exactly when a period was filled in"
+            )
+        first, last, active = timing
+        if first is None or last is None or active is None:
+            return self
+        if last < first:
+            raise ValueError(
+                f"last_fill_s: {last} is before the first fill's offset {first}, and a period's "
+                "last fill is at or after its first"
+            )
+        if active > last:
+            raise ValueError(
+                f"active_s: {active} is longer than the last fill's offset {last}, and a "
+                "period's fills span no more than its first point to its last fill"
+            )
         return self
 
     def cells(self) -> tuple[str, ...]:
@@ -232,6 +356,10 @@ class RunRecord(KansoModel):
     card_budget_s: float = Field(gt=0)
     baseline_wall_s: float = Field(ge=0)
     baseline_peak_mem_gb: float = Field(ge=0)
+    budget_sha: Sha256 | None = None
+    """The card `card_budget_s` was struck from: the run's first card that traded — the
+    baseline, when it did. `None` while no card of the run has traded, and the budget is the
+    baseline's."""
     best_sha: Sha256 | None = None
     best_metric: float | None = None
     started_at: datetime

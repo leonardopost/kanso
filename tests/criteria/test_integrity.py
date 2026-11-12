@@ -24,6 +24,7 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
     DENIED_UNDER_DEPTH,
+    RATE_MARKS,
     SEND_MARKS,
     check,
     clashes,
@@ -36,6 +37,7 @@ from kanso.criteria.integrity import (
 )
 from kanso.nautilus.strategy import KansoModifier, KansoStrategy
 from kanso.workspace import PACKAGE_ROOT
+from tests.own_bar_size import DECLARING, TOP_LEVEL
 
 ALLOWED_SOURCES = [
     "import numpy as np",
@@ -816,6 +818,108 @@ def test_a_class_reaching_the_base_by_any_route_is_held_to_it(source: str) -> No
     assert "'_close' belongs to KansoStrategy" in problem
 
 
+@pytest.mark.parametrize(
+    ("declared", "line"),
+    [
+        ('bar_resolution: str = "5m"', 4),
+        ("bar_resolution: str | None", 4),
+        ('bar_resolution = "5m"', 4),
+        ('bar_resolution, every = "5m", 6', 4),
+        ('[every, bar_resolution] = [6, "5m"]', 4),
+        ('*every, bar_resolution = 6, "5m"', 4),
+        ('if True:\n        bar_resolution: str = "5m"', 5),
+        ('for bar_resolution in ("5m",):\n        pass', 4),
+        ('try:\n        bar_resolution = "5m"\n    except ValueError:\n        pass', 5),
+        ('every = (bar_resolution := "5m")', 4),
+        ('@property\n    def bar_resolution(self) -> str:\n        return "5m"', 5),
+        ("from math import pi as bar_resolution", 4),
+        ('match "5m":\n        case bar_resolution:\n            pass', 5),
+        ('match {"k": 5}:\n        case {**bar_resolution}:\n            pass', 5),
+        ('def size(self, every=(bar_resolution := "5m")) -> str:\n        return every', 4),
+        ("class Leg((bar_resolution := object)):\n        pass", 4),
+    ],
+    ids=[
+        "annotated",
+        "annotation alone",
+        "assigned",
+        "tuple assign",
+        "list assign",
+        "starred",
+        "nested if",
+        "for target",
+        "nested try",
+        "walrus",
+        "property",
+        "import",
+        "match capture",
+        "match mapping rest",
+        "a default's walrus",
+        "a nested class's base",
+    ],
+)
+def test_a_config_declaring_the_bar_size_kanso_sets_is_refused(declared: str, line: int) -> None:
+    """A version's manifest carries `bar_resolution` only where the hypothesis states one, so a
+    Config's own default would set a stage's bar size and not a card's, and a binding that
+    hides the field would be what the strategy reads of it on both: a binding anywhere in the
+    class's own scope is refused."""
+    source = (
+        "from kanso.nautilus.strategy import KansoConfig as Base, KansoStrategy\n"
+        "class Config(Base):\n"
+        "    lookback: int = 60\n"
+        f"    {declared}\n"
+        "class Strategy(KansoStrategy):\n"
+        "    config_cls = Config\n"
+    )
+
+    assert scan(source) == [
+        f"line {line}: 'bar_resolution' is a field kanso sets on KansoConfig from the "
+        "hypothesis, and a Config may not bind it: a value bound there would stand in for the "
+        "file's on a stage, or, where it hides the field, in what the strategy reads of it; "
+        "rename yours"
+    ]
+
+
+@DECLARING
+def test_the_scan_reads_a_bar_size_default_in_a_top_level_class_body_alone(config: bytes) -> None:
+    """The scan reads the body of a top-level class reaching `KansoConfig` as the base classes
+    are reached, and no other: a class under an `if`, one deriving from a base held under
+    another name or read off `KansoStrategy.config_cls`, and one `type()` builds give the field a
+    default it does not see. The runner refuses all five where it builds the class
+    (`kanso.nautilus.strategy.refuse_own_bar_resolution`)."""
+    source = (
+        b"from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
+        + config
+        + b"class Strategy(KansoStrategy):\n    config_cls = Config\n"
+    )
+
+    assert len(scan(source.decode())) == (1 if config == TOP_LEVEL else 0)
+
+
+def test_a_config_may_declare_fields_of_its_own_and_another_class_any_name() -> None:
+    """What a function's, a lambda's or a nested class's body binds, and a comprehension's
+    targets, bind in a scope of their own, never on the Config."""
+    source = (
+        "from kanso.nautilus.strategy import KansoConfig, KansoStrategy\n"
+        "class Leg:\n"
+        "    bar_resolution = '5m'\n"
+        "class Config(KansoConfig):\n"
+        "    lookback: int = 60\n"
+        "    fixed_params: tuple[str, ...] = ('lookback',)\n"
+        "    sizes = [bar_resolution for bar_resolution in ('5m',)]\n"
+        "    pick = lambda self, bar_resolution='5m': bar_resolution\n"
+        "    peek = lambda self: (bar_resolution := '5m')\n"
+        "    class Inner:\n"
+        "        bar_resolution = '5m'\n"
+        "    def size(self) -> str:\n"
+        "        bar_resolution = '5m'\n"
+        "        return bar_resolution\n"
+        "class Strategy(KansoStrategy):\n"
+        "    config_cls = Config\n"
+    )
+
+    assert scan(source) == []
+
+
 def test_a_file_that_does_not_parse_has_no_clash_to_name_and_scan_says_why() -> None:
     source = f"{SLEEVE_HEAD}    def on_start(self:\n        self._close = 3\n"
 
@@ -912,6 +1016,36 @@ def test_a_sleeve_reaching_the_harness_s_own_send_is_refused_sized_or_not(name: 
         (problem,) = (p for p in scan(source, sized=sized) if f"'.{name}'" in p)
         assert problem.startswith(f"line 4: attribute '.{name}' is denied, because it is the ")
         assert "submit_entry(instrument_id, side) or submit_exit(instrument_id)" in problem
+
+
+@pytest.mark.parametrize("name", sorted(RATE_MARKS))
+def test_a_sleeve_reaching_what_holds_it_to_its_order_rate_is_refused_sized_or_not(
+    name: str,
+) -> None:
+    """Called or read by a strategy, the lift, the spend, the bucket or the tally would let it
+    send past the account's rate, or rewrite what it counted; only a stage's flatten lifts
+    it. A modifier, whose base holds no rate, keeps the names for its own."""
+    for source in (
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        self.{name}()\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        go(self)\n"
+        f"def go(strategy):\n    strategy.{name}\n",
+    ):
+        for sized in (False, True):
+            (problem,) = (p for p in scan(source, sized=sized) if f"'.{name}'" in p)
+            assert f"attribute '.{name}' is denied, because it is the harness's hold" in problem
+            assert "costs.orders_per_minute" in problem
+
+    own = f"{MODIFIER_HEAD}    def evaluate(self, ctx):\n        return self.{name}\n"
+    assert not [p for p in scan(own) if f"'.{name}'" in p]
+
+
+def test_what_holds_a_sleeve_to_its_order_rate_is_the_base_s_own() -> None:
+    """Every name the rate rule denies is one the base defines or sets, so renaming one in the
+    base cannot leave a strategy reaching it unrefused."""
+    strategy = KansoStrategy()
+
+    assert all(hasattr(strategy, name) for name in RATE_MARKS)
+    assert owned(KansoStrategy) >= RATE_MARKS
 
 
 @pytest.mark.parametrize(
