@@ -587,14 +587,34 @@ def test_the_instruction_names_every_number_a_recent_card_s_digest_carries() -> 
 
 def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None:
     """A signature's mark is per session — the instrument, the side, and whether it was
-    still on at the end — so the same holding moved to another hour of the same session
-    is the same signature. The instruction told the proposer to change the time of day to
-    be in or out of the market, which is advice the rule refuses again, and a refusal the
-    proposer was never told about is the wasted ladder this whole paragraph exists for.
+    still on at the end — and, under a horizon shorter than a day, the hours of the session
+    it was on in. So the same holding moved to another hour is the same signature for a
+    daily hypothesis and another one for an intraday one, and the proposer is told which:
+    an instruction that once told every proposer to change the time of day gave advice the
+    rule refused again, and a refusal the proposer was never told about is the wasted ladder
+    this whole paragraph exists for.
     """
     said = INSTRUCTIONS["propose"]
     assert "a different time of day to be in or out of the market" not in said
-    assert "The reading is by session" in said
+    assert "The reading is by session, and by the hour as well only under a horizon" in said
+    assert "another hour of the session makes it another book" in said
+
+
+def test_the_instruction_says_from_where_a_card_s_timing_is_read() -> None:
+    """An offset is from somewhere: the proposer is told each period is `period` long and cut
+    from midnight UTC, that an offset is seconds into a period from its first point, that
+    `active_s` spans a period's first fill to its last, and that a burst straddling a period's
+    boundary reads as the whole period."""
+    said = INSTRUCTIONS["propose"]
+    for name in ("period", "filled_periods", "first_fill_s", "last_fill_s", "active_s"):
+        assert f"`{name}`" in said
+    assert "each `period` long and cut from midnight UTC whatever the venue" in said
+    assert "the median seconds into each period from its first point" in said
+    assert "`active_s` is the median seconds from a period's first fill to its last" in said
+    assert (
+        "A burst that straddles a period's boundary, as a hold across 00:00Z does on a 24 h "
+        "name at a daily period, reads as the whole period." in said
+    )
 
 
 def test_the_phase_is_a_rule_of_misses_and_it_cycles() -> None:
@@ -692,8 +712,8 @@ def test_each_recent_card_that_ran_shows_its_trades_and_its_edge_per_trade(
 ) -> None:
     """A metric alone cannot say whether it moved because each trade earned more or because
     the strategy traded less, so a card that ran reaches the proposer with its trade count
-    and its digest: the same numbers the card recorded. A crash ran to no result and
-    carries neither a digest nor a trade."""
+    and its digest: the same numbers the card recorded, and the return period its timing is
+    read in. A crash ran to no result and carries neither a digest nor a trade."""
     scripted(ws, propose=[proposal("revert"), proposal("boom"), proposal("weak")])
 
     driver.run(ws, store, prepared_hyp, cards=3)
@@ -705,6 +725,7 @@ def test_each_recent_card_that_ran_shows_its_trades_and_its_edge_per_trade(
     assert kept.n_trades > 0 and kept.digest is not None
     assert shown[1]["digest"]["net_bps_per_trade"] == round(kept.digest.net_bps_per_trade, 4)
     assert shown[1]["digest"]["sessions"] == kept.digest.sessions
+    assert shown[1]["digest"]["period"] == ws.config.research.return_period == "1d"
     assert set(shown[1]["digest"]) == set(type(kept.digest).model_fields)
     assert shown[0]["digest"]["net_bps_per_trade"] is None, "the flat baseline closed nothing"
     assert "digest" not in shown[2] and crashed.digest is None

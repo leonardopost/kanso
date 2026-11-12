@@ -183,6 +183,12 @@ commented out, header included, because its two keys — `reference`, naming the
 resolves instruments (default `none`), and `adjusted` (default `false`) — are the defaults
 until a vendor is configured, and the table you then append is not declared twice.
 
+`[research] baseline_budget_s` is the wall a baseline card may take. A lane whose baseline was
+killed for it passes the hypothesis over until it, or another of what that baseline ran on,
+moves (`docs/cli.md`, The daemon and the queue), and a lane reads `kanso.toml` when it starts,
+so a budget raised under a running daemon reaches its lanes after `kanso research stop` and
+`kanso research start`.
+
 `[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
 many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.
@@ -317,7 +323,8 @@ already moved past it would stamp its own older version over the newer one and l
 `state.db` whose schema no `kanso migrate` could reach again.
 
 **What grows, and the one thing kanso gives back.** Every judged card stores its book — what
-it held, session by session, and the number it earned — so the redundancy rule can refuse
+it held, session by session and, under a horizon shorter than a day, hour by hour within
+each, and the number it earned — so the redundancy rule can refuse
 the next spelling of the same bets (`docs/concepts.md`). A book is read only under the pins
 of the run asking, and nothing deletes one as research moves on, so the books stored under a
 file since re-pinned, an earlier kanso, a snapshot a newer run moved past or a retired
@@ -533,7 +540,24 @@ equity curve strikes at each period end, and one a strategy may size from. Readi
 bar costs what the sleeve's orders gained since the last read, however long they have lived,
 so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
 does not save memory either, since the engine keeps every order's events for the run
-(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
+(`docs/concepts.md`).
+`self.balance_at_quote` is that balance with each open position marked at the mid of its
+name's last quote instead of its last print: the number to hold a strategy's own daily stop or
+target to, since a print outside a valid quote moves `balance` and not it. Under `depth` a
+name's last quote is level one of the harness's copy of its book, which `balance` never marks
+at; otherwise, where every name held last had a valid quote it is `balance` exactly. A name
+whose last quote is not `ask > bid > 0` — locked, crossed or one-sided, as level one is under
+`depth` while a side of the book is empty — or that has none, a bar sleeve's among them, is
+marked at its last trade or bar close and never at an invalid quote's mid, with neither at its
+cost, so a name the sleeve is handed no quotes of is marked
+as `balance` marks it. It is the mid, not the bid of a long or the ask of a short, so a flatten
+at market still pays half the spread past it; nothing kanso sizes or measures reads it. A
+read books the fills the venue has made since the last read, as a read of `balance` does, and
+nothing else: read where a sleeve reads `balance` it changes nothing the sleeve books, and read
+on a point where it reads nothing else it books them there rather than at the next read, as
+`balance` read there would, which can add the same sums in another order and leave the cash a
+unit in its last place apart.
+`strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
 the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
@@ -782,8 +806,9 @@ an instant and never later than it: at the change itself, stamped with it, befor
 point of the feed. Neither is delayed again: an order sent from either reaches the venue
 `costs.latency_ms` after the point that carried the call, as every order does, because the
 latency is the whole round trip, feed and order together. The quote is a signal and moves
-nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
-`spread: quotes` has no quote series to read. What else the strategy may not touch under the
+nothing but `balance_at_quote`: `last_quote` and `last_price` do not read it, `balance` and
+the card mark no position at it, and `spread: quotes` has no quote series to read. What else
+the strategy may not touch under the
 key — the engine's own book subscriptions, beside the message bus, which no strategy may
 touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book
 at all, neither the view nor a subscription of its own — asking for one is refused, and
@@ -1352,7 +1377,7 @@ tokens or an exit owed for want of a token waits for one (below). Then:
   kanso owes, and one is owed a side of a name, so a second `submit_exit` asked past the rate
   while the first is still owed replaces it rather than adding to it, unless the first was an
   exit rule's, which its host's ask neither replaces nor adds to: asked twice for half the
-  position, the rate owes one half, and the other stays held (`docs/backlog.md` row 234);
+  position, the rate owes one half, and the other stays held (`docs/backlog.md` row 237);
 - **any other exit is refused** — one the strategy built itself, at market or at a limit,
   good till cancelled, for the day, immediate-or-cancel, fill-or-kill or good till a date, a
   stop, a post-only or part-displayed limit, an order sized in the quote's currency, an
@@ -1433,7 +1458,7 @@ holds where the two paths already part: a cancel of an order the engine was neve
 held back, as the cancel of any order not yet handed to the venue is, and sent once the
 strategy submits that same order, which the research engine answers as not found, the order
 resting and filling, and a node obeys, cancelling it — so a card fills what a replay's or a
-stage's node does not (`docs/backlog.md` row 233). The handling above, where such a cancel is
+stage's node does not (`docs/backlog.md` row 236). The handling above, where such a cancel is
 neither sent nor held, is a stated rate's.
 
 **A print at a resting limit's price fills it by its own size**, and no more: a buy of 320
@@ -1561,10 +1586,12 @@ never loses a row. Deleting it loses nothing. Its columns are `sha7 metric metri
 n_trades wall_s peak_mem_gb status desc`, then the card's digest — `trades_per_session
 hit_rate median_hold_s maker_share fill_ratio gross_bps_per_trade cost_bps_per_trade
 net_bps_per_trade net_bps_per_trade_se gross_bps_per_session cost_bps_per_session
-net_bps_per_session`, what its trades did (`docs/concepts.md`, Card) — appended after `desc` so
-that the first nine columns sit where they always sat. A digest number with nothing to be read
-off, and every digest cell of a crash, of a card refused before or during its backtest and of
-a card recorded before 0.17, is empty.
+net_bps_per_session`, what its trades did, then `first_fill_s last_fill_s active_s`, when in
+its return periods it filled (`docs/concepts.md`, Card) — appended after `desc` so that the
+first nine columns sit where they always sat, and the timing after the twelve that came before
+it. A digest number with nothing to be read off, and every digest cell of a crash, of a card
+refused before or during its backtest and of a card recorded before 0.17, is empty; so are the
+three timing cells of a card recorded before the digest timed its fills.
 
 ## `screens/<id>/`
 
@@ -2216,6 +2243,7 @@ The lane directories, and the only place research edits anything.
 runs/<lane>/<hyp>/         hypothesis.yaml, program.md, strategy.py — and nothing else
 runs/<lane>/<hyp>/.card/   a card's report and output, only while the card runs
 runs/daemon.pid            the supervisor's pid, and its lock
+runs/daemon.drains         the same pid, written by a supervisor that answers `research stop --drain`
 runs/<child>.<pid>.lock    held by a lane or the monitor, named for it and its pid, while it lives
 runs/<child>.<pid>.work    held by it and by every card it starts, until the last of them exits
 runs/daemon.log            whatever the daemon and its children write to a stream
@@ -2258,7 +2286,8 @@ ends lets it go: the card in flight is killed within a second and recorded nowhe
 lane takes the next hypothesis without recording a failure. `kanso research stop` removes
 neither: it signals the daemon, waits for it to go and leaves every active run and every lane
 directory exactly where they are, so the next `start` resumes them. Stopping is meant to be
-cheap.
+cheap. `kanso research stop --drain` removes neither as well, and kills nothing: each lane's
+card in flight runs to its end and is recorded before the lane stops.
 
 The pid file is also the lock:
 

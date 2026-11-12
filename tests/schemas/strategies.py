@@ -305,6 +305,7 @@ def run_records(draw: st.DrawFn) -> RunRecord:
         card_budget_s=draw(POSITIVE),
         baseline_wall_s=draw(NON_NEGATIVE),
         baseline_peak_mem_gb=draw(NON_NEGATIVE),
+        budget_sha=draw(st.none() | SHAS),
         best_sha=best,
         best_metric=draw(FINITE) if best else None,
         started_at=started,
@@ -346,12 +347,18 @@ def commands(draw: st.DrawFn) -> Commands:
 def digests(draw: st.DrawFn) -> CardDigest:
     """A card digest: per-trade numbers all present or all absent — the edge's error absent
     alone where the trades closed in one period — per-session numbers present exactly when a
-    session was measured, and gross the net plus the cost."""
+    session was measured, and gross the net plus the cost; and when in its periods it filled,
+    absent from one recorded before that was kept, else their length, a period for each fill
+    at most and the offsets exactly when a period was filled in, the last never before the
+    first nor short of the span from a first fill to a last."""
     sessions = draw(st.integers(0, 500))
     fills = draw(st.integers(0, 10000))
     traded = draw(st.booleans())
     net, cost = draw(FINITE), draw(NON_NEGATIVE)
     net_session, cost_session = draw(FINITE), draw(NON_NEGATIVE)
+    filled = draw(st.none() | st.integers(min(fills, 1), fills))
+    first = draw(NON_NEGATIVE)
+    last = first + draw(NON_NEGATIVE)
     return CardDigest(
         sessions=sessions,
         fills=fills,
@@ -360,6 +367,11 @@ def digests(draw: st.DrawFn) -> CardDigest:
         median_hold_s=draw(NON_NEGATIVE) if traded else None,
         maker_share=draw(st.none() | PROBABILITY) if fills else None,
         fill_ratio=draw(st.none() | NON_NEGATIVE),
+        period=None if filled is None else draw(st.sampled_from(("1d", "1h", "90s"))),
+        filled_periods=filled,
+        first_fill_s=first if filled else None,
+        last_fill_s=last if filled else None,
+        active_s=draw(st.floats(0, last)) if filled else None,
         gross_bps_per_trade=net + cost if traded else None,
         cost_bps_per_trade=cost if traded else None,
         net_bps_per_trade=net if traded else None,

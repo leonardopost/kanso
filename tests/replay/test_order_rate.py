@@ -1693,7 +1693,7 @@ def test_with_no_rate_a_cancel_of_an_order_never_sent_is_held_and_each_path_does
     engine answers it as not found, so on a card the order rests and fills, and an exit behind
     it is cut by it, and owed what it cut; a node obeys it and cancels the order, so the exit
     behind it goes whole at once. The two paths part there, as they did before — pinned as
-    they are, since a rate that is not stated changes nothing (`docs/backlog.md` row 233) —
+    they are, since a rate that is not stated changes nothing (`docs/backlog.md` row 236) —
     where under a stated rate the cancel is neither sent nor held and both agree (below)."""
     source, levels = NEVER_SENT[built]
     groups: list[tuple[object, ...]] = [tuple(quoted(40, levels))]
