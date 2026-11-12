@@ -23,7 +23,7 @@ from kanso.hyp import STRATEGY_FILE
 from kanso.models import INSTRUCTIONS, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
-from kanso.schemas import CardDigest
+from kanso.schemas import CardDigest, Commands
 from kanso.schemas.models import ROUTING_DEFAULTS
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -577,10 +577,12 @@ def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
 
 
 def test_the_instruction_names_every_number_a_recent_card_s_digest_carries() -> None:
-    """A field the proposer is shown and never told the meaning of is a number it guesses at."""
+    """A field the proposer is shown and never told the meaning of is a number it guesses at,
+    the counts nested under `commands` among them."""
     said = INSTRUCTIONS["propose"]
     assert "`n_trades`" in said and "`digest`" in said
     assert [name for name in CardDigest.model_fields if f"`{name}`" not in said] == []
+    assert [name for name in Commands.model_fields if f"`{name}`" not in said] == []
 
 
 def test_the_instruction_states_the_granularity_the_signature_reads_at() -> None:

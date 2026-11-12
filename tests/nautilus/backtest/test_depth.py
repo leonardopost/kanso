@@ -594,6 +594,111 @@ def test_an_owed_exit_is_stamped_with_the_change_it_is_paid_on(request_for) -> N
     assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [3_000, 33_000]
 
 
+def test_what_the_rate_held_back_is_sent_from_the_change_and_stamped_with_it(request_for) -> None:
+    """At two a minute, with no latency, the cancel BOOK_ONLY's exit at market calls for on its
+    thirtieth view finds no token, and the exit is owed behind it; a token is back at 31.9 s, and
+    the cancel goes from the change at 32 s, after which the exit finds the bucket empty and is
+    owed for want of a token, until the next one is back at 61.9 s. No view sends either: each
+    goes from the change it is due on, once that change's views have been handled, stamped with
+    the change as an exit owed behind a cancel in flight is. So the exit is stamped with the
+    change at 62 s, not with the grid instant 100 ms before it that the view on the same change
+    carries, and with no latency fills on that change."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_ONLY, BOOK_OPEN_NS
+
+    changes, hyp = owed_exit(RESEARCH[0], shown=True, latency_ms=0.0)
+    document = hyp.model_dump(mode="json", by_alias=True)
+    document["costs"] = {**document["costs"], "orders_per_minute": 2}
+    rated = Hypothesis.model_validate(document)
+    result = run(request_for(RESEARCH, source=BOOK_ONLY, hypothesis_=rated), [tuple(changes)])
+    base = midnight_ns(RESEARCH[0]) + BOOK_OPEN_NS
+
+    assert [((intent[0] - base) // MS_NS, intent[2], intent[4]) for intent in result.intents] == [
+        (1_900, "BUY", "LIMIT"),
+        (4_900, "SELL", "LIMIT"),
+        (62_000, "SELL", "MARKET"),
+    ]
+    assert [(fill.ts_ns - base) // MS_NS for fill in result.run.fills] == [2_000, 62_000]
+    assert result.commands is not None and result.commands.cancels == 1
+
+
+VIEWED_PAST_AN_OWED_EXIT = b'''
+from nautilus_trader.model.objects import Price
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Buys at the offer on its second view and rests a buy of 10 at 9.00 on its third; exits
+    at market once on its thirtieth, and on every view after it does THEN."""
+
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_order_book_deltas(self, deltas):
+        instrument_id = deltas.instrument_id
+        self.seen += 1
+        if self.seen == 2:
+            self.submit_entry(instrument_id, "BUY", qty=100, price=10.02)
+        elif self.seen == 3:
+            self.buy = self.submit_entry(instrument_id, "BUY", qty=10, price=9.00)
+        elif self.seen == 30:
+            self.submit_exit(instrument_id)
+        elif self.seen > 30:
+            THEN
+'''
+
+PAST_AN_OWED_EXIT = {
+    "modify": "self.modify_order(self.buy, price=Price(9.0 - self.seen / 100, 2))",
+    "entry": 'self.submit_entry(instrument_id, "BUY", qty=1, price=9.00)',
+}
+"""What a view's handler asks for behind the exit: the resting buy moved to a new price, or a
+further buy of 1 resting at 9.00."""
+
+
+@pytest.mark.parametrize("then", sorted(PAST_AN_OWED_EXIT))
+def test_no_view_takes_the_token_an_exit_owed_for_want_of_one_waits_for(
+    request_for, then: str
+) -> None:
+    """At two a minute, with no latency, the entry and the resting buy empty the bucket, and the
+    exit at market asked for on the thirtieth view, with nothing to cancel, finds no token and is
+    owed for want of one. The token is back at 31.9 s, the instant of the view the change at 32 s
+    shows, and the view's handler asks for a modify or an entry on every view: while the exit
+    waits for its token neither takes it, each being dropped and counted, so the exit goes from
+    the change at 32 s and fills there, and the next token, back at 61.9 s, is the view's. Were
+    a view's command to take the token first, it would take every one that came back, and the
+    exit would never go."""
+    from tests.nautilus.backtest.test_exit_flat import BOOK_OPEN_NS
+
+    changes, hyp = owed_exit(RESEARCH[0], shown=True, latency_ms=0.0)
+    document = hyp.model_dump(mode="json", by_alias=True)
+    document["costs"] = {**document["costs"], "orders_per_minute": 2}
+    rated = Hypothesis.model_validate(document)
+    source = VIEWED_PAST_AN_OWED_EXIT.replace(b"THEN", PAST_AN_OWED_EXIT[then].encode())
+    result = run(request_for(RESEARCH, source=source, hypothesis_=rated), [tuple(changes)])
+    base = midnight_ns(RESEARCH[0]) + BOOK_OPEN_NS
+
+    assert [((intent[0] - base) // MS_NS, intent[2], intent[4]) for intent in result.intents][
+        :3
+    ] == [(1_900, "BUY", "LIMIT"), (2_900, "BUY", "LIMIT"), (32_000, "SELL", "MARKET")]
+    assert [(fill.side, (fill.ts_ns - base) // MS_NS) for fill in result.run.fills] == [
+        ("BUY", 2_000),
+        ("SELL", 32_000),
+    ]
+    assert result.commands is not None
+    counts = result.commands
+    if then == "modify":
+        assert (counts.submits, counts.modifies, counts.refused_modifies) == (3, 1, 48)
+    else:
+        assert (counts.submits, counts.refused_submits) == (4, 48)
+        assert (result.intents[3][0] - base) // MS_NS == 61_900
+
+
 def _bars(day: date, at_ms: tuple[int, ...]) -> list[Bar]:
     from kanso.nautilus.strategy import _bar_type
 

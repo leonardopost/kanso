@@ -62,6 +62,11 @@ quantity the toolbox already defines:
 
 Funding is a payment on what was held, not a fill cost, so it stays in gross and in net
 alike; a run with none of something reads `None` for what that something measures.
+
+Beside the trades it carries how fast the strategy sent its orders — what it sent of each
+kind and how many in its busiest 60 s (`kanso.schemas.Commands`) — which the run counted as
+the strategy sent them, on the data clock (`kanso.nautilus.rate.Tally`), and which is handed
+on here as it was counted.
 """
 
 from __future__ import annotations
@@ -75,7 +80,7 @@ from typing import Final
 from kanso.criteria.objectives import net_edge_bps
 from kanso.criteria.quantities import edge_bps, mean, variances_of_means
 from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, day_of
-from kanso.schemas import CardDigest
+from kanso.schemas import CardDigest, Commands
 
 Intent = tuple[int, str, str, float, str, float | None]
 """One submitted order as the runner reports it: `(ts, instrument, side, qty, type, price)`,
@@ -144,9 +149,15 @@ def session_edge(run: CardRun) -> tuple[float, float | None, int, int] | None:
     return edge, sqrt(variance), sessions, len(traded)
 
 
-def digest(run: CardRun, intents: Sequence[Intent] = (), firsts: Sequence[int] = ()) -> CardDigest:
+def digest(
+    run: CardRun,
+    intents: Sequence[Intent] = (),
+    firsts: Sequence[int] = (),
+    commands: Commands | None = None,
+) -> CardDigest:
     """Every number of the digest, read off `run`, the orders its strategy submitted and the
-    first instant of each return period it was handed (`RunResult.firsts_ns`)."""
+    first instant of each return period it was handed (`RunResult.firsts_ns`), with the
+    `commands` the run counted as they were sent."""
     traded = [t for t in run.trades if t.notional > 0]
     per_trade: dict[str, float | None] = dict.fromkeys(
         (
@@ -200,6 +211,7 @@ def digest(run: CardRun, intents: Sequence[Intent] = (), firsts: Sequence[int] =
         active_s=active,
         **per_trade,
         **per_session,
+        commands=commands,
     )
 
 

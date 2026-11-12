@@ -144,6 +144,49 @@ def test_the_program_says_the_print_rule_holds_where_nothing_states_it() -> None
     assert "a `hypothesis.yaml` that names no `limit_fill` is no sign the rule is off" in bullet
 
 
+def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_refused() -> None:
+    """The loop's strategy reads `program.md` and nothing else of the rate: it is told that an
+    entry or a modify past it is dropped and counted while the card runs on, and which digest
+    fields count them; that only an exit `submit_exit` sized is owed; and that an exit it built
+    itself refuses the card, whatever its type or time in force — the day's, a size in the
+    quote's currency and an execution algorithm named among them, where the bullet once
+    promised an exit built at market or at a good-till-cancelled limit was owed as asked."""
+    bullet = re.sub(
+        r"\s+", " ", line_with(template("program.md"), "- Under `costs.orders_per_minute`")
+    )
+
+    assert "is dropped unsent and counted" in bullet
+    assert "the card runs on" in bullet
+    assert "`refused_submits` and `refused_modifies`" in bullet
+    assert "Only an exit `submit_exit` sized is owed" in bullet
+    assert "refuses the card (`order_rate`" in bullet
+    for named in ("for the day", "sized in the quote's currency", "an execution algorithm"):
+        assert named in bullet, named
+    assert "an entry, a modify or an order list refuses the card" not in bullet
+    assert "is owed as you asked it" not in bullet
+
+
+def test_the_program_and_the_scaffold_say_an_overlay_s_closing_leg_or_clip_refuses_the_card() -> (
+    None
+):
+    """An attached construct's research reads the same `program.md`, and an overlay cannot close
+    with `submit_exit`: its leg or clip that closes past the rate refuses the card too, and the
+    remedy it is given is fewer commands or the account's own figure. The bullet keeps no order
+    among what waits beyond what the replay tests pin — it once promised that a token coming
+    back went to the owed exits and the waiting cancels before any entry — and says a second
+    ask past the rate does not replace an exit rule's."""
+    bullet = re.sub(
+        r"\s+", " ", line_with(template("program.md"), "- Under `costs.orders_per_minute`")
+    )
+    scaffold = re.sub(r"\s*#\s*", " ", template("hypothesis.yaml"))
+
+    assert "So does an overlay's leg or clip that closes" in bullet
+    assert "send fewer commands, or state the account's own figure" in bullet
+    assert "unless the first was an exit rule's" in bullet
+    assert "before any entry you send" not in bullet
+    assert "So is an overlay's leg or clip that closes: send fewer commands" in scaffold
+
+
 def uncommented_screen() -> dict[str, Any]:
     """The screen template's body with its examples uncommented: a `# key:` at the margin loses
     its marker and its space, an indented line its marker, and a line commented twice stays a

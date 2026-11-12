@@ -143,6 +143,14 @@ class BrokerAdapter(Protocol):
         `kanso doctor --check-adapters`; with no credential resolved it sends nothing."""
         ...
 
+    def requests_per_minute(self, ws: Workspace) -> int | None:
+        """The most requests a minute one of this broker's execution clients sends in this
+        workspace — the throttle every request waits on, an order's, a modify's and a
+        cancel's among them — or `None` when kanso holds its clients to no quota it reads.
+        `kanso doctor` sets it against what the sleeves on a stage may send between them
+        (`costs.orders_per_minute`); it reads configuration and sends nothing."""
+        ...
+
 
 def packaged() -> dict[str, BrokerAdapter]:
     """Every packaged broker adapter, read from the directory rather than from a list.

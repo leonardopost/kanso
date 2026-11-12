@@ -24,6 +24,7 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_STALE_BASIS,
     DENIED_UNDER_DEPTH,
+    RATE_MARKS,
     SEND_MARKS,
     check,
     clashes,
@@ -912,6 +913,36 @@ def test_a_sleeve_reaching_the_harness_s_own_send_is_refused_sized_or_not(name: 
         (problem,) = (p for p in scan(source, sized=sized) if f"'.{name}'" in p)
         assert problem.startswith(f"line 4: attribute '.{name}' is denied, because it is the ")
         assert "submit_entry(instrument_id, side) or submit_exit(instrument_id)" in problem
+
+
+@pytest.mark.parametrize("name", sorted(RATE_MARKS))
+def test_a_sleeve_reaching_what_holds_it_to_its_order_rate_is_refused_sized_or_not(
+    name: str,
+) -> None:
+    """Called or read by a strategy, the lift, the spend, the bucket or the tally would let it
+    send past the account's rate, or rewrite what it counted; only a stage's flatten lifts
+    it. A modifier, whose base holds no rate, keeps the names for its own."""
+    for source in (
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        self.{name}()\n",
+        f"{SLEEVE_HEAD}    def on_bar(self, bar):\n        go(self)\n"
+        f"def go(strategy):\n    strategy.{name}\n",
+    ):
+        for sized in (False, True):
+            (problem,) = (p for p in scan(source, sized=sized) if f"'.{name}'" in p)
+            assert f"attribute '.{name}' is denied, because it is the harness's hold" in problem
+            assert "costs.orders_per_minute" in problem
+
+    own = f"{MODIFIER_HEAD}    def evaluate(self, ctx):\n        return self.{name}\n"
+    assert not [p for p in scan(own) if f"'.{name}'" in p]
+
+
+def test_what_holds_a_sleeve_to_its_order_rate_is_the_base_s_own() -> None:
+    """Every name the rate rule denies is one the base defines or sets, so renaming one in the
+    base cannot leave a strategy reaching it unrefused."""
+    strategy = KansoStrategy()
+
+    assert all(hasattr(strategy, name) for name in RATE_MARKS)
+    assert owned(KansoStrategy) >= RATE_MARKS
 
 
 @pytest.mark.parametrize(
