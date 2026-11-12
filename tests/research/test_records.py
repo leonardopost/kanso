@@ -13,6 +13,7 @@ import pytest
 from hypothesis import given
 
 from kanso.criteria import objectives
+from kanso.criteria.objectives import difference, wf_contribution_bps
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
@@ -657,6 +658,104 @@ def test_two_intraday_books_that_share_no_name_are_told_apart_by_the_matcher(
     assert records.matched_book(store, run, stored, 97, 1.0, 0.0, UNDER) is not None, (
         "the same one is not"
     )
+
+
+HOUR_NS = 3_600 * 10**9
+
+
+def clips(*hours: tuple[int, int], days: int = 5, qty: float = 1.0) -> CardRun:
+    """One long clip of `A.X` a day for each `(open, close)` hour pair, on every one of
+    `days` sessions, and the same flat returns whatever the clips are: equal daily results."""
+    return a_run(
+        trades=tuple(
+            a_trade(
+                "A.X", qty, midnight_ns(day) + start * HOUR_NS, midnight_ns(day) + end * HOUR_NS
+            )
+            for day in (date(2024, 1, 1 + i) for i in range(days))
+            for start, end in hours
+        ),
+        days=days,
+    )
+
+
+def test_read_by_the_hour_one_name_held_at_other_hours_is_another_book(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """One name long every session is every intraday candidate's day, so read by the day a
+    scalper holding 10:00 to 11:00, one holding 13:00 to 14:00 and one trading twenty clips
+    through the day are one book — and with the same daily results, one result, refused as a
+    repeat. Read by the hour they are three, and the same run twice is still one."""
+    morning, afternoon = clips((10, 11)), clips((13, 14))
+    twenty = clips(*[(9 + k // 4, 11 + k // 4) for k in range(20)])
+    assert morning.returns == afternoon.returns == twenty.returns
+    assert records.signature(morning) == records.signature(afternoon) == records.signature(twenty)
+
+    by_hour = [records.signature(run, hourly=True) for run in (morning, afternoon, twenty)]
+    assert by_hour[0]["2024-01-02"] == [["A.X", 1, False, 10], ["A.X", 1, False, 11]]
+    assert by_hour[1]["2024-01-02"] == [["A.X", 1, False, 13], ["A.X", 1, False, 14]]
+    assert [mark[3] for mark in by_hour[2]["2024-01-02"]] == list(range(9, 16))
+
+    run = loop.begin(ws, store, registered)
+    records.record_signature(store, run, store.put_blob(b"morning"), by_hour[0], 1.0, UNDER)
+    for other in by_hour[1:]:
+        assert records.matched_book(store, run, other, 97, 1.0, 0.5, UNDER) is None
+    again = records.matched_book(
+        store, run, records.signature(morning, hourly=True), 97, 1.0, 0.5, UNDER
+    )
+    assert again is not None and (again.pct, again.agreed) == (100.0, True)
+
+
+def test_read_by_the_hour_a_span_marks_the_hours_it_was_open_in_beside_its_end_mark() -> None:
+    """The first hour and the last are both marked, as the first day and the last are; a
+    span over midnight marks each day with its own hours; and a position held at an end
+    keeps its hours, since when it was opened is news there too."""
+    day = midnight_ns(date(2024, 1, 2))
+    end = day + 16 * HOUR_NS
+    run = a_run(
+        held=(Held(end, "A.X", 1.0, 10.0),),
+        trades=(
+            a_trade("A.X", 1.0, day + 14 * HOUR_NS + 5, day + 16 * HOUR_NS + 30),
+            a_trade("B.X", -1.0, day + 23 * HOUR_NS, day + 25 * HOUR_NS),
+        ),
+    )
+
+    signed = records.signature(run, hourly=True)
+    assert signed["2024-01-02"] == [
+        ["A.X", 1, False, 14],
+        ["A.X", 1, False, 15],
+        ["A.X", 1, False, 16],
+        ["A.X", 1, True],
+        ["B.X", -1, False, 23],
+    ]
+    assert signed["2024-01-03"] == [["B.X", -1, False, 0], ["B.X", -1, False, 1]]
+    assert records.signature(run)["2024-01-02"] == [["A.X", 1, True], ["B.X", -1, False]]
+
+
+def test_a_card_less_the_best_is_paired_period_by_period_and_only_what_pairs_is_paired() -> None:
+    """Two cards of one run share their periods, their objective and what they are
+    differenced against; anything else is not a pair, and `None` is the fallback's cue."""
+    ref = ObjectiveRef.model_validate(
+        {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    best_run = replace(a_run(days=6), returns=(10.0, -50.0, 80.0, -30.0, 40.0, -20.0))
+    better = replace(best_run, returns=tuple(r + 2.0 for r in best_run.returns))
+    best = records.Measurement(ref, 2, best_run, criteria_version="v")
+    card = records.Measurement(ref, 2, better, criteria_version="v")
+
+    paired = card.against(best)
+    assert paired is not None
+    assert paired == difference(wf_contribution_bps, better, best_run, 2)
+    assert paired[0] == pytest.approx(card.compute()[0] - best.compute()[0])
+    assert paired[1] == pytest.approx(0.0), "a constant two a session better is known exactly"
+    assert card.compute()[1] > 0.0, "though neither number is"
+
+    shifted = replace(best_run, period_ends_ns=tuple(t + 1 for t in best_run.period_ends_ns))
+    assert card.against(replace(best, run=shifted)) is None, "other periods"
+    assert card.against(replace(best, host=best_run)) is None, "another host"
+    other = ObjectiveRef.model_validate(
+        {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    assert card.against(replace(best, objective=other)) is None, "another objective"
 
 
 def test_a_number_measured_under_another_reading_is_no_anchor(
