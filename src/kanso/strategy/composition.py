@@ -594,6 +594,7 @@ def _measure(
         grains=grains,
         sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
         prefix=backtest.warmup_prefix(hyp, _window(hyp), catalog, grains),
+        version_source=manifest.sleeve.source,
     )
     measured = backtest.run(request, catalog).run
     if not measures_benchmark(hyp):

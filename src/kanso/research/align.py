@@ -9,9 +9,9 @@ separately, and checked here first, because three of the ways to drift are visib
 source's own syntax tree and need no model at all:
 
 * **universe** — an instrument literal naming something outside `universe`;
-* **resolution** — a bar specification whose step or aggregation differs from
-  `resolution`, whether it is spelled as a `BarSpecification` call or as a bar-type
-  string;
+* **resolution** — a bar specification whose step or aggregation differs from the size
+  the hypothesis reads its bars at — `resolution`, or `bar_resolution` beside a tick one —
+  whether it is spelled as a `BarSpecification` call or as a bar-type string;
 * **data types** — a subscription or a handler for a type outside `data_requirements`.
 
 Each is a syntactic fact, so a violation is stated rather than judged: this half never
@@ -172,7 +172,11 @@ class _Stated:
 
     universe: tuple[str, ...]
     known: frozenset[str]
-    resolution: str
+    size: str
+    """The size the hypothesis reads its bars at: `bar_resolution` where it states one, else
+    `resolution`."""
+    named: str
+    """What the file calls that size, as a reason names it."""
     bar: tuple[int, str] | None
     required: frozenset[str]
 
@@ -180,15 +184,13 @@ class _Stated:
     def of(cls, hyp: Hypothesis) -> _Stated:
         names = set(hyp.universe)
         names.update(name.split(".")[0] for name in hyp.universe)
-        bar = (
-            (int(hyp.resolution[:-1]), AGGREGATION[hyp.resolution[-1]])
-            if is_duration(hyp.resolution)
-            else None
-        )
+        size = hyp.bar_size
+        bar = (int(size[:-1]), AGGREGATION[size[-1]]) if is_duration(size) else None
         return cls(
             universe=tuple(sorted(hyp.universe)),
             known=frozenset(names),
-            resolution=hyp.resolution,
+            size=size,
+            named="the resolution" if hyp.bar_resolution is None else "bar_resolution",
             bar=bar,
             required=frozenset(hyp.data_requirements),
         )
@@ -200,17 +202,18 @@ class _Stated:
         return f"line {line}: {name!r} is not in the universe ({', '.join(self.universe)})"
 
     def specification(self, step: int, aggregation: str, line: int) -> str | None:
-        """A bar whose step or aggregation is not the one the resolution names."""
+        """A bar whose step or aggregation is not the size the file reads its bars at, named
+        as the file names it: `bar_resolution` where it states one, else the resolution."""
         if self.bar is None:
             return (
-                f"line {line}: a {step}-{aggregation} bar, but the resolution is "
-                f"{self.resolution!r}, which is not a bar size"
+                f"line {line}: a {step}-{aggregation} bar, but {self.named} is "
+                f"{self.size!r}, which is not a bar size"
             )
         if (step, aggregation) == self.bar:
             return None
         return (
-            f"line {line}: a {step}-{aggregation} bar, but the resolution is "
-            f"{self.resolution!r} ({self.bar[0]}-{self.bar[1]})"
+            f"line {line}: a {step}-{aggregation} bar, but {self.named} is "
+            f"{self.size!r} ({self.bar[0]}-{self.bar[1]})"
         )
 
     def data_type(self, name: str, line: int) -> str | None:

@@ -45,6 +45,7 @@ def test_the_benchmark_keeps_everything_the_subject_pins_but_the_strategy(reques
         grains=("1d",),
         sleeve_budget=5_000.0,
         prefix=(date(2023, 12, 27), date(2023, 12, 31)),
+        version_source="kanso_impl_sleeve_demo_mr_0123456789ab.py",
     )
 
     held = benchmark(subject)
@@ -56,6 +57,7 @@ def test_the_benchmark_keeps_everything_the_subject_pins_but_the_strategy(reques
         None,
         None,
     )
+    assert held.version_source is None, "the hold's bytes are kanso's, not the version's"
     assert (held.hyp, held.window, held.prefix, held.snapshot_id) == (
         subject.hyp,
         subject.window,

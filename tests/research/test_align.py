@@ -81,6 +81,26 @@ def test_a_bar_at_all_is_drift_when_the_resolution_is_not_a_bar_size() -> None:
     assert "which is not a bar size" in reason
 
 
+def test_a_tick_sleeve_s_bars_are_held_to_the_size_its_file_reads_them_at() -> None:
+    """At tick resolution the bars are read at `bar_resolution`: a bar of that size is the
+    stated idea, and one of any other size is drift, named against the key that states the
+    size — the file's `resolution` is `tick`."""
+    ticked = {
+        "resolution": "tick",
+        "bar_resolution": "1m",
+        "data_requirements": ["bar", "trade"],
+        "costs": {**DOCUMENT["costs"], "latency_ms": 20},
+    }
+
+    assert aligned("SPEC = BarSpecification(1, BarAggregation.MINUTE, 1)\n", **ticked)
+    ok, reason = align_static(
+        hypothesis(**ticked), b"SPEC = BarSpecification(5, BarAggregation.MINUTE, 1)\n"
+    )
+    assert not ok
+    assert reason is not None
+    assert "a 5-MINUTE bar, but bar_resolution is '1m' (1-MINUTE)" in reason
+
+
 @pytest.mark.parametrize(
     "source",
     [

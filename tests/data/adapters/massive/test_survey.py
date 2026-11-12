@@ -19,6 +19,7 @@ invented and every answer is a frozen body.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -28,16 +29,18 @@ import pytest
 
 from kanso.data.adapters.massive import ADAPTER, API_KEY
 from kanso.data.adapters.massive.client import Response
-from kanso.data.adapters.massive.entitlement import BARS
-from kanso.data.adapters.massive.survey import MARKET_NOTE, TARGETS, Target, survey
+from kanso.data.adapters.massive.entitlement import BARS, FUTURES_BARS
+from kanso.data.adapters.massive.survey import FUTURES_PRODUCT, MARKET_NOTE, TARGETS, Target, survey
 from kanso.data.registry import Reach
 from kanso.workspace import Workspace, init
 
 from . import Replay, bar, definition, missing, nothing, refused, served
 
-TODAY = date(2026, 9, 4)
+TODAY = date(2026, 10, 29)
 """The day the survey runs on. Frozen: a probe's recent window is measured from today, and
-a test that drifted with the calendar would prove nothing."""
+a test that drifted with the calendar would prove nothing. It is the day the futures answers
+below were recorded, so the futures listing, the front month and its fortnight of minutes
+are the ones the source gave on the day the survey asks about."""
 
 KEY = "a-key-this-test-invented"
 
@@ -47,6 +50,17 @@ FUTURE = "ESZ6"
 
 CONTRACTS = "/v3/reference/options/contracts"
 TICKERS = "/v3/reference/tickers"
+FUTURES_CONTRACTS = "/futures/v1/contracts"
+FUTURES_AGGS = "/futures/v1/aggs/"
+
+FUTURES = Path(__file__).parent / "fixtures" / "futures"
+"""Futures answers recorded from the live source on 2026-10-29 (`provenance.json` there)."""
+
+
+def futures_answer(name: str) -> Response:
+    files = json.loads((FUTURES / "provenance.json").read_text("utf-8"))["files"]
+    return Response(status=int(files[name]["status"]), body=(FUTURES / name).read_bytes())
+
 
 LISTINGS = {
     "/v3/reference/splits": "splits",
@@ -82,6 +96,7 @@ class Vendor:
     """
 
     refuses: frozenset[str] = frozenset()
+    futures: str = "served"
     asked: list[tuple[str, dict[str, str]]] = field(default_factory=list)
 
     def __call__(self, url: str, params: Mapping[str, str]) -> Response:
@@ -94,7 +109,11 @@ class Vendor:
         if path.startswith(f"{TICKERS}/"):
             return served([definition(path.rsplit("/", 1)[1])])
         if path == TICKERS:
-            return served([{"ticker": FUTURE}])
+            return nothing()  # measured: the generic listing names no futures contract
+        if path == FUTURES_CONTRACTS:
+            return self._futures_listing(params)
+        if path.startswith(FUTURES_AGGS):
+            return self._futures_minutes(params)
         if path in LISTINGS:
             return self._listing(LISTINGS[path], params)
         if path.startswith("/v2/aggs/ticker/"):
@@ -107,6 +126,22 @@ class Vendor:
         if name in self.refuses:
             return refused()
         return nothing() if windowed(params) else served([{"ticker": "AAPL"}])
+
+    def _futures_listing(self, params: Mapping[str, str]) -> Response:
+        """ES's singles as of 2026-10-28, as recorded; a contract asked by its key is one the
+        listing holds, as `ESZ5` asked with no date came back with its rows."""
+        if "ticker" in params:
+            return futures_answer("contracts_ESZ5_undated.json")
+        return futures_answer("contracts_ES_2026-10-28.json")
+
+    def _futures_minutes(self, params: Mapping[str, str]) -> Response:
+        """ESZ6's minutes as recorded for the survey's own two questions: its fortnight, and
+        all of history, served from the plan's floor."""
+        if self.futures == "refused":
+            return refused()
+        if params.get("window_start.gte") == "1970-01-01":
+            return futures_answer("aggs_ESZ6_1min_from_1970.json")
+        return futures_answer("aggs_ESZ6_1min_fortnight.json")
 
 
 def _ns(day: date) -> int:
@@ -236,6 +271,54 @@ def test_a_target_is_dense_unless_it_says_otherwise() -> None:
     way and floored, rather than silently having its window dropped."""
     assert Target("stocks", BARS).sparse is False
     assert Target("stocks", BARS).question is BARS
+
+
+# --- futures, where the vendor keeps them -------------------------------------------
+
+
+def test_futures_are_probed_on_the_front_month_at_the_vendor_s_own_aggregates(
+    ws: Workspace,
+) -> None:
+    """The survey once asked the generic listing for a futures key, which names none, and
+    reported futures `unprobed` on a plan that serves them. The key is now the ES front month
+    on the last settled day and its minutes are asked of `/futures/v1/aggs`."""
+    vendor = Vendor()
+
+    reach = run(ws, vendor)[("futures", "bars")]
+
+    assert (reach.outcome, reach.ticker) == ("ok", FUTURE)
+    assert reach.floor == date(2025, 9, 10), "ESZ6's first traded minute, as the source served it"
+    notes = survey(ADAPTER, ws, transport=Replay(Vendor()), as_of=TODAY).notes
+    assert any(
+        note.startswith(f"the futures floor is {FUTURE}'s own first traded minute")
+        for note in notes
+    )
+    listed = [params for path, params in vendor.asked if path == FUTURES_CONTRACTS]
+    assert listed == [
+        {"product_code": FUTURES_PRODUCT, "date": "2026-10-28", "type": "single", "limit": "1000"}
+    ]
+    minutes = [params for path, params in vendor.asked if path == f"{FUTURES_AGGS}{FUTURE}"]
+    assert all(params["resolution"] == "1min" for params in minutes)
+    assert all(params["sort"] == "window_start.asc" for params in minutes)
+    assert not [path for path, _ in vendor.asked if path.startswith("/v2/aggs/ticker/ESZ6")]
+
+
+def test_a_plan_that_refuses_futures_minutes_is_not_entitled_to_them(ws: Workspace) -> None:
+    """A refusal is asked of the futures reference, which recognises the key, so it is the
+    plan, not a wrong prefix."""
+    vendor = Vendor(futures="refused")
+
+    reach = run(ws, vendor)[("futures", "bars")]
+
+    assert reach.outcome == "not_entitled"
+    assert any(path == FUTURES_CONTRACTS and "ticker" in params for path, params in vendor.asked)
+
+
+def test_the_futures_target_asks_the_futures_aggregates() -> None:
+    (target,) = [target for target in TARGETS if target.asset_class == "futures"]
+
+    assert target.endpoint is FUTURES_BARS
+    assert target.endpoint.template == "/futures/v1/aggs/{ticker}"
 
 
 def test_every_answer_the_survey_gives_is_one_of_the_named_outcomes(ws: Workspace) -> None:

@@ -137,6 +137,71 @@ def test_tick_resolution_accepts_trades_quotes_or_the_book() -> None:
         build(resolution="tick", data_requirements=["bar"])
 
 
+TICK_BARS: dict[str, Any] = {
+    "universe": ["SPY.ARCX", "ESZ5.XCME"],
+    "resolution": "tick",
+    "data_requirements": ["quote", "trade", "bar"],
+    "data_by_instrument": {"SPY.ARCX": ["quote", "trade"], "ESZ5.XCME": ["bar"]},
+}
+"""Ticks of an equity beside a future's minute bars: the shape a cross-asset lane is."""
+
+
+def test_bars_beside_ticks_are_read_at_the_size_the_file_states() -> None:
+    hyp = build(**TICK_BARS, bar_resolution="1m")
+
+    assert (hyp.resolution, hyp.bar_resolution, hyp.bar_size) == ("tick", "1m", "1m")
+    assert hyp.required_of("ESZ5.XCME") == ("bar",)
+
+
+def test_a_bar_size_resolution_reads_its_bars_at_itself() -> None:
+    hyp = build()
+
+    assert (hyp.bar_resolution, hyp.bar_size) == (None, "1m")
+
+
+@pytest.mark.parametrize("resolution", ["tick", "quote", "trade"])
+def test_bars_beside_ticks_without_a_size_are_refused_with_the_remedy(resolution: str) -> None:
+    """The combination that used to pass validation and be refused at `research begin` for want
+    of a snapshot at its resolution: a sleeve with no bar size, reading bars of none."""
+    with pytest.raises(ValidationError) as caught:
+        build(**{**TICK_BARS, "resolution": resolution})
+
+    assert "bar_resolution:" in caught.value.message
+    assert "nothing says what size the bars are read at" in caught.value.message
+    assert caught.value.code is Exit.VALIDATION
+    assert (caught.value.remedy or "").startswith("state bar_resolution")
+
+
+def test_a_bar_resolution_beside_a_bar_size_resolution_is_refused() -> None:
+    with pytest.raises(ValidationError) as caught:
+        build(bar_resolution="5m")
+
+    assert "resolution 1m is a bar size" in caught.value.message
+    assert caught.value.remedy == (
+        "drop bar_resolution (resolution 1m is the bar size), or keep it and set resolution to "
+        "tick, quote or trade"
+    )
+
+
+def test_a_bar_resolution_with_no_bars_is_refused() -> None:
+    with pytest.raises(ValidationError) as caught:
+        build(resolution="tick", data_requirements=["quote"], bar_resolution="1m")
+
+    assert "'bar' is not required" in caught.value.message
+    assert (caught.value.remedy or "").startswith("add bar to data_requirements")
+
+
+def test_a_zero_bar_resolution_is_refused() -> None:
+    with pytest.raises(ValidationError, match="bar_resolution: must be longer than zero"):
+        build(**TICK_BARS, bar_resolution="0m")
+
+
+@given(hypotheses())
+def test_a_bar_resolution_survives_the_round_trip(hyp: Hypothesis) -> None:
+    again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
+    assert (again.bar_resolution, again.bar_size) == (hyp.bar_resolution, hyp.bar_size)
+
+
 def test_a_zero_resolution_is_refused() -> None:
     with pytest.raises(ValidationError, match="resolution"):
         build(resolution="0m")

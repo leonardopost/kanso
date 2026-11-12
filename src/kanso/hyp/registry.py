@@ -74,6 +74,7 @@ ENDED: Final[frozenset[str]] = frozenset({"retired", "failed"})
 SCOPE: Final = (
     "universe",
     "resolution",
+    "bar_resolution",
     "data_requirements",
     "data_by_instrument",
     "session_scope",
@@ -97,11 +98,12 @@ WARMUP: Final = "warmup"
 BENCHMARK: Final = "benchmark"
 BOOK: Final = "book"
 DEPTH: Final = "depth"
+BAR_RESOLUTION: Final = "bar_resolution"
 """`sizing` joined the scope in 0.4.0, `warmup`, `benchmark` and `book` in 0.8.0, and `depth`
-with the key itself; `objective` in 0.5.0, answering from its own column. A row pinned before
-`sizing`, `warmup`, `benchmark`, `book` or `depth` holds no key for it, which reads as `None`
-— the same answer a file without the key gives — so an older pin keeps its best until the
-file actually declares a rule."""
+and `bar_resolution` each with the key itself; `objective` in 0.5.0, answering from its own
+column. A row pinned before `sizing`, `warmup`, `benchmark`, `book`, `depth` or
+`bar_resolution` holds no key for it, which reads as `None` — the same answer a file without
+the key gives — so an older pin keeps its best until the file actually declares a rule."""
 COSTS: Final = "costs"
 """The scope field that joined in 0.13; a row pinned before it answers from its pinned file."""
 DATA_BY_INSTRUMENT: Final = "data_by_instrument"
@@ -453,10 +455,11 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def scope_of(hyp: Hypothesis) -> dict[str, Any]:
-    """The thirteen fields a metric is only comparable within, in a stable order.
+    """The fourteen fields a metric is only comparable within, in a stable order.
 
     The data a strategy is shown is scope, however the file narrows it: the types it
-    requires, which of them each instrument is asked for (`data_by_instrument`), and the
+    requires, the bar size a tick sleeve reads its bars at (`bar_resolution`), which of them
+    each instrument is asked for (`data_by_instrument`), and the
     sessions a name is delivered on at all (`session_scope`). A rule that read one leg's
     quotes and one that read only its prints, or one handed every name of a pool every
     session and one handed the names a flag admitted, measured different runs over the same
@@ -488,6 +491,7 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
+        BAR_RESOLUTION: hyp.bar_resolution,
         "data_requirements": sorted(hyp.data_requirements),
         DATA_BY_INSTRUMENT: _by_instrument(hyp),
         SESSION_SCOPE: (
@@ -525,11 +529,11 @@ def _scope_of(store: StateStore, held: sqlite3.Row, now: dict[str, Any]) -> dict
     The construct and the objective were pinned in their own columns before they joined
     the pins, and the columns are written with the pins, so a row from before then answers
     from its column rather than reporting a move that never happened. `sizing`, `warmup`,
-    `benchmark`, `book` and `depth` joined later still and have no column, and each joined
-    with its key, so no file pinned before could state one: a pin without the key answers
-    `None`. `costs`, `data_by_instrument` and `session_scope` joined after files could state
-    them (`FROM_FILE`), so a pin without one answers from the file it pinned — the bytes
-    stored under the row's `hypothesis_sha`, read by `scope_of` exactly as the file being
+    `benchmark`, `book`, `depth` and `bar_resolution` joined later still and have no column,
+    and each joined with its key, so no file pinned before could state one: a pin without the
+    key answers `None`. `costs`, `data_by_instrument` and `session_scope` joined after files
+    could state them (`FROM_FILE`), so a pin without one answers from the file it pinned — the
+    bytes stored under the row's `hypothesis_sha`, read by `scope_of` exactly as the file being
     pinned now is, latency included. Only when the store holds no such bytes, or this kanso
     no longer reads them as a hypothesis, does it answer `now`'s, since nothing then says
     what the old pin stated. Answering `now` whenever the key was missing was measured

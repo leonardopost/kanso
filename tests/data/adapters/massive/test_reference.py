@@ -21,6 +21,8 @@ Three properties are asserted throughout and are the reason this module exists.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -34,6 +36,7 @@ from kanso.data import conventions as core
 from kanso.data.adapters import massive
 from kanso.data.adapters.massive import conventions
 from kanso.data.adapters.massive.client import MassiveClient, Response
+from kanso.data.adapters.massive.entitlement import FUTURES_CONTRACTS, FUTURES_PRODUCTS
 from kanso.data.adapters.massive.errors import (
     MalformedRequestError,
     NotEntitledError,
@@ -45,6 +48,7 @@ from kanso.data.adapters.massive.reference import (
     MassiveReference,
     contracts,
     entitled,
+    front_month,
     provider,
     universe,
 )
@@ -56,7 +60,7 @@ from kanso.data.instruments import (
     build,
     definition_checksum,
 )
-from kanso.errors import Exit
+from kanso.errors import Exit, ValidationError
 from kanso.schemas import InstrumentEntry
 from kanso.workspace import Workspace, init
 
@@ -132,6 +136,17 @@ def option(
     return row
 
 
+FUTURES = Path(__file__).parent / "fixtures" / "futures"
+"""Futures listings and aggregates recorded from the live source on 2026-10-29; each file's
+request and instant are in `provenance.json` there."""
+
+
+def recorded(name: str) -> Response:
+    """One recorded futures answer, its body as served and its status as recorded."""
+    files = json.loads((FUTURES / "provenance.json").read_text("utf-8"))["files"]
+    return Response(status=int(files[name]["status"]), body=(FUTURES / name).read_bytes())
+
+
 def future(
     ticker: str = "ESZ6",
     *,
@@ -139,21 +154,31 @@ def future(
     expiry: str | None = "2026-12-18",
     listed: str | None = "2021-12-21",
     size: object = 50,
-    tick: object = "0.25",
-    underlying: str | None = None,
-) -> dict[str, Any]:
-    row: dict[str, Any] = {"ticker": ticker, "market": "futures", "currency": "usd"}
+    tick: object = 0.25,
+    unit: str | None = "IPNT",
+    product: str | None = "ES",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A futures contract's row and its product's, in the fields the vendor's futures
+    listings were measured stating (`fixtures/futures/`)."""
+    contract: dict[str, Any] = {"active": True, "date": TODAY.isoformat(), "ticker": ticker}
     for name, value in (
-        ("exchange", exchange),
-        ("expiration_date", expiry),
-        ("list_date", listed),
-        ("trade_multiplier", size),
-        ("min_tick", tick),
-        ("underlying_ticker", underlying),
+        ("trading_venue", exchange),
+        ("last_trade_date", expiry),
+        ("first_trade_date", listed),
+        ("trade_tick_size", tick),
+        ("product_code", product),
     ):
         if value is not None:
-            row[name] = value
-    return row
+            contract[name] = value
+    stated: dict[str, Any] = {
+        "product_code": product,
+        "type": "single",
+        "trade_currency_code": "USD",
+    }
+    for name, value in (("unit_of_measure", unit), ("unit_of_measure_qty", size)):
+        if value is not None:
+            stated[name] = value
+    return contract, stated
 
 
 @dataclass
@@ -170,6 +195,7 @@ class Directory:
     """
 
     rows: dict[str, dict[str, Any]] = field(default_factory=dict)
+    futures: dict[str, tuple[dict[str, Any], dict[str, Any]]] = field(default_factory=dict)
     pages: tuple[tuple[dict[str, Any], ...], ...] = ()
     chain: tuple[tuple[dict[str, Any], ...], ...] = ()
     entitled: frozenset[str] = frozenset()
@@ -179,6 +205,12 @@ class Directory:
     def __call__(self, url: str, params: Mapping[str, str]) -> Response:
         self.asked.append(url)
         path = url.split("?", 1)[0]
+        if path.endswith(FUTURES_CONTRACTS):
+            listed = self.futures.get(params.get("ticker", ""))
+            return nothing() if listed is None else served([listed[0]])
+        if path.endswith(FUTURES_PRODUCTS):
+            named = [stated for _, stated in self.futures.values()]
+            return served([row for row in named if row["product_code"] == params["product_code"]])
         if f"{CONTRACTS}/" in path:
             return self._detail(path.split(f"{CONTRACTS}/", 1)[1])
         if CONTRACTS in url:
@@ -204,9 +236,14 @@ class Directory:
 
         Measured: an option key sent here comes back a client error, not an empty answer.
         A provider that read that as "the vendor does not know this key" would fail a whole
-        chain by the one reason that is definitely wrong.
+        chain by the one reason that is definitely wrong. A futures key comes back a 404, the
+        body recorded on 2026-10-29.
         """
-        return rejected() if ticker.startswith("O:") else self._detail(ticker)
+        if ticker.startswith("O:"):
+            return rejected()
+        if ticker in self.futures:
+            return recorded("reference_tickers_ESZ5.json")
+        return self._detail(ticker)
 
     def _detail(self, ticker: str) -> Response:
         if self.lookup == "refused":
@@ -359,46 +396,23 @@ def test_an_empty_string_is_not_a_ticker() -> None:
         conventions.parse("  ")
 
 
-# --- the futures year ----------------------------------------------------------
+# --- the futures key ------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("digits", "expected"),
-    [("2025", 2025), ("25", 2025), ("5", 2025), ("6", 2026), ("4", 2034), ("3", 2033)],
-)
-def test_a_one_digit_year_is_resolved_over_the_decade_beginning_a_year_back(
-    digits: str, expected: int
-) -> None:
-    """As of 2026, `5` is last December and `4` is eight years out; one digit says no more."""
-    assert conventions.contract_year(digits, TODAY) == expected
-
-
-def test_a_three_digit_year_is_not_a_year() -> None:
-    with pytest.raises(MalformedRequestError, match="one, two"):
-        conventions.contract_year("202", TODAY)
-
-
-@pytest.mark.parametrize(
-    ("symbol", "expected"),
-    [
-        ("ESZ5", ("ES", 2025, 12)),
-        ("ESZ25", ("ES", 2025, 12)),
-        ("ESZ2025", ("ES", 2025, 12)),
-        ("MESH6", ("MES", 2026, 3)),
-        ("ZNZ5", ("ZN", 2025, 12)),
-        ("GCG6", ("GC", 2026, 2)),
-    ],
+    ("symbol", "product"),
+    [("ESZ5", "ES"), ("CLZ30", "CL"), ("MESH6", "MES"), ("ZNZ5", "ZN"), ("6EM5", "6E")],
 )
 def test_a_contract_code_splits_at_the_digits_however_the_product_is_spelled(
-    symbol: str, expected: tuple[str, int, int]
+    symbol: str, product: str
 ) -> None:
     """`ZN` ends in a month letter itself, so the trailing digits are what anchors the split."""
-    assert conventions.contract_month(symbol, TODAY) == expected
+    assert conventions.contract_product(symbol) == product
 
 
-@pytest.mark.parametrize("symbol", ["AAPL", "ES", "ESZ202", "ES1"])
-def test_a_key_that_is_not_a_contract_code_is_no_failure(symbol: str) -> None:
-    assert conventions.contract_month(symbol, TODAY) is None
+@pytest.mark.parametrize("symbol", ["AAPL", "ES", "ES1", "esz5"])
+def test_a_key_that_is_not_a_contract_code_names_no_product(symbol: str) -> None:
+    assert conventions.contract_product(symbol) is None
 
 
 # --- the conventions -----------------------------------------------------------
@@ -576,7 +590,6 @@ def test_an_option_key_the_contracts_endpoint_does_not_carry_is_unknown_and_not_
         ("AAPL", stock()),
         ("I:NDX", index()),
         ("C:EURUSD", pair()),
-        ("ESZ6", future()),
     ],
 )
 def test_every_other_class_is_looked_up_in_the_generic_reference(
@@ -625,7 +638,7 @@ def test_an_option_on_an_index_records_the_underlyings_own_class() -> None:
 
 
 def test_a_future_takes_its_tick_and_its_size_from_the_contract_specification() -> None:
-    found = one(Directory(rows={"ESZ6": future()}), "ESZ6")
+    found = one(Directory(futures={"ESZ6": future()}), "ESZ6")
 
     stored = fields_of(found)
     assert (stored["type"], stored["id"]) == ("FuturesContract", "ESZ6.XCME")
@@ -633,60 +646,456 @@ def test_a_future_takes_its_tick_and_its_size_from_the_contract_specification() 
     assert (stored["underlying"], stored["asset_class"]) == ("ES", "COMMODITY")
 
 
-def test_a_bare_key_the_source_lists_as_a_future_is_resolved_as_one() -> None:
+def test_a_futures_key_the_generic_reference_does_not_carry_is_asked_of_its_own_listings() -> None:
+    """The generic reference answers a futures key with a 404, measured; the contract and its
+    product are asked of `/futures/v1` as of the day asked, and the vendor's spelling of the
+    key is what the instrument's sources record."""
+    directory = Directory(futures={"ESZ6": future()})
+    reader = reading(directory)
+
+    reader.resolve(["ESZ6"], TODAY)
+
+    asked = [url.split("?", 1)[0].removeprefix(API) for url in directory.asked]
+    assert asked == [f"{LISTING}/ESZ6", FUTURES_CONTRACTS, FUTURES_PRODUCTS]
+    assert reader.sources("ESZ6.XCME") == {"massive": "ESZ6"}
+
+
+def generic_future(ticker: str = "ES") -> dict[str, Any]:
+    """A futures contract as a row of the generic reference would list it, its terms the
+    futures listings' (`future`) under the names a generic row is read by. Measured, the
+    generic reference lists no futures key — it answered `ESZ5` with a 404, and nothing under
+    `market=futures` — so this is the route a key takes only if it ever does."""
+    contract, stated = future(ticker)
+    return {
+        "ticker": ticker,
+        "market": "futures",
+        "exchange": contract["trading_venue"],
+        "min_tick": contract["trade_tick_size"],
+        "list_date": contract["first_trade_date"],
+        "expiration_date": contract["last_trade_date"],
+        "multiplier": stated["unit_of_measure_qty"],
+        "underlying_ticker": ticker,
+    }
+
+
+def test_a_bare_key_the_generic_reference_lists_as_a_future_is_resolved_as_one() -> None:
     """The market field decides; nothing infers a class from the shape of a bare symbol."""
-    row = future("ES", underlying="ES")
-    found = one(Directory(rows={"ES": row}), "ES")
+    found = one(Directory(rows={"ES": generic_future()}), "ES")
 
     assert fields_of(found)["type"] == "FuturesContract"
 
 
 @pytest.mark.parametrize(
-    ("row", "reason"),
+    ("dropped", "reason"),
     [
-        (future(tick=None), "minimum price increment"),
-        (future(tick="n/a"), "minimum price increment"),
-        (future(size=None), "contract size"),
-        (future(listed=None), "listing date"),
-        (future(expiry=None), "expiry"),
-        (future(listed="the fifth"), "listing date"),
-        (future(exchange=None), "no listing venue"),
-        (future("XYZ", underlying=None), "no underlying"),
+        ("multiplier", "the vendor's row states no contract size"),
+        ("underlying_ticker", "the vendor's row names no underlying for this contract"),
     ],
+    ids=["no contract size", "no underlying"],
 )
-def test_a_row_that_states_no_contract_term_fails_by_name_rather_than_by_guess(
-    row: dict[str, Any], reason: str
+def test_a_future_the_generic_reference_lists_without_a_term_fails_by_name(
+    dropped: str, reason: str
 ) -> None:
-    """Each of these is a number the engine requires and nothing here may invent."""
-    found = one(Directory(rows={row["ticker"]: row}), row["ticker"])
+    """The futures convention states no contract size, and a bare key names no underlying, so
+    a generic row that states neither leaves nothing to take one from."""
+    row = {name: value for name, value in generic_future().items() if name != dropped}
+    found = one(Directory(rows={"ES": row}), "ES")
 
     assert isinstance(found, ResolveError)
     assert reason in found.reason
 
 
-def test_a_one_digit_year_that_disagrees_with_the_source_names_no_single_contract() -> None:
-    """The id would mean one contract today and another next year, which is not an id."""
-    row = future("ESZ6", expiry="2036-12-19", listed="2016-12-19")
-    found = one(Directory(rows={"ESZ6": row}), "ESZ6")
+@pytest.mark.parametrize(
+    ("listed", "reason"),
+    [
+        (future(tick=None), "states a tick"),
+        (future(tick="n/a"), "states a tick"),
+        (future(size=None), "contract size"),
+        (future(listed=None), "listing date"),
+        (future(expiry=None), "expiry"),
+        (future(listed="the fifth"), "listing date"),
+        (future(exchange=None), "no listing venue"),
+        (future(product=None), "lists no product"),
+    ],
+)
+def test_a_row_that_states_no_contract_term_fails_by_name_rather_than_by_guess(
+    listed: tuple[dict[str, Any], dict[str, Any]], reason: str
+) -> None:
+    """Each of these is a number the engine requires and nothing here may invent."""
+    ticker = listed[0]["ticker"]
+    found = one(Directory(futures={ticker: listed}), ticker)
 
     assert isinstance(found, ResolveError)
-    assert "two digits" in found.reason
-
-
-def test_the_same_contract_written_with_two_digits_resolves() -> None:
-    row = future("ESZ36", expiry="2036-12-19", listed="2016-12-19")
-    found = one(Directory(rows={"ESZ36": row}), "ESZ36")
-
-    assert fields_of(found)["id"] == "ESZ36.XCME"
+    assert reason in found.reason
 
 
 def test_a_definition_the_engine_itself_refuses_is_reported_as_the_engine_put_it() -> None:
     """A zero tick passes every check kanso makes and none the engine makes; its refusal is
     the answer, translated by nobody."""
-    found = one(Directory(rows={"ESZ6": future(tick=0)}), "ESZ6")
+    found = one(Directory(futures={"ESZ6": future(tick=0)}), "ESZ6")
 
     assert isinstance(found, ResolveError)
     assert "rejected its fields" in found.reason
+
+
+# --- futures, against the answers the source gave -----------------------------
+
+
+RECORDED: dict[tuple[str, tuple[tuple[str, str], ...]], str] = {
+    (FUTURES_CONTRACTS, (("date", "2025-01-02"), ("ticker", "ESH5"))): (
+        "contracts_ESH5_2025-01-02.json"
+    ),
+    (
+        FUTURES_CONTRACTS,
+        (("date.gte", "2025-01-02"), ("date.lte", "2025-03-21"), ("ticker", "ESH5")),
+    ): "contracts_ESH5_life.json",
+    (FUTURES_PRODUCTS, (("date", "2025-01-02"), ("product_code", "ES"), ("type", "single"))): (
+        "products_ES_2025-01-02.json"
+    ),
+    (FUTURES_CONTRACTS, (("date", "2025-01-04"), ("ticker", "ESH5"))): (
+        "contracts_ESH5_2025-01-04.json"
+    ),
+    (
+        FUTURES_CONTRACTS,
+        (("date.gte", "2024-12-29"), ("date.lte", "2025-01-04"), ("ticker", "ESH5")),
+    ): "contracts_ESH5_week_to_2025-01-04.json",
+    (FUTURES_PRODUCTS, (("date", "2025-01-03"), ("product_code", "ES"), ("type", "single"))): (
+        "products_ES_2025-01-03.json"
+    ),
+    (
+        FUTURES_CONTRACTS,
+        (("date.gte", "2025-01-04"), ("date.lte", "2025-03-21"), ("ticker", "ESH5")),
+    ): "contracts_ESH5_life_from_2025-01-04.json",
+    (FUTURES_CONTRACTS, (("date", "2026-10-28"), ("ticker", "ESZ5"))): (
+        "contracts_ESZ5_2026-10-28.json"
+    ),
+    (
+        FUTURES_CONTRACTS,
+        (("date.gte", "2026-10-22"), ("date.lte", "2026-10-28"), ("ticker", "ESZ5")),
+    ): "contracts_ESZ5_week_to_2026-10-28.json",
+    (FUTURES_CONTRACTS, (("date", "2024-10-29"), ("ticker", "ESZ4"))): (
+        "contracts_ESZ4_2024-10-29.json"
+    ),
+    (
+        FUTURES_CONTRACTS,
+        (("date.gte", "2024-10-29"), ("date.lte", "2024-12-20"), ("ticker", "ESZ4")),
+    ): "contracts_ESZ4_life.json",
+    (FUTURES_CONTRACTS, (("date", "2026-10-28"), ("ticker", "CLZ6"))): (
+        "contracts_CLZ6_2026-10-28.json"
+    ),
+    (FUTURES_CONTRACTS, (("date", "2026-10-28"), ("ticker", "CLZ30"))): (
+        "contracts_CLZ30_2026-10-28.json"
+    ),
+    (FUTURES_CONTRACTS, (("date", "2026-10-28"), ("ticker", "CLZ36"))): (
+        "contracts_CLZ36_2026-10-28.json"
+    ),
+    (FUTURES_PRODUCTS, (("date", "2026-10-28"), ("product_code", "CL"), ("type", "single"))): (
+        "products_CL_2026-10-28.json"
+    ),
+    (FUTURES_CONTRACTS, (("date", "2026-10-28"), ("ticker", "CLF0"))): (
+        "contracts_CLF0_2026-10-28.json"
+    ),
+    (
+        FUTURES_CONTRACTS,
+        (("date.gte", "2026-10-22"), ("date.lte", "2026-10-28"), ("ticker", "CLF0")),
+    ): "contracts_CLF0_week_to_2026-10-28.json",
+}
+"""Every futures listing answer recorded from the live source on 2026-10-29, by the request
+that drew it, its page size aside: the file and the instant are in `provenance.json`."""
+
+
+def as_recorded(url: str, params: Mapping[str, str]) -> Response:
+    """The futures listings as the source answered them, by request. The generic reference
+    answers every key with the 404 it gave ESZ5, as it gave ESH5, CLZ6 and CLF30 theirs."""
+    path = url.split("?", 1)[0].removeprefix(API)
+    asked = dict(params)
+    if path.startswith(f"{LISTING}/"):
+        return recorded("reference_tickers_ESZ5.json")  # a futures key there: the 404
+    key = tuple(sorted((name, value) for name, value in asked.items() if name != "limit"))
+    name = RECORDED.get((path, key))
+    if name is None:
+        pytest.fail(f"no recorded answer for {path} {asked}")
+    return recorded(name)
+
+
+def recorded_reader() -> tuple[MassiveReference, Replay]:
+    replay = Replay(as_recorded)
+    return MassiveReference(MassiveClient("test-key-not-a-secret", transport=replay)), replay
+
+
+def futures_asked(replay: Replay) -> list[tuple[str, dict[str, str]]]:
+    """Every futures request a resolution made, its path and its parameters."""
+    return [
+        (item.url.removeprefix(API), item.params)
+        for item in replay.asked
+        if "/futures/" in item.url
+    ]
+
+
+def test_a_contract_resolves_from_the_rows_the_source_served() -> None:
+    """ESH5 as of 2025-01-02, every answer recorded: its row that day states its life and its
+    venue and no tick, the tick comes from the first day of its life that states one, and the
+    contract size from ES's product as of that day — 50 index points."""
+    reader, _ = recorded_reader()
+    found = reader.resolve(["ESH5"], date(2025, 1, 2))["ESH5"]
+
+    stored = fields_of(found)
+    assert (stored["type"], stored["id"]) == ("FuturesContract", "ESH5.XCME")
+    assert (stored["price_increment"], stored["multiplier"]) == ("0.25", "50")
+    assert (stored["underlying"], stored["exchange"], stored["currency"]) == ("ES", "XCME", "USD")
+    assert stored["activation_ns"] == epoch_ns(date(2022, 12, 16))
+    assert stored["expiration_ns"] == epoch_ns(date(2025, 3, 21))
+
+
+def test_crude_resolves_though_its_last_trade_falls_in_the_month_before_delivery() -> None:
+    """CLZ6 as of 2026-10-28: December's crude last trades on 2026-11-20, as every CL single
+    listed that day last trades in the month before its delivery month. The listing names the
+    contract; nothing compares its expiry with the key's month."""
+    reader, _ = recorded_reader()
+    found = reader.resolve(["CLZ6"], date(2026, 10, 28))["CLZ6"]
+
+    stored = fields_of(found)
+    assert (stored["type"], stored["id"]) == ("FuturesContract", "CLZ6.XNYM")
+    assert (stored["price_increment"], stored["multiplier"]) == ("0.01", "1000")
+    assert (stored["underlying"], stored["currency"]) == ("CL", "USD")
+    assert stored["expiration_ns"] == epoch_ns(date(2026, 11, 20))
+    assert reader.sources("CLZ6.XNYM") == {"massive": "CLZ6"}
+
+
+def test_a_two_digit_contract_is_asked_for_as_written_and_names_its_own_decade() -> None:
+    """CL lists its contracts delivering from 2030 under two year digits, CLZ36 beside CLZ6:
+    each key is asked for exactly as written, so CLZ30 resolves, and CLZ36 is December 2036's
+    contract and never December 2026's."""
+    reader, replay = recorded_reader()
+
+    found = reader.resolve(["CLZ30", "CLZ36"], date(2026, 10, 28))
+
+    assert fields_of(found["CLZ30"])["expiration_ns"] == epoch_ns(date(2030, 11, 20))
+    assert fields_of(found["CLZ36"])["expiration_ns"] == epoch_ns(date(2036, 11, 20))
+    assert [params.get("ticker") for path, params in futures_asked(replay)] == [
+        "CLZ30",
+        None,
+        "CLZ36",
+        None,
+    ]
+
+
+def test_a_key_the_listing_names_no_contract_by_is_refused_with_where_to_read_its_spelling() -> (
+    None
+):
+    """January 2030's crude is CLF30 to the vendor; written CLF0 it names nothing that day nor
+    in the week to it, and is refused rather than respelled, pointing at the product's
+    listing, which names each contract by the ticker to write."""
+    reader, replay = recorded_reader()
+
+    found = reader.resolve(["CLF0"], date(2026, 10, 28))["CLF0"]
+
+    assert isinstance(found, ResolveError)
+    assert found.reason == (
+        f"{UNKNOWN}: the vendor's futures listing holds no row of CLF0 in the week to "
+        "2026-10-28, and kanso asks for a contract exactly as its id spells it: write the "
+        "ticker the vendor's listing of CL names the contract by, read off "
+        "/futures/v1/contracts?product_code=CL&type=single&date=2026-10-28 — or, if the "
+        "contract was not listed then, resolve it as of a day it was"
+    )
+    assert [params.get("ticker") for _, params in futures_asked(replay)] == ["CLF0", "CLF0"]
+
+
+def test_a_contract_still_listed_past_its_last_trade_with_no_tick_is_delisted_unread() -> None:
+    """The listing named CLX6 eight days after its last trade, inactive (recorded); a row of
+    that shape that states no tick, as no row did before 2025-03-12, is past its expiry, so it
+    is refused as delisted without its life being read for a tick, and is not sent to a manual
+    entry it has no use for."""
+    contract, stated = future(tick=None, expiry="2026-12-18")
+    listed = {**contract, "active": False, "date": "2026-12-28"}
+    replay = Replay(Directory(futures={"ESZ6": (listed, stated)}))
+    reader = MassiveReference(MassiveClient("test-key-not-a-secret", transport=replay))
+
+    found = reader.resolve(["ESZ6"], date(2026, 12, 28))["ESZ6"]
+
+    assert isinstance(found, ResolveError)
+    assert found.reason == f"{DELISTED} 2026-12-18, before 2026-12-28"
+    assert [params for path, params in futures_asked(replay) if path == FUTURES_CONTRACTS] == [
+        {"date": "2026-12-28", "limit": "1", "ticker": "ESZ6"}
+    ]
+
+
+def test_a_contract_past_its_last_trade_is_listed_nowhere_and_says_so() -> None:
+    reader, _ = recorded_reader()
+    found = reader.resolve(["ESZ5"], date(2026, 10, 28))["ESZ5"]
+
+    assert isinstance(found, ResolveError)
+    assert "holds no row of ESZ5 in the week to 2026-10-28" in found.reason
+    assert "if the contract was not listed then, resolve it as of a day it was" in found.reason
+
+
+def test_a_day_the_listing_holds_no_row_on_is_answered_by_the_latest_row_of_its_week() -> None:
+    """Saturday 2025-01-04, inside ESH5's life: the listing held no row that day, and its week
+    held six, the latest the Friday's. The contract resolves from that row, its product as of
+    that Friday, and the tick its life first states — the definition it has on the Thursday."""
+    reader, replay = recorded_reader()
+
+    saturday = reader.resolve(["ESH5"], date(2025, 1, 4))["ESH5"]
+    thursday = reader.resolve(["ESH5"], date(2025, 1, 2))["ESH5"]
+
+    stored = fields_of(saturday)
+    assert (stored["id"], stored["price_increment"], stored["multiplier"]) == (
+        "ESH5.XCME",
+        "0.25",
+        "50",
+    )
+    keep = ("price_increment", "multiplier", "activation_ns", "expiration_ns", "underlying")
+    assert {name: stored[name] for name in keep} == {
+        name: fields_of(thursday)[name] for name in keep
+    }
+    assert futures_asked(replay)[:3] == [
+        (FUTURES_CONTRACTS, {"date": "2025-01-04", "limit": "1", "ticker": "ESH5"}),
+        (
+            FUTURES_CONTRACTS,
+            {"date.gte": "2024-12-29", "date.lte": "2025-01-04", "limit": "1000", "ticker": "ESH5"},
+        ),
+        (
+            FUTURES_CONTRACTS,
+            {"date.gte": "2025-01-04", "date.lte": "2025-03-21", "limit": "1000", "ticker": "ESH5"},
+        ),
+    ]
+
+
+def test_a_contract_that_ended_before_the_source_stated_ticks_is_refused_to_a_manual_entry() -> (
+    None
+):
+    """ESZ4, the December 2024 E-mini: the plan serves its minutes from 2024-10-29, and no row of
+    its life from then to its last trade states a tick, since the source states a contract's
+    terms from 2025-03-12 on. Refused, naming the manual entry, before its product is asked."""
+    reader, replay = recorded_reader()
+
+    found = reader.resolve(["ESZ4"], date(2024, 10, 29))["ESZ4"]
+
+    assert isinstance(found, ResolveError)
+    assert found.reason == (
+        f"{UNKNOWN}: no row of ESZ4's futures listing from 2024-10-29 to its last trade on "
+        "2024-12-20 states a tick (the vendor's rows state one from 2025-03-12 on, measured on "
+        "ES's); define it as a `manual: true` entry in instruments.yaml whose `override` states "
+        "`instrument_class: future` and its `price_increment`, `multiplier`, `lot_size`, "
+        "`currency`, `underlying`, `activation_ns` and `expiration_ns`"
+    )
+    assert all(path == FUTURES_CONTRACTS for path, _ in futures_asked(replay))
+
+
+def test_the_manual_entry_that_refusal_names_defines_the_contract_and_needs_every_field() -> None:
+    """Followed as written, with ESZ4's terms — its row's dates, ES's tick, size and currency —
+    the entry builds the future; without any one field it names, it does not."""
+    reader, _ = recorded_reader()
+    found = reader.resolve(["ESZ4"], date(2024, 10, 29))["ESZ4"]
+    assert isinstance(found, ResolveError)
+    named = re.findall(r"`([a-z_]+)(?:: future)?`", found.reason.partition("`override`")[2])
+    terms = {
+        "instrument_class": "future",
+        "price_increment": "0.25",
+        "multiplier": "50",
+        "lot_size": "1",
+        "currency": "USD",
+        "underlying": "ES",
+        "activation_ns": "2021-06-04",
+        "expiration_ns": "2024-12-20",
+    }
+    dated = {"ts_event": date(2024, 10, 29), "ts_init": date(2024, 10, 29)}
+
+    def entry(*fields: str) -> InstrumentEntry:
+        return InstrumentEntry(
+            nautilus_id="ESZ4.XCME",
+            asset_class="COMMODITY",
+            manual=True,
+            corporate_actions="none",
+            override={name: terms[name] for name in fields},
+        )
+
+    assert sorted(named) == sorted(terms)
+    built = fields_of(build(entry(*named), dated))
+    assert (built["type"], built["price_increment"], built["multiplier"]) == (
+        "FuturesContract",
+        "0.25",
+        "50",
+    )
+    for missing in named:
+        refused_for = "implies no instrument class" if missing == "instrument_class" else missing
+        with pytest.raises(ValidationError, match=refused_for):
+            build(entry(*(name for name in named if name != missing)), dated)
+
+
+def test_a_product_quoted_in_points_of_par_has_no_contract_size_kanso_reads() -> None:
+    """ZN states 100,000 USD and is quoted in points of par, so a point is worth 1,000: the
+    quantity is no multiplier, and the contract is refused rather than mispriced a hundredfold."""
+    (stated,) = json.loads((FUTURES / "products_ZN_2026-10-27.json").read_text())["results"]
+    contract, _ = future("ZNZ6", product="ZN", tick=0.015625)
+    found = one(Directory(futures={"ZNZ6": (contract, stated)}), "ZNZ6")
+
+    assert isinstance(found, ResolveError)
+    assert "states ZN as 100000 USD" in found.reason
+    assert "manual entry" in found.reason
+
+
+def test_every_contract_unit_was_measured_quoting_its_price_per_one_of_it() -> None:
+    """The four units kanso reads a product's quantity in, as the source stated each single
+    product on 2026-10-27, and the size each exchange publishes for it."""
+    rows = json.loads((FUTURES / "products_singles_2026-10-27.json").read_text())["results"]
+    sizes = {
+        row["product_code"]: (row["unit_of_measure"], row["unit_of_measure_qty"]) for row in rows
+    }
+
+    assert sizes == {
+        "6E": ("EUR", 125_000.0),
+        "CL": ("BBL", 1_000.0),
+        "ES": ("IPNT", 50.0),
+        "GC": ("TRYOZ", 100.0),
+    }
+    assert {unit for unit, _ in sizes.values()} == conventions.CONTRACT_UNITS
+    assert all(row["price_quotation"].startswith("U.S. dollars and cents per") for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("answer", "error"),
+    [(refused(), NotEntitledError), (rejected(), MalformedRequestError)],
+    ids=["refused", "rejected"],
+)
+def test_a_futures_listing_that_refuses_or_rejects_stops_the_call(
+    answer: Response, error: type[Exception]
+) -> None:
+    """A refusal is the plan, not one contract; a rejection is kanso's own question gone
+    wrong. Neither is reported as a key the vendor does not carry."""
+
+    def vendor(url: str, params: Mapping[str, str]) -> Response:
+        return recorded("reference_tickers_ESZ5.json") if LISTING in url else answer
+
+    reader = MassiveReference(MassiveClient("test-key-not-a-secret", transport=Replay(vendor)))
+
+    with pytest.raises(error):
+        reader.resolve(["ESZ6"], TODAY)
+
+
+def test_the_front_month_is_the_soonest_single_still_trading() -> None:
+    """The listing will not sort by last trade date (HTTP 400, recorded), so it is read whole
+    and the soonest chosen here: ESZ6 on 2026-10-28, past ESH0, listed first, and ESH2, listed
+    but not yet trading."""
+    asked: list[dict[str, str]] = []
+
+    def vendor(url: str, params: Mapping[str, str]) -> Response:
+        asked.append(dict(params))
+        return recorded("contracts_ES_2026-10-28.json")
+
+    client = MassiveClient("test-key-not-a-secret", transport=Replay(vendor))
+
+    assert front_month(client, "ES", date(2026, 10, 28)) == "ESZ6"
+    assert front_month(client, "ES", date(2028, 1, 3)) == "ESH0", "the same rows, a later day"
+    assert front_month(client, "ES", date(2031, 1, 2)) is None, "ESH2 is listed, not trading"
+    assert "sort" not in asked[0] and asked[0]["type"] == "single"
+    assert json.loads(recorded("contracts_sort_by_last_trade_date.json").body)["status"] == "ERROR"
+
+
+def test_a_front_month_listing_that_answers_nothing_names_no_key() -> None:
+    client = MassiveClient("test-key-not-a-secret", transport=Replay(lambda url, params: refused()))
+
+    assert front_month(client, "ES", date(2026, 10, 28)) is None
 
 
 def test_an_option_whose_side_nobody_states_does_not_resolve() -> None:
@@ -841,11 +1250,16 @@ def test_an_instrument_this_provider_never_resolved_has_no_vendor_symbol() -> No
     ],
 )
 def test_every_answer_survives_the_rebuild_the_core_puts_it_through(
-    wanted: str, row: dict[str, Any], asset_class: str
+    wanted: str, row: Any, asset_class: str
 ) -> None:
     """The core reconstructs a resolved definition so an override applies over it; a class
     whose fields did not survive that would be resolved once and lost on the next run."""
-    found = one(Directory(rows={wanted: row}), wanted)
+    directory = (
+        Directory(futures={wanted: row})
+        if isinstance(row, tuple)
+        else Directory(rows={wanted: row})
+    )
+    found = one(directory, wanted)
 
     assert definition_checksum(rebuilt(found, asset_class)) == definition_checksum(found)
 

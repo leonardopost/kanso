@@ -9,10 +9,11 @@ alike and the market is taken from the reference row rather than guessed from th
 Two of the formats encode the contract itself. An option key is an OSI symbol — root,
 `YYMMDD`, `C` or `P`, then the strike in thousandths — and is parsed from the right, so a
 root of any length works and the expiry, the kind and the strike come out exactly. A
-futures key is a product code, a month letter and a year, and the year is where the
-trouble is: a single digit names one year in every decade, so it is resolved against the
-date the question is asked on, and a resolution that disagrees with the source's own
-expiry is a refusal rather than a guess.
+futures key is a product code, a month letter and a year as the vendor spells it, which is
+its own: measured on 2026-10-29, ES's contracts for 2030 carry one year digit (`ESH0`) and
+CL's two (`CLF30`, beside `CLZ9` for 2029). No year is resolved here; a contract is asked for
+exactly as its key is written, and the vendor's listing as of the date asked is what names
+the contract.
 
 **Conventions** are what the engine needs and the vendor does not publish: the minimum
 price increment, the minimum lot and the contract size. Three rules govern them.
@@ -45,6 +46,7 @@ from kanso.errors import ValidationError
 
 __all__ = [
     "CLASSES",
+    "CONTRACT_UNITS",
     "CONVENTIONS",
     "FOREX",
     "FUTURES",
@@ -59,8 +61,7 @@ __all__ = [
     "Convention",
     "Ticker",
     "classify",
-    "contract_month",
-    "contract_year",
+    "contract_product",
     "convention",
     "increments",
     "market_class",
@@ -136,20 +137,24 @@ MONTHS: Final[dict[str, int]] = {
 December, and I and O are omitted so neither can be read as a digit."""
 
 CONTRACT: Final = re.compile(rf"([A-Z0-9]{{1,5}}?)([{''.join(MONTHS)}])([0-9]{{1,4}})")
-"""A futures key: a product code, a delivery month, then one, two or four year digits. The
-product is matched lazily so a code that itself ends in a month letter — `ZN`, `GC` — still
-splits at the right place, the trailing digits being the anchor."""
+"""A futures key: a product code, a delivery month, then the year's digits. The product is
+matched lazily so a code that itself ends in a month letter — `ZN`, `GC` — still splits at
+the right place, the trailing digits being the anchor."""
 
 DIGITS: Final = re.compile(r"[0-9]+")
 LETTERS: Final = re.compile(r"[A-Za-z]+")
 """ASCII digits and letters. `str.isdigit` is not the test: it is true of digits from every
 script, and a key written in them would pass a format check and fail the engine."""
 
-YEAR_BACK: Final = 1
-DECADE: Final = 10
-"""How a single-digit year is resolved: over the ten years beginning one year before the
-date the question is asked on. One year back, because a contract is still referred to for
-a while after it expires; ten years, because a single digit distinguishes no more."""
+CONTRACT_UNITS: Final[frozenset[str]] = frozenset({"IPNT", "BBL", "TRYOZ", "EUR"})
+"""The futures product units whose `unit_of_measure_qty` is the contract's multiplier: the
+units the product's price is quoted per one of, so the quantity of them is what one point of
+price is worth. Measured on 2026-10-29 from `/futures/v1/products`, single products as of
+2026-10-27: ES `IPNT` 50 "per index point", CL `BBL` 1000 "per barrel", GC `TRYOZ` 100 "per
+troy ounce" and 6E `EUR` 125000 "per Euro increment" — each the exchange's own contract size.
+The same field is not a multiplier everywhere: ZN states `USD` 100000 and is quoted in points
+of par, so a point is worth 1000. A unit not listed here is not read as a contract size, and
+a contract of one resolves only from a manual entry."""
 
 OSI_STRIKE_DIGITS: Final = 8
 OSI_DATE_DIGITS: Final = 6
@@ -157,9 +162,8 @@ STRIKE_SCALE: Final = Decimal(1000)
 """The OSI option symbol: `<root><YYMMDD><C|P><strike x 1000, 8 digits>`."""
 
 CENTURY: Final = 2000
-"""The century a two-digit year belongs to, for both formats that carry one. The OSI
-symbology dates from 2010 and no series predates it, and a futures key has been written
-with two digits only since the market stopped tolerating the ambiguity of one."""
+"""The century an OSI option symbol's two-digit year belongs to: the symbology dates from
+2010 and no series predates it."""
 
 PAIR_LENGTH: Final = 6
 """A currency pair is two ISO 4217 alphabetic codes, base then quote, and nothing else."""
@@ -389,42 +393,16 @@ def parse(ticker: str) -> Ticker:
     return Ticker(text=text, key=text, asset_class=None)
 
 
-def contract_year(digits: str, as_of: date) -> int:
-    """The calendar year a futures key's year digits name, resolved against `as_of`.
-
-    Four digits are a year. Two are a year of this century, which the market has spelled
-    that way since it stopped being ambiguous. One is ambiguous by construction — it names
-    a year in every decade — and is resolved to the one in the ten years beginning a year
-    before `as_of`, which is the range a listed contract falls in and the reason resolution
-    is dated at all.
-    """
-    if len(digits) == 4:
-        return int(digits)
-    if len(digits) == 2:
-        return CENTURY + int(digits)
-    if len(digits) != 1:
-        raise MalformedRequestError(
-            f"massive: {digits!r} is not a contract year; a year is written with one, two "
-            "or four digits",
-            remedy="name the contract with a two-digit year, such as ESZ25",
-        )
-    first = as_of.year - YEAR_BACK
-    return first + (int(digits) - first) % DECADE
-
-
-def contract_month(symbol: str, as_of: date) -> tuple[str, int, int] | None:
-    """A futures key as product, year and delivery month, or `None` when it is not one.
+def contract_product(symbol: str) -> str | None:
+    """The product code a futures contract key begins with, or `None` when it is not one.
 
     `None` rather than a refusal, because a bare key that is not a contract code is an
-    ordinary ticker until the source says otherwise, and the source is asked either way.
+    ordinary ticker until the source says otherwise. The key is read as written: the vendor
+    spells each contract its own way, so nothing here reads a year out of it or writes it
+    another way.
     """
-    found = CONTRACT.fullmatch(symbol.upper())
-    if found is None:
-        return None
-    product, month, digits = found.groups()
-    if len(digits) == 3:
-        return None
-    return product, contract_year(digits, as_of), MONTHS[month]
+    found = CONTRACT.fullmatch(symbol)
+    return None if found is None else found.group(1)
 
 
 def increments(

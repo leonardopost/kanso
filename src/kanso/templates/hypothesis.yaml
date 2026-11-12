@@ -8,6 +8,7 @@ mechanism:                         # mean_reversion|momentum|microstructure|stat
 universe: []                       # ids from instruments.yaml; venues derive from their nautilus_id
 horizon:                           # holding period: <n>(s|m|h|d|w)
 resolution:                        # bar duration <n>(s|m|h|d|w), or tick|quote|trade
+# bar_resolution: 1m               # at tick|quote|trade with `bar` required: the size the bar instruments are read at (a future's or an index's minute bars beside an equity's tape). Scope: changing it clears `best`
 data_requirements: [bar]           # bar|quote|trade|book|<any registered custom type id>; book = the exchange's level-two changes, run on a venue with queue position
 # data_by_instrument:              # optional: a listed instrument is asked only for its own subset, e.g. {ETH-USD.COINBASE: [trade]} beside quoted equities. Scope: changing it clears `best`
 # costs:                           # optional. Costs are inherited from the venue, which the configured broker defines

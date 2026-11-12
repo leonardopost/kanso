@@ -119,7 +119,7 @@ from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
 from kanso.nautilus.cross_section import arm, coincident, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, signals_kept
-from kanso.nautilus.strategy import BAR, BOOK, QUOTE
+from kanso.nautilus.strategy import BAR, BOOK, QUOTE, KansoConfig, _bar_resolution_of
 from kanso.nautilus.venue import PRINT_SIZE, venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
@@ -771,9 +771,16 @@ def _reconfigured(config: Any, **overrides: Any) -> Any:
 
     An engine configuration is a frozen struct, and `dict()` round-trips one through its
     own field set with its tuples intact, so replacing a field is building the same class
-    from what it already held.
+    from what it already held — but for a sleeve's `bar_resolution`. `dict()` reads each field
+    as an attribute (nautilus_trader 1.231.0, `NautilusConfig.dict`), and an attribute of that
+    name the strategy's file sets on its `Config` hides the field from that read, so the size is
+    carried from `KansoConfig`'s own slot, which is what the sleeve subscribes its bars at
+    (`kanso.nautilus.strategy._BAR_RESOLUTION`), rather than as that attribute holds it.
     """
-    return type(config)(**{**config.dict(), **overrides})
+    held = config.dict()
+    if isinstance(config, KansoConfig):
+        held["bar_resolution"] = _bar_resolution_of(config)
+    return type(config)(**{**held, **overrides})
 
 
 async def _drive(

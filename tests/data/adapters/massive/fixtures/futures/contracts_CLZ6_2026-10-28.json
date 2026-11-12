@@ -1,0 +1,27 @@
+{
+ "status": "OK",
+ "request_id": "04fbb7cd51404b849689463729e0dbea",
+ "results": [
+  {
+   "active": true,
+   "date": "2026-10-28",
+   "days_to_maturity": 23,
+   "first_trade_date": "2017-11-21",
+   "last_trade_date": "2026-11-20",
+   "max_order_quantity": 2999,
+   "min_order_quantity": 1,
+   "name": "CLZ6 Future",
+   "product_code": "CL",
+   "settlement_date": "2026-11-20",
+   "settlement_tick_size": 0.01,
+   "spread_tick_size": 0.01,
+   "ticker": "CLZ6",
+   "trade_tick_size": 0.01,
+   "trading_venue": "XNYM",
+   "type": "single",
+   "group_code": "CL",
+   "provider_id": "KBQPJNBATHIC",
+   "provider_product_id": "J6RPLCCJNZSE"
+  }
+ ]
+}

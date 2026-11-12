@@ -109,6 +109,13 @@ class HostRef:
         """The workspace-relative directory holding this version's generated impl."""
         return f"strategies/{self.strategy_id}/impl/{self.version}"
 
+    def sleeve_file(self, source: bytes) -> str:
+        """The file this version's implementation holds its sleeve's bytes `source` in, which a
+        refusal of those bytes names (`kanso.strategy.impl.module_name`)."""
+        from kanso.strategy.impl import SLEEVE, module_name
+
+        return f"{module_name(SLEEVE, self.sleeve.hyp_id, source)}.py"
+
     @classmethod
     def of(cls, strategy: StrategyFile, version: int | None = None) -> HostRef:
         """The reference to one version of `strategy` (*default* its latest)."""
