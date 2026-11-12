@@ -382,7 +382,7 @@ def _sleeve_config(
     The fields the runner injects when it builds a card, so a version deployed to a stage is
     configured as the card that earned it was — but for `data_by_instrument` and
     `session_scope`, which are not written here, so a stage sleeve subscribes every required
-    type of every name (`docs/backlog.md` row 233) — with the version's own `config`
+    type of every name (`docs/backlog.md` row 239) — with the version's own `config`
     layered on top for the fields an operator or a later construct set. `sizing_budget` is
     the sleeve hypothesis's rule, and `extra_resolutions` the grains its attached overlays
     keep their own clock on, so a stage node runs both as a card did; `bar_resolution` is

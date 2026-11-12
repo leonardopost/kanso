@@ -204,6 +204,19 @@ it. Measured before that on an operator's workspace on 2026-10-01: lanes that ha
 certification's parity on a node did not exit within a minute of a `SIGTERM`, and only
 `SIGKILL` moved them.
 
+**A drain stops a lane after its card, not inside it.** `kanso research stop --drain` has the
+supervisor send its lanes `SIGUSR1` rather than `SIGTERM`: a lane told to drain begins nothing
+more — no proposal, card, alignment check, certification or exploration — and kills nothing it
+is running, so the card in flight runs to its own end, its budget included, and is recorded
+before the lane exits. The monitor is stopped as a stop stops it, and the supervisor and the
+command wait for every child however long its card takes. A stop meanwhile is a stop.
+
+**A hypothesis whose baseline was killed for its clock waits in the queue.** The lane puts the
+hypothesis back in the queue and passes over it while a baseline begun now would run on the
+same strategy, `hypothesis.yaml`, `program.md`, snapshots, `[research] baseline_budget_s` and
+kanso version as the one killed, which its `baseline_failed` event records (`docs/cli.md`,
+The daemon and the queue). A run begun since ends the wait.
+
 A lane directory holds **exactly three files** — `hypothesis.yaml`, `program.md`,
 `strategy.py` — and only `strategy.py` may change. That is not a convention: it is checked
 before every card, and the first two are compared against the blobs the run pinned. The one
@@ -612,20 +625,23 @@ evaluate, record. Four outcomes, and each does something different to the lane.
 restore. Three proposals into the demo:
 
 ```
-sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc	trades_per_session	hit_rate	median_hold_s	maker_share	fill_ratio	gross_bps_per_trade	cost_bps_per_trade	net_bps_per_trade	net_bps_per_trade_se	gross_bps_per_session	cost_bps_per_session	net_bps_per_session
-93510e2	0.000000	0.000000	1	0	6.168	0.185	discard	baseline	0.0000									0.0000	0.0000	0.0000
-f729a53	9.986730	1.065174	2	1003	14.868	0.216	keep	fade a 2-sigma deviation from a 60-bar rolling mean	3.8429	0.7498	960.0000	0.0000		15.0843	5.0038	10.0805	1.0545	5.7693	1.9137	3.8556
-340620b	5.285159	0.838720	3	1164	13.608	0.214	discard	exit at 1 sigma rather than half a sigma	4.4598	0.7474	540.0000	0.0000		10.3818	5.0026	5.3792	0.8191	4.6091	2.2204	2.3887
-020aef2	0.000000	0.000000	4	0	1.588	0.196	crash	scale by a rolling sigma helper that does not exist (intentional crash)												
+sha7	metric	metric_se	n_trials	n_trades	wall_s	peak_mem_gb	status	desc	trades_per_session	hit_rate	median_hold_s	maker_share	fill_ratio	gross_bps_per_trade	cost_bps_per_trade	net_bps_per_trade	net_bps_per_trade_se	gross_bps_per_session	cost_bps_per_session	net_bps_per_session	first_fill_s	last_fill_s	active_s
+93510e2	0.000000	0.000000	1	0	6.168	0.185	discard	baseline	0.0000									0.0000	0.0000	0.0000			
+f729a53	9.986730	1.065174	2	1003	14.868	0.216	keep	fade a 2-sigma deviation from a 60-bar rolling mean	3.8429	0.7498	960.0000	0.0000		15.0843	5.0038	10.0805	1.0545	5.7693	1.9137	3.8556	2340.0000	21060.0000	17460.0000
+340620b	5.285159	0.838720	3	1164	13.608	0.214	discard	exit at 1 sigma rather than half a sigma	4.4598	0.7474	540.0000	0.0000		10.3818	5.0026	5.3792	0.8191	4.6091	2.2204	2.3887	2760.0000	20760.0000	17040.0000
+020aef2	0.000000	0.000000	4	0	1.588	0.196	crash	scale by a rolling sigma helper that does not exist (intentional crash)															
 ```
 
 **A card that ran carries a digest of what its trades did.** A metric is one number, and one
 number cannot say how it moved: a per-trade edge rises when every trade earns more and when
 the trades that lost are dropped, and a contribution falls when the trades get worse and when
 the book merely trades less. Shown only the number, a search scored on a contribution that
-loses on every trade is rewarded for trading less and cannot see that it was. So the lane
-reads, off the run the card was scored on and the orders its strategy submitted, a dozen more
-numbers, and records them with the card:
+loses on every trade is rewarded for trading less and cannot see that it was; and a number
+struck over a whole window cannot say when in each day a card traded, so a card whose every
+fill lands in the first seconds of each session, its day ended there by a stop, reads like one
+that trades all day. So the lane reads, off the run the card was scored on, the orders its
+strategy submitted and the first point it was handed in each return period, the numbers
+below, and records them with the card:
 
 | field | what it is |
 |---|---|
@@ -635,18 +651,24 @@ numbers, and records them with the card:
 | `median_hold_s` | the median seconds from a trade's entry fill to its exit fill |
 | `maker_share` | the share of traded notional the venue reported as a maker's fill |
 | `fill_ratio` | the quantity filled on orders that carried a limit over the quantity submitted on such orders; `null` when the strategy sent none. An order the emulator released at market fills with no limit, and a modify that raised a quantity is not in the order as submitted, so it is a reading rather than an identity |
+| `period`, `filled_periods` | the run's `[research] return_period`, and how many of its return periods it filled in. The window is cut into them on the UTC clock, as the paragraph on return periods below says: each opens at the window's first midnight plus a whole number of periods, and a fill is in the one its instant falls in. `first_fill_s`, `last_fill_s` and `active_s` are read over the periods filled in; all five are `null` on a card recorded before the digest timed its fills |
+| `first_fill_s`, `last_fill_s` | the median, over those periods, of the seconds from a period's first point — the first point the card was handed in it — to its first fill and to its last. No calendar is consulted: an offset is from a point, so a card whose every period opens on its own session's first point — a session that starts at the same local time every day and leaves nothing past the next midnight UTC — and that trades at the same local times reads the same either side of a change of clocks. A session that runs past midnight UTC hands the next period its last points, and that period is read from the first of them: where it does so in one season and not the other — New York's evening session, which closes at 20:00 there, does in winter, when that is 01:00Z, and not in summer, when it is 00:00Z — the same local trading reads hours apart either side of the change. Over an even count of periods it is the lower of the two middle offsets, so it is one some period filled at |
+| `active_s` | the median, over the same periods, of the seconds from a period's first fill to its last. A burst that straddles a period's boundary, as a hold across 00:00Z does on a 24 h name at a daily period, reads as the whole period |
 | `net_bps_per_trade`, `net_bps_per_trade_se` | the mean of `pnl_net / notional` over the closed trades, in basis points of the position opened, and its error: the per-trade objective over the whole window as one fold, the error read period by period. What `edge_per_trade` judges. Read that way an error has as many degrees of freedom as periods that closed a trade, less one, and on `p` such periods reads low by `√((p − 1)/p)` — 0.71 of the error on two, 0.94 on eight — which the gate's margin allows for and this number does not; it is zero by construction when one period closed them all, however far apart they landed, so with fewer than two the error is `null` |
 | `cost_bps_per_trade`, `gross_bps_per_trade` | the mean of `cost / notional` on the same trades, and the net plus it |
 | `net_bps_per_session`, `cost_bps_per_session`, `gross_bps_per_session` | in basis points of the capital, per session: the sum of the returns — what the book made, an open position's mark included — every fill's cost, and the net plus it |
+| `commands` | how fast the strategy sent its orders, counted as it sent them on the data clock: `submits` (one per order), `modifies` (one per modify the engine sends), `cancels` (one per order a cancel would reach), and `peak_60s` and `p99_60s` — of the counts of commands in the 60 s ending at each command, that one and every other sent at the same instant included, the largest and the 99th percentile by nearest rank, so a cancel and the order replacing it in one handler each count two; and `refused_submits` and `refused_modifies`, the submits of an entry — every order of an entry's list — and the modifies a stated `costs.orders_per_minute` had no token available to, the bucket holding fewer tokens than they cost — a list one for each of its orders, all or none — or a cancel waiting for its tokens or an exit owed for want of a token waiting for one, dropped unsent while the card ran on, so in none of the other counts. A command is what the sleeve asks of the venue, so an order the engine's emulator holds is counted when the strategy submits it and its cancel when the strategy sends it. What a stated `costs.orders_per_minute` is set against; `null` on a card recorded before cards kept it, and the refused counts zero on one recorded before they were kept |
 
 Gross is before fill costs and net after, so gross less cost is net, per trade and per
 session; funding, which is a payment on what was held and not a fill cost, stays in both. A
 number with nothing to be read off — an edge with no closed trade, a share with no fill — is
 `null`, never a zero. The proposer is shown every recent card's `n_trades` and digest beside
 its metric, rounded to four places; `research card` prints it as a `trades` line and an `edge`
-line and carries it under `--json` as `digest`; `research show --json` carries the newest card
-of the bytes it prints; and `results.tsv` carries twelve of its numbers after `desc`, appended so
-that a reader taking the first nine columns by position reads what it always read, an absent
+line, a `commands` line where it counted them, and a `timing` line, and carries it under
+`--json` as `digest`; `research show --json` carries the newest card of the bytes it prints;
+and `results.tsv` carries fifteen of its numbers after `desc` — none of `commands` — appended
+so that a reader taking the first nine columns by position reads what it always read — the
+three timing columns after the twelve that came before them — an absent
 number an empty cell. A card of a turn that ran several carries the digest one card of the
 same bytes carries; 0.18.0 and 0.19.0 recorded such cards with none. A crash, a card
 refused before or during its backtest, and a card recorded before 0.17 carry none. In the
@@ -654,7 +676,12 @@ sample above the keep closed 3.84 trades a session,
 three in four of them winners, held for a median of 16 minutes and netting 10.08 ± 1.05 bp of
 the position — 15.08 gross less 5.00 of cost — and the discard after it traded more, 4.46 a
 session, for 5.38 net: its number fell because each trade earned less, not because it traded
-less. The demo sends market orders only, so `fill_ratio` is empty.
+less. The demo sends market orders only, so `fill_ratio` is empty. The keep filled in all 261
+of its daily periods, its first fill a median 2,340 s and its last 21,060 s after its period's
+first point — the session's first bar, which closes at 09:31 in New York in winter and summer
+alike — with 17,460 s, nearly five hours, between them: a book that trades through the
+session, where one whose stop ended its day a second after the open would read a span of
+about a second.
 
 **A card that ran keeps what its number was computed from.** The metric is one reading of
 the run the card child measured — its return and equity at each period end, every closed
@@ -718,14 +745,16 @@ research window — and the warmup sessions before it, when the hypothesis decla
 out of the catalog and hands the points to the child, which starts in a new
 session under an environment allow-list. A card therefore has no route to data outside its
 window even if its code went looking for one. The parent supervises wall time and resident
-memory and kills the process group on breach. The wall-time budget is three times what the
-run's baseline took and never under 60 s (the `budget` `research begin` prints), and a card
-killed for it is a `crash`. The baseline is the strategy the run starts from. A later run
-starts from the hypothesis's best, or from the card a re-seed names, so its baseline's wall
-already includes that strategy's fills. A hypothesis's first run starts from the workspace's
-`strategy.py`, and when that is the stub kanso renders, as in the demo, the baseline trades
-nothing and a card that trades spends the headroom on its fills: in the sample above the keep
-and the discard took 2.4 and 2.2 times the baseline's wall (row 139 of `docs/backlog.md`).
+memory and kills the process group on breach. The wall-time budget is three times the wall
+of the run's first card that traded and never under 60 s, and a card killed for it is a
+`crash`. The baseline is the strategy the run starts from, and the first card of the run. A
+hypothesis's first run starts from the workspace's `strategy.py`, and when that is the stub
+kanso renders, as in the demo, the baseline trades nothing: the budget is three times its
+wall (the `budget` `research begin` prints) until a card trades, and that card strikes it
+from its own. Struck once from a baseline that traded nothing, a card that traded spent the
+headroom on its fills and could be killed before it was scored (row 139 of
+`docs/backlog.md`). The run records which card struck its budget (`budget_sha`), and
+`research card` prints the budget after every card.
 
 **The window streams to the child.** The parent starts the child first and hands it the
 window on its standard input while it runs: it reads the catalog in steps of an hour when the
@@ -811,6 +840,18 @@ and 671.2 s of wall time (468.5 s and 485.3 s of the child's CPU) before and 412
 orders being the engine's to handle. Of what is left, about half is the engine's own dispatch,
 matching and identifiers, and half the Python the venue's modules, the harness and the sleeve
 run on every point and marker.
+
+**What a trade costs a card.** The engine's portfolio records each position it closes in its
+analyzer, which copies every record before it to append one, so a card's wall grew with the
+square of its trades; kanso reads nothing the analyzer keeps, and the engine a card runs in
+has it record nothing (`kanso.nautilus.facts`). Measured on 2026-10-31 on one name's 1 s quotes
+and prints over 27 sessions, the same cards before and after, byte for byte: 1,002 trades took
+20.1 s and take 19.1 s, 10,028 took 64.6 s and take 27.8 s, and 35,425 took 634.0 s and take
+118.5 s. Across names a close still costs more the more closes came before it: on a NETTING
+venue the portfolio re-reads the closing name's snapshots whenever a close in another name came
+between (`kanso.nautilus.facts`, a design constraint). Over the same tape of two names, 10,028
+trades in one of them took 46.2 s and the same count across both 512.4 s; over seven sessions
+of twenty names, 10,237 trades in one took 112.0 s and 9,805 across all twenty 141.5 s.
 
 **A replay streams its window as a card does.** `kanso replay run` and `parity` — and so the
 `parity_replay` certification gate — read the range through the reads and chunks a card's
@@ -905,27 +946,38 @@ prompt, the system turn a provider caches by its exact bytes, and not beside the
 cards in the user turn, where they would be the same bytes resent on every call. An edit to
 `context_cards` or `cards_per_turn` during a run moves that half once.
 
-A card that ran and did not keep is then compared by what it **held**: its signature,
-which is, for each session of the research window, the instruments and sides it held and
-whether each was still open at the session's end. Both of a run's own records of a
-position are read — what it held at each period end, and the spans of the positions it
-opened and closed — because a period end is a sample, and a hypothesis whose positions
-close before the session does is flat at every sample by construction. Signed from the
-ends alone, such a hypothesis matched every candidate against every other at 100 percent
-and never made an experiment again: measured in a live workspace, 192 of one's 201 stored
-signatures held nothing on any of their 834 sampled days. The two are marked apart rather
-than merged into "something was held", so the reading is strictly finer than sampling the
-ends alone and never coarser: two strategies that differed under the old reading differ
-under this one, and carrying a position over the close is not the same book as closing it
-before. Two strategies with the same signature on nearly every shared session made the
-same bets, however differently they were written — a threshold moved, a helper renamed, a
+A card that ran and did not keep is then compared by what it **held**: its signature, which
+is, for each session of the research window, the instruments and sides it held and whether
+each was still open at the session's end — and, for a hypothesis held under a day, in which
+hours of the session it held them. Both of a run's own records of a position are read — what
+it held at each period end, and the spans of the positions it opened and closed — because a
+period end is a sample, and a hypothesis whose positions close before the session does is
+flat at every sample by construction. Signed from the ends alone, such a hypothesis matched
+every candidate against every other at 100 percent and never made an experiment again:
+measured in a live workspace, 192 of one's 201 stored signatures held nothing on any of
+their 834 sampled days. The two are marked apart rather than merged into "something was
+held", so the reading is strictly finer than sampling the ends alone and never coarser: two
+strategies that differed under the old reading differ under this one, and carrying a
+position over the close is not the same book as closing it before. A hypothesis whose
+`horizon` is under a day is read by the hour as well, because a lane that holds one name on
+one side every session gives every candidate the same sessions: read by the day, two
+strategies holding it from 10:00 to 11:00 and from 13:00 to 14:00, or trading one clip a day
+and twenty spread through it, held the same book on every session, so a candidate that
+changed only when it traded was a repeat whenever its number stayed inside the floor. Read
+by the hour, a position held during a session marks it with each UTC hour it was open in,
+and those are three books. The sessions stay what `redundant_pct` is a share of: counted in
+hours, the hours a scalper was flat in would outvote the one it traded in. A book an earlier
+kanso stored by the day carries no hours, so under the pins of a run begun before the
+upgrade it matches a candidate read by the hour only on the sessions neither held a position
+inside. Two strategies with the same signature on nearly every shared session made the same
+bets, however differently they were written — a threshold moved, a helper renamed, a
 condition spelt the other way. Whether they also earned the same number is the rest of that
 sentence, and it is read rather than assumed: a signature is stored with the metric its card
 earned, and a candidate is **redundant** when it matches a strategy judged under the run's
 pins on at least `[research] redundant_pct` percent of their shared sessions *and* its own
-metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)`, the floor
-the keep rule is struck from too — of what that strategy earned. Then it is a card of that
-status carrying the metric it measured, the lane restored as any non-keep restores it, a
+metric is within that hypothesis's noise floor — `max(min_delta, k_se x se)` on the
+candidate's own error — of what that strategy earned. Then it is a card of that status
+carrying the metric it measured, the lane restored as any non-keep restores it, a
 `redundant` event carrying the card it repeats and both numbers, the command that asked for
 it refused, and the proposer shown that card by name on its next turn.
 
@@ -943,26 +995,22 @@ matches of one book scored -18.780 to 9.179 around that book's -4.5452, a median
 against a floor of 10.116, with 74 of its 325 refusals beyond it. The same book read by
 session, and not the same result.
 
-A redundant card is a card because the backtest ran and a real number came back — the
-trial it counts as, the corner it fills in on the coverage table and the record the next
-run reads are all things the search actually did, and dropping them was measured deflating
-a certificate by a search more than a hundred times narrower than the one that ran. The
-same argument is owed to the 106, and it is paid in the only currency they lack: a card
-that matched a measured book and moved the number is an ordinary discard, with nothing in
-`cards` to say which book it matched, so it appends a `same_book` event carrying what the
-`redundant` event carries. The next proposals are shown both kinds in one list, each
-saying which it is — a proposer told to hold a measured book and move its number cannot
-apply that rule from the refusals alone, and each admitted candidate stores its own book,
-so a hypothesis whose spread is wide against its floor re-treads a book about
-`ceil(spread / 2 x floor)` times before matching resumes. What
-it may never be is a keep: the keep rule is asked first, so a candidate that beats the
-best is a keep whatever it resembles. Nor is there a gap between the two rules for a card
-to fall into unjudged — they are struck from one floor, which the keep rule doubles only
-when the file grew past its line budget, so a candidate that cleared the floor upward and
-not the doubled bar is neither a keep nor a repeat, which is what a discard is. The
-baseline is exempt, since it is the last run's best and its signature is already stored;
-and signatures are stored for every judged run, redundant ones included, so the third
-spelling of an idea is refused against the second as well as the first.
+A redundant card is a card because the backtest ran and a real number came back — the trial
+it counts as, the corner it fills in on the coverage table and the record the next run reads
+are all things the search actually did, and dropping them was measured deflating a
+certificate by a search more than a hundred times narrower than the one that ran. The same
+argument is owed to the 106, and it is paid in the only currency they lack: a card that
+matched a measured book and moved the number is an ordinary discard, with nothing in `cards`
+to say which book it matched, so it appends a `same_book` event carrying what the
+`redundant` event carries. The next proposals are shown both kinds in one list, each saying
+which it is — a proposer told to hold a measured book and move its number cannot apply that
+rule from the refusals alone, and each admitted candidate stores its own book, so a
+hypothesis whose spread is wide against its floor re-treads a book about
+`ceil(spread / 2 x floor)` times before matching resumes. What it may never be is a keep:
+the keep rule is asked first, so a candidate that beats the best is a keep whatever it resembles. The
+baseline is exempt, since it is the last run's best and its signature is already stored; and
+signatures are stored for every judged run, redundant ones included, so the third spelling
+of an idea is refused against the second as well as the first.
 
 The rule is in the proposer's instruction, with what a signature is and what to do with
 the refusals it is shown, for the same reason the phase is: a refusal the proposer was
@@ -1026,11 +1074,10 @@ lane's memory is divided by `cards_per_turn`, never below three times what the r
 baseline needed: a width whose part of the share falls under that is refused before the
 turn is proposed, naming the widest turn the share funds and the `[env] mem_per_lane_gb`
 the width needs. Each child runs on `cards_per_turn` times the run's card budget, because
-the children share the lane's cores and the budget was struck from a baseline that had
-them to itself. On 0.18.0 and 0.19.0 every child had one card's budget, so on a host whose
-lanes already fill its cores each child of a turn of eight had about an eighth of the core
-its baseline had and would run about eight times its baseline's wall against a budget of
-three: every one of them killed. A child killed for its share or its clock is a crash of
+the children share the lane's cores. On 0.18.0 and 0.19.0 every child had one card's budget,
+so on a host whose lanes already fill its cores each child of a turn of eight had about an
+eighth of the core its baseline had and would run about eight times its baseline's wall
+against a budget of three: every one of them killed. A child killed for its share or its clock is a crash of
 that slot alone.
 
 A crash is the one card whose idea was never judged, so the turn after it is a **repair**.
@@ -1312,6 +1359,26 @@ order saves none of it: one resting order moved on each of 30,000 one-second bar
 engine holding 60,001 events, and the same sleeve cancelling it for a fresh one every 2,000
 moves left it holding 60,043 across fifteen orders, at the same peak.
 
+**A strategy's own limits can be read at the quote.** `self.balance_at_quote` is that balance
+with each open position marked at the mid of its name's quote in force instead of its last
+print, for a strategy that stops or takes its day at a level of its own; under `depth` the
+quote in force is level one of the harness's copy of the book, which `balance` never marks at. A
+trade can print well outside the quote: measured on 2026-10-30 over the first second of nine
+opens — SPY, QQQ and IWM on 2025-01-02, 2025-01-03 and 2025-02-03 — 1,744 of 4,791 prints lay
+outside the quote in force at them, a median of 0.68 bp and at most 13.7 bp of the price from
+its mid, and one NVDA print of a single share took a scalping card's balance from -0.9 bp of
+its book to -54 bp and ended its day at its -40 bp stop. The mark is the mid because `balance`
+and the card mark a quote at its mid, so without `depth`, where the last point of each name
+held is a valid quote, the two readers are one number; the side a close would take — the bid
+for a long, the ask for a short — would also move every limit by half the spread of every
+position open, at those opens a median of 0.23 bp and at most 1.13 bp of the price, which a
+flatten at market pays past the limit. A name with no valid quote in force — none yet, or a
+last quote that is not `ask > bid > 0`, as a locked or crossed one is, which 48 of those 4,791
+prints met, and as level one is under `depth` while a side of the book is empty — is marked at
+its last trade or bar close, never at that quote's mid, and with neither at its cost. Nothing
+kanso sizes, reserves or measures reads it: the room reads `balance`, and a card is measured on
+the runner's equity, which `balance` mirrors.
+
 **A `book` policy changes the equity a card is measured on** (`docs/workspace.md` has the
 keys). The runner applies it once, at each period end of the extraction, in one order: the
 carry — the yearly `financing_rate_bps` on gross exposure, shorts counted, above the book's
@@ -1422,10 +1489,13 @@ they are the loop's whole defence against fitting noise.
 **A metric arrives with its own noise floor.** The objective is computed on each of the
 research window's contiguous folds; the metric is their mean, and `metric_se` is the error
 of that mean read off the series it is a mean of — the per-period returns for a contribution
-or a Sharpe, the per-trade edges taken period by period for a per-trade objective. An
-improvement counts only when it clears `max(min_delta, k_se × metric_se)` — the operator's
-smallest interesting difference and the error of the number that would become the best. Both
-parameters are fixed at classification, before any result is seen.
+or a Sharpe, the per-trade edges taken period by period for a per-trade objective. A
+candidate is compared with the run's best by their difference, and an improvement counts
+only when that difference clears `max(min_delta, k_se × se)`, where `se` is the larger of
+two errors: the candidate's own `metric_se` — the error of the number that would become the
+best — and the error of the difference. `min_delta` is the operator's smallest interesting
+difference, in the objective's units, and `k_se` how many of that larger error it must
+clear. Both parameters are fixed at classification, before any result is seen.
 
 The error was once the spread of the fold means over the root of their count: four numbers,
 three degrees of freedom, scattering from half to one and a half times the true error card
@@ -1445,8 +1515,36 @@ and this is what keeps that robustness. How well that holds, and where it falls 
 `docs/backlog.md` row 171. A relative or benchmark objective's error is the paired one
 wherever the two runs share their periods: a contribution's per-period differences, a
 difference of Sharpes by Memmel's correction of Jobson–Korkie, a per-trade edge's difference
-linearised period by period. That one number is the card's, the keep floor's, the redundancy
-floor's, a certificate's `±` and every deflation gate's.
+linearised period by period. That one number is the card's, the redundancy floor's, a
+certificate's `±` and every deflation gate's.
+
+The keep rule reads the same pairing between two cards. Each card keeps what it was measured
+from (Card, above), and the best stands where a relative objective's host stands: the
+difference is the candidate's statistic less the best's, fold by fold, and its error is the
+paired one that objective would read — the per-period differences of two contributions,
+Memmel's for two Sharpes, two per-trade edges' linearisations differenced period by period —
+widened for serial correlation like any other. Two cards over the same sessions share most
+of their day-to-day noise, so a refinement has a difference far better known than either
+number, and two unrelated strategies one less well known than either. The bar takes the
+larger error, so it is never lower than the one the candidate's own error struck before the
+rule paired: an unrelated strategy is held to the error of its difference, and a refinement
+to its own error, as it was. Measured over 4,000 synthetic draws of a lane earning 15 bp a
+day at 120 bp of spread over 250 sessions, at `k_se` 0.5 and 1: an unrelated strategy no
+better than the best was kept 0.36 and 0.24 of the time on its own error and is kept 0.31
+and 0.16, the rate `k_se` states, `1 − Φ(k_se)`; a refinement truly worth +3 bp a day, its
+difference known to 1.5 bp a day, is kept 0.26 and 0.001 of the time, and the same edit with
+nothing in it 0.004 and in none of the draws, the rule deciding every draw of the two as its
+own error did. Struck on the difference's error alone, the bar kept that refinement 0.93 and
+0.82 of the time and the edit with nothing in it 0.30 and 0.16: on a difference known that
+well, no bar keeps more of the one without keeping more of the other. `edge_per_trade`'s
+margin, which grows with the search, is not part of the comparison: it holds the card's own
+trades to their own error before the keep rule is asked, as it always has. Where the best
+card kept no measurement — one recorded before cards kept theirs — or the two do not pair,
+because what they were measured under moved between them, the bar is struck on the
+candidate's own error alone. The `card` event of every card the rule compared with a best
+carries the comparison as `keep`: the best's sha7, the `difference`, its `se`, whether it
+was `paired`, and when it was not, `unpaired`, saying why; the card's own error is its
+`metric_se`.
 
 The folds are `[research] folds` equal spans of the calendar, not of the sessions, and a
 return period belongs to the fold its end falls in. So the metric is a mean of folds and not
@@ -1456,20 +1554,8 @@ folds hold nearly as many sessions each and the two means nearly agree; over a w
 few sessions they need not, and that is the window a certificate measures (below).
 
 Here is the rule on the filter. The hypothesis carries `min_delta: 0.0` and `k_se: 1.0`;
-the neutral baseline above scored `0.000000`:
-
-```
-$ kanso research card demo_filter --desc "withhold entries in the first ten minutes of each hour"
-error: 4d00282 held the same book as 2c6529e on 257 of 261 sessions (98%) and scored 0.273688 against its 0, inside the 0.461477 that separates two results here, so its result is already known and it is not an experiment; it is recorded as a redundant card and the lane copy has been restored
-remedy: move the result further than 0.461477 — a different instrument, side, set of sessions or holding over a session's end, or a size that changes the number and not only the book; `kanso research show demo_filter --sha 2c6529e` prints the card it repeats
-```
-
-Every constraint passed and the metric went up, and it was not kept: `0.273688 − 0.0` is less
-than `max(0.0, 1.0 × 0.461477)`, the error of a difference of per-trade edges over 844 trades
-paired session by session with the host's, so the improvement is not yet distinguishable
-from the noise it was measured in. Declined by the keep rule, it was then a repeat — the same
-book as the baseline on 98% of sessions, a number within the same floor — and is recorded
-`redundant` (Card, above). Withholding the first half of each hour moves further:
+the neutral baseline above scored `0.000000`, and withholding entries in the first half of
+each hour beat it:
 
 ```
 $ kanso research card demo_filter --desc "withhold entries in the first half of each hour"
@@ -1481,7 +1567,10 @@ best       9ea5a0b
            max_drawdown: pass — limit_pct=15.0, max_drawdown_pct=0.20953873499999465
 ```
 
-`1.436577 − 0.0` clears `max(0.0, 1.0 × 0.882818)`, and the card is the run's best.
+`1.436577 − 0.0` clears `max(0.0, 1.0 × 0.882818)`, and the card is the run's best. The best
+it was compared with is the baseline, a filter that withholds nothing, whose run is the
+host's own, so the error of their difference is the card's own: a difference of per-trade
+edges paired session by session with the host's.
 
 **The comparison is strict.** Equal is not better. A loop that kept ties drifts across a
 plateau of indistinguishable strategies and calls the drift progress.
@@ -1705,8 +1794,10 @@ or not. The base's private helpers that send an order as kanso's own — `_submi
 `_booked`, `_close` and every private method of the base that calls one of the three on
 itself or on `super()`, or calls one that does — are refused when read off a strategy, with
 the mark a book recognises kanso's order by (`_sending`) and the book's ledger
-(`_book_ledger`); on a class of the file that is not the harness's, the names are the
-author's own. And a method the engine defines and the base overrides — `submit_order`,
+(`_book_ledger`); and so is what holds a strategy to its account's order rate — the bucket,
+the tally, what spends them, and the lift only a stage's flatten calls (`RATE_MARKS`) — which a
+strategy that reached it could send past the rate with or rewrite what its card counted. On a
+class of the file that is not the harness's, the names are the author's own. And a method the engine defines and the base overrides — `submit_order`,
 `modify_order`, `cancel_order`, the `handle_*` handlers and the rest — is refused when read
 off anything but `self`, the instance a method receives, or `super()` with no arguments: off
 the engine's class, as `Strategy.submit_order(self, order)`, or a two-argument
@@ -2035,6 +2126,67 @@ equity the runner strikes. A fill that took liquidity can be charged a tick as w
 never past the limit its order carried and never on a maker's fill (`docs/workspace.md`), and
 each recorded fill keeps the increment and that limit, so this charge too is struck again from
 the record.
+
+**An account takes orders at a rate, and the sleeve holds itself to it.** A broker counts every
+order, modify and cancel a strategy sends and answers past its rate by refusing or by making
+it wait; the simulated venue counts nothing, so a rule that re-posts on every move of the touch
+would trade on its card at a rate no account takes and behave otherwise once it trades through
+one. So the sleeve counts what it asks of the venue, on the data clock, on every path — an
+order the engine's emulator holds when the strategy submits it, and its cancel when the
+strategy sends it — and under a venue model that states `costs.orders_per_minute` takes tokens
+for each command from a bucket of that many, refilled at that many a minute of the data clock
+— one for a submit or a modify, and for a cancel the `requests_per_cancel` the broker's client
+sends for one, which no resolved model lets exceed the rate (`docs/workspace.md`). The
+engine's own risk engine throttles on its own clock — a test clock on one path, the wall on the
+other — and is left unbounded on both for that reason; the account's rate is the sleeve's,
+where both paths read the same instants. With no token available — the bucket holding fewer
+tokens than the command costs, a list one for each of its orders, all or none, or, for an
+entry or a modify, a cancel waiting for its tokens or an exit owed for want of a token waiting
+for one — a command the account need not take is
+dropped, and one it must take waits or, when kanso did not size it, refuses the card: **an
+entry and a modify are dropped unsent and counted**, and the card runs on — an entry built by
+`submit_entry` in every form, or one built by hand or by an overlay that opens, every order of
+an entry's list with it, which `submit_entry` answers with `None`; a modify whichever order it
+moves, which stays as it was — so the card measures the entries the rate let through, and its
+digest carries how many it dropped (`refused_submits`, `refused_modifies`), which reaches the
+proposer beside its trades. An order built by hand opens when it opens or grows the position
+the sleeve's market orders in flight and the exits the rate owes it at market — for want of a
+token, or behind a cancel it deferred — leave, so the second leg of a flip — `submit_entry`'s,
+or one built by hand behind an exit at market sent or so owed — is an entry, dropped, and not
+owed as an exit. The bucket is asked for an entry `submit_entry` sizes, or one built by hand,
+before it is sized or funded, so one past the rate is dropped and counted unsized and unfunded,
+never refused for its size or its funding — a call kanso refuses whatever the rate, a quantity
+given under a sizing rule or an order built by hand under one, is refused before the bucket is
+asked — and the room and the funding are read only for one it lets through, as with no
+rate stated. An order the engine was never handed, dropped so, is nothing to cancel or to move,
+and its cancel or modify is no command. **An exit `submit_exit` sized is owed**, asked for again
+as it was asked, and **a cancel is deferred**. **Any other exit is refused** — one the strategy
+built itself, at market or at a limit in any time in force, a stop, an order of a list or a list
+that closes, an overlay's leg or clip — as `order_rate`, the same refusal a sizing rule makes,
+and the card is a `discard`
+carrying a `sizing` gate with what was asked, when and what the bucket held: dropped, it would
+leave open what the strategy asked to close, and owed, it would go as an order kanso built in
+its place, which the strategy could neither cancel nor move. While a cancel waits for its
+tokens, or an exit owed for want of a token waits for one, no entry or modify takes one, so
+entries do not starve a cancel that spends two requests, nor a view's handler under `depth` an
+owed exit, and an exit takes one the bucket holds all the same — so exits asked for on every
+point can keep a cancel waiting, the order it would cancel free to fill meanwhile. A cancel
+whose order has closed waits for nothing, and the exit owed behind a deferred cancel is asked
+for again as soon as the cancel goes, before the handler of its point: with no latency stated
+the order the cancel takes out is spent then, so the exit goes, or is owed for a token, ahead of
+any entry that handler sends; under a latency it stays owed behind the cancel in flight, as with
+no rate stated. An owed exit and a deferred cancel are what the
+account would have let through later, but a sleeve acts only on points, and the venue matches a
+point before any handler of it runs: they go on a later point, after it is matched, so one that
+waits over a session's close goes on the next session's first point or later, where the order a
+deferred cancel was meant for can still fill. It is not a charge, so it is not struck again
+from a record: it decides which orders a run sends, as `latency_ms` decides when they land, and
+every card records how many it sent, how many it dropped and how many in its busiest 60 s
+whether or not a rate is stated (Card, above). A stage node runs the same code, so it drops the
+same entries and runs on rather than halting. Both paths count a command where the strategy
+decides to send it, so under a stated rate, where what one path spent decides what it may send
+next, `kanso replay parity` judges the counts, the dropped among them, beside the orders; with
+no rate stated it judges the orders alone, as it did before kanso counted.
 
 **Two grains in one run.** An overlay researched at a finer grain than its host loads both —
 for the combined run and the host-alone run alike, so the difference between them is the

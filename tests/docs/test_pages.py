@@ -9,6 +9,7 @@ page that drifts is a defect and this is where it fails.
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
 import re
 import sys
@@ -109,10 +110,79 @@ def test_the_cli_page_says_the_daemon_starts_a_child_that_died_again() -> None:
     assert "started again under the same name" in start
     assert "`lane_died`" in start and "`monitor_died`" in start
     assert "doubling" in start and "five minutes" in start
-    stop = next(line for line in rows if line.startswith("| `kanso research stop`"))
+    stop = next(line for line in rows if line.startswith("| `kanso research stop"))
     assert "is not started again" in stop
     status = next(line for line in rows if line.startswith("| `kanso research status`"))
     assert "started again" in status
+
+
+def test_the_pages_say_a_drain_kills_nothing_and_name_its_signal() -> None:
+    """`stop --drain` was added so a card in flight is not the price of a stop; the pages name
+    the signal the supervisor is sent, which `daemon.DRAIN` is, and what a drain begins."""
+    import signal
+
+    from kanso.research import daemon
+
+    stop = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop")
+    )
+    assert stop.startswith("| `kanso research stop [--drain]` |")
+    assert daemon.DRAIN == signal.SIGUSR1
+    assert "**`--drain` kills nothing:** the supervisor is sent `SIGUSR1` instead" in stop
+    assert (
+        "the card in flight runs to its own end — its time budget included — and is recorded"
+        in stop
+    )
+    assert "(`daemon     drained · pid N`; `--json`: `drain` is `true`)" in stop
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "**A drain stops a lane after its card, not inside it.**" in lanes
+    assert "`kanso research stop --drain` removes neither" in prose(page("workspace.md"))
+
+
+def test_the_pages_name_what_a_baseline_killed_for_its_clock_waits_on() -> None:
+    """A lane began such a baseline again `BACKOFF_S` later on the same inputs; the pages name
+    every input `loop.baseline_inputs` reads, so one added there and not here fails."""
+    from kanso.research import daemon, loop, scheduler
+
+    cli = prose(page("cli.md"))
+    assert "**A baseline killed for its clock waits until what it ran on moves.**" in cli
+    assert f"back in the queue at −{-scheduler.BASELINE_PRIORITY}," in cli
+    assert daemon.BACKOFF_S == 30.0 and "began it again thirty seconds later" in cli
+    named = {
+        "strategy": "the strategy the run would start from",
+        "hypothesis": "the workspace `hypothesis.yaml` and `program.md`",
+        "program": "the workspace `hypothesis.yaml` and `program.md`",
+        "snapshots": "the snapshots the workspace holds",
+        "budget_s": "`[research] baseline_budget_s` as the lane read `kanso.toml` when it started",
+        "kanso": "the kanso version",
+    }
+    assert set(re.findall(r'"(\w+)":', inspect.getsource(loop._inputs))) == set(named)
+    for phrase in named.values():
+        assert phrase in cli
+    lanes = prose(section(page("concepts.md"), "Run, lane and the envelope"))
+    assert "**A hypothesis whose baseline was killed for its clock waits in the queue.**" in lanes
+
+
+def test_the_pages_say_a_card_budget_is_struck_from_the_first_card_that_traded() -> None:
+    """Struck once from a baseline that traded nothing, a card that traded spent the headroom on
+    its fills (`docs/backlog.md` row 139); the pages say which card strikes it now."""
+    from kanso.research import loop
+
+    assert (loop.MIN_CARD_BUDGET_S, loop.HEADROOM) == (60.0, 3.0)
+    card = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research card")
+    )
+    struck = "The time budget is three times the wall of the run's first card that traded"
+    assert f"{struck}, never under 60 s" in card
+    assert "(`budget`: the seconds, then `struck by` that card's sha7 or `the baseline's`" in card
+    concepts = prose(section(page("concepts.md"), "Card"))
+    assert (
+        "The wall-time budget is three times the wall of the run's first card that traded"
+        in concepts
+    )
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 139 |"))
+    assert "~~A card's time budget is three times its run's baseline wall" in row
+    assert "**closed:**" in row
 
 
 def test_the_cli_page_says_stop_sees_the_cards_it_left_end() -> None:
@@ -120,7 +190,7 @@ def test_the_cli_page_says_stop_sees_the_cards_it_left_end() -> None:
     found one still running when it returned. The page says what it waits on now, what it
     says when the wait runs out, and that it is silent until then."""
     rows = page("cli.md").splitlines()
-    stop = next(line for line in rows if line.startswith("| `kanso research stop`"))
+    stop = next(line for line in rows if line.startswith("| `kanso research stop"))
     assert "`stop` waits on those locks" in stop
     assert "is named under `ending`" in stop
     assert "`stop` prints nothing until it is done" in stop
@@ -507,6 +577,29 @@ def test_the_workspace_page_says_an_exit_counts_the_exits_still_working() -> Non
     assert "A cancel on that side takes back only an owed exit that has a price" in text
     assert "An order the engine's order emulator holds" in text
     assert "`cancel_orders` cancels it on its own, through the emulator" in text
+
+
+def test_the_pages_say_the_balance_at_quote_is_the_mid_and_read_by_no_part_of_kanso() -> None:
+    """`balance_at_quote` marks at the quote's mid and, without a valid quote, at the last trade
+    or bar close; only a strategy reads it; a read of it books what a read of `balance` books
+    (`tests/replay/test_quote_mark.py`, `tests/nautilus/strategy/test_quote_mark.py`)."""
+    workspace = prose(page("workspace.md"))
+    assert (
+        "`self.balance_at_quote` is that balance with each open position marked at the mid of"
+        " its name's last quote instead of its last print"
+    ) in workspace
+    assert (
+        "is marked at its last trade or bar close and never at an invalid quote's mid"
+    ) in workspace
+    assert "nothing kanso sizes or measures reads it" in workspace
+    assert (
+        "A read books the fills the venue has made since the last read, as a read of `balance`"
+        " does, and nothing else"
+    ) in workspace
+    concepts = prose(page("concepts.md"))
+    assert "**A strategy's own limits can be read at the quote.**" in concepts
+    assert "is marked at its last trade or bar close, never at that quote's mid" in concepts
+    assert "Nothing kanso sizes, reserves or measures reads it" in concepts
 
 
 def test_the_research_template_says_an_exit_can_return_none_while_exits_are_working() -> None:
@@ -922,7 +1015,7 @@ def test_the_pages_say_a_stall_certifies_in_a_child_held_to_the_lane_s_share() -
     cli = prose(page("cli.md"))
     assert "The certification is made in a child of the lane, exactly as `cert run` makes it" in cli
     stop = next(
-        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop")
     )
     assert "a stall's certification in flight is killed the same way" in stop
     for number, opening in (
@@ -972,7 +1065,7 @@ def test_the_pages_say_the_monitor_demotes_in_a_child() -> None:
         "A pass demotes in a child of its own process, exactly as `kanso demote` does" in monitoring
     )
     stop = next(
-        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop`")
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research stop")
     )
     assert "A demotion the monitor is making is not: it is left to finish" in stop
     rows = {
@@ -1137,3 +1230,84 @@ def test_the_concepts_page_says_a_window_reads_through_a_file_replaced_while_it_
     assert "is found gone by the read that wants it, which lists that type's files again" in card
     assert "is refused (exit 2), naming the series" in card
     assert "is read by a later read only once one of that type has listed afresh" in card
+
+
+def test_the_pages_say_an_entry_past_the_rate_is_dropped_and_counted_and_the_card_runs_on() -> None:
+    """Past `costs.orders_per_minute` an entry and a modify are dropped and counted, and the
+    card runs on; once the pages said the card was refused, and a proposer told so stops
+    sending what the rate would have let through. Each page names the fields that carry the
+    count and still names the one refusal the rate makes: an exit the strategy built itself,
+    since kanso owes only an exit `submit_exit` sized. Once the pages said an exit built by
+    hand at market or at a good-till-cancelled limit was owed, which sent an order kanso built
+    in its place, one the strategy could neither cancel nor move."""
+    for name in ("concepts.md", "workspace.md", "cli.md"):
+        said = prose(page(name))
+        assert "dropped unsent and counted" in said, name
+        assert "`order_rate`" in said and "one the strategy built itself" in said, name
+        assert "`submit_exit` sized" in said, name
+        assert "exit kanso cannot send again as it was asked" not in said, name
+        assert "an entry, a modify and an order list are refused" not in said, name
+        assert "an entry is refused" not in said, name
+    for name in ("concepts.md", "workspace.md"):
+        assert "`refused_submits`" in page(name) and "`refused_modifies`" in page(name), name
+
+
+def test_the_pages_promise_no_order_among_what_waits_that_the_code_does_not_keep() -> None:
+    """Of when what waits for a token goes, the pages keep what the replay tests pin on both
+    paths and an operator acts on: no entry or modify takes a token while a cancel waits, an
+    exit takes one the bucket holds, so exits asked for on every point can keep a cancel
+    waiting while its order fills, and what waits goes on a later point, after the venue has
+    matched it. They once said more, and each time it was more than the code kept: that what
+    waited took every token that came back before the handler could, though an exit owed behind
+    a deferred cancel is asked for after the handler of the point its cancel goes on; that an
+    exit owed for want of a token went before anything asked after it, though the deferred
+    cancels take the tokens first, and what an order that came to rest meanwhile cuts from it is
+    owed behind that order's deferred cancel, where an entry can go first; that a whole
+    `submit_exit` could not keep a cancel waiting, though an order on the opening side whose
+    cancel waits keeps filling; that what waited went on the first point a token came back for
+    it; that a second cancel of an order whose cancel waits goes at once when the bucket holds
+    what it costs, which no test pinned and no operator acts on; and that a deferred cancel
+    keeps its place in line, though an exit takes a token the bucket holds while it waits."""
+    said = {name: prose(page(name)) for name in ("concepts.md", "workspace.md", "cli.md")}
+    for name, text in said.items():
+        for promise in (
+            "before anything asked after it",
+            "before any entry or modify asked after it",
+            "takes the tokens it waits for first",
+            "goes to what waited for it",
+            "finds the bucket as they left it",
+            "leaves nothing to close once it has gone",
+            "first point at or after the instant",
+            "before the strategy's handler of the first point",
+            "take what tokens came back",
+            "goes at once if the bucket",
+            "its place in line",
+        ):
+            assert promise not in text, (name, promise)
+    assert "can keep a cancel waiting" in said["workspace.md"]
+    assert "can keep a cancel waiting" in said["concepts.md"]
+    assert "goes on a later point, after the venue has matched it" in said["workspace.md"]
+
+
+def test_the_pages_say_an_overlay_s_leg_or_clip_past_the_rate_is_not_told_to_use_submit_exit() -> (
+    None
+):
+    """An overlay answers with legs and clips and cannot itself close with `submit_exit`, so the
+    refusal of its leg or clip past the rate names fewer commands or the account's own figure,
+    and only the strategy's own exit is told to close with `submit_exit`; and an exit kanso did
+    not size neither drops nor waits, but refuses the card."""
+    row = prose(next(line for line in page("workspace.md").splitlines() if "`order_rate`" in line))
+    assert "for an exit the strategy built itself, to close with `submit_exit`" in row
+    assert "for an overlay's leg or clip, to send fewer commands" in row
+    assert "when kanso did not size it, refuses the card" in prose(page("concepts.md"))
+
+
+def test_the_pages_say_a_second_exit_past_the_rate_leaves_an_exit_rule_s_owed_exit_alone() -> None:
+    """kanso owes one exit a side of a name, so a second `submit_exit` asked past the rate while
+    the first is owed replaces it rather than adding to it — but not an exit rule's, which its
+    host's ask neither replaces nor adds to, as the replay tests pin on both paths
+    (`test_an_exit_rule_s_owed_exit_is_not_replaced_by_its_host_s`)."""
+    for name in ("workspace.md", "backlog.md"):
+        said = prose(page(name))
+        assert "replaces it rather than adding to it" in said, name
+        assert "unless the first was an exit rule's, which its host's ask neither" in said, name

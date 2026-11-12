@@ -167,7 +167,7 @@ what the rules above refuse when it is spelt directly (`docs/backlog.md` row 211
   one made in a function, one `type()` builds — and a class whose base the scan does not
   resolve to a harness class: one held under an assigned name (`Base = KansoStrategy`) or read
   off an attribute other than its own name (`KansoStrategy.config_cls`). The rules on the
-  base's names and on `bar_resolution` read no such class (`docs/backlog.md` row 240); a
+  base's names and on `bar_resolution` read no such class (`docs/backlog.md` row 246); a
   `Config` default of `bar_resolution` is refused where the runner builds the class, whatever
   its spelling.
 
@@ -390,6 +390,7 @@ DENIED_DEPTH: Final = frozenset(
         "_depth_shown",
         "_depth_seen_ns",
         "_top_shown",
+        "_top_balance_at_quote",
         "_take_depth",
         "_show_view",
         "_show_book",
@@ -541,6 +542,28 @@ SEND_MARKS: Final = frozenset({"_sending", "_book_ledger"})
 """What a book lets kanso's own order through by: the mark on the order kanso is sending, and
 the book's ledger; denied beside the base's private sends (`sends`)."""
 
+RATE_MARKS: Final = frozenset(
+    {
+        "_command_bucket",
+        "_command_spend",
+        "_command_tally",
+        "_drop_rate",
+        "_lift_rate",
+        "_pay_rated",
+        "_send_deferred",
+    }
+)
+"""What holds a strategy to its account's order rate (`costs.orders_per_minute`): the bucket
+and the tally, what spends them and counts what they refused, and what lifts the bucket and
+sends what it held back, which only a stage's flatten does; denied, read off a strategy,
+beside the sends."""
+
+WHY_RATE: Final = (
+    "it is the harness's hold on the account's order rate, costs.orders_per_minute, which a "
+    "strategy can neither lift, spend nor rewrite; send fewer commands — re-post only when "
+    "the price has moved enough to matter — and give a name of your own another spelling"
+)
+
 ENGINE_SENDS: Final = frozenset({"submit_order", "submit_order_list", "modify_order"})
 """The engine's methods that hand it an order or move one; a private method of kanso's that
 calls one on the instance or on `super()` is a send (`sends`)."""
@@ -559,8 +582,8 @@ stage only where the file states one. A `Config` the scan does not reach is held
 the runner builds the class, and for a default alone
 (`kanso.nautilus.strategy.refuse_own_bar_resolution`). Not every field kanso sets from the file
 is held here: a `Config` default of `depth`, `data_by_instrument` or `session_scope` stands on a
-stage and not on a card too (`docs/backlog.md` row 237), and a binding that hides any other
-field is read in kanso's place (row 239)."""
+stage and not on a card too (`docs/backlog.md` row 243), and a binding that hides any other
+field is read in kanso's place (row 245)."""
 
 BODIED: Final = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 """The nodes whose body binds in a scope of its own, while their decorators, defaults,
@@ -965,9 +988,10 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
     """Every read of the harness's own sends, and of a method it overrides, off a receiver
     that can reach past the harness base.
 
-    A send (`sends`, `SEND_MARKS`) is refused when read off anything but the instance of a
-    method of a class that is not held to the base that owns it, where the name is that
-    class's own; a binding of one is the clash rule's (`_clashes`). An overridden method
+    A send (`sends`, `SEND_MARKS`), and what holds a strategy to its order rate
+    (`RATE_MARKS`), is refused when read off anything but the instance of a method of a class
+    that is not held to the base that owns it, where the name is that class's own; a binding
+    of one is the clash rule's (`_clashes`). An overridden method
     (`overridden`) is refused when read off anything but `self`, the instance a method
     receives, or `super()` with no arguments.
     """
@@ -975,6 +999,7 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
     for node, base in _harness_classes(tree):
         holding.setdefault(id(node), set()).add(base)
     sent = {base: sends(base) | SEND_MARKS for base in _bases()}
+    rated = _bases()[0]
     names = frozenset().union(*(overridden(base) for base in _bases()))
     found: list[str] = []
 
@@ -1014,6 +1039,10 @@ def _receiver_problems(tree: ast.Module) -> list[str]:
                         f"{WHY_SEND}"
                     )
                     break
+            if node.attr in RATE_MARKS and not (mine and rated not in owners):
+                found.append(
+                    f"line {node.lineno}: attribute '.{node.attr}' is denied, because {WHY_RATE}"
+                )
         for child in ast.iter_child_nodes(node):
             visit(child, scope, held)
 
@@ -1116,7 +1145,7 @@ def _harness_classes(
     one; every top-level class of the file in that line, a mixin included, is held to the same
     base. A class nested in a block or a function, one `type()` builds and one whose base is
     held under an assigned name or read off another attribute are not reached
-    (`docs/backlog.md` row 240). The bases are the strategy's and the modifier's (`_bases`)
+    (`docs/backlog.md` row 246). The bases are the strategy's and the modifier's (`_bases`)
     unless `roots` names others.
     """
     harness = {base.__name__: base for base in roots or _bases()}

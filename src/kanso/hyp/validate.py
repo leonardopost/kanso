@@ -1218,7 +1218,7 @@ def _host_bars(
     host's size on the host's own clock. Only an overlay states a size over a bar-size host
     here, since a filter or an exit stating one is off the host's grain and refused on it first,
     and the overlay's card would hand the host the overlay's own tick, quote or trade clock as a
-    bar grain beside the host's, at which no bar can be subscribed (`docs/backlog.md` row 238),
+    bar grain beside the host's, at which no bar can be subscribed (`docs/backlog.md` row 244),
     whatever size it states. `regrain` is that grain refusal's: its one remedy takes the host's
     resolution as well — and, at `quote` or `trade`, requires that kind, since a file at either
     resolution requires it and asks some instrument for it, which a file off that grain need

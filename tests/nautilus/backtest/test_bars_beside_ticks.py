@@ -282,7 +282,7 @@ def test_a_stage_sleeve_of_a_config_hiding_bar_resolution_subscribes_at_the_file
     """A stage builds the sleeve's config from the version's manifest as `strategy.impl._build`
     does, then rebuilds it with its deployed capital and identity as `nautilus.node._components`
     does, and that sleeve subscribes bars at the file's 1m past the same bindings — every name's
-    bars, since a stage's config carries no `data_by_instrument` (`docs/backlog.md` row 233).
+    bars, since a stage's config carries no `data_by_instrument` (`docs/backlog.md` row 239).
     The rebuild reads the config's fields as attributes, which the binding hides, so it carries
     the size from kanso's slot rather than the strategy's 5m."""
     strategy_cls = _module(ON_BARS.replace(UNHIDDEN, config), "sleeve").Strategy

@@ -45,7 +45,7 @@ filled at its own price. On an order that carries a limit it is capped, share by
 what the limit leaves above the fill's price for a buy or below it for a sale, so a limit
 filled at its own price pays none of it and none pays past its limit. Zero unless stated.
 
-The cost model carries two keys that are not charges. `latency_ms` is how long the venue
+The cost model carries four keys that are not charges. `latency_ms` is how long the venue
 takes to see an order — the delay between a sleeve's insert, update or cancel and the
 simulated book acting on it, zero unless stated, measured on the account and route the
 strategy will trade through; a hypothesis at tick resolution may not resolve it to zero
@@ -57,6 +57,18 @@ that is left of it), and fills a taker on the quote rather than on a print. It d
 run has rather than what they cost, so it cannot be re-applied to recorded fills the way the
 charges can; it lives beside them because it is the same kind of statement — how
 pessimistic the simulation is about execution — and is stated at the same three layers.
+`orders_per_minute` is how many of the account's requests a minute the sleeve's orders may
+spend: the sleeve holds itself to it on the data clock, on every path (`kanso.nautilus.rate`),
+each submit and each modify spending one and each cancel of an order `requests_per_cancel`,
+the requests the broker's client sends for one (one unless stated), and with it unset nothing
+holds a sleeve to any rate. A broker states its figure and its client's cancel for its venues
+and a workspace its plan's figure; it is the sleeve's own figure, so sleeves sharing one
+account state shares of it. A rate below what one cancel spends is refused where the model is
+resolved, naming the venue, and by the model itself: the sleeve's bucket holds no more than the
+rate, so its first cancel would wait for ever and every entry and modify behind it be dropped.
+Unset, each is left out of the resolved model's serialised form altogether, so a model in which
+no layer states either, the broker's declaration included, dumps, digests and records exactly
+as one did before the keys existed.
 
 The resolved model records the origin of every field, so a number on a card, a certificate
 or a strategy version is always traceable to the venue that produced it.
@@ -68,9 +80,15 @@ feeding a broker that matches against current prices.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+    model_validator,
+)
 
 from kanso.errors import ApprovalError, PreconditionError, ValidationError
 from kanso.schemas.base import KansoModel, NonEmpty
@@ -105,6 +123,10 @@ REPLAY_DATA_CLIENT = "replay"
 """The catalog replay data client; every other data client id belongs to an adapter."""
 
 
+UNWRITTEN_UNSTATED: Final = ("orders_per_minute", "requests_per_cancel")
+"""The cost keys a resolved model leaves out of what it dumps when no layer states them."""
+
+
 class CostsOverride(KansoModel):
     """Any subset of a cost model, as a hypothesis or a venue entry may state it."""
 
@@ -120,12 +142,17 @@ class CostsOverride(KansoModel):
     sell_fee_per_share: float | None = Field(default=None, ge=0)
     limit_fill: LimitFill | None = None
     latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    orders_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_cancel: int | None = Field(default=None, ge=1)
 
 
 class Costs(KansoModel):
     """A complete cost model: what the runner charges, once, to every fill, whether the
-    venue fills a resting limit the market only touched (`limit_fill`), and how long the
-    venue takes to see an order (`latency_ms`, zero unless stated).
+    venue fills a resting limit the market only touched (`limit_fill`), how long the venue
+    takes to see an order (`latency_ms`, zero unless stated), how many of the account's
+    requests a minute the sleeve's orders may spend (`orders_per_minute`, no limit unless
+    stated), and how many of them a cancel of one order spends (`requests_per_cancel`, one
+    unless stated); either, unstated, is left out of what the model dumps.
 
     `maker_bps` and `maker_per_share` are the charge on a fill the venue reports as a maker's,
     of its notional and per share, in place of all three of the others and of the per-share
@@ -149,12 +176,38 @@ class Costs(KansoModel):
     sell_fee_per_share: float = Field(default=0.0, ge=0)
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL
     latency_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    orders_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_cancel: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _fixed_bps_present(self) -> Costs:
         if self.spread == "fixed_bps" and self.fixed_bps is None:
             raise ValueError("fixed_bps: required when spread is fixed_bps")
         return self
+
+    @model_validator(mode="after")
+    def _cancel_fits_the_rate(self) -> Costs:
+        short = _cancel_past_rate(self.orders_per_minute, self.requests_per_cancel)
+        if short is not None:
+            raise ValueError(short)
+        return self
+
+    @model_serializer(mode="wrap")
+    def _unstated_rate_unwritten(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """The model as it dumps, without `orders_per_minute` or `requests_per_cancel` when
+        no layer states it.
+
+        Every card, certificate and strategy version records the venue model it was
+        measured under, and a research run digests it into what a stored number was measured
+        under (`kanso.research.loop.Setup.measured_under`). A model that states no rate dumps
+        exactly as one did before the keys existed, so neither a record nor that digest moves
+        for a workspace that states none.
+        """
+        dumped: dict[str, Any] = handler(self)
+        for key in UNWRITTEN_UNSTATED:
+            if getattr(self, key) is None:
+                dumped.pop(key, None)
+        return dumped
 
 
 class VenueDeclaration(KansoModel):
@@ -210,6 +263,7 @@ SANDBOX = ExecutionClientSpec(id="sandbox", capital="simulated", clock="replay")
 def _merge_costs(
     layers: list[tuple[Origin, CostsOverride | None]],
     *,
+    venue: str,
     quotes_available: bool,
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL,
 ) -> tuple[Costs, Origin]:
@@ -237,7 +291,32 @@ def _merge_costs(
             "costs.fixed_bps: no value declared and no quotes to take a spread from; "
             "set it on the hypothesis costs or on the venue"
         )
+    rate, per_cancel = values.get("orders_per_minute"), values.get("requests_per_cancel")
+    short = _cancel_past_rate(rate, per_cancel, venue)
+    if short is not None:
+        raise ValidationError(
+            short,
+            remedy=f"state costs.orders_per_minute of at least {per_cancel} — the share of the "
+            f"account's rate this sleeve may spend — in the hypothesis costs or under "
+            f"venues.{venue}.costs in portfolio.yaml",
+        )
     return Costs.model_validate(values), origin
+
+
+def _cancel_past_rate(rate: object, per_cancel: object, venue: str | None = None) -> str | None:
+    """Why a rate admits no cancel, or `None` when it admits one or either is unstated: a
+    bucket of `rate` tokens holds no more than `rate`, so a cancel that spends more never finds
+    them, and while it waits no entry or modify takes a token
+    (`kanso.nautilus.strategy.KansoStrategy`). `venue` names where it was resolved."""
+    if not isinstance(rate, int) or not isinstance(per_cancel, int) or rate >= per_cancel:
+        return None
+    where = "" if venue is None else f" on {venue}"
+    return (
+        f"costs.orders_per_minute: {rate}{where} is below costs.requests_per_cancel: "
+        f"{per_cancel}; a bucket of {rate} token(s) never holds the {per_cancel} one cancel "
+        "spends, so the sleeve's first cancel would wait for ever and every entry and modify "
+        "behind it be dropped"
+    )
 
 
 def resolve_venue_model(
@@ -286,6 +365,7 @@ def resolve_venue_model(
     ]
     costs, costs_origin = _merge_costs(
         cost_layers,
+        venue=venue,
         quotes_available=quotes_available,
         limit_fill=default_limit_fill,
     )

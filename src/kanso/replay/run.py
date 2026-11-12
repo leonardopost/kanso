@@ -19,7 +19,7 @@ become evidence for a decision the research loop makes.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import date
 from typing import TYPE_CHECKING, Final
 
@@ -102,6 +102,7 @@ def run(
             "exec": SANDBOX.id,
             "released": stream.count,
             "intents": len(result.intents),
+            "commands": result.commands if _rated(request) else None,
             "clock_ns": replayed.clock_ns,
             "started_at": started,
             "ended_at": record.now(),
@@ -124,6 +125,19 @@ def run(
         },
     )
     return written
+
+
+def _rated(request: backtest.RunRequest) -> bool:
+    """Whether the venue model this replay ran under states `costs.orders_per_minute`.
+
+    Only under one do the commands a strategy sent decide what it may send next, so only then
+    does a session record them for parity to compare (`kanso.replay.parity.Parity.counted`).
+    With no layer stating the rate a session records none, as one written before kanso
+    counted, and two paths whose orders agree are judged identical as they were then, though
+    what each counted may differ where the two paths already fill apart.
+    """
+    costs = request.venue_model.get("costs")
+    return isinstance(costs, Mapping) and costs.get("orders_per_minute") is not None
 
 
 def sessions(ws: Workspace) -> list[Session]:

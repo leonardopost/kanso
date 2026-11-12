@@ -31,7 +31,9 @@ improvement has to beat: a contribution's per-period differences, a difference o
 by Memmel's correction of Jobson–Korkie, a difference of per-trade edges by differencing the
 two runs' linearisations period by period (trades of two runs pair nowhere else). Runs
 whose periods differ are taken as independent and their variances summed, which can only
-overstate the error of two runs that share trades.
+overstate the error of two runs that share trades. The keep rule reads the same pairing
+between two cards (`difference`): a card against the run's best is a marginal improvement
+on it, and what varies in both cancels.
 
 Which objectives can score a hypothesis is the `applies` predicate over its own attributes,
 with `min` inclusive and `max` exclusive: the set an objective is named from, by the
@@ -446,6 +448,29 @@ REGISTRY: Final[Mapping[str, Objective]] = MappingProxyType(
     }
 )
 """The implemented objectives, for a caller that already knows the id it wants."""
+
+_MARGINAL: Final[Mapping[str, Objective]] = MappingProxyType(
+    {
+        objective.statistic: objective
+        for objective in REGISTRY.values()
+        if objective.mode == RELATIVE
+    }
+)
+"""The relative objective of each statistic: what one run is scored by against another."""
+
+
+def difference(
+    objective: Objective, run: CardRun, other: CardRun, folds: int
+) -> tuple[float, float]:
+    """`run`'s statistic less `other`'s, fold by fold and averaged, and the error of that mean:
+    `run` scored by the relative objective of `objective`'s statistic with `other` in the
+    host's place, so paired period by period wherever the two struck their returns at the
+    same instants, and summed as two independent errors where they did not.
+
+    Two runs scored against one host or one hold carry the same host's or hold's part in
+    each number, which cancels, so this is the difference of their metrics in every mode.
+    """
+    return _MARGINAL[objective.statistic].compute(run, folds, other)
 
 
 def resolution_seconds(resolution: str) -> float:
