@@ -195,6 +195,34 @@ def test_a_filter_that_refuses_every_entry_loses_what_the_host_earned(
     assert neutral.host == measured.host, "every card of the run is differenced against one host"
 
 
+def test_a_card_is_compared_with_the_best_paired_against_the_one_host_both_were_run_on(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The best's host-alone run comes back out of its stored measurement and equals the one
+    the candidate was differenced against, so the host's part of both numbers cancels and the
+    comparison is paired, as it is between any two cards of an absolute objective."""
+    compose_host(ws, store)
+    hyp_id = attached(ws, store)
+    run = loop.begin(ws, store, hyp_id)
+    (ws.root / run.dir / "strategy.py").write_bytes(BLOCKING)
+
+    blocked = loop.card(ws, store, hyp_id, "refuse every entry")
+
+    compared = [
+        event.detail["keep"]
+        for event in store.events(kind=loop.CARDED, subject=hyp_id)
+        if "keep" in event.detail
+    ]
+    assert compared == [
+        {
+            "best": run.base_sha[:7],
+            "difference": pytest.approx(blocked.metric),
+            "se": pytest.approx(blocked.metric_se),
+            "paired": True,
+        }
+    ], "the best is the neutral baseline, whose run is the host's own"
+
+
 def test_the_host_run_is_computed_once_per_run_and_dropped_when_it_ends(
     ws: Workspace, store: StateStore
 ) -> None:

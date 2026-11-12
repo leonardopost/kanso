@@ -321,7 +321,8 @@ already moved past it would stamp its own older version over the newer one and l
 `state.db` whose schema no `kanso migrate` could reach again.
 
 **What grows, and the one thing kanso gives back.** Every judged card stores its book — what
-it held, session by session, and the number it earned — so the redundancy rule can refuse
+it held, session by session and, under a horizon shorter than a day, hour by hour within
+each, and the number it earned — so the redundancy rule can refuse
 the next spelling of the same bets (`docs/concepts.md`). A book is read only under the pins
 of the run asking, and nothing deletes one as research moves on, so the books stored under a
 file since re-pinned, an earlier kanso, a snapshot a newer run moved past or a retired
@@ -537,7 +538,24 @@ equity curve strikes at each period end, and one a strategy may size from. Readi
 bar costs what the sleeve's orders gained since the last read, however long they have lived,
 so a resting order moved on every bar need not be re-posted to keep a card fast; re-posting
 does not save memory either, since the engine keeps every order's events for the run
-(`docs/concepts.md`). `strategy_integrity` discards a `strategy.py`
+(`docs/concepts.md`).
+`self.balance_at_quote` is that balance with each open position marked at the mid of its
+name's last quote instead of its last print: the number to hold a strategy's own daily stop or
+target to, since a print outside a valid quote moves `balance` and not it. Under `depth` a
+name's last quote is level one of the harness's copy of its book, which `balance` never marks
+at; otherwise, where every name held last had a valid quote it is `balance` exactly. A name
+whose last quote is not `ask > bid > 0` — locked, crossed or one-sided, as level one is under
+`depth` while a side of the book is empty — or that has none, a bar sleeve's among them, is
+marked at its last trade or bar close and never at an invalid quote's mid, with neither at its
+cost, so a name the sleeve is handed no quotes of is marked
+as `balance` marks it. It is the mid, not the bid of a long or the ask of a short, so a flatten
+at market still pays half the spread past it; nothing kanso sizes or measures reads it. A
+read books the fills the venue has made since the last read, as a read of `balance` does, and
+nothing else: read where a sleeve reads `balance` it changes nothing the sleeve books, and read
+on a point where it reads nothing else it books them there rather than at the next read, as
+`balance` read there would, which can add the same sums in another order and leave the cash a
+unit in its last place apart.
+`strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
 the harness's own sends (`_submitted`, `_close` and the rest), reaches a method the harness
@@ -786,8 +804,9 @@ an instant and never later than it: at the change itself, stamped with it, befor
 point of the feed. Neither is delayed again: an order sent from either reaches the venue
 `costs.latency_ms` after the point that carried the call, as every order does, because the
 latency is the whole round trip, feed and order together. The quote is a signal and moves
-nothing else: `last_quote` and `last_price` do not read it, the book marks no position, and
-`spread: quotes` has no quote series to read. What else the strategy may not touch under the
+nothing but `balance_at_quote`: `last_quote` and `last_price` do not read it, `balance` and
+the card mark no position at it, and `spread: quotes` has no quote series to read. What else
+the strategy may not touch under the
 key — the engine's own book subscriptions, beside the message bus, which no strategy may
 touch — is in `docs/concepts.md`, The embargo. An attached construct researched or composed under the key is handed no book
 at all, neither the view nor a subscription of its own — asking for one is refused, and
@@ -1406,10 +1425,12 @@ never loses a row. Deleting it loses nothing. Its columns are `sha7 metric metri
 n_trades wall_s peak_mem_gb status desc`, then the card's digest — `trades_per_session
 hit_rate median_hold_s maker_share fill_ratio gross_bps_per_trade cost_bps_per_trade
 net_bps_per_trade net_bps_per_trade_se gross_bps_per_session cost_bps_per_session
-net_bps_per_session`, what its trades did (`docs/concepts.md`, Card) — appended after `desc` so
-that the first nine columns sit where they always sat. A digest number with nothing to be read
-off, and every digest cell of a crash, of a card refused before or during its backtest and of
-a card recorded before 0.17, is empty.
+net_bps_per_session`, what its trades did, then `first_fill_s last_fill_s active_s`, when in
+its return periods it filled (`docs/concepts.md`, Card) — appended after `desc` so that the
+first nine columns sit where they always sat, and the timing after the twelve that came before
+it. A digest number with nothing to be read off, and every digest cell of a crash, of a card
+refused before or during its backtest and of a card recorded before 0.17, is empty; so are the
+three timing cells of a card recorded before the digest timed its fills.
 
 ## `screens/<id>/`
 
