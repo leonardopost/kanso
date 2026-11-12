@@ -435,14 +435,12 @@ class PrintThrough(FillModel):  # type: ignore[misc]
             _shares(point, resting, self._places.get(instrument_id, {})),
         )
 
-    def traded(self, point: TradeTick, instrument_id: Any = None) -> None:
+    def traded(self, point: TradeTick, instrument_id: Any) -> None:
         """End the last quote of a print's instrument if the print trades strictly outside it:
         the market has left that quote, so no taker is filled on it from here on, one landing
         on this print included. Asked again for the same print it ends nothing more: the
         quote is gone, or the print is still not outside it. `instrument_id` is the print's
-        own, when the caller has read it already."""
-        if instrument_id is None:
-            instrument_id = point.instrument_id
+        own, as the caller has read it already."""
         quote = self._quote.get(instrument_id)
         if quote is not None and _outside(point.price, quote):
             del self._quote[instrument_id]
@@ -640,15 +638,6 @@ def _past(quote: QuoteTick, buy: bool, instrument: Any) -> Any:
     step = instrument.price_increment.raw
     touch = quote.ask_price if buy else quote.bid_price
     return Price.from_raw(touch.raw + step if buy else touch.raw - step, instrument.price_precision)
-
-
-def _reaches(price: Any, hit: Any, buy: bool, limit: Any) -> bool:
-    """Whether a print at `price` whose aggressor hit `hit` is through a resting limit at
-    `limit` — under a buy, over a sell — from the side that can trade with it, as the engine's
-    own match reaches only the side a print hit."""
-    if hit == (AggressorSide.BUYER if buy else AggressorSide.SELLER):
-        return False
-    return bool(price < limit if buy else price > limit)
 
 
 def _shares(

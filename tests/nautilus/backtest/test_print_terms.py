@@ -24,7 +24,14 @@ from kanso.criteria.run import midnight_ns
 from kanso.data import manifest as m
 from kanso.data import snapshot as snap
 from kanso.data.types import PrintTerms
-from kanso.nautilus.backtest import RunRequest, execute, window_chunks, window_data
+from kanso.nautilus.backtest import (
+    RunRequest,
+    _catalog,
+    execute,
+    termed,
+    window_chunks,
+    window_data,
+)
 from kanso.nautilus.tape import Unlit
 from kanso.schemas import Hypothesis
 from kanso.schemas.yamlio import write_yaml
@@ -32,6 +39,7 @@ from kanso.schemas.yamlio import write_yaml
 from .conftest import INSTRUMENT, RESEARCH, catalog, hypothesis, instrument
 
 SECOND_NS = 1_000_000_000
+DAY_NS = 86_400 * SECOND_NS
 DAY = date(2024, 1, 3)
 OPEN_NS = midnight_ns(DAY) + 15 * 3_600 * SECOND_NS
 NAME = InstrumentId.from_str(INSTRUMENT)
@@ -224,6 +232,79 @@ def test_terms_that_read_one_print_two_ways_are_held_for_neither(
     )
     _, whole = window_data(request, root)
     assert kinds(whole) == ["TradeTick"] * 4
+
+
+def test_two_prints_of_one_instant_are_each_read_by_the_terms_of_their_own_id(
+    tmp_path: Path, request_for
+) -> None:
+    """Prints share an instant often enough on a consolidated tape: each is read by the terms
+    that name its trade id, so only the one they mark not lit is handed on unlit."""
+    at = OPEN_NS + 2 * SECOND_NS
+    prints = [
+        TradeTick(
+            NAME, Price(10.00, 2), Quantity.from_int(100), AggressorSide.NO_AGGRESSOR,
+            TradeId(name), at, at,
+        )
+        for name in ("A", "B")
+    ]  # fmt: skip
+    readings = [
+        PrintTerms(
+            instrument_id=NAME, trade_id=name, exchange="11" if lit else "4",
+            conditions="" if lit else "37", lit=lit, ts_event=at, ts_init=at,
+        )
+        for name, lit in (("A", True), ("B", False))
+    ]  # fmt: skip
+    root = catalog(tmp_path / "catalog", [tape()[0], *prints, *readings], [instrument()])
+    request = pinned(
+        root, request_for(RESEARCH, source=POSTING, hypothesis_=taped("print_through")), TAPED
+    )
+    _, whole = window_data(request, root)
+    handed = [p for group in whole for p in group if isinstance(p, TradeTick)]
+    assert [(type(p).__name__, str(p.trade_id)) for p in handed] == [
+        ("TradeTick", "A"),
+        ("Unlit", "B"),
+    ]
+
+
+def test_prints_with_no_terms_over_their_span_are_handed_back_as_they_came(
+    tmp_path: Path,
+) -> None:
+    """No prints, and prints over a span the catalog holds no terms of — here the terms are
+    the next day's — are handed back untouched."""
+    later = [
+        PrintTerms(
+            instrument_id=NAME, trade_id=held.trade_id, exchange="4", conditions="37",
+            lit=False, ts_event=held.ts_event + DAY_NS, ts_init=held.ts_init + DAY_NS,
+        )
+        for held in terms(READINGS)
+    ]  # fmt: skip
+    root = catalog(tmp_path / "catalog", [*tape(), *later], [instrument()])
+    prints = tuple(p for p in tape() if isinstance(p, TradeTick))
+    held = _catalog(root)
+    span = (OPEN_NS, OPEN_NS + 9 * SECOND_NS)
+
+    assert termed(held, instrument(), *span, ()) == ()
+    assert termed(held, instrument(), *span, prints) is prints
+
+
+@pytest.mark.parametrize("filed", [False, True])
+def test_prints_the_catalog_s_print_files_do_not_give_are_read_by_their_own_ids(
+    tmp_path: Path, filed: bool
+) -> None:
+    """A print's id is read off the catalog's print files only when those give exactly the
+    prints handed; where they hold none, or others, it is read off each print itself."""
+    root = catalog(
+        tmp_path / "catalog", [*(tape() if filed else []), *terms(READINGS)], [instrument()]
+    )
+    p2, p3 = (p for p in tape() if isinstance(p, TradeTick) and str(p.trade_id) in {"P2", "P3"})
+    span = (OPEN_NS, OPEN_NS + 9 * SECOND_NS)
+
+    handed = termed(_catalog(root), instrument(), *span, (p2, p3))
+
+    assert [(type(p).__name__, str(p.trade_id)) for p in handed] == [  # type: ignore[attr-defined]
+        ("Unlit", "P2"),
+        ("TradeTick", "P3"),
+    ]
 
 
 def fills_of(tmp_path: Path, request_for, source: bytes, held: bool) -> object:

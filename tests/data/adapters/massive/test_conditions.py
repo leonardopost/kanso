@@ -252,6 +252,8 @@ LIT_ROW: dict[str, Any] = {
         ({"conditions": [99]}, False),
         ({"correction": 12}, False),
         ({"price": 590.185}, False),
+        ({"price": "590.18"}, False),
+        ({"price": True}, False),
         ({"sip_timestamp": 1_735_830_001_071_502_760}, False),
     ],
 )
@@ -259,7 +261,8 @@ def test_each_rule_alone_keeps_a_print_off_the_lit_tape(change: dict[str, Any], 
     """An exchange's regular-way print in whole cents carried within the second is lit; an
     indicator and a later mark leave it so; a facility's print, an odd lot, an extended-hours
     or closing print, a code the reference does not list, a correction record, a sub-penny
-    price and a print carried more than a second late each make it not lit."""
+    price, a price that is no number and a print carried more than a second late each make it
+    not lit."""
     row = {**LIT_ROW, **change}
     assert conditions.lit(row, row["participant_timestamp"], row["sip_timestamp"]) is lit
 
