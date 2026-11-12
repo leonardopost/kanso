@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from nautilus_trader.model.data import OrderBookDelta, TradeTick
+from nautilus_trader.model.data import OrderBookDelta, QuoteTick, TradeTick
 from nautilus_trader.model.enums import AggressorSide, BookAction, OrderSide
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId
 from nautilus_trader.model.objects import Price, Quantity
@@ -85,21 +85,42 @@ def prints(day: date) -> list[TradeTick]:
     return made
 
 
+def quotes(day: date, shown: int = 500) -> list[QuoteTick]:
+    """The top of the same book at the open: `shown` on the bid at 10.00, 500 at 10.02."""
+    base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
+    return [
+        QuoteTick(
+            _id(),
+            Price(10.00, 2),
+            Price(10.02, 2),
+            Quantity.from_int(shown),
+            Quantity.from_int(500),
+            base,
+            base,
+        )
+    ]
+
+
 def _seconds_of_fills(
     data_requirements: tuple[str, ...],
     request_for,
     latency_ms: float = 0.0,
     shown: int = 500,
+    limit_fill: str | None = None,
 ) -> list[int]:
     day = RESEARCH[0]
     document = hypothesis().model_dump(mode="json")
     document.update(resolution="tick", data_requirements=list(data_requirements))
     document["costs"] = {**document["costs"], "latency_ms": latency_ms}
+    if limit_fill is not None:
+        document["costs"]["limit_fill"] = limit_fill
     hyp = Hypothesis.model_validate(document)
     request = request_for(RESEARCH, source=JOINING, hypothesis_=hyp)
     groups = [tuple(prints(day))]
     if "book" in data_requirements:
         groups.insert(0, tuple(deltas(day, shown)))
+    if "quote" in data_requirements:
+        groups.insert(0, tuple(quotes(day, shown)))
     result = execute(request, [instrument()], groups)
     assert not result.crashed, result.traceback_tail
     base = midnight_ns(day) + 14 * 3_600 * SECOND_NS
@@ -130,6 +151,19 @@ def test_an_order_that_joins_a_level_waits_for_the_size_the_book_showed_ahead_of
     three prints; on the top-of-book venue the same order is filled by the first print."""
     assert _seconds_of_fills(("book", "trade"), request_for) == [7, 8, 9]
     assert _seconds_of_fills(("trade",), request_for) == [2, 3, 4]
+
+
+def test_on_the_top_of_book_venue_the_print_rules_wait_for_the_size_the_quote_showed_ahead(
+    request_for,
+) -> None:
+    """With quotes and prints and no book, the print rules estimate the queue from the quote:
+    the 500 it shows on the bid trade through before the order's 300 fill, at the three prints
+    the book's own queue fills it at — and an order alone at a price nothing shows is filled by
+    the first three, as on the book."""
+    for rule in ("print_through", "print_through_whole"):
+        assert _seconds_of_fills(("quote", "trade"), request_for, limit_fill=rule) == [7, 8, 9]
+        alone = _seconds_of_fills(("quote", "trade"), request_for, shown=0, limit_fill=rule)
+        assert alone == [2, 3, 4]
 
 
 def test_an_intent_sent_from_the_book_handler_carries_the_changes_own_instant(

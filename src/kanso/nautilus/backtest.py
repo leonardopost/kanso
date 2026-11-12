@@ -164,6 +164,7 @@ from kanso.nautilus.costs import (
 )
 from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
+from kanso.nautilus.tape import Unlit
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Commands, Hypothesis, VenueModel, is_duration, parse_duration
 
@@ -192,6 +193,7 @@ __all__ = [
     "run_subprocess",
     "run_subprocesses",
     "stage_of",
+    "termed",
     "tunable",
     "wanted",
     "warmup_prefix",
@@ -952,7 +954,8 @@ def window_data(
     held = _held(catalog, hyp)
     opens, closes = request.delivered
     scope = _scope_days(catalog, hyp, opens, closes - 1)
-    groups, loaded = _window_points(request, catalog, held, scope, opens, closes - 1)
+    pinned = _with_terms(request, catalog_path)
+    groups, loaded = _window_points(request, catalog, held, scope, pinned, opens, closes - 1)
     _refuse_missing_grain(request, loaded)
     ordered = tuple(held[name] for name in sorted(hyp.universe))
     return ordered, groups
@@ -963,6 +966,7 @@ def _window_points(
     catalog: Any,
     held: Mapping[str, Any],
     scope: Scope | None,
+    with_terms: frozenset[str],
     start: int,
     end: int,
 ) -> tuple[tuple[tuple[object, ...], ...], dict[str, int]]:
@@ -980,12 +984,154 @@ def _window_points(
                 groups.append(custom)
             continue
         found = market_points(catalog, requirement, held[name], resolution, start, end)
+        if requirement == "trade" and name in with_terms:
+            found = termed(catalog, held[name], start, end, found)
         found = _in_scope(found, name, scope)
         if found:
             if requirement == "bar":
                 loaded[resolution] += len(found)
             groups.append(found)
     return tuple(groups), loaded
+
+
+def _with_terms(request: RunRequest, catalog_path: Path) -> frozenset[str]:
+    """The names whose prints are read with their terms: under a print rule, the one place a
+    print's terms move a fill (`kanso.nautilus.tape`), each whose terms over the days fed the
+    request's snapshot pins (`kanso.data.snapshot.with_terms`); under any other, none. So a
+    load of terms after the snapshot moves no card pinned to it."""
+    from kanso.data.snapshot import with_terms
+    from kanso.nautilus.venue import PRINT_SIZE
+
+    held = request.venue_model
+    model = held if isinstance(held, VenueModel) else VenueModel.model_validate(dict(held))
+    if model.costs.limit_fill not in PRINT_SIZE:
+        return frozenset()
+    return with_terms(catalog_path, request.snapshot_id, sorted(request.hyp.universe), request.span)
+
+
+def termed(
+    catalog: Any, instrument: Any, start: int, end: int, prints: tuple[object, ...]
+) -> tuple[object, ...]:
+    """One instrument's prints with `start <= ts_init <= end`, in file order, with each that its
+    terms in the catalog mark not lit handed on as a `kanso.nautilus.tape.Unlit` and every other
+    as it was: a lit one, and one whose terms the catalog does not hold. The runner asks it only
+    of a name whose terms the run's snapshot pins (`_with_terms`).
+
+    A print's terms are the `print_terms` point of its instrument at its `ts_init` under its
+    trade id (`kanso.data.types.print_terms`); an id two terms of one instant claim with
+    different readings is read as held for neither. The columns are read off the files with
+    `pyarrow`, as `_days_filed` reads them, and the prints' own keys off the files the query was
+    handed: on nautilus_trader 1.231.0 a query handed files returns their rows in the order
+    given, sorting stably by `ts_init` when files overlap (`_in_file_order`), so the keys,
+    sorted so too, are the prints' own whenever their instants are the prints' — and are read
+    off the prints themselves otherwise.
+    """
+    if not prints:
+        return prints
+    import numpy
+
+    from kanso.data.types import PrintTerms
+
+    identifier = str(instrument.id)
+    terms = _columns(catalog, PrintTerms, identifier, start, end, ("trade_id", "lit"))
+    if terms is None:
+        return prints
+    instants = numpy.array([int(p.ts_init) for p in prints], dtype=numpy.int64)  # type: ignore[attr-defined]
+    keys = _columns(catalog, TradeTick, identifier, start, end, ("trade_id",))
+    if keys is None or len(keys[0]) != len(prints) or not (keys[0] == instants).all():
+        names: Any = numpy.array([str(p.trade_id) for p in prints], dtype=object)  # type: ignore[attr-defined]
+    else:
+        names = keys[1]
+    verdicts = _matched((instants, names), terms)
+    unlit = numpy.flatnonzero(verdicts == 0)
+    if not len(unlit):
+        return prints
+    out = list(prints)
+    instrument_id = out[0].instrument_id  # type: ignore[attr-defined]
+    for index in unlit.tolist():
+        print_ = out[index]
+        out[index] = Unlit(
+            instrument_id,
+            print_.price,  # type: ignore[attr-defined]
+            print_.size,  # type: ignore[attr-defined]
+            print_.aggressor_side,  # type: ignore[attr-defined]
+            print_.trade_id,  # type: ignore[attr-defined]
+            print_.ts_event,  # type: ignore[attr-defined]
+            print_.ts_init,  # type: ignore[attr-defined]
+        )
+    return tuple(out)
+
+
+def _columns(
+    catalog: Any,
+    data_cls: type,
+    identifier: str,
+    start: int,
+    end: int,
+    names: tuple[str, ...],
+) -> tuple[Any, ...] | None:
+    """`ts_init` and the columns `names` of one series' rows with `start <= ts_init <= end`,
+    stably sorted by `ts_init`, read off the files a query of the span is handed — `None` when
+    the catalog holds none — through the same `wanted` check and miss handling as a query."""
+    import numpy
+    import pyarrow.parquet as pq  # type: ignore[import-untyped,unused-ignore]
+
+    _refuse_if_unwanted()
+
+    def read() -> tuple[object, ...]:
+        files = sorted(
+            catalog.filter_files(
+                data_cls, catalog.get_file_list_from_data_cls(data_cls), [identifier], start, end
+            )
+        )
+        if not files:
+            return ()
+        tables = [
+            pq.read_table(
+                path,
+                columns=["ts_init", *names],
+                filters=[("ts_init", ">=", start), ("ts_init", "<=", end)],
+                use_threads=False,
+            )
+            for path in files
+        ]
+        instants = numpy.concatenate(
+            [table.column("ts_init").to_numpy().astype(numpy.int64) for table in tables]
+        )
+        order = numpy.argsort(instants, kind="stable")
+        columns = [
+            numpy.concatenate(
+                [table.column(name).to_numpy(zero_copy_only=False) for table in tables]
+            )[order]
+            for name in names
+        ]
+        return (instants[order], *columns)
+
+    found = _read_listed(catalog, data_cls, [identifier], (start, end), read)
+    return found or None
+
+
+def _matched(prints: tuple[Any, Any], terms: tuple[Any, ...]) -> Any:
+    """Each print's reading of its terms, by `ts_init` and trade id: 1 lit, 0 not, -1 none held
+    — or none agreed, where terms of one instant give its id two readings."""
+    import numpy
+
+    instants, names = prints
+    held, ids, lit = terms
+    low = numpy.searchsorted(held, instants, "left")
+    high = numpy.searchsorted(held, instants, "right")
+    verdicts = numpy.full(len(instants), -1, dtype=numpy.int8)
+    one = numpy.flatnonzero(high - low == 1)
+    at = low[one]
+    same = ids[at] == names[one]
+    verdicts[one[same]] = lit[at[same]].astype(numpy.int8)
+    for index in numpy.flatnonzero(high - low > 1).tolist():
+        readings = {
+            bool(lit[row]) for row in range(low[index], high[index]) if ids[row] == names[index]
+        }
+        if len(readings) == 1:
+            verdicts[index] = int(readings.pop())
+    return verdicts
 
 
 def _series(request: RunRequest) -> Iterator[tuple[str, str | None, str]]:
@@ -1565,7 +1711,7 @@ def _book_days(
             changed.setdefault(int(point.ts_init) // NS_PER_DAY, set()).add(name)  # type: ignore[attr-defined]
         elif kind is Bar:
             name = point.bar_type.instrument_id  # type: ignore[attr-defined]
-        elif kind is TradeTick or kind is QuoteTick:
+        elif kind is TradeTick or kind is QuoteTick or kind is Unlit:
             name = point.instrument_id  # type: ignore[attr-defined]
         else:
             continue
@@ -1640,7 +1786,7 @@ def _own_peak_gb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _MAXRSS_BYTES / GIB
 
 
-_MARKET: Final = (QuoteTick, TradeTick, Bar)
+_MARKET: Final = (QuoteTick, TradeTick, Unlit, Bar)
 """The market types a funding settlement never is, so `Marks.take` asks them nothing."""
 
 Point = tuple[int, str, float | None, float | None, float | None]
@@ -1776,7 +1922,7 @@ class Marks:
             held[1].append(bid)
             held[2].append(ask)
             return
-        if kind is TradeTick:
+        if kind is TradeTick or kind is Unlit:
             ts = int(point.ts_init)  # type: ignore[attr-defined]
             if not self.opens <= ts < self.closes:
                 self._admitted(point)  # the refusal
@@ -2117,7 +2263,7 @@ def _load_stream(engine: Any, points: Sequence[object], *, book: bool = False) -
     from nautilus_trader.model.data import OrderBookDelta, OrderBookDeltas
     from nautilus_trader.model.identifiers import ClientId
 
-    plain = (Bar, QuoteTick, TradeTick, OrderBookDelta, OrderBookDeltas)
+    plain = (Bar, QuoteTick, TradeTick, Unlit, OrderBookDelta, OrderBookDeltas)
     seen: set[tuple[type, object]] = set()
     unchecked: list[object] = []
     start = 0
@@ -3064,7 +3210,7 @@ def window_chunks(
     been read. Every caller re-checks each chunk as it runs it.
     """
     catalog, held, instruments, scope = _opened(request, catalog_path)
-    return instruments, _chunked(request, catalog, held, scope)
+    return instruments, _chunked(request, catalog, held, scope, _with_terms(request, catalog_path))
 
 
 def _opened(
@@ -3088,7 +3234,11 @@ def _opened(
 
 
 def _chunked(
-    request: RunRequest, catalog: Any, held: Mapping[str, Any], scope: Scope | None
+    request: RunRequest,
+    catalog: Any,
+    held: Mapping[str, Any],
+    scope: Scope | None,
+    with_terms: frozenset[str],
 ) -> Iterator[tuple[tuple[object, ...], ...]]:
     """The delivered span as chunks, read from the catalog only as they are asked for.
 
@@ -3118,7 +3268,7 @@ def _chunked(
     edge = first + (opens - first) // step * step
     counted = _row_groups(_files_read(request, catalog, held, opens, closes - 1), edge, step)
     for start, end in _reads(counted, edge, step, (opens, closes), cap):
-        groups, counts = _window_points(request, catalog, held, scope, start, end)
+        groups, counts = _window_points(request, catalog, held, scope, with_terms, start, end)
         for grain, count in counts.items():
             loaded[grain] += count
         yield from _cut(groups, CHUNK_POINTS)

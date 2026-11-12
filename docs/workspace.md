@@ -1141,7 +1141,8 @@ asked for `quote` alone, never fills there (`docs/backlog.md` row 223). On a tap
 resting limit with no queue ahead of it, all that is left of it from any point beyond its
 price and the size a quote shows again at every quote that shows it, and the card's fill
 ratio, maker share and per-trade edge read those credits; the print rule credits it only from
-a print through it, by that print's size. A rule a layer states is the operator's and stands,
+the lit prints that reach it — one through it by that print's size, one at its price past the
+size the quote showed ahead of it. A rule a layer states is the operator's and stands,
 `touch` included. At tick resolution on the top-of-book venue, a maker schedule —
 `maker_bps` or `maker_per_share`, from any layer — under `touch` or `through` is refused at
 `hyp validate`, `hyp add` and `research begin` (exit 3), naming the key: it would price as a
@@ -1190,58 +1191,74 @@ rule, so those two never share a venue and one of them is retired (`docs/backlog
 A tick version's `latency_ms` is above zero, so beside a bar version at zero it meets the
 latency refusal below as well.
 
-**`print_through` fills a resting limit only on a print through it, and a taker only on a
-quote.** It is a rule for the top-of-book venue fed both quotes and prints, and it moves both
-kinds of fill. A resting limit fills only on a print strictly through its price — a print under
-a resting buy, over a resting sell — that the venue applied after the order reached its book at
-the price it rests at, and by that print's own size, shared across the orders it reaches in
-price priority and then time at the price: a buy of 320 resting at 9.50 met by a print of 100
-at 9.49 fills 100, and the next print under it another 100; one print of 300 under buys of 200
-at 9.51 and of 200 at 9.50 fills the better-priced 200 and the other the 100 left; and of two
-buys at one price the one that took its place there first is filled first — the one the venue
-accepted first, unless a later modify sent it to the back of its price, as a modify of either
-price or size does; a partial fill keeps its place, and a stop-limit or a limit-if-touched takes
-its place at its limit when it triggers, not when the venue accepted it. Orders that take their
-places at one instant — sent from one handler, or landing together under a latency — keep the
-order the engine holds them in, which a modify does not re-sort, rather than the order they
-landed in: at that instant an order modified to a price can stay ahead of one that landed there
-before the modify did. Nothing else fills it: not a quote however far through its price, not a
-print at its price, not a bar, not a print the venue applied before the order landed, and not
-one it applied before a modify moved the order to its price. That is one
-reading of how much a print through a displayed limit fills — the size the tape shows traded
-there; `print_through_whole` is the same rule with the other reading, a print through filling all that is left of the order,
-as a market that traded through a displayed limit would have taken it first. A taker — a market
-order, or a limit marketable when it lands — fills against the quote in force, at its touch and
-up to the size it shows, never against a print standing as the book: a limit fills there and no
-further than its own price, so a buy limit never pays above its limit, and its rest stays on the
-book at its price under the rule above; a market order's rest walks one increment past the
-touch, as the engine walks any market order larger than the top level, so a rule that sizes a
-taker down to the displayed size is the sleeve's to apply, from the quote it is handed. A limit
-sent immediate-or-cancel (`TimeInForce.IOC`) takes what that quote shows within its limit and
-is cancelled for the rest — cancelled whole when the quote shows nothing it can take — and one
-sent fill-or-kill fills whole from it or is cancelled, so neither ever rests for a print. The
-quote in force is the last one the venue applied, until a print trades strictly outside it —
-under a bid or over an ask it shows at a size — which ends it: a market that traded there has
-left the quote. With no quote in force, or one showing nothing on the side a market order takes,
-a market order is refused for want of a market and a limit rests at its price; so a sleeve that
-buys at market on a print over the ask is refused rather than filled at that ask — on a
-synthetic tape whose next session opens 98 cents over the last session's closing ask the quote
-before would have filled it there, and on one whose prints jump nine cents over the ask within
-a session nine cents under the market — and kanso's benchmark hold, refused
-so, sends its entry again on the next point; under `touch` and `through` it does not, so a hold
-the venue refused there holds nothing for the window, as it always has. A split restates the quote in force, not the print the book
-holds. Under a stated latency a command due by a print's instant lands before that print, so an
-order that reached the book in time is there when the print arrives and a cancel that reached it
-in time has taken the order off; a command due at a quote still lands after the quote, so a
-taker fills on the first quote at or after its delay — unless a print comes first, when it fills
-on the quote before, if neither that print nor one since traded outside it: a print outside
-the quote ends it before what is due by that print lands, so a taker still in flight across a
-gap or a jump is refused or rests, as one sent on the print is. The venue cannot tell one print
-from another: it fills on every print the hypothesis loads, so a rule that only lit,
-last-sale-eligible, round-lot prints may fill needs a trade series written with only those
-(`csv_parquet`, `docs/adapters.md`), and a print outside the quote that a later report put there
-ends the quote all the same. A print carrying an aggressor reaches only the orders on the side
-it hit, as under the engine's own rules. A hypothesis whose resolved `limit_fill` is either
+**`print_through` fills a resting limit on the prints that reach it once the size ahead of it
+has traded, and a taker only on a quote.** It is a rule for the top-of-book venue fed both quotes
+and prints, and it moves both kinds of fill. A resting limit fills only on a print the venue
+applied after the order reached its book at the price it rests at, from the side that can trade
+with it, and that its terms do not mark unlit (below). A print strictly through its price — a
+print under a resting buy, over a resting sell — fills it by that print's own size, shared across
+the orders it reaches in price priority and then time at the price: a buy of 320 resting at 9.50
+met by a print of 100 at 9.49 fills 100, and the next print under it another 100; one print of
+300 under buys of 200 at 9.51 and of 200 at 9.50 fills the better-priced 200 and the other the
+100 left. A print at its price fills it only once the size ahead of it there has traded, and by
+what of the print is left past that size: a buy of 150 joining a bid of 9.48 showing 200 is
+filled 100 by the third print of 100 there and 50 by the fourth. The size ahead is
+estimated from the quotes, since a top-of-book tape shows no queue. When the order takes its
+place it is what the quote in force shows at the order's price, less what the sleeve's own
+takers have taken there since that quote; nothing when the order's price is better than the
+quote's side, inside the spread; and unknown when it rests behind the touch or no quote is in
+force, and then, until a quote shows its price, only a print through it fills it. Each later
+quote cuts the estimate to what it shows at the order's price — a size cancelled there is taken from behind the order first, and the
+estimate never exceeds what the price shows — a quote whose side has moved away from the price,
+a bid under a resting buy, leaves nothing ahead, one whose side is better than the price leaves
+the estimate as it was, and one at a price whose estimate was unknown starts it at the size shown. A print at
+the price cuts it by what of the print is left once the orders it is through have taken their
+share, a taker of the sleeve's own filled at that price cuts it by what it took, and a print
+through the price leaves nothing ahead. The sleeve's own orders at one price queue by the time
+each took its place: a later one fills only past all that is left of an earlier one. An order
+takes its place when the venue accepts it, unless a later modify sent it to the back of its
+price, as a modify of either price or size does; a partial fill keeps its place, and a stop-limit
+or a limit-if-touched takes its place at its limit when it triggers, not when the venue accepted
+it. Orders that take their places at one instant — sent from one handler, or landing together
+under a latency — keep the order the engine holds them in, which a modify does not re-sort,
+rather than the order they landed in: at that instant an order modified to a price can stay
+ahead of one that landed there before the modify did. Nothing else fills it: not a quote however
+far through its price, not a bar, not a print the venue applied before the order landed, and not
+one it applied before a modify moved the order to its price. That is one reading of how much a
+print through a displayed limit fills — the size the tape shows traded there;
+`print_through_whole` is the same rule with the other reading, a print through filling all that
+is left of the order, as a market that traded through a displayed limit would have taken it
+first, and a print at its price filling what of it is left past the size ahead under either. A
+taker — a market order, or a limit marketable when it lands — fills against the quote in force,
+at its touch and up to the size it shows less what the sleeve's own takers have taken from it
+since, never against a print standing as the book: three market buys of 80 sent while one quote
+shows 100 at the ask fill 80, then 20 and 60 one increment past the ask, then 80 there. A limit
+fills there and no further than its own price, so a buy limit never pays above its limit, and its
+rest stays on the book at its price under the rule above; a market order's rest walks one
+increment past the touch, as the engine walks any market order larger than the top level, so a
+rule that sizes a taker down to the displayed size is the sleeve's to apply, from the quote it is
+handed. A limit sent immediate-or-cancel (`TimeInForce.IOC`) takes what that quote shows within
+its limit and is cancelled for the rest — cancelled whole when the quote shows nothing it can
+take — and one sent fill-or-kill fills whole from it or is cancelled, so neither ever rests for a
+print. The quote in force is the last one the venue applied, until a print trades strictly
+outside it — under a bid or over an ask it shows at a size — which ends it: a market that traded
+there has left the quote. With no quote in force, or one showing nothing on the side a market
+order takes, a market order is refused for want of a market and a limit rests at its price; so a
+sleeve that buys at market on a print over the ask is refused rather than filled at that ask —
+on a synthetic tape whose next session opens 98 cents over the last session's closing ask the
+quote before would have filled it there, and on one whose prints jump nine cents over the ask
+within a session nine cents under the market — and kanso's benchmark hold, refused so, sends its
+entry again on the next point; under `touch` and `through` it does not, so a hold the venue
+refused there holds nothing for the window, as it always has. A split restates the quote in
+force, not the print the book holds. Under a stated latency a command due by a print's instant
+lands before that print, so an order that reached the book in time is there when the print
+arrives and a cancel that reached it in time has taken the order off; a command due at a quote
+still lands after the quote, so a taker fills on the first quote at or after its delay — unless
+a print comes first, when it fills on the quote before, if neither that print nor one since
+traded outside it: a print outside the quote ends it before what is due by that print lands, so
+a taker still in flight across a gap or a jump is refused or rests, as one sent on the print is.
+A print carrying an aggressor reaches only the orders on the side it hit, as under the engine's
+own rules. A hypothesis whose resolved `limit_fill` is either
 value, from whichever layer, must require `quote` and `trade`, may not require `book`, and may
 not ask an instrument for `bar` beside `quote` — a bar walks the engine's own bid and ask
 through its prices, past the quote a taker fills on, so a market order sent on a bar that
@@ -1272,9 +1289,28 @@ costs:
   fixed_bps: 0.0                   # prices a bar-fed name; a quoted name's fill carries its spread
   sell_fee_bps: 0.206              # the transaction fee and the activity fee, on every sale
   sell_fee_per_share: 0.000195
-  limit_fill: print_through        # a resting limit fills only on a later print through it
+  limit_fill: print_through        # a resting limit fills on lit prints, past the size ahead of it
   latency_ms: 30                   # the time to decide and the route to the venue, one number
 ```
+
+**Which prints fill is the data's to say.** A `TradeTick` has no field for where a print traded
+or under what sale conditions, so a print's terms are a dataset of their own: one `print_terms`
+point per print, at the print's instants and under its trade id, carrying the source's exchange
+and condition codes as it gives them and `lit`, the source's reading of them — whether the print
+was an execution on an exchange's displayed book in the regular way. Load them beside the prints
+(`massive_print_terms`, or a `print_terms` file under `csv_parquet`, `docs/adapters.md`), then
+take a snapshot. Under either print rule a print its terms mark not lit — off-exchange, odd-lot,
+late, out of sequence, a correction, an auction print — fills no resting order and moves no
+queue; it still reaches the sleeve as a print, and still ends the quote in force when it trades
+outside it, so a taker is decided as before. This is the venue's own rule and not a choice a
+hypothesis states: measured on 2026-10-29 over the regular sessions of twenty names on 139 days
+of the vendor's flat files, 18.4 % of the 992.5 million prints were lit — 34.4 % of the shares — and
+41.4 % traded off any exchange, prints no displayed order there could have been part of. A run reads
+a name's prints with their terms only when its snapshot pins them — a `print_terms` dataset
+serving every day each print dataset of the name it pins serves over the days a card is fed —
+so terms loaded after the snapshot move no card pinned to it. Every print of any other name is
+read as lit, and `research begin` names each such name (`docs/cli.md`). A stage's live feed
+carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 255).
 
 Four parts of a taker rule that waits for the first quote at or after its delay and sizes a
 clip down to the displayed size are approximated, and `docs/backlog.md` row 158 records each: a
@@ -1566,19 +1602,22 @@ point it fills only the better-priced. Under `touch` a print at a price is credi
 every order resting there: two buys at 9.50 met by one seller's print of 100 there fill 100
 each. So the fills a run reports are as honest as the print sizes it is fed only for an order
 alone at its price and no larger than the prints that reach it (`docs/concepts.md`, Delivery).
-Under `print_through` a print at the price fills nothing and one beyond it fills by its own
-size, shared across the orders it reaches, so a resting fill is as honest as the prints that
-made it; under `print_through_whole` one beyond fills all that is left (above).
-A resting order sits on one exchange's book and is filled only by the executions that reach
-that book, so the trade stream that stands in for that exchange has to be its own executions,
-one print per execution: a consolidated tape fills the order with prints from venues it never
-rested on, and a file that merges a run of same-price prints into one hands it their sum in one
-fill. Measured on a posting strategy over one month of two Nasdaq names, the consolidated
-tape's fills were an order of magnitude larger than the exchange's own executions at the same
-prices and instants allowed. On a level-two book (`OrderBookDelta` data) the venue can also
-track queue position — `queue_position` in the engine's venue configuration — so a limit that
-joins a level showing 500 ahead fills only after those 500 have traded through; an order posted
-inside the spread creates its own level and has nothing ahead of it either way.
+Under `print_through` a print at the price fills only past the size estimated ahead of the
+order and one beyond it fills by its own size, shared across the orders it reaches, so a resting
+fill is as honest as the prints that made it and the estimate; under `print_through_whole` one
+beyond fills all that is left (above). A resting order sits on one exchange's book and is filled
+only by the executions that reach that book, so the trade stream that stands in for that
+exchange has to be its own executions, one print per execution: a consolidated tape fills the
+order with prints from venues it never rested on, and a file that merges a run of same-price
+prints into one hands it their sum in one fill. Measured on a posting strategy over one month of
+two Nasdaq names, the consolidated tape's fills were an order of magnitude larger than the
+exchange's own executions at the same prices and instants allowed. Under the print rules a
+print's terms keep off-exchange and irregular prints out of the fills, and the quote's size at
+the price stands for the queue, so the lit prints of every exchange and the size the quote shows
+are read as one book. On a level-two book (`OrderBookDelta` data) the venue can also track queue
+position — `queue_position` in the engine's venue configuration — so a limit that joins a level
+showing 500 ahead fills only after those 500 have traded through; an order posted inside the
+spread creates its own level and has nothing ahead of it either way.
 
 A hypothesis that requires `book` needs the book on every UTC day its window holds a name's
 bars, quotes or prints. A day that holds them and no change of that name's book — its book

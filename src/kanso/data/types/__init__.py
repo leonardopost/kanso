@@ -2,8 +2,8 @@
 
 Three market-data types are built in — `bar`, `quote` and `trade`, the engine's `Bar`,
 `QuoteTick` and `TradeTick` — and everything else is a **custom type**, registered
-under an id by `register_custom_type`. kanso ships two, `corporate_action` and
-`funding`; a vendor adapter or a workspace extension registers its own the same way, and
+under an id by `register_custom_type`. kanso ships three, `corporate_action`, `funding`
+and `print_terms`; a vendor adapter or a workspace extension registers its own the same way, and
 from that moment the id is admissible in a hypothesis's `data_requirements`, loadable by
 a loader, persistable in the catalog and selectable in a backtest by dotted path.
 
@@ -39,6 +39,8 @@ from nautilus_trader.model.data import Bar, CustomData, OrderBookDelta, QuoteTic
 from kanso.data.types.corporate_action import KINDS, TYPE_ID, CorporateAction
 from kanso.data.types.funding import TYPE_ID as FUNDING
 from kanso.data.types.funding import Funding
+from kanso.data.types.print_terms import TYPE_ID as PRINT_TERMS
+from kanso.data.types.print_terms import PrintTerms
 from kanso.errors import ValidationError
 
 __all__ = [
@@ -46,6 +48,7 @@ __all__ = [
     "KINDS",
     "CorporateAction",
     "Funding",
+    "PrintTerms",
     "custom_types",
     "data_types",
     "register_custom_type",
@@ -202,3 +205,4 @@ def _name(value: object) -> str:
 
 register_custom_type(TYPE_ID, CorporateAction)
 register_custom_type(FUNDING, Funding)
+register_custom_type(PRINT_TERMS, PrintTerms)

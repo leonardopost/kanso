@@ -458,3 +458,76 @@ def test_a_warmup_prefix_is_read_on_the_calendar_as_well(ws: FakeWorkspace) -> N
     assert not snap.covering(
         ws, [AAPL], ["bar"], "1d", windows(), ((date(2023, 12, 18), date(2023, 12, 31)),)
     )
+
+
+def load_tape(
+    ws: FakeWorkspace, instrument: str, type_: str, start: date, count: int
+) -> cat.Written:
+    """A print, or its terms, on each of `count` days from `start`, at 16:00 UTC."""
+    from nautilus_trader.model.data import TradeTick
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import InstrumentId, TradeId
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from kanso.data.catalog import day_start_ns
+    from kanso.data.types import PrintTerms
+
+    name = InstrumentId.from_str(instrument)
+    days = [date.fromordinal(start.toordinal() + n) for n in range(count)]
+    at = [day_start_ns(day) + 16 * 3_600 * 1_000_000_000 for day in days]
+    made: list[object] = [
+        PrintTerms(
+            instrument_id=name,
+            trade_id=f"T{day:%Y%m%d}",
+            exchange="11",
+            conditions="",
+            lit=True,
+            ts_event=ns,
+            ts_init=ns,
+        )
+        if type_ == "print_terms"
+        else TradeTick(
+            name,
+            Price.from_str("100.00"),
+            Quantity.from_int(1),
+            AggressorSide.NO_AGGRESSOR,
+            TradeId(f"T{day:%Y%m%d}"),
+            ns,
+            ns,
+        )
+        for day, ns in zip(days, at, strict=True)
+    ]
+    define(ws, instrument)
+    span = (start, days[-1])
+    return cat.write(
+        ws,
+        made,
+        ref=Ref(instrument=instrument, type=type_, resolution=None, span=span),
+        source="synthetic",
+    )
+
+
+def test_a_name_is_read_with_terms_only_where_the_snapshot_pins_them_for_every_print(
+    ws: FakeWorkspace,
+) -> None:
+    """AAPL's terms cover its prints over the research window and MSFT's stop two days in, so
+    only AAPL is read with terms, as is MSFT over those two days; terms loaded after the
+    snapshot change nothing pinned to it and cover MSFT under a later one. A name with no
+    prints, and a snapshot the store does not hold, read no terms."""
+    for name in (AAPL, MSFT):
+        load_tape(ws, name, "trade", JAN1, 10)
+    load_tape(ws, AAPL, "print_terms", JAN1, 10)
+    load_tape(ws, MSFT, "print_terms", JAN1, 2)
+    first = snap.freeze(ws)
+    load_tape(ws, MSFT, "print_terms", date(2024, 1, 3), 8)
+    second = snap.freeze(ws)
+    root = m.catalog_path(ws)  # type: ignore[arg-type]
+    names = [AAPL, MSFT, "NONE.XNAS"]
+
+    assert snap.with_terms(root, first.snapshot_id, names, RESEARCH) == {AAPL}
+    assert snap.with_terms(root, first.snapshot_id, names, (JAN1, date(2024, 1, 2))) == {
+        AAPL,
+        MSFT,
+    }
+    assert snap.with_terms(root, second.snapshot_id, names, RESEARCH) == {AAPL, MSFT}
+    assert snap.with_terms(root, "0" * 64, names, RESEARCH) == frozenset()

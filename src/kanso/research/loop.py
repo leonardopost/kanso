@@ -103,7 +103,7 @@ from kanso.criteria.integrity import check as check_integrity
 from kanso.criteria.objectives import measures_benchmark
 from kanso.data.instruments import run_definitions
 from kanso.data.manifest import catalog_path, snapshots_path
-from kanso.data.snapshot import covering
+from kanso.data.snapshot import Snapshot, covering, with_terms
 from kanso.env import read as read_envelope
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.hyp import (
@@ -126,7 +126,7 @@ from kanso.research import lanes, records
 from kanso.research.keep import Against, noise_floor
 from kanso.research.keep import grew_by as lines_added
 from kanso.research.keep import keep as keep_rule
-from kanso.research.passages import BEGUN, RESEED_FROM, reseed_of, taken
+from kanso.research.passages import BEGUN, RESEED_FROM, WITHOUT_TERMS, reseed_of, taken
 from kanso.research.results import write_results
 from kanso.schemas import (
     Card,
@@ -1384,6 +1384,9 @@ def begin(
     begun: dict[str, object] = {"run_id": run.run_id, "tag": run.tag, "lane": lane}
     if reseeded is not None:
         begun[RESEED_FROM] = reseeded
+    bare = _without_terms(ws, hyp, snapshot, setup)
+    if bare is not None:
+        begun[WITHOUT_TERMS] = list(bare)
     store.event(BEGUN, hyp_id, begun)
     if registration.status != RESEARCHING:
         set_status(store, hyp_id, RESEARCHING)
@@ -1403,6 +1406,24 @@ def begin(
         benchmark_run=benchmark_run,
     )
     return records.require_active(store, hyp_id)
+
+
+def _without_terms(
+    ws: Workspace, hyp: Hypothesis, snapshot: Snapshot, setup: Setup
+) -> tuple[str, ...] | None:
+    """Under a print rule, each name the hypothesis asks for `trade` whose prints over the days
+    a card is fed — the research window and its warmup — the pinned snapshot holds no terms
+    for, by the rule the runner reads terms by (`kanso.data.snapshot.with_terms`): its resting
+    orders fill on every print the tape holds, each read as lit (`kanso.nautilus.tape`).
+    `None` under any other rule, where a print's terms move no fill."""
+    from kanso.nautilus.venue import PRINT_SIZE
+
+    if setup.venue_model.costs.limit_fill not in PRINT_SIZE:
+        return None
+    names = [name for name in sorted(hyp.universe) if "trade" in hyp.required_of(name)]
+    span = (setup.window[0] if setup.prefix is None else setup.prefix[0], setup.window[1])
+    termed = with_terms(catalog_path(ws), snapshot.snapshot_id, names, span)
+    return tuple(name for name in names if name not in termed)
 
 
 def baseline_inputs(ws: Workspace, store: StateStore, hyp_id: str) -> dict[str, object]:

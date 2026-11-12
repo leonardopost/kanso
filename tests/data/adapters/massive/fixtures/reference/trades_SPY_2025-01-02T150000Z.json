@@ -1,0 +1,5706 @@
+{
+ "_source": {
+  "asked_at_utc": "2026-10-28T12:16:48Z",
+  "auth": "Authorization: Bearer <scalp-tape workspace KANSO_MASSIVE_API_KEY>, header only; key stripped",
+  "host": "https://api.massive.com",
+  "http_status": 200,
+  "params": {
+   "limit": "50000",
+   "order": "asc",
+   "sort": "timestamp",
+   "timestamp.gte": "1735830000000000000",
+   "timestamp.lt": "1735830002000000000"
+  },
+  "path": "/v3/trades/SPY",
+  "request_id": "de904ce812662a993bbb6b7f3992e12f",
+  "rows": 376,
+  "seconds": 1.4,
+  "signal": "rows",
+  "vendor_status": "OK",
+  "what": "one live Massive REST response, measured by lit-tape/code/rest_once.py"
+ },
+ "body": {
+  "request_id": "de904ce812662a993bbb6b7f3992e12f",
+  "results": [
+   {
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130163",
+    "participant_timestamp": 1735830000071502759,
+    "price": 590.18,
+    "sequence_number": 335806,
+    "sip_timestamp": 1735830000071538432,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314890552",
+    "participant_timestamp": 1735830000071478706,
+    "price": 590.18,
+    "sequence_number": 335807,
+    "sip_timestamp": 1735830000071845376,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 7,
+    "id": "52983525041248",
+    "participant_timestamp": 1735830000071670000,
+    "price": 590.17,
+    "sequence_number": 335808,
+    "sip_timestamp": 1735830000071908352,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "30.0",
+    "exchange": 4,
+    "id": "71679618538071",
+    "participant_timestamp": 1735830000071954748,
+    "price": 590.18,
+    "sequence_number": 335809,
+    "sip_timestamp": 1735830000072572672,
+    "size": 30,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000072220934
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618593095",
+    "participant_timestamp": 1735830000083336000,
+    "price": 590.1772,
+    "sequence_number": 335817,
+    "sip_timestamp": 1735830000084039168,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000083679772
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130164",
+    "participant_timestamp": 1735830000086929979,
+    "price": 590.19,
+    "sequence_number": 335818,
+    "sip_timestamp": 1735830000086952960,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "52.0",
+    "exchange": 11,
+    "id": "52983527130165",
+    "participant_timestamp": 1735830000099393276,
+    "price": 590.2,
+    "sequence_number": 335821,
+    "sip_timestamp": 1735830000099417856,
+    "size": 52,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "48.0",
+    "exchange": 11,
+    "id": "52983527130166",
+    "participant_timestamp": 1735830000099393276,
+    "price": 590.2,
+    "sequence_number": 335822,
+    "sip_timestamp": 1735830000099417856,
+    "size": 48,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "7.0",
+    "exchange": 11,
+    "id": "52983527130167",
+    "participant_timestamp": 1735830000100264359,
+    "price": 590.21,
+    "sequence_number": 335824,
+    "sip_timestamp": 1735830000100286720,
+    "size": 7,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 11,
+    "id": "52983527130168",
+    "participant_timestamp": 1735830000100264359,
+    "price": 590.21,
+    "sequence_number": 335825,
+    "sip_timestamp": 1735830000100289792,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130169",
+    "participant_timestamp": 1735830000103406275,
+    "price": 590.22,
+    "sequence_number": 335842,
+    "sip_timestamp": 1735830000103429120,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 8,
+    "id": "52983525684291",
+    "participant_timestamp": 1735830000103281000,
+    "price": 590.22,
+    "sequence_number": 335843,
+    "sip_timestamp": 1735830000103513600,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618594382",
+    "participant_timestamp": 1735830000110000000,
+    "price": 590.22,
+    "sequence_number": 335846,
+    "sip_timestamp": 1735830000112709376,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000112355259
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314892092",
+    "participant_timestamp": 1735830000116051352,
+    "price": 590.24,
+    "sequence_number": 335849,
+    "sip_timestamp": 1735830000116411136,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "50.0",
+    "exchange": 4,
+    "id": "71679618594632",
+    "participant_timestamp": 1735830000116295158,
+    "price": 590.24,
+    "sequence_number": 335850,
+    "sip_timestamp": 1735830000116886272,
+    "size": 50,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000116528172
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "35.0",
+    "exchange": 11,
+    "id": "52983527130177",
+    "participant_timestamp": 1735830000117189308,
+    "price": 590.25,
+    "sequence_number": 335854,
+    "sip_timestamp": 1735830000117217024,
+    "size": 35,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 10,
+    "id": "52983525292086",
+    "participant_timestamp": 1735830000117207301,
+    "price": 590.25,
+    "sequence_number": 335855,
+    "sip_timestamp": 1735830000117244416,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "4.0",
+    "exchange": 21,
+    "id": "53100197656950",
+    "participant_timestamp": 1735830000117232578,
+    "price": 590.25,
+    "sequence_number": 335856,
+    "sip_timestamp": 1735830000117512192,
+    "size": 4,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100197656952",
+    "participant_timestamp": 1735830000117232578,
+    "price": 590.25,
+    "sequence_number": 335857,
+    "sip_timestamp": 1735830000117512192,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "19.0",
+    "exchange": 18,
+    "id": "52983525040250",
+    "participant_timestamp": 1735830000117288000,
+    "price": 590.25,
+    "sequence_number": 335858,
+    "sip_timestamp": 1735830000117535744,
+    "size": 19,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292651",
+    "participant_timestamp": 1735830000117425000,
+    "price": 590.25,
+    "sequence_number": 335859,
+    "sip_timestamp": 1735830000117662208,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618594903",
+    "participant_timestamp": 1735830000100318976,
+    "price": 590.204,
+    "sequence_number": 335867,
+    "sip_timestamp": 1735830000126058240,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000125697821
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 12,
+    "id": "62879314892595",
+    "participant_timestamp": 1735830000131230778,
+    "price": 590.25,
+    "sequence_number": 335868,
+    "sip_timestamp": 1735830000131579392,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618595160",
+    "participant_timestamp": 1735830000121498000,
+    "price": 590.245,
+    "sequence_number": 335872,
+    "sip_timestamp": 1735830000133570048,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000133219913
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618597701",
+    "participant_timestamp": 1735830000154000000,
+    "price": 590.26,
+    "sequence_number": 335874,
+    "sip_timestamp": 1735830000156304384,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000155949126
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "3.0",
+    "exchange": 11,
+    "id": "52983527130178",
+    "participant_timestamp": 1735830000184331362,
+    "price": 590.26,
+    "sequence_number": 335898,
+    "sip_timestamp": 1735830000184358144,
+    "size": 3,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "7.0",
+    "exchange": 4,
+    "id": "71679618598965",
+    "participant_timestamp": 1735830000185000000,
+    "price": 590.26,
+    "sequence_number": 335899,
+    "sip_timestamp": 1735830000187326208,
+    "size": 7,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000186975083
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "7.0",
+    "exchange": 11,
+    "id": "52983527130179",
+    "participant_timestamp": 1735830000190974210,
+    "price": 590.28,
+    "sequence_number": 335900,
+    "sip_timestamp": 1735830000191001088,
+    "size": 7,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130180",
+    "participant_timestamp": 1735830000190974210,
+    "price": 590.28,
+    "sequence_number": 335901,
+    "sip_timestamp": 1735830000191004160,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130181",
+    "participant_timestamp": 1735830000190974210,
+    "price": 590.28,
+    "sequence_number": 335902,
+    "sip_timestamp": 1735830000191006976,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100198183737",
+    "participant_timestamp": 1735830000191026227,
+    "price": 590.28,
+    "sequence_number": 335903,
+    "sip_timestamp": 1735830000191295488,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314893391",
+    "participant_timestamp": 1735830000190942533,
+    "price": 590.28,
+    "sequence_number": 335904,
+    "sip_timestamp": 1735830000191301632,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684298",
+    "participant_timestamp": 1735830000191236000,
+    "price": 590.28,
+    "sequence_number": 335905,
+    "sip_timestamp": 1735830000191482112,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292655",
+    "participant_timestamp": 1735830000191274000,
+    "price": 590.28,
+    "sequence_number": 335906,
+    "sip_timestamp": 1735830000191508992,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "5.0",
+    "exchange": 4,
+    "id": "71679618599223",
+    "participant_timestamp": 1735830000195252000,
+    "price": 590.275,
+    "sequence_number": 335911,
+    "sip_timestamp": 1735830000196293376,
+    "size": 5,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000195941035
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618599476",
+    "participant_timestamp": 1735830000203000000,
+    "price": 590.29,
+    "sequence_number": 335916,
+    "sip_timestamp": 1735830000205107712,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000204755704
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618599478",
+    "participant_timestamp": 1735830000203000000,
+    "price": 590.2795,
+    "sequence_number": 335917,
+    "sip_timestamp": 1735830000205471232,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000205120305
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618599479",
+    "participant_timestamp": 1735830000204000000,
+    "price": 590.29,
+    "sequence_number": 335918,
+    "sip_timestamp": 1735830000205931520,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000205580473
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130182",
+    "participant_timestamp": 1735830000214227271,
+    "price": 590.28,
+    "sequence_number": 335920,
+    "sip_timestamp": 1735830000214252288,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 4,
+    "id": "71679618599512",
+    "participant_timestamp": 1735830000216823000,
+    "price": 590.2705,
+    "sequence_number": 335923,
+    "sip_timestamp": 1735830000220119296,
+    "size": 10,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000219767217
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130183",
+    "participant_timestamp": 1735830000243625421,
+    "price": 590.3,
+    "sequence_number": 335924,
+    "sip_timestamp": 1735830000243656960,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "6.0",
+    "exchange": 11,
+    "id": "52983527130184",
+    "participant_timestamp": 1735830000243625421,
+    "price": 590.3,
+    "sequence_number": 335925,
+    "sip_timestamp": 1735830000243656960,
+    "size": 6,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "6.0",
+    "exchange": 11,
+    "id": "52983527130185",
+    "participant_timestamp": 1735830000243625421,
+    "price": 590.3,
+    "sequence_number": 335926,
+    "sip_timestamp": 1735830000243659776,
+    "size": 6,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314894385",
+    "participant_timestamp": 1735830000243577294,
+    "price": 590.3,
+    "sequence_number": 335927,
+    "sip_timestamp": 1735830000243936000,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "25.0",
+    "exchange": 11,
+    "id": "52983527130186",
+    "participant_timestamp": 1735830000244210492,
+    "price": 590.31,
+    "sequence_number": 335928,
+    "sip_timestamp": 1735830000244236800,
+    "size": 25,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618600017",
+    "participant_timestamp": 1735830000246708000,
+    "price": 590.29,
+    "sequence_number": 335930,
+    "sip_timestamp": 1735830000248064768,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000247711163
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618600240",
+    "participant_timestamp": 1735830000248000000,
+    "price": 590.296,
+    "sequence_number": 335933,
+    "sip_timestamp": 1735830000250350336,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000249995090
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314895166",
+    "participant_timestamp": 1735830000274365049,
+    "price": 590.28,
+    "sequence_number": 335942,
+    "sip_timestamp": 1735830000274714112,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 8,
+    "id": "52983525684335",
+    "participant_timestamp": 1735830000337382000,
+    "price": 590.32,
+    "sequence_number": 335978,
+    "sip_timestamp": 1735830000337627136,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "3.0",
+    "exchange": 11,
+    "id": "52983527130187",
+    "participant_timestamp": 1735830000365867746,
+    "price": 590.34,
+    "sequence_number": 335984,
+    "sip_timestamp": 1735830000365894656,
+    "size": 3,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "7.0",
+    "exchange": 4,
+    "id": "71679618602316",
+    "participant_timestamp": 1735830000367000000,
+    "price": 590.34,
+    "sequence_number": 335988,
+    "sip_timestamp": 1735830000368754432,
+    "size": 7,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000368402267
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 11,
+    "id": "52983527130188",
+    "participant_timestamp": 1735830000375136215,
+    "price": 590.36,
+    "sequence_number": 335989,
+    "sip_timestamp": 1735830000375159552,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "300.0",
+    "exchange": 17,
+    "id": "62879130477660",
+    "participant_timestamp": 1735830000375086898,
+    "price": 590.36,
+    "sequence_number": 335990,
+    "sip_timestamp": 1735830000375459840,
+    "size": 300,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684541",
+    "participant_timestamp": 1735830000375212000,
+    "price": 590.36,
+    "sequence_number": 335991,
+    "sip_timestamp": 1735830000375466240,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 12,
+    "id": "62879314896964",
+    "participant_timestamp": 1735830000375105453,
+    "price": 590.36,
+    "sequence_number": 335992,
+    "sip_timestamp": 1735830000375469312,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292663",
+    "participant_timestamp": 1735830000375270000,
+    "price": 590.36,
+    "sequence_number": 335993,
+    "sip_timestamp": 1735830000375520512,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "decimal_size": "200.0",
+    "exchange": 12,
+    "id": "62879314897226",
+    "participant_timestamp": 1735830000376646471,
+    "price": 590.37,
+    "sequence_number": 335996,
+    "sip_timestamp": 1735830000377006592,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314897227",
+    "participant_timestamp": 1735830000376646471,
+    "price": 590.37,
+    "sequence_number": 335997,
+    "sip_timestamp": 1735830000377006592,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "80.0",
+    "exchange": 12,
+    "id": "62879314897228",
+    "participant_timestamp": 1735830000376646471,
+    "price": 590.37,
+    "sequence_number": 335998,
+    "sip_timestamp": 1735830000377009152,
+    "size": 80,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314897231",
+    "participant_timestamp": 1735830000376876519,
+    "price": 590.37,
+    "sequence_number": 335999,
+    "sip_timestamp": 1735830000377234688,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314897232",
+    "participant_timestamp": 1735830000376876519,
+    "price": 590.37,
+    "sequence_number": 336000,
+    "sip_timestamp": 1735830000377234688,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "132.0",
+    "exchange": 12,
+    "id": "62879314897233",
+    "participant_timestamp": 1735830000376909324,
+    "price": 590.37,
+    "sequence_number": 336001,
+    "sip_timestamp": 1735830000377264640,
+    "size": 132,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "49.0",
+    "exchange": 4,
+    "id": "71679618602804",
+    "participant_timestamp": 1735830000377000000,
+    "price": 590.36,
+    "sequence_number": 336002,
+    "sip_timestamp": 1735830000379742464,
+    "size": 49,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000379391840
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "3.0",
+    "exchange": 11,
+    "id": "52983527130189",
+    "participant_timestamp": 1735830000384987703,
+    "price": 590.345,
+    "sequence_number": 336004,
+    "sip_timestamp": 1735830000385008128,
+    "size": 3,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71675224207694",
+    "participant_timestamp": 1735830000390639000,
+    "price": 590.34,
+    "sequence_number": 336010,
+    "sip_timestamp": 1735830000411308800,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 203,
+    "trf_timestamp": 1735830000401672947
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130190",
+    "participant_timestamp": 1735830000413108755,
+    "price": 590.35,
+    "sequence_number": 336011,
+    "sip_timestamp": 1735830000413131264,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618603571",
+    "participant_timestamp": 1735830000414000000,
+    "price": 590.34,
+    "sequence_number": 336012,
+    "sip_timestamp": 1735830000416243456,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000415888981
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 4,
+    "id": "71679618658628",
+    "participant_timestamp": 1735830000461000000,
+    "price": 590.3301,
+    "sequence_number": 336014,
+    "sip_timestamp": 1735830000463041024,
+    "size": 10,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000462682935
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "5.0",
+    "exchange": 4,
+    "id": "71679618658644",
+    "participant_timestamp": 1735830000472000000,
+    "price": 590.3301,
+    "sequence_number": 336015,
+    "sip_timestamp": 1735830000474477568,
+    "size": 5,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000474123501
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "218.0",
+    "exchange": 11,
+    "id": "52983527130191",
+    "participant_timestamp": 1735830000520894174,
+    "price": 590.35,
+    "sequence_number": 336018,
+    "sip_timestamp": 1735830000520920064,
+    "size": 218,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "54.0",
+    "exchange": 4,
+    "id": "71679618659406",
+    "participant_timestamp": 1735830000528295347,
+    "price": 590.345,
+    "sequence_number": 336020,
+    "sip_timestamp": 1735830000529983744,
+    "size": 54,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000529630950
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618659413",
+    "participant_timestamp": 1735830000531000000,
+    "price": 590.36,
+    "sequence_number": 336021,
+    "sip_timestamp": 1735830000533249536,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000532897395
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618659649",
+    "participant_timestamp": 1735830000542767079,
+    "price": 590.36,
+    "sequence_number": 336022,
+    "sip_timestamp": 1735830000543362560,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000543010033
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618659909",
+    "participant_timestamp": 1735830000575000000,
+    "price": 590.34,
+    "sequence_number": 336024,
+    "sip_timestamp": 1735830000577527040,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000577173800
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618659918",
+    "participant_timestamp": 1735830000580000000,
+    "price": 590.3699,
+    "sequence_number": 336025,
+    "sip_timestamp": 1735830000582455808,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000582104435
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618660658",
+    "participant_timestamp": 1735830000471000000,
+    "price": 590.3588,
+    "sequence_number": 336043,
+    "sip_timestamp": 1735830000644776192,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000644422629
+   },
+   {
+    "conditions": [
+     10,
+     37,
+     41
+    ],
+    "decimal_size": "4.0",
+    "exchange": 4,
+    "id": "71679618662706",
+    "participant_timestamp": 1735830000659751391,
+    "price": 590.0727,
+    "sequence_number": 336061,
+    "sip_timestamp": 1735830000661435904,
+    "size": 4,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000661081510
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 12,
+    "id": "62879314949231",
+    "participant_timestamp": 1735830000742938478,
+    "price": 590.39,
+    "sequence_number": 336073,
+    "sip_timestamp": 1735830000743288064,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "9.0",
+    "exchange": 4,
+    "id": "71679618663502",
+    "participant_timestamp": 1735830000745000000,
+    "price": 590.39,
+    "sequence_number": 336074,
+    "sip_timestamp": 1735830000747885824,
+    "size": 9,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000747524300
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "11.0",
+    "exchange": 1,
+    "id": "52983525093443",
+    "participant_timestamp": 1735830000763624374,
+    "price": 590.38,
+    "sequence_number": 336076,
+    "sip_timestamp": 1735830000763661568,
+    "size": 11,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "50.0",
+    "exchange": 12,
+    "id": "62879314949457",
+    "participant_timestamp": 1735830000763343877,
+    "price": 590.38,
+    "sequence_number": 336077,
+    "sip_timestamp": 1735830000763697664,
+    "size": 50,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "18.0",
+    "exchange": 19,
+    "id": "52983525292858",
+    "participant_timestamp": 1735830000763479000,
+    "price": 590.38,
+    "sequence_number": 336078,
+    "sip_timestamp": 1735830000763718656,
+    "size": 18,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "82.0",
+    "exchange": 19,
+    "id": "52983525292859",
+    "participant_timestamp": 1735830000763528000,
+    "price": 590.38,
+    "sequence_number": 336079,
+    "sip_timestamp": 1735830000763772672,
+    "size": 82,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130192",
+    "participant_timestamp": 1735830000768370298,
+    "price": 590.37,
+    "sequence_number": 336086,
+    "sip_timestamp": 1735830000768400640,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 11,
+    "id": "52983527130193",
+    "participant_timestamp": 1735830000794486505,
+    "price": 590.38,
+    "sequence_number": 336092,
+    "sip_timestamp": 1735830000794518016,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130194",
+    "participant_timestamp": 1735830000794486505,
+    "price": 590.38,
+    "sequence_number": 336093,
+    "sip_timestamp": 1735830000794521344,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684558",
+    "participant_timestamp": 1735830000794512000,
+    "price": 590.38,
+    "sequence_number": 336095,
+    "sip_timestamp": 1735830000794752512,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292864",
+    "participant_timestamp": 1735830000794516000,
+    "price": 590.38,
+    "sequence_number": 336096,
+    "sip_timestamp": 1735830000794755584,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 8,
+    "id": "52983525684559",
+    "participant_timestamp": 1735830000794512000,
+    "price": 590.38,
+    "sequence_number": 336097,
+    "sip_timestamp": 1735830000794767872,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 19,
+    "id": "52983525292865",
+    "participant_timestamp": 1735830000794516000,
+    "price": 590.38,
+    "sequence_number": 336098,
+    "sip_timestamp": 1735830000794770688,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100313989745",
+    "participant_timestamp": 1735830000794503448,
+    "price": 590.38,
+    "sequence_number": 336099,
+    "sip_timestamp": 1735830000794776576,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130195",
+    "participant_timestamp": 1735830000809423199,
+    "price": 590.4,
+    "sequence_number": 336109,
+    "sip_timestamp": 1735830000809448704,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684561",
+    "participant_timestamp": 1735830000809313000,
+    "price": 590.4,
+    "sequence_number": 336110,
+    "sip_timestamp": 1735830000809553920,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "150.0",
+    "exchange": 11,
+    "id": "52983527130196",
+    "participant_timestamp": 1735830000832411599,
+    "price": 590.4,
+    "sequence_number": 336113,
+    "sip_timestamp": 1735830000832435456,
+    "size": 150,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100314652522",
+    "participant_timestamp": 1735830000832426704,
+    "price": 590.4,
+    "sequence_number": 336123,
+    "sip_timestamp": 1735830000832745216,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314950727",
+    "participant_timestamp": 1735830000832392141,
+    "price": 590.4,
+    "sequence_number": 336124,
+    "sip_timestamp": 1735830000832756992,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292867",
+    "participant_timestamp": 1735830000832541000,
+    "price": 590.4,
+    "sequence_number": 336126,
+    "sip_timestamp": 1735830000832781312,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "5.0",
+    "exchange": 21,
+    "id": "53100314653489",
+    "participant_timestamp": 1735830000832474165,
+    "price": 590.41,
+    "sequence_number": 336133,
+    "sip_timestamp": 1735830000832814336,
+    "size": 5,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100314653491",
+    "participant_timestamp": 1735830000832474165,
+    "price": 590.41,
+    "sequence_number": 336134,
+    "sip_timestamp": 1735830000832814336,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292869",
+    "participant_timestamp": 1735830000832670000,
+    "price": 590.41,
+    "sequence_number": 336139,
+    "sip_timestamp": 1735830000832931584,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100314709316",
+    "participant_timestamp": 1735830000832775568,
+    "price": 590.42,
+    "sequence_number": 336147,
+    "sip_timestamp": 1735830000833223168,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314951242",
+    "participant_timestamp": 1735830000832956745,
+    "price": 590.43,
+    "sequence_number": 336152,
+    "sip_timestamp": 1735830000833319424,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684566",
+    "participant_timestamp": 1735830000833346000,
+    "price": 590.43,
+    "sequence_number": 336158,
+    "sip_timestamp": 1735830000833577984,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "15.0",
+    "exchange": 15,
+    "id": "52983543056724",
+    "participant_timestamp": 1735830000832990789,
+    "price": 590.41,
+    "sequence_number": 336161,
+    "sip_timestamp": 1735830000833707520,
+    "size": 15,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "25.0",
+    "exchange": 15,
+    "id": "52983543056727",
+    "participant_timestamp": 1735830000832990789,
+    "price": 590.41,
+    "sequence_number": 336162,
+    "sip_timestamp": 1735830000833725952,
+    "size": 25,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292877",
+    "participant_timestamp": 1735830000833978000,
+    "price": 590.43,
+    "sequence_number": 336171,
+    "sip_timestamp": 1735830000834212608,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684569",
+    "participant_timestamp": 1735830000835455000,
+    "price": 590.44,
+    "sequence_number": 336175,
+    "sip_timestamp": 1735830000835686144,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "169.0",
+    "exchange": 12,
+    "id": "62879314952509",
+    "participant_timestamp": 1735830000838556882,
+    "price": 590.44,
+    "sequence_number": 336187,
+    "sip_timestamp": 1735830000838916096,
+    "size": 169,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130197",
+    "participant_timestamp": 1735830000840279461,
+    "price": 590.43,
+    "sequence_number": 336188,
+    "sip_timestamp": 1735830000840305152,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314952524",
+    "participant_timestamp": 1735830000840581931,
+    "price": 590.43,
+    "sequence_number": 336189,
+    "sip_timestamp": 1735830000840933632,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314952525",
+    "participant_timestamp": 1735830000840581931,
+    "price": 590.43,
+    "sequence_number": 336190,
+    "sip_timestamp": 1735830000840933632,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314952526",
+    "participant_timestamp": 1735830000840581931,
+    "price": 590.43,
+    "sequence_number": 336191,
+    "sip_timestamp": 1735830000840936704,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314952528",
+    "participant_timestamp": 1735830000841401830,
+    "price": 590.41,
+    "sequence_number": 336192,
+    "sip_timestamp": 1735830000841751808,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100314982457",
+    "participant_timestamp": 1735830000842299287,
+    "price": 590.42,
+    "sequence_number": 336193,
+    "sip_timestamp": 1735830000842524416,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618665015",
+    "participant_timestamp": 1735830000842000000,
+    "price": 590.45,
+    "sequence_number": 336194,
+    "sip_timestamp": 1735830000844500224,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000844145584
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618665027",
+    "participant_timestamp": 1735830000843000000,
+    "price": 590.45,
+    "sequence_number": 336195,
+    "sip_timestamp": 1735830000845119488,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000844768143
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618665282",
+    "participant_timestamp": 1735830000834557969,
+    "price": 590.43,
+    "sequence_number": 336200,
+    "sip_timestamp": 1735830000859391488,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000859037451
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130198",
+    "participant_timestamp": 1735830000882240119,
+    "price": 590.42,
+    "sequence_number": 336202,
+    "sip_timestamp": 1735830000882260992,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130416",
+    "participant_timestamp": 1735830000891422893,
+    "price": 590.43,
+    "sequence_number": 336204,
+    "sip_timestamp": 1735830000891448064,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130417",
+    "participant_timestamp": 1735830000891422893,
+    "price": 590.43,
+    "sequence_number": 336205,
+    "sip_timestamp": 1735830000891450880,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130418",
+    "participant_timestamp": 1735830000891422893,
+    "price": 590.43,
+    "sequence_number": 336206,
+    "sip_timestamp": 1735830000891457024,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "6.0",
+    "exchange": 10,
+    "id": "52983525292089",
+    "participant_timestamp": 1735830000891434750,
+    "price": 590.42,
+    "sequence_number": 336207,
+    "sip_timestamp": 1735830000891465984,
+    "size": 6,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "61.0",
+    "exchange": 10,
+    "id": "52983525292097",
+    "participant_timestamp": 1735830000891506815,
+    "price": 590.43,
+    "sequence_number": 336208,
+    "sip_timestamp": 1735830000891529216,
+    "size": 61,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "33.0",
+    "exchange": 10,
+    "id": "52983525292098",
+    "participant_timestamp": 1735830000891526630,
+    "price": 590.43,
+    "sequence_number": 336209,
+    "sip_timestamp": 1735830000891547392,
+    "size": 33,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130419",
+    "participant_timestamp": 1735830000891622304,
+    "price": 590.43,
+    "sequence_number": 336210,
+    "sip_timestamp": 1735830000891643392,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100315179116",
+    "participant_timestamp": 1735830000891415360,
+    "price": 590.43,
+    "sequence_number": 336211,
+    "sip_timestamp": 1735830000891646464,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 7,
+    "id": "52983525041252",
+    "participant_timestamp": 1735830000891409000,
+    "price": 590.42,
+    "sequence_number": 336212,
+    "sip_timestamp": 1735830000891649536,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292881",
+    "participant_timestamp": 1735830000891420000,
+    "price": 590.43,
+    "sequence_number": 336213,
+    "sip_timestamp": 1735830000891655424,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684575",
+    "participant_timestamp": 1735830000891420000,
+    "price": 590.43,
+    "sequence_number": 336214,
+    "sip_timestamp": 1735830000891655424,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130420",
+    "participant_timestamp": 1735830000891659781,
+    "price": 590.43,
+    "sequence_number": 336215,
+    "sip_timestamp": 1735830000891685632,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "90.0",
+    "exchange": 21,
+    "id": "53100315179364",
+    "participant_timestamp": 1735830000891461643,
+    "price": 590.43,
+    "sequence_number": 336216,
+    "sip_timestamp": 1735830000891694592,
+    "size": 90,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "4.0",
+    "exchange": 7,
+    "id": "52983525041253",
+    "participant_timestamp": 1735830000891469000,
+    "price": 590.43,
+    "sequence_number": 336217,
+    "sip_timestamp": 1735830000891700480,
+    "size": 4,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "94.0",
+    "exchange": 7,
+    "id": "52983525041254",
+    "participant_timestamp": 1735830000891508000,
+    "price": 590.43,
+    "sequence_number": 336218,
+    "sip_timestamp": 1735830000891739648,
+    "size": 94,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292882",
+    "participant_timestamp": 1735830000891508000,
+    "price": 590.43,
+    "sequence_number": 336219,
+    "sip_timestamp": 1735830000891751680,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 18,
+    "id": "52983525040436",
+    "participant_timestamp": 1735830000891510000,
+    "price": 590.43,
+    "sequence_number": 336220,
+    "sip_timestamp": 1735830000891754752,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684576",
+    "participant_timestamp": 1735830000891523000,
+    "price": 590.43,
+    "sequence_number": 336221,
+    "sip_timestamp": 1735830000891757824,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684577",
+    "participant_timestamp": 1735830000891563000,
+    "price": 590.43,
+    "sequence_number": 336222,
+    "sip_timestamp": 1735830000891793920,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292883",
+    "participant_timestamp": 1735830000891566000,
+    "price": 590.43,
+    "sequence_number": 336223,
+    "sip_timestamp": 1735830000891799808,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314953062",
+    "participant_timestamp": 1735830000891497409,
+    "price": 590.43,
+    "sequence_number": 336224,
+    "sip_timestamp": 1735830000891853824,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314953063",
+    "participant_timestamp": 1735830000891497409,
+    "price": 590.43,
+    "sequence_number": 336225,
+    "sip_timestamp": 1735830000891856896,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314953064",
+    "participant_timestamp": 1735830000891497409,
+    "price": 590.43,
+    "sequence_number": 336226,
+    "sip_timestamp": 1735830000891859968,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618665802",
+    "participant_timestamp": 1735830000891396920,
+    "price": 590.43,
+    "sequence_number": 336229,
+    "sip_timestamp": 1735830000913252864,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000912898123
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130421",
+    "participant_timestamp": 1735830000923321683,
+    "price": 590.42,
+    "sequence_number": 336232,
+    "sip_timestamp": 1735830000923345408,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684578",
+    "participant_timestamp": 1735830000946152000,
+    "price": 590.43,
+    "sequence_number": 336234,
+    "sip_timestamp": 1735830000946395136,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314953784",
+    "participant_timestamp": 1735830000954813957,
+    "price": 590.44,
+    "sequence_number": 336235,
+    "sip_timestamp": 1735830000955164160,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618666569",
+    "participant_timestamp": 1735830000990893000,
+    "price": 590.44,
+    "sequence_number": 336238,
+    "sip_timestamp": 1735830000991809280,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000991454636
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618666570",
+    "participant_timestamp": 1735830000990946000,
+    "price": 590.44,
+    "sequence_number": 336239,
+    "sip_timestamp": 1735830000992107008,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830000991753702
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292884",
+    "participant_timestamp": 1735830001000195000,
+    "price": 590.42,
+    "sequence_number": 336240,
+    "sip_timestamp": 1735830001000433920,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "75.0",
+    "exchange": 4,
+    "id": "71679618666581",
+    "participant_timestamp": 1735830001000417507,
+    "price": 590.4201,
+    "sequence_number": 336241,
+    "sip_timestamp": 1735830001002138880,
+    "size": 75,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001001786520
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130422",
+    "participant_timestamp": 1735830001022031232,
+    "price": 590.43,
+    "sequence_number": 336242,
+    "sip_timestamp": 1735830001022055424,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130423",
+    "participant_timestamp": 1735830001022244013,
+    "price": 590.44,
+    "sequence_number": 336244,
+    "sip_timestamp": 1735830001022277888,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "600.0",
+    "exchange": 11,
+    "id": "52983527130424",
+    "participant_timestamp": 1735830001022244013,
+    "price": 590.45,
+    "sequence_number": 336247,
+    "sip_timestamp": 1735830001022284288,
+    "size": 600,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "5.0",
+    "exchange": 11,
+    "id": "52983527130425",
+    "participant_timestamp": 1735830001022244013,
+    "price": 590.45,
+    "sequence_number": 336249,
+    "sip_timestamp": 1735830001022287616,
+    "size": 5,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "64.0",
+    "exchange": 11,
+    "id": "52983527130433",
+    "participant_timestamp": 1735830001022244013,
+    "price": 590.45,
+    "sequence_number": 336251,
+    "sip_timestamp": 1735830001022290176,
+    "size": 64,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "136.0",
+    "exchange": 11,
+    "id": "52983527130434",
+    "participant_timestamp": 1735830001022312368,
+    "price": 590.45,
+    "sequence_number": 336254,
+    "sip_timestamp": 1735830001022344192,
+    "size": 136,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130435",
+    "participant_timestamp": 1735830001022312368,
+    "price": 590.45,
+    "sequence_number": 336255,
+    "sip_timestamp": 1735830001022350080,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "298.0",
+    "exchange": 11,
+    "id": "52983527130436",
+    "participant_timestamp": 1735830001022312368,
+    "price": 590.45,
+    "sequence_number": 336256,
+    "sip_timestamp": 1735830001022353152,
+    "size": 298,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314954298",
+    "participant_timestamp": 1735830001022004140,
+    "price": 590.43,
+    "sequence_number": 336257,
+    "sip_timestamp": 1735830001022365696,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130437",
+    "participant_timestamp": 1735830001022387126,
+    "price": 590.45,
+    "sequence_number": 336260,
+    "sip_timestamp": 1735830001022419200,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "136.0",
+    "exchange": 11,
+    "id": "52983527130438",
+    "participant_timestamp": 1735830001022387126,
+    "price": 590.45,
+    "sequence_number": 336262,
+    "sip_timestamp": 1735830001022422272,
+    "size": 136,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100315636534",
+    "participant_timestamp": 1735830001022257253,
+    "price": 590.45,
+    "sequence_number": 336265,
+    "sip_timestamp": 1735830001022545664,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130439",
+    "participant_timestamp": 1735830001022518761,
+    "price": 590.45,
+    "sequence_number": 336267,
+    "sip_timestamp": 1735830001022560768,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "66.0",
+    "exchange": 11,
+    "id": "52983527130440",
+    "participant_timestamp": 1735830001022518761,
+    "price": 590.45,
+    "sequence_number": 336268,
+    "sip_timestamp": 1735830001022564096,
+    "size": 66,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314954349",
+    "participant_timestamp": 1735830001022260688,
+    "price": 590.44,
+    "sequence_number": 336272,
+    "sip_timestamp": 1735830001022617600,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684581",
+    "participant_timestamp": 1735830001022380000,
+    "price": 590.44,
+    "sequence_number": 336273,
+    "sip_timestamp": 1735830001022617600,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 11,
+    "id": "52983527130441",
+    "participant_timestamp": 1735830001022633201,
+    "price": 590.46,
+    "sequence_number": 336276,
+    "sip_timestamp": 1735830001022665728,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314954547",
+    "participant_timestamp": 1735830001022316852,
+    "price": 590.45,
+    "sequence_number": 336279,
+    "sip_timestamp": 1735830001022678016,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292887",
+    "participant_timestamp": 1735830001022462000,
+    "price": 590.44,
+    "sequence_number": 336280,
+    "sip_timestamp": 1735830001022699008,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684583",
+    "participant_timestamp": 1735830001022511000,
+    "price": 590.45,
+    "sequence_number": 336281,
+    "sip_timestamp": 1735830001022753024,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314954568",
+    "participant_timestamp": 1735830001022398305,
+    "price": 590.46,
+    "sequence_number": 336282,
+    "sip_timestamp": 1735830001022756096,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292889",
+    "participant_timestamp": 1735830001022583000,
+    "price": 590.45,
+    "sequence_number": 336285,
+    "sip_timestamp": 1735830001022822912,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "5.0",
+    "exchange": 8,
+    "id": "52983525684588",
+    "participant_timestamp": 1735830001022988000,
+    "price": 590.46,
+    "sequence_number": 336302,
+    "sip_timestamp": 1735830001023225344,
+    "size": 5,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292893",
+    "participant_timestamp": 1735830001023016000,
+    "price": 590.46,
+    "sequence_number": 336304,
+    "sip_timestamp": 1735830001023252224,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292894",
+    "participant_timestamp": 1735830001023016000,
+    "price": 590.46,
+    "sequence_number": 336305,
+    "sip_timestamp": 1735830001023261440,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130442",
+    "participant_timestamp": 1735830001023277222,
+    "price": 590.46,
+    "sequence_number": 336307,
+    "sip_timestamp": 1735830001023303680,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100315751736",
+    "participant_timestamp": 1735830001023088256,
+    "price": 590.46,
+    "sequence_number": 336313,
+    "sip_timestamp": 1735830001023586304,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314955588",
+    "participant_timestamp": 1735830001023546120,
+    "price": 590.47,
+    "sequence_number": 336315,
+    "sip_timestamp": 1735830001023908096,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "25.0",
+    "exchange": 12,
+    "id": "62879314955589",
+    "participant_timestamp": 1735830001023546120,
+    "price": 590.47,
+    "sequence_number": 336316,
+    "sip_timestamp": 1735830001023908096,
+    "size": 25,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684590",
+    "participant_timestamp": 1735830001024018000,
+    "price": 590.46,
+    "sequence_number": 336323,
+    "sip_timestamp": 1735830001024259584,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "25.0",
+    "exchange": 12,
+    "id": "62879314956087",
+    "participant_timestamp": 1735830001024029226,
+    "price": 590.47,
+    "sequence_number": 336324,
+    "sip_timestamp": 1735830001024385792,
+    "size": 25,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "2.0",
+    "exchange": 15,
+    "id": "52983543057203",
+    "participant_timestamp": 1735830001024175733,
+    "price": 590.46,
+    "sequence_number": 336328,
+    "sip_timestamp": 1735830001025288192,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 15,
+    "id": "52983543057206",
+    "participant_timestamp": 1735830001024175733,
+    "price": 590.46,
+    "sequence_number": 336329,
+    "sip_timestamp": 1735830001025300224,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "2.0",
+    "exchange": 15,
+    "id": "52983543057209",
+    "participant_timestamp": 1735830001024175733,
+    "price": 590.46,
+    "sequence_number": 336330,
+    "sip_timestamp": 1735830001025306112,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "2.0",
+    "exchange": 11,
+    "id": "52983527130443",
+    "participant_timestamp": 1735830001025967577,
+    "price": 590.49,
+    "sequence_number": 336334,
+    "sip_timestamp": 1735830001025988864,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314956630",
+    "participant_timestamp": 1735830001025716338,
+    "price": 590.48,
+    "sequence_number": 336335,
+    "sip_timestamp": 1735830001026075904,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314956639",
+    "participant_timestamp": 1735830001025798459,
+    "price": 590.49,
+    "sequence_number": 336336,
+    "sip_timestamp": 1735830001026154240,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "2.0",
+    "exchange": 4,
+    "id": "71679618667056",
+    "participant_timestamp": 1735830001026022843,
+    "price": 590.49,
+    "sequence_number": 336337,
+    "sip_timestamp": 1735830001026596352,
+    "size": 2,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001026242126
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684595",
+    "participant_timestamp": 1735830001028156000,
+    "price": 590.49,
+    "sequence_number": 336340,
+    "sip_timestamp": 1735830001028404224,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 11,
+    "id": "52983527130444",
+    "participant_timestamp": 1735830001029462900,
+    "price": 590.5,
+    "sequence_number": 336342,
+    "sip_timestamp": 1735830001029486080,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 8,
+    "id": "52983525684596",
+    "participant_timestamp": 1735830001029481000,
+    "price": 590.5,
+    "sequence_number": 336343,
+    "sip_timestamp": 1735830001029717760,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 12,
+    "id": "62879314957677",
+    "participant_timestamp": 1735830001029463749,
+    "price": 590.5,
+    "sequence_number": 336344,
+    "sip_timestamp": 1735830001029819904,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "8.0",
+    "exchange": 11,
+    "id": "52983527130445",
+    "participant_timestamp": 1735830001031252748,
+    "price": 590.5,
+    "sequence_number": 336345,
+    "sip_timestamp": 1735830001031275264,
+    "size": 8,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 11,
+    "id": "52983527130446",
+    "participant_timestamp": 1735830001031252748,
+    "price": 590.5,
+    "sequence_number": 336346,
+    "sip_timestamp": 1735830001031281408,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "5.0",
+    "exchange": 11,
+    "id": "52983527130447",
+    "participant_timestamp": 1735830001031252748,
+    "price": 590.5,
+    "sequence_number": 336347,
+    "sip_timestamp": 1735830001031281408,
+    "size": 5,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 11,
+    "id": "52983527130448",
+    "participant_timestamp": 1735830001031252748,
+    "price": 590.5,
+    "sequence_number": 336348,
+    "sip_timestamp": 1735830001031284480,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "30.0",
+    "exchange": 21,
+    "id": "53100316091186",
+    "participant_timestamp": 1735830001032429585,
+    "price": 590.5,
+    "sequence_number": 336351,
+    "sip_timestamp": 1735830001032715776,
+    "size": 30,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 21,
+    "id": "53100316091188",
+    "participant_timestamp": 1735830001032429585,
+    "price": 590.5,
+    "sequence_number": 336352,
+    "sip_timestamp": 1735830001032715776,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "18.0",
+    "exchange": 12,
+    "id": "62879314958402",
+    "participant_timestamp": 1735830001033519241,
+    "price": 590.5,
+    "sequence_number": 336360,
+    "sip_timestamp": 1735830001033868032,
+    "size": 18,
+    "tape": 1
+   },
+   {
+    "decimal_size": "600.0",
+    "exchange": 12,
+    "id": "62879314958403",
+    "participant_timestamp": 1735830001033519241,
+    "price": 590.5,
+    "sequence_number": 336361,
+    "sip_timestamp": 1735830001033876480,
+    "size": 600,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "3.0",
+    "exchange": 8,
+    "id": "52983525684784",
+    "participant_timestamp": 1735830001033679000,
+    "price": 590.5,
+    "sequence_number": 336362,
+    "sip_timestamp": 1735830001033915648,
+    "size": 3,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 8,
+    "id": "52983525684785",
+    "participant_timestamp": 1735830001033679000,
+    "price": 590.5,
+    "sequence_number": 336363,
+    "sip_timestamp": 1735830001033925120,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 8,
+    "id": "52983525684786",
+    "participant_timestamp": 1735830001033679000,
+    "price": 590.5,
+    "sequence_number": 336364,
+    "sip_timestamp": 1735830001033925120,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "30.0",
+    "exchange": 8,
+    "id": "52983525684787",
+    "participant_timestamp": 1735830001033679000,
+    "price": 590.5,
+    "sequence_number": 336365,
+    "sip_timestamp": 1735830001033927680,
+    "size": 30,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "173.0",
+    "exchange": 8,
+    "id": "52983525684788",
+    "participant_timestamp": 1735830001033679000,
+    "price": 590.5,
+    "sequence_number": 336366,
+    "sip_timestamp": 1735830001033936640,
+    "size": 173,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314958416",
+    "participant_timestamp": 1735830001033955562,
+    "price": 590.5,
+    "sequence_number": 336367,
+    "sip_timestamp": 1735830001034306560,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618667333",
+    "participant_timestamp": 1735830001034390801,
+    "price": 590.5,
+    "sequence_number": 336368,
+    "sip_timestamp": 1735830001034950144,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001034599533
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618667346",
+    "participant_timestamp": 1735830001023202797,
+    "price": 590.455,
+    "sequence_number": 336370,
+    "sip_timestamp": 1735830001036056832,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001035703248
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314958444",
+    "participant_timestamp": 1735830001035755844,
+    "price": 590.49,
+    "sequence_number": 336375,
+    "sip_timestamp": 1735830001036113920,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618667575",
+    "participant_timestamp": 1735830001030817079,
+    "price": 590.456,
+    "sequence_number": 336384,
+    "sip_timestamp": 1735830001038697216,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001038344610
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130449",
+    "participant_timestamp": 1735830001039587630,
+    "price": 590.5,
+    "sequence_number": 336385,
+    "sip_timestamp": 1735830001039614208,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130450",
+    "participant_timestamp": 1735830001039587630,
+    "price": 590.5,
+    "sequence_number": 336386,
+    "sip_timestamp": 1735830001039617280,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130451",
+    "participant_timestamp": 1735830001039587630,
+    "price": 590.5,
+    "sequence_number": 336387,
+    "sip_timestamp": 1735830001039620608,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 10,
+    "id": "52983525292099",
+    "participant_timestamp": 1735830001039651592,
+    "price": 590.5,
+    "sequence_number": 336388,
+    "sip_timestamp": 1735830001039680512,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130452",
+    "participant_timestamp": 1735830001039702105,
+    "price": 590.5,
+    "sequence_number": 336389,
+    "sip_timestamp": 1735830001039728640,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314958663",
+    "participant_timestamp": 1735830001039397272,
+    "price": 590.5,
+    "sequence_number": 336390,
+    "sip_timestamp": 1735830001039746560,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "5.0",
+    "exchange": 21,
+    "id": "53100328088432",
+    "participant_timestamp": 1735830001039568924,
+    "price": 590.5,
+    "sequence_number": 336391,
+    "sip_timestamp": 1735830001039797760,
+    "size": 5,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 17,
+    "id": "62879130477875",
+    "participant_timestamp": 1735830001039440257,
+    "price": 590.5,
+    "sequence_number": 336392,
+    "sip_timestamp": 1735830001039800832,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "95.0",
+    "exchange": 21,
+    "id": "53100328088649",
+    "participant_timestamp": 1735830001039586444,
+    "price": 590.5,
+    "sequence_number": 336393,
+    "sip_timestamp": 1735830001039809792,
+    "size": 95,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292895",
+    "participant_timestamp": 1735830001039596000,
+    "price": 590.5,
+    "sequence_number": 336394,
+    "sip_timestamp": 1735830001039834112,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684789",
+    "participant_timestamp": 1735830001039656000,
+    "price": 590.5,
+    "sequence_number": 336395,
+    "sip_timestamp": 1735830001039897088,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 15,
+    "id": "52983543057501",
+    "participant_timestamp": 1735830001040291572,
+    "price": 590.5,
+    "sequence_number": 336396,
+    "sip_timestamp": 1735830001040805120,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618667609",
+    "participant_timestamp": 1735830001040000000,
+    "price": 590.47,
+    "sequence_number": 336397,
+    "sip_timestamp": 1735830001042311680,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001041949830
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618667832",
+    "participant_timestamp": 1735830001041000000,
+    "price": 590.47,
+    "sequence_number": 336398,
+    "sip_timestamp": 1735830001042855936,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001042506032
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618667849",
+    "participant_timestamp": 1735830001041000000,
+    "price": 590.47,
+    "sequence_number": 336400,
+    "sip_timestamp": 1735830001043445504,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001043091927
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130453",
+    "participant_timestamp": 1735830001045157345,
+    "price": 590.5,
+    "sequence_number": 336401,
+    "sip_timestamp": 1735830001045183488,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130454",
+    "participant_timestamp": 1735830001045157345,
+    "price": 590.5,
+    "sequence_number": 336402,
+    "sip_timestamp": 1735830001045186816,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130672",
+    "participant_timestamp": 1735830001045157345,
+    "price": 590.5,
+    "sequence_number": 336403,
+    "sip_timestamp": 1735830001045189632,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 10,
+    "id": "52983525292100",
+    "participant_timestamp": 1735830001045210930,
+    "price": 590.5,
+    "sequence_number": 336404,
+    "sip_timestamp": 1735830001045234688,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130673",
+    "participant_timestamp": 1735830001045215172,
+    "price": 590.5,
+    "sequence_number": 336405,
+    "sip_timestamp": 1735830001045240576,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314958921",
+    "participant_timestamp": 1735830001045010030,
+    "price": 590.5,
+    "sequence_number": 336406,
+    "sip_timestamp": 1735830001045358080,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 17,
+    "id": "62879130477876",
+    "participant_timestamp": 1735830001045029546,
+    "price": 590.5,
+    "sequence_number": 336407,
+    "sip_timestamp": 1735830001045381888,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "80.0",
+    "exchange": 2,
+    "id": "62879131004209",
+    "participant_timestamp": 1735830001045038254,
+    "price": 590.5,
+    "sequence_number": 336408,
+    "sip_timestamp": 1735830001045388032,
+    "size": 80,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 2,
+    "id": "62879131004210",
+    "participant_timestamp": 1735830001045039369,
+    "price": 590.5,
+    "sequence_number": 336409,
+    "sip_timestamp": 1735830001045391104,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314958922",
+    "participant_timestamp": 1735830001045041720,
+    "price": 590.5,
+    "sequence_number": 336410,
+    "sip_timestamp": 1735830001045391104,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14
+    ],
+    "decimal_size": "100.0",
+    "exchange": 21,
+    "id": "53100328154185",
+    "participant_timestamp": 1735830001045182590,
+    "price": 590.5,
+    "sequence_number": 336411,
+    "sip_timestamp": 1735830001045421056,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292896",
+    "participant_timestamp": 1735830001045181000,
+    "price": 590.5,
+    "sequence_number": 336412,
+    "sip_timestamp": 1735830001045424128,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 18,
+    "id": "52983525040438",
+    "participant_timestamp": 1735830001045180000,
+    "price": 590.5,
+    "sequence_number": 336413,
+    "sip_timestamp": 1735830001045427200,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 7,
+    "id": "52983525041259",
+    "participant_timestamp": 1735830001045190000,
+    "price": 590.5,
+    "sequence_number": 336414,
+    "sip_timestamp": 1735830001045433088,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684790",
+    "participant_timestamp": 1735830001045236000,
+    "price": 590.5,
+    "sequence_number": 336415,
+    "sip_timestamp": 1735830001045478144,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314958926",
+    "participant_timestamp": 1735830001045173672,
+    "price": 590.5,
+    "sequence_number": 336416,
+    "sip_timestamp": 1735830001045523456,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "30.0",
+    "exchange": 12,
+    "id": "62879314958927",
+    "participant_timestamp": 1735830001045173672,
+    "price": 590.5,
+    "sequence_number": 336417,
+    "sip_timestamp": 1735830001045526272,
+    "size": 30,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "70.0",
+    "exchange": 12,
+    "id": "62879314958928",
+    "participant_timestamp": 1735830001045201051,
+    "price": 590.5,
+    "sequence_number": 336418,
+    "sip_timestamp": 1735830001045550336,
+    "size": 70,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "30.0",
+    "exchange": 12,
+    "id": "62879314958929",
+    "participant_timestamp": 1735830001045201051,
+    "price": 590.5,
+    "sequence_number": 336419,
+    "sip_timestamp": 1735830001045553408,
+    "size": 30,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "70.0",
+    "exchange": 12,
+    "id": "62879314958930",
+    "participant_timestamp": 1735830001045350678,
+    "price": 590.5,
+    "sequence_number": 336420,
+    "sip_timestamp": 1735830001045697792,
+    "size": 70,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618668080",
+    "participant_timestamp": 1735830001043000000,
+    "price": 590.493,
+    "sequence_number": 336421,
+    "sip_timestamp": 1735830001045706752,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001045338299
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618668083",
+    "participant_timestamp": 1735830001045180000,
+    "price": 590.5,
+    "sequence_number": 336422,
+    "sip_timestamp": 1735830001045851136,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001045498437
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618668085",
+    "participant_timestamp": 1735830001044000000,
+    "price": 590.5,
+    "sequence_number": 336423,
+    "sip_timestamp": 1735830001046196992,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001045843792
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 4,
+    "id": "71679618668087",
+    "participant_timestamp": 1735830001044000000,
+    "price": 590.493,
+    "sequence_number": 336424,
+    "sip_timestamp": 1735830001046617856,
+    "size": 20,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001046265110
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618668088",
+    "participant_timestamp": 1735830001045112354,
+    "price": 590.5,
+    "sequence_number": 336425,
+    "sip_timestamp": 1735830001046660096,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001046309267
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618668089",
+    "participant_timestamp": 1735830001045112354,
+    "price": 590.5,
+    "sequence_number": 336426,
+    "sip_timestamp": 1735830001046723328,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001046365345
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "59.0",
+    "exchange": 4,
+    "id": "71679618668100",
+    "participant_timestamp": 1735830001045000000,
+    "price": 590.5,
+    "sequence_number": 336428,
+    "sip_timestamp": 1735830001047823872,
+    "size": 59,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001047471686
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314959183",
+    "participant_timestamp": 1735830001053108793,
+    "price": 590.48,
+    "sequence_number": 336431,
+    "sip_timestamp": 1735830001053462272,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314959184",
+    "participant_timestamp": 1735830001053108793,
+    "price": 590.48,
+    "sequence_number": 336432,
+    "sip_timestamp": 1735830001053465344,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314959185",
+    "participant_timestamp": 1735830001053108793,
+    "price": 590.48,
+    "sequence_number": 336433,
+    "sip_timestamp": 1735830001053468160,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292897",
+    "participant_timestamp": 1735830001053496000,
+    "price": 590.47,
+    "sequence_number": 336437,
+    "sip_timestamp": 1735830001053735936,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684792",
+    "participant_timestamp": 1735830001061830000,
+    "price": 590.46,
+    "sequence_number": 336444,
+    "sip_timestamp": 1735830001062074880,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "21.0",
+    "exchange": 4,
+    "id": "71679618668593",
+    "participant_timestamp": 1735830001077600000,
+    "price": 590.46,
+    "sequence_number": 336445,
+    "sip_timestamp": 1735830001078283520,
+    "size": 21,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001077929706
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314959938",
+    "participant_timestamp": 1735830001096362491,
+    "price": 590.46,
+    "sequence_number": 336447,
+    "sip_timestamp": 1735830001096714240,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314959939",
+    "participant_timestamp": 1735830001096362491,
+    "price": 590.46,
+    "sequence_number": 336448,
+    "sip_timestamp": 1735830001096714240,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130674",
+    "participant_timestamp": 1735830001116578393,
+    "price": 590.48,
+    "sequence_number": 336468,
+    "sip_timestamp": 1735830001116606976,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130675",
+    "participant_timestamp": 1735830001116607161,
+    "price": 590.48,
+    "sequence_number": 336469,
+    "sip_timestamp": 1735830001116630784,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314960200",
+    "participant_timestamp": 1735830001116714096,
+    "price": 590.48,
+    "sequence_number": 336470,
+    "sip_timestamp": 1735830001117066752,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "5.0",
+    "exchange": 4,
+    "id": "71679618668889",
+    "participant_timestamp": 1735830001121000000,
+    "price": 590.4801,
+    "sequence_number": 336473,
+    "sip_timestamp": 1735830001123081216,
+    "size": 5,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001122729533
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618669121",
+    "participant_timestamp": 1735830001045100295,
+    "price": 590.5,
+    "sequence_number": 336475,
+    "sip_timestamp": 1735830001126698752,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001126346052
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618669122",
+    "participant_timestamp": 1735830001045100296,
+    "price": 590.5,
+    "sequence_number": 336476,
+    "sip_timestamp": 1735830001126725888,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001126373954
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130676",
+    "participant_timestamp": 1735830001157282093,
+    "price": 590.49,
+    "sequence_number": 336477,
+    "sip_timestamp": 1735830001157305600,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618723914",
+    "participant_timestamp": 1735830001165250000,
+    "price": 590.4905,
+    "sequence_number": 336478,
+    "sip_timestamp": 1735830001167927040,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001167573451
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618724181",
+    "participant_timestamp": 1735830001184820000,
+    "price": 590.4905,
+    "sequence_number": 336488,
+    "sip_timestamp": 1735830001187247872,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001186891965
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618724419",
+    "participant_timestamp": 1735830001196890000,
+    "price": 590.4905,
+    "sequence_number": 336490,
+    "sip_timestamp": 1735830001199724544,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001199371941
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 4,
+    "id": "71679618724436",
+    "participant_timestamp": 1735830001209313969,
+    "price": 590.47,
+    "sequence_number": 336497,
+    "sip_timestamp": 1735830001210063360,
+    "size": 1,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001209710210
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "99.0",
+    "exchange": 11,
+    "id": "52983527130677",
+    "participant_timestamp": 1735830001210633825,
+    "price": 590.47,
+    "sequence_number": 336499,
+    "sip_timestamp": 1735830001210658816,
+    "size": 99,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71675224207924",
+    "participant_timestamp": 1735830001191319000,
+    "price": 590.4905,
+    "sequence_number": 336500,
+    "sip_timestamp": 1735830001211783424,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 203,
+    "trf_timestamp": 1735830001202133820
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292900",
+    "participant_timestamp": 1735830001212591000,
+    "price": 590.47,
+    "sequence_number": 336501,
+    "sip_timestamp": 1735830001212830208,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292901",
+    "participant_timestamp": 1735830001212591000,
+    "price": 590.47,
+    "sequence_number": 336502,
+    "sip_timestamp": 1735830001212835840,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     10,
+     37,
+     41
+    ],
+    "decimal_size": "40.0",
+    "exchange": 4,
+    "id": "71679618724664",
+    "participant_timestamp": 1735830001154403446,
+    "price": 590.079,
+    "sequence_number": 336506,
+    "sip_timestamp": 1735830001223784960,
+    "size": 40,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001223429313
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "8.0",
+    "exchange": 4,
+    "id": "71679618724917",
+    "participant_timestamp": 1735830001257115488,
+    "price": 590.495,
+    "sequence_number": 336512,
+    "sip_timestamp": 1735830001258545152,
+    "size": 8,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001258189102
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130678",
+    "participant_timestamp": 1735830001297931184,
+    "price": 590.5,
+    "sequence_number": 336514,
+    "sip_timestamp": 1735830001297962752,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 11,
+    "id": "52983527130679",
+    "participant_timestamp": 1735830001297997265,
+    "price": 590.51,
+    "sequence_number": 336516,
+    "sip_timestamp": 1735830001298028800,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314961243",
+    "participant_timestamp": 1735830001297926907,
+    "price": 590.51,
+    "sequence_number": 336517,
+    "sip_timestamp": 1735830001298287616,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "decimal_size": "500.0",
+    "exchange": 4,
+    "id": "71679618725196",
+    "participant_timestamp": 1735830001298167306,
+    "price": 590.495,
+    "sequence_number": 336518,
+    "sip_timestamp": 1735830001299015168,
+    "size": 500,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001298660775
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 11,
+    "id": "52983527130680",
+    "participant_timestamp": 1735830001302328606,
+    "price": 590.52,
+    "sequence_number": 336521,
+    "sip_timestamp": 1735830001302353152,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "3.0",
+    "exchange": 4,
+    "id": "71679618725425",
+    "participant_timestamp": 1735830001304879672,
+    "price": 590.52,
+    "sequence_number": 336524,
+    "sip_timestamp": 1735830001306184192,
+    "size": 3,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001305823867
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314961471",
+    "participant_timestamp": 1735830001322941626,
+    "price": 590.52,
+    "sequence_number": 336526,
+    "sip_timestamp": 1735830001323292160,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684807",
+    "participant_timestamp": 1735830001336524000,
+    "price": 590.54,
+    "sequence_number": 336539,
+    "sip_timestamp": 1735830001336764672,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "5.0",
+    "exchange": 4,
+    "id": "71679618725452",
+    "participant_timestamp": 1735830001336713085,
+    "price": 590.55,
+    "sequence_number": 336546,
+    "sip_timestamp": 1735830001337284608,
+    "size": 5,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001336924802
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618725688",
+    "participant_timestamp": 1735830001349522000,
+    "price": 590.53,
+    "sequence_number": 336549,
+    "sip_timestamp": 1735830001351550464,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001351196701
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 10,
+    "id": "52983525292102",
+    "participant_timestamp": 1735830001359369326,
+    "price": 590.54,
+    "sequence_number": 336553,
+    "sip_timestamp": 1735830001359396096,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 11,
+    "id": "52983527130681",
+    "participant_timestamp": 1735830001359368411,
+    "price": 590.55,
+    "sequence_number": 336554,
+    "sip_timestamp": 1735830001359396096,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 11,
+    "id": "52983527130689",
+    "participant_timestamp": 1735830001359368411,
+    "price": 590.55,
+    "sequence_number": 336555,
+    "sip_timestamp": 1735830001359402240,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "99.0",
+    "exchange": 11,
+    "id": "52983527130690",
+    "participant_timestamp": 1735830001359368411,
+    "price": 590.55,
+    "sequence_number": 336556,
+    "sip_timestamp": 1735830001359402240,
+    "size": 99,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14
+    ],
+    "decimal_size": "100.0",
+    "exchange": 21,
+    "id": "53100329923426",
+    "participant_timestamp": 1735830001359400213,
+    "price": 590.55,
+    "sequence_number": 336557,
+    "sip_timestamp": 1735830001359636736,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314962276",
+    "participant_timestamp": 1735830001359327375,
+    "price": 590.54,
+    "sequence_number": 336558,
+    "sip_timestamp": 1735830001359682048,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 12,
+    "id": "62879314962277",
+    "participant_timestamp": 1735830001359327375,
+    "price": 590.55,
+    "sequence_number": 336559,
+    "sip_timestamp": 1735830001359682048,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314962278",
+    "participant_timestamp": 1735830001359327375,
+    "price": 590.55,
+    "sequence_number": 336560,
+    "sip_timestamp": 1735830001359684864,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 18,
+    "id": "52983525040439",
+    "participant_timestamp": 1735830001359452000,
+    "price": 590.55,
+    "sequence_number": 336561,
+    "sip_timestamp": 1735830001359693824,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 2,
+    "id": "62879131004243",
+    "participant_timestamp": 1735830001359353191,
+    "price": 590.55,
+    "sequence_number": 336562,
+    "sip_timestamp": 1735830001359702784,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "80.0",
+    "exchange": 20,
+    "id": "52984687189067",
+    "participant_timestamp": 1735830001359368586,
+    "price": 590.55,
+    "sequence_number": 336563,
+    "sip_timestamp": 1735830001359762944,
+    "size": 80,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 20,
+    "id": "52984687189070",
+    "participant_timestamp": 1735830001359368586,
+    "price": 590.55,
+    "sequence_number": 336564,
+    "sip_timestamp": 1735830001359762944,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 8,
+    "id": "52983525684814",
+    "participant_timestamp": 1735830001359556000,
+    "price": 590.55,
+    "sequence_number": 336565,
+    "sip_timestamp": 1735830001359793152,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 7,
+    "id": "52983525041261",
+    "participant_timestamp": 1735830001359569000,
+    "price": 590.55,
+    "sequence_number": 336566,
+    "sip_timestamp": 1735830001359808256,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 8,
+    "id": "52983525684815",
+    "participant_timestamp": 1735830001359556000,
+    "price": 590.55,
+    "sequence_number": 336567,
+    "sip_timestamp": 1735830001359808256,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 17,
+    "id": "62879130477883",
+    "participant_timestamp": 1735830001359480253,
+    "price": 590.55,
+    "sequence_number": 336568,
+    "sip_timestamp": 1735830001359835136,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "90.0",
+    "exchange": 7,
+    "id": "52983525041262",
+    "participant_timestamp": 1735830001359610000,
+    "price": 590.55,
+    "sequence_number": 336569,
+    "sip_timestamp": 1735830001359847168,
+    "size": 90,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 8,
+    "id": "52983525684816",
+    "participant_timestamp": 1735830001360718000,
+    "price": 590.56,
+    "sequence_number": 336570,
+    "sip_timestamp": 1735830001360953856,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 8,
+    "id": "52983525684817",
+    "participant_timestamp": 1735830001360718000,
+    "price": 590.56,
+    "sequence_number": 336571,
+    "sip_timestamp": 1735830001360960000,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "50.0",
+    "exchange": 8,
+    "id": "52983525684818",
+    "participant_timestamp": 1735830001360718000,
+    "price": 590.56,
+    "sequence_number": 336572,
+    "sip_timestamp": 1735830001360960000,
+    "size": 50,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130691",
+    "participant_timestamp": 1735830001360931056,
+    "price": 590.56,
+    "sequence_number": 336573,
+    "sip_timestamp": 1735830001360963328,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "20.0",
+    "exchange": 11,
+    "id": "52983527130692",
+    "participant_timestamp": 1735830001360931056,
+    "price": 590.56,
+    "sequence_number": 336574,
+    "sip_timestamp": 1735830001360965888,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 11,
+    "id": "52983527130693",
+    "participant_timestamp": 1735830001360931056,
+    "price": 590.56,
+    "sequence_number": 336575,
+    "sip_timestamp": 1735830001360965888,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618725937",
+    "participant_timestamp": 1735830001383876528,
+    "price": 590.54,
+    "sequence_number": 336576,
+    "sip_timestamp": 1735830001384605440,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001384252192
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "32.0",
+    "exchange": 11,
+    "id": "52983527130694",
+    "participant_timestamp": 1735830001387004661,
+    "price": 590.53,
+    "sequence_number": 336577,
+    "sip_timestamp": 1735830001387026176,
+    "size": 32,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618725944",
+    "participant_timestamp": 1735830001390168000,
+    "price": 590.54,
+    "sequence_number": 336578,
+    "sip_timestamp": 1735830001390854400,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001390501588
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618725945",
+    "participant_timestamp": 1735830001390258232,
+    "price": 590.54,
+    "sequence_number": 336579,
+    "sip_timestamp": 1735830001391010560,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001390656330
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "13.0",
+    "exchange": 11,
+    "id": "52983527130695",
+    "participant_timestamp": 1735830001404032947,
+    "price": 590.52,
+    "sequence_number": 336580,
+    "sip_timestamp": 1735830001404058880,
+    "size": 13,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 10,
+    "id": "52983525292103",
+    "participant_timestamp": 1735830001404045897,
+    "price": 590.52,
+    "sequence_number": 336581,
+    "sip_timestamp": 1735830001404071168,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "87.0",
+    "exchange": 11,
+    "id": "52983527130696",
+    "participant_timestamp": 1735830001404094184,
+    "price": 590.52,
+    "sequence_number": 336584,
+    "sip_timestamp": 1735830001404125184,
+    "size": 87,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "13.0",
+    "exchange": 11,
+    "id": "52983527130697",
+    "participant_timestamp": 1735830001404094184,
+    "price": 590.52,
+    "sequence_number": 336585,
+    "sip_timestamp": 1735830001404128512,
+    "size": 13,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 18,
+    "id": "52983525040440",
+    "participant_timestamp": 1735830001404100000,
+    "price": 590.5,
+    "sequence_number": 336592,
+    "sip_timestamp": 1735830001404344576,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "13.0",
+    "exchange": 12,
+    "id": "62879314962526",
+    "participant_timestamp": 1735830001404098298,
+    "price": 590.51,
+    "sequence_number": 336594,
+    "sip_timestamp": 1735830001404462080,
+    "size": 13,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "10.0",
+    "exchange": 21,
+    "id": "53100330055782",
+    "participant_timestamp": 1735830001404176816,
+    "price": 590.49,
+    "sequence_number": 336595,
+    "sip_timestamp": 1735830001404476672,
+    "size": 10,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 8,
+    "id": "52983525684823",
+    "participant_timestamp": 1735830001404406000,
+    "price": 590.51,
+    "sequence_number": 336604,
+    "sip_timestamp": 1735830001404654336,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 19,
+    "id": "52983525292908",
+    "participant_timestamp": 1735830001404741000,
+    "price": 590.5,
+    "sequence_number": 336606,
+    "sip_timestamp": 1735830001404982016,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 19,
+    "id": "52983525292909",
+    "participant_timestamp": 1735830001404741000,
+    "price": 590.49,
+    "sequence_number": 336607,
+    "sip_timestamp": 1735830001404982016,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130700",
+    "participant_timestamp": 1735830001446845319,
+    "price": 590.49,
+    "sequence_number": 336619,
+    "sip_timestamp": 1735830001446871808,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 11,
+    "id": "52983527130701",
+    "participant_timestamp": 1735830001446845319,
+    "price": 590.49,
+    "sequence_number": 336620,
+    "sip_timestamp": 1735830001446875136,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130702",
+    "participant_timestamp": 1735830001446845319,
+    "price": 590.49,
+    "sequence_number": 336621,
+    "sip_timestamp": 1735830001446875136,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314963249",
+    "participant_timestamp": 1735830001446769792,
+    "price": 590.49,
+    "sequence_number": 336622,
+    "sip_timestamp": 1735830001447118592,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "1.0",
+    "exchange": 11,
+    "id": "52983527130703",
+    "participant_timestamp": 1735830001447923380,
+    "price": 590.48,
+    "sequence_number": 336623,
+    "sip_timestamp": 1735830001447945216,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "72.0",
+    "exchange": 11,
+    "id": "52983527130704",
+    "participant_timestamp": 1735830001447923380,
+    "price": 590.48,
+    "sequence_number": 336624,
+    "sip_timestamp": 1735830001447948288,
+    "size": 72,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618728505",
+    "participant_timestamp": 1735830001470000000,
+    "price": 590.5095,
+    "sequence_number": 336639,
+    "sip_timestamp": 1735830001472928768,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001472575046
+   },
+   {
+    "decimal_size": "200.0",
+    "exchange": 4,
+    "id": "79371838239557",
+    "participant_timestamp": 1735830001588447000,
+    "price": 590.5399,
+    "sequence_number": 336652,
+    "sip_timestamp": 1735830001589426432,
+    "size": 200,
+    "tape": 1,
+    "trf_id": 201,
+    "trf_timestamp": 1735830001589402647
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "5.0",
+    "exchange": 4,
+    "id": "71679618729552",
+    "participant_timestamp": 1735830001589855000,
+    "price": 590.5297,
+    "sequence_number": 336653,
+    "sip_timestamp": 1735830001593504256,
+    "size": 5,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001593149654
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130705",
+    "participant_timestamp": 1735830001601883118,
+    "price": 590.5,
+    "sequence_number": 336654,
+    "sip_timestamp": 1735830001601915392,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314964039",
+    "participant_timestamp": 1735830001601851044,
+    "price": 590.51,
+    "sequence_number": 336655,
+    "sip_timestamp": 1735830001602207744,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "20.0",
+    "exchange": 12,
+    "id": "62879314964040",
+    "participant_timestamp": 1735830001601851044,
+    "price": 590.5,
+    "sequence_number": 336656,
+    "sip_timestamp": 1735830001602210048,
+    "size": 20,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 12,
+    "id": "62879314964047",
+    "participant_timestamp": 1735830001604330720,
+    "price": 590.5,
+    "sequence_number": 336657,
+    "sip_timestamp": 1735830001604678912,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "2.0",
+    "exchange": 12,
+    "id": "62879314964056",
+    "participant_timestamp": 1735830001612436817,
+    "price": 590.5,
+    "sequence_number": 336658,
+    "sip_timestamp": 1735830001612786176,
+    "size": 2,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "5.0",
+    "exchange": 4,
+    "id": "71675224207940",
+    "participant_timestamp": 1735830001587690000,
+    "price": 590.53,
+    "sequence_number": 336659,
+    "sip_timestamp": 1735830001615859456,
+    "size": 5,
+    "tape": 1,
+    "trf_id": 203,
+    "trf_timestamp": 1735830001606211811
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314964058",
+    "participant_timestamp": 1735830001616772158,
+    "price": 590.5,
+    "sequence_number": 336660,
+    "sip_timestamp": 1735830001617122304,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879314964059",
+    "participant_timestamp": 1735830001616819052,
+    "price": 590.5,
+    "sequence_number": 336661,
+    "sip_timestamp": 1735830001617167616,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "19.0",
+    "exchange": 12,
+    "id": "62879314964060",
+    "participant_timestamp": 1735830001616863957,
+    "price": 590.5,
+    "sequence_number": 336662,
+    "sip_timestamp": 1735830001617212672,
+    "size": 19,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "38.0",
+    "exchange": 4,
+    "id": "71679618729802",
+    "participant_timestamp": 1735830001619537434,
+    "price": 590.5263,
+    "sequence_number": 336663,
+    "sip_timestamp": 1735830001620099584,
+    "size": 38,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001619746385
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 4,
+    "id": "71679618729804",
+    "participant_timestamp": 1735830001618000000,
+    "price": 590.51,
+    "sequence_number": 336664,
+    "sip_timestamp": 1735830001620728064,
+    "size": 10,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001620375433
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "37.0",
+    "exchange": 4,
+    "id": "71675224207941",
+    "participant_timestamp": 1735830001621588000,
+    "price": 590.526,
+    "sequence_number": 336667,
+    "sip_timestamp": 1735830001643089408,
+    "size": 37,
+    "tape": 1,
+    "trf_id": 203,
+    "trf_timestamp": 1735830001633434277
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "19.0",
+    "exchange": 11,
+    "id": "52983527130706",
+    "participant_timestamp": 1735830001655557117,
+    "price": 590.54,
+    "sequence_number": 336668,
+    "sip_timestamp": 1735830001655581184,
+    "size": 19,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "25.0",
+    "exchange": 12,
+    "id": "62879315013727",
+    "participant_timestamp": 1735830001690731647,
+    "price": 590.52,
+    "sequence_number": 336672,
+    "sip_timestamp": 1735830001691080960,
+    "size": 25,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "10.0",
+    "exchange": 4,
+    "id": "71679618730578",
+    "participant_timestamp": 1735830001769187120,
+    "price": 590.5237,
+    "sequence_number": 336688,
+    "sip_timestamp": 1735830001769754368,
+    "size": 10,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001769397588
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "42.0",
+    "exchange": 12,
+    "id": "62879315014206",
+    "participant_timestamp": 1735830001770181148,
+    "price": 590.54,
+    "sequence_number": 336689,
+    "sip_timestamp": 1735830001770539264,
+    "size": 42,
+    "tape": 1
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618730580",
+    "participant_timestamp": 1735830001770403000,
+    "price": 590.54,
+    "sequence_number": 336690,
+    "sip_timestamp": 1735830001771561728,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001771206933
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "50.0",
+    "exchange": 4,
+    "id": "71679618730584",
+    "participant_timestamp": 1735830001780448000,
+    "price": 590.5436,
+    "sequence_number": 336706,
+    "sip_timestamp": 1735830001781124352,
+    "size": 50,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001780771182
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "50.0",
+    "exchange": 4,
+    "id": "71679618730805",
+    "participant_timestamp": 1735830001783474000,
+    "price": 590.5442,
+    "sequence_number": 336708,
+    "sip_timestamp": 1735830001787394304,
+    "size": 50,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001787041308
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "1.0",
+    "exchange": 12,
+    "id": "62879315014507",
+    "participant_timestamp": 1735830001791386234,
+    "price": 590.56,
+    "sequence_number": 336711,
+    "sip_timestamp": 1735830001791736832,
+    "size": 1,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "50.0",
+    "exchange": 4,
+    "id": "71679618730817",
+    "participant_timestamp": 1735830001791938660,
+    "price": 590.5525,
+    "sequence_number": 336714,
+    "sip_timestamp": 1735830001792500480,
+    "size": 50,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001792146132
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "50.0",
+    "exchange": 4,
+    "id": "71679618730833",
+    "participant_timestamp": 1735830001793428000,
+    "price": 590.5531,
+    "sequence_number": 336715,
+    "sip_timestamp": 1735830001796924160,
+    "size": 50,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001796569096
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "4.0",
+    "exchange": 4,
+    "id": "71679618730836",
+    "participant_timestamp": 1735830001795000000,
+    "price": 590.56,
+    "sequence_number": 336716,
+    "sip_timestamp": 1735830001797633792,
+    "size": 4,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001797279917
+   },
+   {
+    "decimal_size": "100.0",
+    "exchange": 4,
+    "id": "71679618731064",
+    "participant_timestamp": 1735830001809840000,
+    "price": 590.54,
+    "sequence_number": 336717,
+    "sip_timestamp": 1735830001810540544,
+    "size": 100,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001810187010
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 10,
+    "id": "52983525292104",
+    "participant_timestamp": 1735830001887921212,
+    "price": 590.57,
+    "sequence_number": 336727,
+    "sip_timestamp": 1735830001887953920,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "49.0",
+    "exchange": 11,
+    "id": "52983527130707",
+    "participant_timestamp": 1735830001887921687,
+    "price": 590.57,
+    "sequence_number": 336730,
+    "sip_timestamp": 1735830001887960064,
+    "size": 49,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "4.0",
+    "exchange": 11,
+    "id": "52983527130708",
+    "participant_timestamp": 1735830001887921687,
+    "price": 590.57,
+    "sequence_number": 336731,
+    "sip_timestamp": 1735830001887963136,
+    "size": 4,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 8,
+    "id": "52983525684848",
+    "participant_timestamp": 1735830001887902000,
+    "price": 590.57,
+    "sequence_number": 336732,
+    "sip_timestamp": 1735830001888146432,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "124.0",
+    "exchange": 7,
+    "id": "52983525041263",
+    "participant_timestamp": 1735830001887936000,
+    "price": 590.57,
+    "sequence_number": 336733,
+    "sip_timestamp": 1735830001888176640,
+    "size": 124,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "495.0",
+    "exchange": 8,
+    "id": "52983525684849",
+    "participant_timestamp": 1735830001887942000,
+    "price": 590.57,
+    "sequence_number": 336734,
+    "sip_timestamp": 1735830001888176640,
+    "size": 495,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 7,
+    "id": "52983525041264",
+    "participant_timestamp": 1735830001887964000,
+    "price": 590.57,
+    "sequence_number": 336735,
+    "sip_timestamp": 1735830001888197632,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 7,
+    "id": "52983525041265",
+    "participant_timestamp": 1735830001887983000,
+    "price": 590.57,
+    "sequence_number": 336736,
+    "sip_timestamp": 1735830001888218624,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "76.0",
+    "exchange": 7,
+    "id": "52983525041266",
+    "participant_timestamp": 1735830001887998000,
+    "price": 590.57,
+    "sequence_number": 336739,
+    "sip_timestamp": 1735830001888230912,
+    "size": 76,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879315015499",
+    "participant_timestamp": 1735830001887872356,
+    "price": 590.57,
+    "sequence_number": 336740,
+    "sip_timestamp": 1735830001888233728,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "200.0",
+    "exchange": 8,
+    "id": "52983525684850",
+    "participant_timestamp": 1735830001888029000,
+    "price": 590.57,
+    "sequence_number": 336741,
+    "sip_timestamp": 1735830001888275968,
+    "size": 200,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 8,
+    "id": "52983525684851",
+    "participant_timestamp": 1735830001888044000,
+    "price": 590.57,
+    "sequence_number": 336742,
+    "sip_timestamp": 1735830001888281856,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     37,
+     41
+    ],
+    "decimal_size": "5.0",
+    "exchange": 8,
+    "id": "52983525684852",
+    "participant_timestamp": 1735830001888147000,
+    "price": 590.57,
+    "sequence_number": 336743,
+    "sip_timestamp": 1735830001888384000,
+    "size": 5,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     37
+    ],
+    "decimal_size": "11.0",
+    "exchange": 4,
+    "id": "71679618731855",
+    "participant_timestamp": 1735830001889000000,
+    "price": 590.57,
+    "sequence_number": 336752,
+    "sip_timestamp": 1735830001890765824,
+    "size": 11,
+    "tape": 1,
+    "trf_id": 202,
+    "trf_timestamp": 1735830001890413197
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130709",
+    "participant_timestamp": 1735830001911974115,
+    "price": 590.57,
+    "sequence_number": 336758,
+    "sip_timestamp": 1735830001912002304,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 2,
+    "id": "62879131004270",
+    "participant_timestamp": 1735830001911993959,
+    "price": 590.57,
+    "sequence_number": 336759,
+    "sip_timestamp": 1735830001912348672,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 12,
+    "id": "62879315015753",
+    "participant_timestamp": 1735830001911994916,
+    "price": 590.57,
+    "sequence_number": 336760,
+    "sip_timestamp": 1735830001912348672,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 18,
+    "id": "52983525040444",
+    "participant_timestamp": 1735830001912113000,
+    "price": 590.57,
+    "sequence_number": 336761,
+    "sip_timestamp": 1735830001912354048,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 11,
+    "id": "52983527130710",
+    "participant_timestamp": 1735830001912807507,
+    "price": 590.57,
+    "sequence_number": 336762,
+    "sip_timestamp": 1735830001912829184,
+    "size": 100,
+    "tape": 1
+   },
+   {
+    "conditions": [
+     14,
+     41
+    ],
+    "decimal_size": "100.0",
+    "exchange": 10,
+    "id": "52983525292105",
+    "participant_timestamp": 1735830001912820650,
+    "price": 590.57,
+    "sequence_number": 336763,
+    "sip_timestamp": 1735830001912841472,
+    "size": 100,
+    "tape": 1
+   }
+  ],
+  "status": "OK"
+ }
+}

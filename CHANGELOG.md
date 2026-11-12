@@ -3,6 +3,17 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+**Every card under a print rule moves under this version.** End each run of a hypothesis whose venue model resolves to `limit_fill: print_through` or `print_through_whole` — every tick hypothesis on quotes and prints that states no rule — and begin it again (`kanso research end ID`, then `kanso research begin ID`), so its `best` is struck under the fills its cards will be judged by; and re-certify every version on paper that was certified under one (`kanso cert plan ID --replan`, then `kanso cert run ID`), since its expectation was struck under the old fills. To fill resting orders from lit prints alone, load the prints' terms before beginning (`kanso data load --loader massive_print_terms --spec FILE` over the research window, its warmup and the certification window), then `kanso data snapshot`: a run pinned to a snapshot that holds no terms for a name reads every print of it as lit, and `research begin` names it.
+
+- **A resting limit fills on a print at its price once the size ahead of it has traded.** Under the print rules the size ahead is estimated from the quote in force when the order takes its place — nothing inside the spread, unknown behind the touch — cut by every later quote that shows less at the price and by every lit print there; a print at the price fills what of it is left past that size. The sleeve's own orders at one price queue by the time each took its place.
+- **Takers sent into one quote share the size it shows.** A taker takes what the quote in force shows less what the sleeve's earlier takers took from it; a market order past what is left walks one increment past the touch, and a taker's take at the touch cuts the size ahead of the sleeve's own resting orders there.
+- **A print its terms mark not lit fills no resting order and moves no queue.** New built-in custom type `print_terms` (a print's exchange and condition codes, and `lit`) and loader `massive_print_terms`, which reads the rows `massive_trades` keeps; `csv_parquet` loads the type too. A print with no terms is read as lit, and a run reads terms only where its snapshot pins them, so terms loaded after a snapshot move no run pinned to it.
+- **`research begin` names each name whose prints it reads without terms** under a print rule, on a `prints` line and as `prints_without_terms` under `--json` and on `run_begun`.
+- A stage's live feed carries no terms, so on paper every print is read as lit (`docs/backlog.md` row 255).
+- Skill `kanso-hypothesis` says so; run `kanso skills sync`. The `hypothesis.yaml`, `portfolio.yaml` and `program.md` templates say so too.
+
 ## v0.20.0 — 2026-10-26
 
 **Every quoted card moves under this version.** End each run of a hypothesis that requires `quote`, `trade` or `book` and begin it again (`kanso research end ID`, then `kanso research begin ID`), so its `best` is struck under the arithmetic its cards will be judged by; and re-certify every version on paper that was certified on such a hypothesis (`kanso cert plan ID --replan`, then `kanso cert run ID`), since its expectation was struck under the old charges and its paper window is not. A tick version re-certified on the new default fill rule may then be refused at `deploy` or `promote --live` beside a version on bars on the same venue: see the `print_through` line below.

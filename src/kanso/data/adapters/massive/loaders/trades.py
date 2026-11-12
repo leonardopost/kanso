@@ -18,6 +18,14 @@ no size or a size of zero is not a trade, and the engine refuses a non-positive 
 outright. The drop is visible, because the row count and the served span are measured
 from the points that survived.
 
+**A print's terms are a dataset of their own.** The row says where the print traded and
+under what sale conditions, and a `TradeTick` has no field for either, so `massive_print_terms`
+reads the same rows into one `print_terms` point per print — the vendor's exchange and
+condition codes as it gives them, and whether they make the print lit
+(`kanso.data.adapters.massive.conditions`) — at the print's own instants and under its own
+trade id, keeping exactly the rows this loader keeps. It is a second load of the same endpoint,
+asked when a posting strategy's fills should follow the lit tape.
+
 NautilusTrader facts (`nautilus_trader 1.231.0`)
 ------------------------------------------------
 `TradeTick` requires a strictly positive size and a non-empty trade id, and carries an
@@ -34,6 +42,7 @@ from typing import Any, ClassVar, Final
 
 from nautilus_trader.model.enums import AggressorSide
 
+from kanso.data.adapters.massive import conditions
 from kanso.data.adapters.massive.entitlement import TRADES, Endpoint
 from kanso.data.adapters.massive.loaders.bars import (
     TICK_LIMIT,
@@ -45,13 +54,18 @@ from kanso.data.adapters.massive.loaders.bars import (
     ticks,
 )
 from kanso.data.loaders.points import instrument_id, make_trade
+from kanso.data.types.print_terms import TYPE_ID as PRINT_TERMS
+from kanso.data.types.print_terms import PrintTerms
 
 __all__ = [
     "AVAILABLE_FIELD",
     "EVENT_FIELD",
+    "TERMS_KIND",
     "TICK_UNIT",
     "TRADES_KIND",
+    "MassivePrintTermsLoader",
     "MassiveTradesLoader",
+    "build_terms",
     "build_trade",
     "trade_id",
     "trades_endpoint",
@@ -101,6 +115,46 @@ def build_trade(request: Request, row: Mapping[str, Any]) -> Any:
     earlier than the source stated it, and only an availability that is too early can leak
     the future into a backtest.
     """
+    printed = _printed(request, row)
+    if printed is None:
+        return None
+    price, size, ts_event, available, name = printed
+    return make_trade(
+        instrument_id(request.symbol, request.venue),
+        price,
+        size,
+        AggressorSide.NO_AGGRESSOR,
+        name,
+        request.price_precision,
+        request.size_precision,
+        min(ts_event, available),
+        available,
+    )
+
+
+def build_terms(request: Request, row: Mapping[str, Any]) -> Any:
+    """One tape row's terms, for exactly the rows `build_trade` makes a print of: the
+    vendor's exchange and condition codes as it gives them, whether they make the print lit,
+    and the print's own trade id and instants."""
+    printed = _printed(request, row)
+    if printed is None:
+        return None
+    _, _, ts_event, available, name = printed
+    codes = row.get("conditions") or ()
+    return PrintTerms(
+        instrument_id=instrument_id(request.symbol, request.venue),
+        trade_id=name,
+        exchange=str(row.get("exchange", "")),
+        conditions=",".join(str(code) for code in codes),
+        lit=conditions.lit(row, ts_event, available),
+        ts_event=min(ts_event, available),
+        ts_init=available,
+    )
+
+
+def _printed(request: Request, row: Mapping[str, Any]) -> tuple[int, int, int, int, str] | None:
+    """A row's price and size in ticks, its two instants and its trade id, or `None` for a
+    row that is not a print the engine accepts."""
     available = instant(row, AVAILABLE_FIELD, TICK_UNIT)
     if available is None:
         return None
@@ -111,21 +165,16 @@ def build_trade(request: Request, row: Mapping[str, Any]) -> Any:
     size = ticks(values[1], request.size_precision)
     if size <= 0:
         return None
-    return make_trade(
-        instrument_id(request.symbol, request.venue),
-        ticks(values[0], request.price_precision),
-        size,
-        AggressorSide.NO_AGGRESSOR,
-        trade_id(request, row, ts_event),
-        request.price_precision,
-        request.size_precision,
-        min(ts_event, available),
-        available,
-    )
+    price = ticks(values[0], request.price_precision)
+    return price, size, ts_event, available, trade_id(request, row, ts_event)
 
 
 TRADES_KIND: Final = Kind(
     type="trade", dataset="trades", endpoint=trades_endpoint, build=build_trade
+)
+
+TERMS_KIND: Final = Kind(
+    type=PRINT_TERMS, dataset="trades", endpoint=trades_endpoint, build=build_terms
 )
 
 
@@ -138,3 +187,10 @@ class MassiveTradesLoader(RequestLoader):
     """A liquid name's day is millions of prints — measured, 3.4 million TQQQ quotes and 1.4
     million NVDA prints on 2026-09-14 — so a dataset holds one day, written as it streams, and
     a walk that fails loses that day and no other."""
+
+
+class MassivePrintTermsLoader(MassiveTradesLoader):
+    """The terms of the trade prints `massive_trades` loads, one point per print."""
+
+    id: ClassVar[str] = "massive_print_terms"
+    kind: ClassVar[Kind] = TERMS_KIND

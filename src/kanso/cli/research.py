@@ -47,6 +47,7 @@ from kanso.criteria import criteria_version
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import daemon, records
 from kanso.research.lanes import DEFAULT_LANE
+from kanso.research.passages import BEGUN, WITHOUT_TERMS
 from kanso.schemas import Card, CardDigest, GateResult
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -184,6 +185,7 @@ def _begin(ws: Workspace, hyp_id: str, tag: str | None, from_workspace: bool) ->
     with store(ws) as opened:
         run = research.begin(ws, opened, hyp_id, tag=tag, from_workspace=from_workspace)
         cards = records.cards_of(opened, hyp_id)
+        begun = opened.events(kind=BEGUN, subject=hyp_id)[-1].detail
     directory = ws.root / run.dir
     baseline = cards[-1]
     data: dict[str, Any] = {
@@ -191,7 +193,11 @@ def _begin(ws: Workspace, hyp_id: str, tag: str | None, from_workspace: bool) ->
         "lane_dir": str(directory),
         "baseline": baseline.model_dump(mode="json", by_alias=True),
     }
-    lines = (
+    held = begun.get(WITHOUT_TERMS)
+    bare = [str(name) for name in held] if isinstance(held, list) else None
+    if bare is not None:
+        data[WITHOUT_TERMS] = bare
+    lines = [
         # The lane directory is the interface: an agent edits `strategy.py` there.
         field("lane dir", directory),
         field("run", f"{run.run_id} · {run.tag} · lane {run.lane}"),
@@ -201,9 +207,19 @@ def _begin(ws: Workspace, hyp_id: str, tag: str | None, from_workspace: bool) ->
             f"{baseline.status} · metric {baseline.metric:.6f} · {baseline.wall_s:.1f}s · "
             f"budget {run.card_budget_s:.0f}s",
         ),
-        field("next", f"edit {directory / 'strategy.py'}, then `kanso research card {hyp_id}`"),
+    ]
+    if bare:
+        lines.append(
+            field(
+                "prints",
+                f"no print terms held for {', '.join(bare)}: their resting orders "
+                "fill on every print the tape holds",
+            )
+        )
+    lines.append(
+        field("next", f"edit {directory / 'strategy.py'}, then `kanso research card {hyp_id}`")
     )
-    return Report(data=data, lines=lines)
+    return Report(data=data, lines=tuple(lines))
 
 
 def _card(ws: Workspace, hyp_id: str, desc: str) -> Report:

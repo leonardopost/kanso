@@ -93,8 +93,10 @@ cannot drift apart over it, since they are handed the same model.
 **The fill model is the venue model's, on both paths.** It is built from the configuration's
 own `fill_model` with the engine's converter, as the research path's is, so a resting limit
 the market only touched fills here exactly when it fills in a card — every time under
-`limit_fill: touch`, never under `through`, and only from a print through it under
-`print_through` (`kanso.nautilus.venue`, `kanso.nautilus.tape`).
+`limit_fill: touch`, never under `through`, and under `print_through` only from a lit print at
+it past the size ahead of it or through it (`kanso.nautilus.venue`, `kanso.nautilus.tape`). The
+data can still differ: a broker's live feed hands every print on as a plain one, which the venue
+reads as lit, where a card reads the terms its snapshot pins (`docs/backlog.md` row 255).
 
 Engine facts this module relies on (nautilus_trader 1.231.0):
 
