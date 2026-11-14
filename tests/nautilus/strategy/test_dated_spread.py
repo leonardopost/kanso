@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from nautilus_trader.model.identifiers import InstrumentId, TradeId
 
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest
@@ -137,8 +138,11 @@ def test_a_sleeve_charged_a_dated_spread_and_handed_no_table_refuses_to_charge_n
 DAY = date(2023, 7, 3)
 
 
-def _filled(event_id: str, name: str, ts: int) -> SimpleNamespace:
-    return SimpleNamespace(id=event_id, instrument_id=SimpleNamespace(value=name), ts_event=ts)
+def _filled(trade_id: str, name: str, ts: int) -> SimpleNamespace:
+    """A fill as the harness is handed it, as far as `_half_of` and the record read one."""
+    return SimpleNamespace(
+        instrument_id=InstrumentId.from_str(name), trade_id=TradeId(trade_id), ts_event=ts
+    )
 
 
 def test_a_fill_is_charged_at_the_instant_the_venue_recorded_for_it() -> None:
@@ -148,7 +152,8 @@ def test_a_fill_is_charged_at_the_instant_the_venue_recorded_for_it() -> None:
     struck = Struck()
     sleeve = _sleeve(struck=struck)
     before, at = _ns(DAY, "09:30"), _ns(DAY, "09:31")
-    struck._at["priced"] = before
+    struck.point(SimpleNamespace(ts_event=before), InstrumentId.from_str(NAME))
+    struck.filled(_filled("priced", NAME, at))
 
     priced = sleeve._half_of(None, _filled("priced", NAME, at))
     unheard = sleeve._half_of(None, _filled("unheard", NAME, at))

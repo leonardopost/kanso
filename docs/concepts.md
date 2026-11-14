@@ -2127,7 +2127,8 @@ the open is a cost window inside regular hours and a strategy's `self.session` k
 segments. Which price a fill took is the venue's to say, and it is read off the venue: kanso's
 venue keeps each name's last point as it applies it, at the point's own reference time — a
 bar's close, a print's stamp — and each fill's when the execution engine applies it, before
-the sleeve is handed it (`kanso.nautilus.struck`). The venue settles the commands due at an
+the sleeve is handed it, by the fill's instrument and trade id, which both halves of a fill that
+flips a position keep (`kanso.nautilus.struck`). The venue settles the commands due at an
 instant after each point, so under a latency an order lands after the first point of the
 instant it arrives at, and fills at its name's bar of that instant only where a bar of the
 name was that point, at its last price before it otherwise; with none, an order sent once the

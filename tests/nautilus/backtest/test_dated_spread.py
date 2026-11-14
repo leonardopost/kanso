@@ -615,3 +615,88 @@ def test_a_cost_multiple_of_one_reproduces_a_dated_run() -> None:
 
     card = _run((FIRST, SECOND), 10.0)
     assert stressed(card, 1.0) == card
+
+
+FLIP = b"""
+from pathlib import Path
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_bar(self, bar):
+        name = bar.bar_type.instrument_id
+        if name.symbol.value != "LAGG":
+            return
+        minute = self.session.minute
+        if minute == 568:
+            self.submit_entry(name, "BUY", qty=100)
+        elif minute == 569:
+            self.submit_entry(name, "SELL", qty=200)
+        elif minute == 959:
+            self.submit_exit(name)
+        elif minute == 964:
+            with Path(self.kanso_config.record).open("a") as out:
+                out.write(f"{self.balance!r}\\n")
+"""
+
+
+def _part(hhmm: str) -> str:
+    """The part of the session the bar stamped `hhmm` covers, of the stamps `_bars` makes."""
+    if hhmm in ("09:29", "09:30"):
+        return "pre"
+    if hhmm in ("09:31", "09:32"):
+        return "open"
+    return "rth" if hhmm in ("15:59", "16:00") else "post"
+
+
+@pytest.mark.parametrize("order", [(FIRST, SECOND), (SECOND, FIRST)])
+def test_both_halves_of_a_fill_that_flips_a_position_pay_the_instant_its_price_was_struck_at(
+    order: tuple[str, str], tmp_path: Path
+) -> None:
+    """A long of 100 in LAGG is sold 200 in one order on the bar stamped 09:30, which the
+    engine splits into a close and an open of the other side, the second under an event id of
+    its own. Both halves are priced at the bar the sale filled at, and the harness, handed the
+    sale whole, charges what the extraction charges the two: the balance once flat is the
+    equity."""
+    record = tmp_path / "balance.txt"
+    request = replace(_request(10.0, record), strategy_source=FLIP)
+    card = execute(
+        request, [instrument(FIRST), instrument(SECOND)], [_bars(symbol) for symbol in order]
+    ).run
+
+    for fill in card.fills:
+        stamp = STAMPS[round((fill.px - _close(SECOND, 0)) / 0.01)]
+        assert fill.price_ts_ns == _stamp(stamp), fill
+        width = WIDTHS[SECOND][_part(stamp)]
+        assert fill.cost == pytest.approx(fill.notional * width / 2 / BPS), fill
+    sold = [fill for fill in card.fills if fill.side == "SELL"]
+    assert [fill.qty for fill in sold] == [100.0, 100.0]
+    assert sold[0].px == sold[1].px
+    assert {fill.price_ts_ns for fill in sold} == {
+        _stamp("09:30" if order[0] == FIRST else "09:31")
+    }
+    (balance,) = [float(line) for line in record.read_text().split()[-1:]]
+    assert balance == pytest.approx(card.equity[-1], rel=1e-12)
+
+
+def test_a_replay_charges_both_halves_of_a_flip_the_row_the_backtest_does(tmp_path: Path) -> None:
+    """The node reads the same record, so a flip's halves are priced and charged alike there."""
+    from kanso.nautilus import session
+
+    request = replace(_request(10.0, tmp_path / "balance.txt"), strategy_source=FLIP)
+    instruments = [instrument(FIRST), instrument(SECOND)]
+    groups = [_bars(FIRST), _bars(SECOND)]
+
+    researched = execute(request, instruments, groups).run
+    replayed = session.run_node(request, instruments, groups).result.run
+
+    assert len(researched.fills) == 4
+    assert replayed.fills == researched.fills
+    assert replayed.equity == researched.equity

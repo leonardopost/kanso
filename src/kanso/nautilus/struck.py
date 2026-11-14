@@ -22,9 +22,12 @@ so it is handed each point after the parts that may land commands before the poi
 point the engine applies, at that point's `ts_event` — a bar's close, a print's or a quote's
 own stamp, never the instant it was published at. Its other half hears each fill on the bus as
 the execution engine applies it, before the sleeve is handed it, and keeps the name's instant
-for it, by the fill's event id. A fill of a name the venue had applied nothing of is not kept,
-and is read at its own instant. A level-two venue strikes every fill at the touch, which pays
-no half-spread, so what is kept for one charges nothing.
+for it, by the fill's instrument and trade id. Those are what every event of one fill shares:
+a fill that flips a net position reaches the positions the extraction reads as two events, the
+second under an event id the bus never carried, and both keep the fill's instrument and trade
+id, which the harness is handed whole. A fill of a name the venue had applied nothing of is not
+kept, and is read at its own instant. A level-two venue strikes every fill at the touch, which
+pays no half-spread, so what is kept for one charges nothing.
 
 Engine facts this module relies on (nautilus_trader 1.231.0):
 
@@ -43,8 +46,21 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   handler before it returns. On a node kanso's venue hands its events to the execution
   engine's synchronous implementation (`kanso.nautilus.sandbox`), so a fill is heard there
   before the venue applies another point, as it is in a backtest.
-* An `OrderFilled`'s `id` is its own `UUID4`, and the cache and a position keep the event
-  object the engine published.
+* `ExecutionEngine._flip_position` splits a fill that flips a position into one that closes
+  it, under the fill's event id, and one that opens the other side, under a new `UUID4`; both
+  copy the fill's `instrument_id` and `trade_id`, and the matching engine gives each fill of an
+  instrument a trade id of its own (`_generate_trade_id`, a hash of the venue, the matching
+  engine and the instant, and a count of every trade id it has made).
+
+`kanso doctor` re-checks, in `kanso.nautilus.facts`, the first fact ("a simulation module that
+calls its exchange's process from pre_process lands every command due by then before the
+matching engine applies the point"), the second's finest grain ("the exchange matches against
+the finest bar type it has seen for an instrument"), and the third's order of the two topics
+with the fourth ("a fill is published on its instrument's fills topic before its strategy is
+handed it, and a fill that flips a NETTING position reaches the positions as two that keep its
+instrument and trade id ..."). That a bar is applied only on a top-of-book venue with bar
+execution, never one aggregated `INTERNAL`, and that a node's venue hands its events over
+synchronously, are read from the engine's source alone.
 """
 
 from __future__ import annotations
@@ -74,8 +90,8 @@ class Struck:
         """Each instrument's last point the venue applied, at its `ts_event`."""
         self._grain: dict[Any, tuple[Any, Any]] = {}
         """Each instrument's execution bar type and its step, as the matching engine holds it."""
-        self._at: dict[Any, int] = {}
-        """The instant each fill's price was struck at, by the fill's event id."""
+        self._at: dict[tuple[str, str], int] = {}
+        """The instant each fill's price was struck at, by its instrument and trade id."""
 
     def bar(self, bar: Bar) -> None:
         """A bar the venue is about to be handed: kept where the matching engine applies it."""
@@ -99,15 +115,22 @@ class Struck:
         """A fill the execution engine has applied: keep its name's last applied instant."""
         at = self._last.get(event.instrument_id)
         if at is not None:
-            self._at[event.id] = at
+            self._at[_fill_key(event)] = at
 
     def at(self, event: Any) -> int | None:
-        """The instant a fill's price was struck at, or `None` for a fill not heard."""
-        return self._at.get(event.id)
+        """The instant a fill's price was struck at, or `None` for a fill not heard: the fill
+        the bus carried, or either event the engine split it into on a flip."""
+        return self._at.get(_fill_key(event))
 
     def listen(self, msgbus: Any) -> None:
         """Hear every fill the execution engine on `msgbus` applies."""
         msgbus.subscribe(topic=FILLS, handler=self.filled)
+
+
+def _fill_key(event: Any) -> tuple[str, str]:
+    """What every event of one fill shares: its instrument and the trade id its matching engine
+    gave it, which a flip's two halves both copy and no other fill of the name carries."""
+    return event.instrument_id.value, event.trade_id.value
 
 
 class StruckPart(SimulationModule):  # type: ignore[misc]

@@ -66,13 +66,15 @@ def _print(ts: int) -> TradeTick:
     )
 
 
-def _fill(event_id: str) -> SimpleNamespace:
-    return SimpleNamespace(id=event_id, instrument_id=NAME)
+def _fill(trade_id: str) -> SimpleNamespace:
+    """A fill as the bus carries it, as far as the record reads one: its name and the trade id
+    its matching engine gave it."""
+    return SimpleNamespace(instrument_id=NAME, trade_id=TradeId(trade_id))
 
 
-def _heard(struck: Struck, event_id: str) -> int | None:
-    struck.filled(_fill(event_id))
-    return struck.at(_fill(event_id))
+def _heard(struck: Struck, trade_id: str) -> int | None:
+    struck.filled(_fill(trade_id))
+    return struck.at(_fill(trade_id))
 
 
 def test_a_fill_is_kept_at_its_name_s_last_point_at_that_point_s_reference_time() -> None:
@@ -86,6 +88,19 @@ def test_a_fill_is_kept_at_its_name_s_last_point_at_that_point_s_reference_time(
     struck.point(_print(T0 + 30 * SECOND_NS), NAME)
     assert _heard(struck, "print") == T0 + 30 * SECOND_NS
     assert struck.at(_fill("bar")) == T0
+
+
+def test_every_event_of_one_fill_reads_its_instant_and_no_other_fill_of_the_name_does() -> None:
+    """A fill that flips a position reaches the positions as two events, the second under an
+    event id the bus never carried; both keep the fill's name and trade id, which is what the
+    record keys on. Another fill of the name, under a trade id of its own, was not heard."""
+    struck = Struck()
+    struck.point(_print(T0), NAME)
+    struck.filled(SimpleNamespace(id="carried", instrument_id=NAME, trade_id=TradeId("flip")))
+    opened = SimpleNamespace(id="never-carried", instrument_id=NAME, trade_id=TradeId("flip"))
+
+    assert struck.at(opened) == T0
+    assert struck.at(_fill("another")) is None
 
 
 def test_of_a_name_s_bar_types_only_the_one_the_venue_executes_on_is_kept() -> None:

@@ -148,6 +148,9 @@ BINDINGS = {
     "cancel_all_orders marks, which moves no quantity, at no latency and at 20 ms",
     "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
     "which a NETTING flip or reopen appends to and nothing else changes",
+    "a fill is published on its instrument's fills topic before its strategy is handed it, "
+    "and a fill that flips a NETTING position reaches the positions as two that keep its "
+    "instrument and trade id, the second under an event id of its own",
     "the portfolio hands every closed position to the record_trade it finds on its "
     "analyzer instance, and a run whose record_trade records nothing leaves the same "
     "positions, orders and balances",
