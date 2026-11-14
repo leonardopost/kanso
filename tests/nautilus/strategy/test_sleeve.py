@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import ast
 from datetime import date, datetime, time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
+from kanso import nautilus
 from kanso.criteria.integrity import clashes
 from kanso.errors import ValidationError
 from kanso.nautilus.backtest import SLEEVE_ENTRY, _entry, _module
@@ -240,6 +243,25 @@ def test_a_mixin_s_session_shadows_the_base_s_only_listed_before_it() -> None:
 
     with pytest.raises(AttributeError, match="session"):
         stored(after).on_start()
+
+
+def test_the_harness_reads_the_clock_and_never_self_session() -> None:
+    """Stored bytes run without a scan may bind `session` ahead of the base's and replace it
+    with a value of their own, so what the harness itself reads off New York time —
+    `KansoStrategy`, the shared book, the runner, the costs — reads `session_of` of the
+    instant, never `self.session`. No module of `kanso.nautilus` reads or sets it."""
+    package = Path(nautilus.__file__).parent
+    found = [
+        f"{path.name}:{node.lineno}"
+        for path in sorted(package.glob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Attribute)
+        and node.attr == "session"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    ]
+    assert len(list(package.glob("*.py"))) > 10
+    assert not found
 
 
 def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:
