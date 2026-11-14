@@ -3,6 +3,11 @@
 One line per user-visible change, newest release first. The format is the one
 `docs/maintainers.md` §4 and the `kanso-release` skill require; versions are semver.
 
+## Unreleased
+
+- **A strategy reads New York time from `self.session`.** It is the `segment` (`pre` from 04:00, `rth` 09:30–16:00, `post` to 20:00, `overnight` otherwise), the New York `day` and the `minute` of that day of the minute the point being handled covers: the instant a nanosecond before `data_time`, so the bar stamped 09:30 is `pre`, minute 569, and the first regular bar is the one stamped 09:31, minute 570. It is read off one New York clock in the package (`kanso.nautilus.clock`), the one the shared book's regular-hours rule reads, so a card, a certificate, a replay and a stage read it alike, and a strategy is handed values, never the zone. `session` is now a name the strategy base owns: a `strategy.py` that binds it is refused by `strategy_integrity`, and `kanso doctor`'s `base names` check names it; rename yours. The `program.md` template says which minute a bar's session names; a hypothesis's own `program.md`, written from an earlier template, does not, and is yours to edit.
+- Skill `kanso-research` says so; run `kanso skills sync`.
+
 ## v0.20.0 — 2026-10-26
 
 **Every quoted card moves under this version.** End each run of a hypothesis that requires `quote`, `trade` or `book` and begin it again (`kanso research end ID`, then `kanso research begin ID`), so its `best` is struck under the arithmetic its cards will be judged by; and re-certify every version on paper that was certified on such a hypothesis (`kanso cert plan ID --replan`, then `kanso cert run ID`), since its expectation was struck under the old charges and its paper window is not. A tick version re-certified on the new default fill rule may then be refused at `deploy` or `promote --live` beside a version on bars on the same venue: see the `print_through` line below.

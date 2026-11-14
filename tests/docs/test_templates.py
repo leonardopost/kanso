@@ -8,6 +8,7 @@ is a page that lies where it is trusted most.
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, get_args
 
@@ -17,6 +18,7 @@ import yaml
 from kanso.config import Config, render_config
 from kanso.criteria.integrity import DENIED_UNDER_SIZING
 from kanso.errors import ValidationError
+from kanso.nautilus.clock import NEW_YORK, session_of
 from kanso.research import driver
 from kanso.schemas import CardStatus
 from kanso.schemas.screen import Screen
@@ -164,6 +166,22 @@ def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_re
         assert named in bullet, named
     assert "an entry, a modify or an order list refuses the card" not in bullet
     assert "is owed as you asked it" not in bullet
+
+
+def test_the_program_names_the_minute_a_bar_s_session_reads_as_the_clock_reads_it() -> None:
+    """The loop reads `program.md` and not the clock's source: the bar it names as the first
+    regular one, and the minutes it gives, are the clock's in winter and in summer."""
+    bullet = line_with(template("program.md"), "- `self.session`")
+    stated = (
+        ((9, 30), "the bar stamped 09:30 is `pre`, minute 569", ("pre", 569)),
+        ((9, 31), "the first regular bar is the one stamped 09:31, minute 570", ("rth", 570)),
+        ((16, 0), "the bar stamped 16:00 is the last regular one, minute 959", ("rth", 959)),
+    )
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        for (hour, minute), said, (segment, of_day) in stated:
+            assert said in bullet
+            stamp = int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+            assert session_of(stamp) == (segment, day, of_day)
 
 
 def test_the_program_and_the_scaffold_say_an_overlay_s_closing_leg_or_clip_refuses_the_card() -> (

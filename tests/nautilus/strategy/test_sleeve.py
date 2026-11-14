@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, time
 from types import SimpleNamespace
 
 import pytest
@@ -9,9 +10,10 @@ from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
 from kanso.errors import ValidationError
+from kanso.nautilus.clock import NEW_YORK, Session, session_of
 from kanso.nautilus.strategy import ENTRY, EXIT_ORDER, KansoConfig, KansoStrategy
 
-from .conftest import DEMO, HEDGE, bar, every_grain, flat, quote, saw_tooth, trade
+from .conftest import DEMO, HEDGE, MINUTE_NS, bar, every_grain, flat, quote, saw_tooth, trade
 
 FREE = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"}}
 """A cost model that charges nothing, so a sizing assertion is exact arithmetic."""
@@ -99,6 +101,48 @@ def test_an_intent_is_stamped_with_data_time(backtest) -> None:
         eighth.ts_event,
     ]
     assert third.ts_init not in [intent.ts_event for intent in run.strategy.intents]
+
+
+def new_york(day: date, hour: int, minute: int) -> int:
+    """A New York wall-clock reading, in nanoseconds since the epoch."""
+    return int(datetime.combine(day, time(hour, minute), tzinfo=NEW_YORK).timestamp()) * 10**9
+
+
+def test_the_session_is_the_new_york_minute_each_bar_covers(backtest) -> None:
+    """Bars stamped at the edges of every segment, in winter and in summer: before each
+    handler the sleeve reads its bar's session off `data_time`, as `session_of` reads it —
+    the bar stamped 09:30 the pre-market's last minute, the one stamped 09:31 the first
+    regular one, 16:00 the last regular one, 20:00 the post-market's last and 20:30, which
+    UTC stamps on the next date, the overnight of its own. Before the first point
+    `data_time` is zero, and the session is the instant before the epoch's."""
+
+    class Clocked(KansoStrategy):
+        def on_start(self) -> None:
+            self.before = self.session
+            self.seen: list[tuple[int, Session]] = []
+
+        def on_bar(self, bar_: object) -> None:
+            self.seen.append((self.data_time, self.session))
+
+    winter, summer = date(2024, 1, 2), date(2024, 7, 2)
+    readings = ((4, 0), (9, 30), (9, 31), (16, 0), (16, 1), (20, 0), (20, 30))
+    stamps = [new_york(day, *reading) for day in (winter, summer) for reading in readings]
+
+    run = backtest(Clocked(config()), data=[bar(DEMO, ts // MINUTE_NS - 1, 10.0) for ts in stamps])
+
+    seen = run.strategy.seen
+    assert seen == [(ts, session_of(ts)) for ts in stamps]
+    for day, at in ((winter, 0), (summer, len(readings))):
+        assert [session for _, session in seen[at : at + len(readings)]] == [
+            Session("overnight", day, 239),
+            Session("pre", day, 569),
+            Session("rth", day, 570),
+            Session("rth", day, 959),
+            Session("post", day, 960),
+            Session("post", day, 1199),
+            Session("overnight", day, 1229),
+        ]
+    assert run.strategy.before == session_of(0) == Session("post", date(1969, 12, 31), 1139)
 
 
 def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:

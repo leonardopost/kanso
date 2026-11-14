@@ -9,7 +9,8 @@ held to it at instants from 2007 to 2027.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import zoneinfo
+from datetime import date, timedelta, tzinfo
 from typing import Any
 
 import pytest
@@ -17,6 +18,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from kanso.data.closures import US_EQUITY_CLOSURES, closed_days
+from kanso.nautilus import clock, strategy
 from kanso.nautilus.clock import Session, minute_of, segment_of, session_of, week_opening
 
 NS = 1_000_000_000
@@ -228,3 +230,19 @@ def test_a_week_is_the_span_from_the_last_opening_to_the_next(
         assert wall(found - NS) < (day, minute * 60)
     assert week_opening(opens, weekday, minute) == (opens, next_opens)
     assert week_opening(next_opens - 1, weekday, minute) == (opens, next_opens)
+
+
+# --- the zone stays in the package ---------------------------------------------------
+
+
+def test_the_strategy_module_hands_a_strategy_no_zone() -> None:
+    """A `strategy.py` may import any name `kanso.nautilus.strategy` binds, and may not import
+    `zoneinfo`; the module binds the clock's functions of plain values and never the zone, its
+    class, the zone database or the clock module."""
+    bound = list(vars(strategy).values())
+
+    assert not [value for value in bound if isinstance(value, tzinfo)]
+    assert not [value for value in bound if isinstance(value, type) and issubclass(value, tzinfo)]
+    assert all(value is not clock and value is not zoneinfo for value in bound)
+    assert strategy.session_of is clock.session_of
+    assert strategy.Session is Session

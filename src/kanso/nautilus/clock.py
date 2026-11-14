@@ -3,8 +3,8 @@
 A US equity trades from 04:00 to 20:00 New York time, and what a point means — whether an
 entry is in regular hours, which part of the session a bar covers, which week it falls in —
 is read off the New York wall clock, which daylight saving moves against UTC twice a year.
-The harness reads it here and only here, so whatever labels an instant by its session labels
-it alike.
+The harness reads it here and only here, so a sleeve and the shared book's ledger label one
+instant alike.
 
 **Segments.** Regular hours (`rth`) run from 09:30 to 16:00, the pre-market (`pre`) from
 04:00 and the post-market (`post`) to 20:00; anything else is `overnight`. No calendar is
@@ -31,6 +31,12 @@ at its own 04:00 like any other; and the week that holds a change of clocks is a
 in March and an hour long in November. A reading a change skips opens at the change, and
 one it repeats at its first instant — the reading the `trading_hours` gate opens a session
 by (`kanso.criteria.gates.first_reading`).
+
+**The zone stays in the package.** A researched `strategy.py` may not import `zoneinfo`
+(`kanso.criteria.integrity`), and `kanso.nautilus.strategy`, which it may import, binds
+from here only `session_of` and `Session` — a function of an integer and the plain values it
+returns — so a strategy is handed New York time as values (`KansoStrategy.session`) and never
+the zone it was read in.
 
 This module relies on no fact of NautilusTrader (1.231.0) beyond the one every engine
 timestamp carries: an instant is an integer of nanoseconds since the Unix epoch.

@@ -13,6 +13,7 @@ import inspect
 import pkgutil
 import re
 import sys
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from kanso.errors import ValidationError
 from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
+from kanso.nautilus.clock import NEW_YORK, session_of
 from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
 from kanso.schemas import CostsOverride
@@ -463,6 +465,29 @@ def test_the_pages_say_the_venue_is_settled_at_a_marker_as_the_research_path_set
     assert "**closed.**" in backlog
     assert "`SimulatedVenue.on_marker` settles the exchange at each marker's instant" in backlog
     assert "`handle_order_book_deltas` stamps `data_time`" in backlog
+
+
+def test_the_concepts_page_reads_a_bar_s_session_as_the_clock_reads_it() -> None:
+    """The minutes the page gives for the bars stamped 09:30, 09:31 and 16:00, and for a daily
+    bar stamped at the next midnight, are the clock's in winter and in summer, and the page
+    says a strategy that binds the name is refused."""
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    stated = (
+        ((9, 30), "the bar stamped 09:30 is the pre-market's last, minute 569", ("pre", 569)),
+        ((9, 31), "the one stamped 09:31 is the first regular bar, minute 570", ("rth", 570)),
+        ((16, 0), "the one stamped 16:00 is the last regular bar, minute 959", ("rth", 959)),
+    )
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        for (hour, minute), said, (segment, of_day) in stated:
+            assert said in concepts
+            stamp = int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+            assert session_of(stamp) == (segment, day, of_day)
+        midnight = (
+            int(datetime.combine(day + timedelta(days=1), time(), NEW_YORK).timestamp()) * 10**9
+        )
+        assert session_of(midnight) == ("overnight", day, 1439)
+    assert "a daily bar stamped at the next New York midnight as minute 1439" in concepts
+    assert "is refused by `strategy_integrity` once its workspace runs a kanso" in concepts
 
 
 def test_the_pages_say_kanso_checks_each_name_s_book_itself_of_every_point() -> None:

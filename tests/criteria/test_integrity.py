@@ -730,6 +730,7 @@ def test_assigning_a_name_the_sleeve_base_owns_names_the_name_the_line_and_the_b
             None,
         ),
         ("    @property\n    def balance(self):\n        return 1.0\n", 4, "balance", None),
+        ("    def on_bar(self, bar):\n        self.session = bar\n", 4, "session", None),
     ],
 )
 def test_every_way_of_binding_a_sleeve_name_is_refused(

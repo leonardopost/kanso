@@ -2200,6 +2200,25 @@ host's own certificate and its combined baseline are therefore different numbers
 construction, and a composed version that carries such an overlay is measured and deployed
 under both grains, so a stage sees what composition measured.
 
+**A point's session is the New York minute it covers.** A `strategy.py` may not import
+`zoneinfo`, so the harness hands it New York time as values: `self.session` is the `segment`
+— `pre` from 04:00, `rth` from 09:30 to 16:00, `post` to 20:00 and `overnight` otherwise — the
+New York `day` and the `minute` of that day of the instant a nanosecond before `data_time`.
+kanso stamps a bar at its close, so that is the minute the bar covers: the bar stamped 09:30
+is the pre-market's last, minute 569; the one stamped 09:31 is the first regular bar, minute
+570; the one stamped 16:00 is the last regular bar, minute 959. A quote or a print stamped at
+09:30:00 exactly reads as the instant before the open, and a daily bar stamped at the next
+New York midnight as minute 1439 of its session's date. Daylight saving moves the segments
+with the market, and no calendar stands behind them: a day the market was closed has
+segments like any other, and a day that closed early is `rth` to 16:00. It is a function of
+`data_time` alone, read off one clock in the package (`kanso.nautilus.clock`), the one the
+shared book's regular-hours rule reads its instants by, so a card, a certificate, a replay
+and a stage read it alike. `session` is a name the base class owns (*The embargo*, above):
+a `strategy.py` written before it existed that binds `session` — `self.session = …`, `def
+session` or `session = …` in the class body — is refused by `strategy_integrity` once its
+workspace runs a kanso that has it, and `kanso doctor`'s `base names` check names it; rename
+yours.
+
 ## Corporate actions
 
 A split is a bookkeeping change: a thousand shares at four dollars become a hundred at
