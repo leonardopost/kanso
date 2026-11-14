@@ -320,3 +320,10 @@ def test_the_strategy_module_hands_a_strategy_no_zone() -> None:
     assert all(value is not clock and value is not zoneinfo for value in bound)
     assert strategy.session_of is clock.session_of
     assert strategy.Session is Session
+
+
+def test_the_strategy_module_exports_the_session_it_hands_a_modifier() -> None:
+    """A `KansoModifier` reads its host's session as `session_of(ctx.ts_event)`, imported from
+    `kanso.nautilus.strategy`, as `program.md` says; the module lists both names among its
+    exports, so a strict type check admits the import as well as the integrity scan does."""
+    assert {"Session", "session_of"} <= set(strategy.__all__)

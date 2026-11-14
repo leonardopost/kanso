@@ -312,6 +312,8 @@ __all__ = [
     "KansoModifierConfig",
     "KansoStrategy",
     "OrderIntent",
+    "Session",
+    "session_of",
     "tunable_fields",
 ]
 
