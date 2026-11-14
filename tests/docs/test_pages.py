@@ -501,15 +501,18 @@ def test_the_pages_say_where_a_bar_s_session_and_the_book_s_hours_part() -> None
     """A sleeve reads the minute a bar covers and the book the instant it places an entry, so
     the two part at the bars stamped 09:30 and 16:00; and a close published after its 16:00
     reference time reads the minute it describes while its orders go in after it. The page
-    says so, the clock reads so, and `test_shared_book.py` holds the book to it."""
+    says so, the release note says what the book does with an entry sent on the second — it
+    refuses it — the clock reads so, and `test_shared_book.py` holds the book to it."""
     concepts = prose(section(page("concepts.md"), "Delivery"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
     assert "that is the last minute the bar covers, whatever its size" in concepts
-    assert (
-        "an entry sent on the bar stamped 09:30, which a sleeve reads as `pre`, is placed in "
-        "regular hours, and one sent on the bar stamped 16:00, which it reads as `rth`, is "
-        "placed outside them and refused there while the book's leverage outside regular "
-        "hours is unset (`outside_rth_unset`)"
-    ) in concepts
+    for stated in (concepts, changelog):
+        assert (
+            "an entry sent on the bar stamped 09:30, which a sleeve reads as `pre`, is placed in "
+            "regular hours, and one sent on the bar stamped 16:00, which it reads as `rth`, is "
+            "placed outside them and refused there while the book's leverage outside regular "
+            "hours is unset (`outside_rth_unset`)"
+        ) in stated
     assert (
         "a close stamped 16:00 and published at 16:15 reads `rth`, minute 959, and an order "
         "sent on it goes in during the post-market"
