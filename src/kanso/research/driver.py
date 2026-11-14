@@ -115,6 +115,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import yaml
+
 from kanso.config import ResearchConfig
 from kanso.criteria import catalogue
 from kanso.errors import PreconditionError, ValidationError
@@ -140,6 +142,7 @@ __all__ = [
     "REPEATED",
     "STRUCTURAL",
     "TASK",
+    "WITHHELD",
     "NothingNewError",
     "Outcome",
     "coverage",
@@ -689,7 +692,9 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     settings = ws.config.research
     facts: dict[str, object] = {
         PROGRAM_FILE: store.get_blob(active.program_sha).decode("utf-8", errors="replace"),
-        HYPOTHESIS_FILE: store.get_blob(active.hypothesis_sha).decode("utf-8", errors="replace"),
+        HYPOTHESIS_FILE: _shown(
+            store.get_blob(active.hypothesis_sha).decode("utf-8", errors="replace")
+        ),
         "objective": _objective(hyp),
     }
     earlier = _earlier(store, active, settings.context_cards * settings.cards_per_turn)
@@ -945,6 +950,27 @@ def _objective(hyp: Hypothesis) -> dict[str, object]:
         "params": ref.params.model_dump(),
         "meaningful_when": None if item is None else item.meaningful_when,
     }
+
+
+WITHHELD: Final = (
+    "{rows} rows, withheld: each is a year's median width, in force from that year's first "
+    "day, so a strategy written from them would know a width before the market showed it"
+)
+"""What the proposer is shown in place of a dated spread's rows."""
+
+
+def _shown(text: str) -> str:
+    """A pinned `hypothesis.yaml` as the proposer is shown it: as pinned, but for a dated
+    spread's rows, which are withheld and the file shown re-rendered without them — the rows
+    reach no `strategy.py` at run time (`kanso.nautilus.cross_section.dated`), and a proposer
+    shown them could write one that keys on a year's width. A file without them is shown
+    byte for byte, so no other hypothesis's prompt moves."""
+    document = yaml.safe_load(text)
+    costs = document.get("costs") if isinstance(document, dict) else None
+    if not isinstance(costs, dict) or not costs.get("dated"):
+        return text
+    costs["dated"] = WITHHELD.format(rows=len(costs["dated"]))
+    return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
 
 
 def _pinned(store: StateStore, active: RunRecord) -> Hypothesis:

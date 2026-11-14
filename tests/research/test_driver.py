@@ -1630,3 +1630,34 @@ def test_a_batch_that_never_applies_fails_the_step(
 
     with pytest.raises(PreconditionError, match="in 3 attempts"):
         driver.run(ws, store, prepared_hyp, cards=1)
+
+
+def test_the_proposer_is_shown_no_row_of_a_dated_spread() -> None:
+    """Each row is a year's median, in force from the year's first day: a proposer shown them
+    could write a strategy keyed on a year's width. A file without them is shown as pinned."""
+    import yaml as pyyaml
+
+    row = {"pre": 872.9, "open": 37.2, "rth": 9.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
+    dated = {
+        **DOCUMENT,
+        "costs": {
+            "spread": "dated",
+            "dated": [
+                {"instrument": "DEMO.SIM", "from": "2023-01-01", **row},
+                {"instrument": "DEMO.SIM", "from": "2024-01-01", **row},
+            ],
+        },
+    }
+    text = "# the operator's comment\n" + pyyaml.safe_dump(dated, sort_keys=False)
+    plain = "# the operator's comment\n" + pyyaml.safe_dump(DOCUMENT, sort_keys=False)
+
+    shown = driver._shown(text)
+
+    assert "872.9" not in shown and "37.2" not in shown
+    assert pyyaml.safe_load(shown)["costs"] == {
+        "spread": "dated",
+        "dated": driver.WITHHELD.format(rows=2),
+    }
+    assert pyyaml.safe_load(shown)["windows"] == pyyaml.safe_load(text)["windows"]
+    assert driver._shown(plain) == plain
+    assert driver._shown("[]") == "[]"

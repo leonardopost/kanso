@@ -1002,7 +1002,9 @@ one would know a width the market had not shown yet. They are stated in the hypo
 `spread: dated` or `dated` is refused (exit 3) wherever the model is resolved, naming the venue.
 They reach no `strategy.py`: the venue model a sleeve is handed (`self.venue_model`, its
 configuration) carries `spread: dated` without the rows, the runner hands the harness the table
-apart, and `strategy_integrity` discards a strategy that reads it. What a sleeve reserves when it
+apart, and `strategy_integrity` discards a strategy that reads it; the research loop's proposer
+is shown `hypothesis.yaml` with the rows withheld, the rest of the file re-rendered without its
+comments. What a sleeve reserves when it
 sizes is the largest width any row of the name states for the part of the session the point it
 is handling is in — every year's, so it reads the same on any day — and `cost_rate`, which names
 no instrument, the largest of every row and part. What a fill was charged still reaches the
