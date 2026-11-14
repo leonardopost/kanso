@@ -147,7 +147,9 @@ __all__ = [
     "Outcome",
     "coverage",
     "phase",
+    "restored",
     "run",
+    "shown",
 ]
 
 TASK: Final = "propose"
@@ -692,7 +694,7 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     settings = ws.config.research
     facts: dict[str, object] = {
         PROGRAM_FILE: store.get_blob(active.program_sha).decode("utf-8", errors="replace"),
-        HYPOTHESIS_FILE: _shown(
+        HYPOTHESIS_FILE: shown(
             store.get_blob(active.hypothesis_sha).decode("utf-8", errors="replace")
         ),
         "objective": _objective(hyp),
@@ -954,22 +956,47 @@ def _objective(hyp: Hypothesis) -> dict[str, object]:
 
 WITHHELD: Final = (
     "{rows} rows, withheld: each is a year's median width, in force from that year's first "
-    "day, so a strategy written from them would know a width before the market showed it"
+    "day, so a strategy written from them would know a width before the market showed it; a "
+    "hypothesis.yaml written from this one that keeps this line keeps the rows"
 )
-"""What the proposer is shown in place of a dated spread's rows."""
+"""What a model writing a `strategy.py` is shown in place of a dated spread's rows."""
 
 
-def _shown(text: str) -> str:
-    """A pinned `hypothesis.yaml` as the proposer is shown it: as pinned, but for a dated
-    spread's rows, which are withheld and the file shown re-rendered without them — the rows
-    reach no `strategy.py` at run time (`kanso.nautilus.cross_section.dated`), and a proposer
-    shown them could write one that keys on a year's width. A file without them is shown
-    byte for byte, so no other hypothesis's prompt moves."""
+def shown(text: str) -> str:
+    """A pinned `hypothesis.yaml` as a model that writes a `strategy.py` is shown it — the
+    research loop's proposer, and the explorer (`kanso.research.explore`): as pinned, but for a
+    dated spread's rows, which are withheld and the file shown re-rendered without them. The
+    rows reach no `strategy.py` at run time (`kanso.nautilus.cross_section.dated`), and a model
+    shown them could write one that keys on a year's width. A file without them is shown byte
+    for byte, so no other hypothesis's prompt moves."""
     document = yaml.safe_load(text)
     costs = document.get("costs") if isinstance(document, dict) else None
     if not isinstance(costs, dict) or not costs.get("dated"):
         return text
     costs["dated"] = WITHHELD.format(rows=len(costs["dated"]))
+    return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+
+
+def restored(written: str, pinned: str) -> str:
+    """A `hypothesis.yaml` a model wrote from one it was `shown`, with the rows put back where
+    it kept the line that stood for them: the rows of `pinned`, the file it was shown, and the
+    file re-rendered with them. A file that states rows of its own, or none, or that is not a
+    mapping of YAML, is returned byte for byte, for the judge to read as written."""
+    try:
+        document = yaml.safe_load(written)
+        source = yaml.safe_load(pinned)
+    except yaml.YAMLError:
+        return written
+    costs = document.get("costs") if isinstance(document, dict) else None
+    kept = source.get("costs") if isinstance(source, dict) else None
+    rows = kept.get("dated") if isinstance(kept, dict) else None
+    if (
+        not isinstance(costs, dict)
+        or not rows
+        or costs.get("dated") != WITHHELD.format(rows=len(rows))
+    ):
+        return written
+    costs["dated"] = rows
     return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
 
 

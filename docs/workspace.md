@@ -1011,9 +1011,11 @@ its first day, which is the evening of the New York day before, so a table whose
 the window's first day is refused, and a warmup reaches further back still. They reach no
 `strategy.py`: the venue model a sleeve is handed (`self.venue_model`, its configuration)
 carries `spread: dated` without the rows, the runner hands the harness the table apart, and
-`strategy_integrity` discards a strategy that reads it; the research loop's proposer is
-shown `hypothesis.yaml` with the rows withheld, the rest of the file re-rendered without its
-comments. What a sleeve reserves when it sizes is the largest width any row of the name
+`strategy_integrity` discards a strategy that reads it; the research loop's proposer and the
+explorer (`research explore`, which writes a `strategy.py` of a new hypothesis) are shown
+`hypothesis.yaml` with the rows withheld, the rest of the file re-rendered without its
+comments, and a candidate the explorer writes keeping the line that stands for them keeps the
+parent's rows. What a sleeve reserves when it sizes is the largest width any row of the name
 states for the part of the session the point it is handling is in — every year's, so it reads
 the same on any day — and `cost_rate`, which names no instrument, the largest of every row and
 part; under a latency a fill priced in a later part than it was sized in can pay more than that

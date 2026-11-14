@@ -14,7 +14,10 @@ their research-window scores, its stalls, and its certificates as a verdict and 
 of the gates that failed — the ids alone, for the reason `research/driver.py` gives for
 the failing gates a proposal is shown: evidence measured on a certification window, handed
 to something whose output is researched next, is a route from the embargoed window into
-research.
+research. A dated spread's rows are withheld from the `hypothesis.yaml` it is shown, as they
+are from a proposer (`kanso.research.driver.shown`): each is a year's median width, in force
+from the year's first day, and the model writes a `strategy.py`. A candidate that keeps the line
+standing for them is written with the parent's rows put back (`driver.restored`).
 
 **The answer is judged on the ladder, like a proposal.** An id that is not one, or that is
 registered or already has a directory; a `hypothesis.yaml` that does not parse as a
@@ -187,18 +190,20 @@ def _attempt(ws: Workspace, store: StateStore, runs: list[RunRecord], lane: str)
     hyp_id = newest.hyp_id
     parent = _pinned(store, newest.hypothesis_sha)
     seen = max(_pinned(store, sha).windows.research.end for sha in {r.hypothesis_sha for r in runs})
+    pinned = _text(store, newest.hypothesis_sha)
     accepted: list[dict[str, Any]] = []
 
     def check(data: Mapping[str, object]) -> Sequence[str]:
-        complaints = _judge(ws, store, parent, seen, data)
+        written = {**data, "hypothesis_yaml": driver.restored(str(data["hypothesis_yaml"]), pinned)}
+        complaints = _judge(ws, store, parent, seen, written)
         if not complaints:
-            accepted.append(dict(data))
+            accepted.append(written)
         return complaints
 
     inputs = CallInputs(
         subject=hyp_id,
         stable={
-            HYPOTHESIS_FILE: _text(store, newest.hypothesis_sha),
+            HYPOTHESIS_FILE: driver.shown(pinned),
             PROGRAM_FILE: _text(store, newest.program_sha),
         },
         dynamic=_dynamic(ws, store, newest),

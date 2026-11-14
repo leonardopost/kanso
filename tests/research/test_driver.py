@@ -1651,7 +1651,7 @@ def test_the_proposer_is_shown_no_row_of_a_dated_spread() -> None:
     text = "# the operator's comment\n" + pyyaml.safe_dump(dated, sort_keys=False)
     plain = "# the operator's comment\n" + pyyaml.safe_dump(DOCUMENT, sort_keys=False)
 
-    shown = driver._shown(text)
+    shown = driver.shown(text)
 
     assert "872.9" not in shown and "37.2" not in shown
     assert pyyaml.safe_load(shown)["costs"] == {
@@ -1659,5 +1659,26 @@ def test_the_proposer_is_shown_no_row_of_a_dated_spread() -> None:
         "dated": driver.WITHHELD.format(rows=2),
     }
     assert pyyaml.safe_load(shown)["windows"] == pyyaml.safe_load(text)["windows"]
-    assert driver._shown(plain) == plain
-    assert driver._shown("[]") == "[]"
+    assert driver.shown(plain) == plain
+    assert driver.shown("[]") == "[]"
+
+
+def test_a_file_written_from_one_shown_keeps_the_rows_where_it_kept_their_line() -> None:
+    """The rows withheld from a file are put back where a file written from it kept the line
+    standing for them; a file that states rows of its own, none, or is no mapping of YAML is
+    left as written."""
+    import yaml as pyyaml
+
+    row = {"pre": 872.9, "open": 37.2, "rth": 9.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
+    rows = [{"instrument": "DEMO.SIM", "from": "2023-01-01", **row}]
+    pinned = pyyaml.safe_dump({**DOCUMENT, "costs": {"spread": "dated", "dated": rows}})
+    kept = driver.shown(pinned)
+    own = pyyaml.safe_dump({**DOCUMENT, "costs": {"spread": "dated", "dated": rows[:0]}})
+
+    assert (
+        pyyaml.safe_load(driver.restored(kept, pinned))["costs"]["dated"]
+        == (pyyaml.safe_load(pinned)["costs"]["dated"])
+    )
+    assert driver.restored(own, pinned) == own
+    assert driver.restored("costs: [", pinned) == "costs: ["
+    assert driver.restored(kept, "[]") == kept
