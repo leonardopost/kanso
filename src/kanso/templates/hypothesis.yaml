@@ -33,8 +33,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
                                    # its price's bar covers (pre, open = the bars stamped 09:31-09:35, rth, post; the larger
                                    # of pre and post overnight). Each name asked for bar, quote or trade needs a row in
                                    # force on the day before the research window's first day (00:00 UTC is the New York
-                                   # evening before), and before any warmup's sessions, and no row may start inside the
-                                   # certification window, or it is refused (exit 3). The rows never reach strategy.py;
+                                   # evening before), and before any warmup's sessions, and no row may start after the
+                                   # research window's last day, or it is refused (exit 3). The rows never reach strategy.py;
                                    # a cost_scenario must state a fixed_bps above zero
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated

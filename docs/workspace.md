@@ -126,7 +126,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
-| state `costs.spread: dated` without rows, rows without it, an instrument's rows out of order by `from`, a negative or non-finite width, a count of sessions or marks below one, a row of an instrument outside the universe, a row from inside the certification window, or, for a name asked for `bar`, `quote` or `trade`, no row in force on the New York date the research window's first instant falls on — the day before its first day, 00:00 UTC being the New York evening before — or, under a warmup of N sessions, on the day before the date N days before the window | 3 · at `hyp validate` and wherever the file is read, naming `costs.dated` and the remedy; under a warmup the catalog resolves, a traded name with no row in force on the day before the first warmup session is refused (3) at `hyp validate` too, and where a run is built, naming that day |
+| state `costs.spread: dated` without rows, rows without it, an instrument's rows out of order by `from`, a negative or non-finite width, a count of sessions or marks below one, a row of an instrument outside the universe, a row from after the research window's last day, or, for a name asked for `bar`, `quote` or `trade`, no row in force on the New York date the research window's first instant falls on — the day before its first day, 00:00 UTC being the New York evening before — or, under a warmup of N sessions, on the day before the date N days before the window | 3 · at `hyp validate` and wherever the file is read, naming `costs.dated` and the remedy; under a warmup the catalog resolves, a traded name with no row in force on the day before the first warmup session is refused (3) at `hyp validate` too, and where a run is built, naming that day |
 | state `spread: dated` or `dated` under `venues.<MIC>.costs`, or in a broker's declaration | 3 · at `hyp validate`, `hyp add`, `research begin` and `screen validate`, naming the venue and the `portfolio.yaml` remedy: a dated spread is a hypothesis's own |
 | require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
 | attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution`, and over a host at `quote` or `trade` that kind required in `data_requirements` and in every `data_by_instrument` entry that asks for more than `bar` |
@@ -1004,8 +1004,13 @@ The rows are each a year's median, in force from that year's first day, so a str
 one would know a width the market had not shown yet. They are stated in the hypothesis's own
 `costs` and nowhere else: a `venues.<MIC>.costs` entry or a broker's declaration that states
 `spread: dated` or `dated` is refused (exit 3) wherever the model is resolved, naming the venue.
-No row is from inside the certification window, which every research card's reserve would
-read; the last row before it stays in force there. Each traded name needs a row in force on
+No row is in force from after the research window's last day: no research fill pays one, and
+every research card's reserve would read it — the certification year's row, in force from its
+1 January inside the embargo, most of all — so it is refused (exit 3), and the last row on or
+before research's last day stays in force through certification. The file does not say what
+sessions a row was measured on, so a row in force within research must be measured on sessions
+that end before the certification window opens; one measured past that is admitted, and hands
+research a held-out width. Each traded name needs a row in force on
 the New York date of the first instant a run delivers: a window is delivered from 00:00 UTC of
 its first day, which is the evening of the New York day before, so a table whose first row is
 the window's first day is refused, and a warmup reaches further back still. They reach no

@@ -299,6 +299,14 @@ def test_a_dated_spread_in_force_from_the_research_window_is_admissible(ws: Work
     assert [row.pre for row in parsed.costs.dated] == [90.0, 9.0]
 
 
+def test_a_dated_row_from_research_s_last_day_is_admissible(ws: Workspace) -> None:
+    """A row in force from the research window's last day is charged on research's fills, so
+    it is no row research reads and never pays."""
+    rows = _dated(("DEMO", "2023-01-01", 90.0), ("DEMO", "2024-12-31", 9.0))
+
+    assert [row.pre for row in accepted(ws, document(costs=rows)).costs.dated] == [90.0, 9.0]
+
+
 @pytest.mark.parametrize(
     ("costs", "said", "remedy"),
     [
@@ -323,10 +331,9 @@ def test_a_dated_spread_in_force_from_the_research_window_is_admissible(ws: Work
             "state costs.spread: dated beside the rows, or drop costs.dated",
         ),
         (
-            _dated(("DEMO", "2023-01-01", 9.0), ("DEMO", "2025-01-06", 9.0)),
-            "costs.dated: DEMO has a row from inside the certification window, which opens "
-            "2025-01-06",
-            "drop the rows from 2025-01-06 on",
+            _dated(("DEMO", "2023-01-01", 9.0), ("DEMO", "2025-01-01", 9.0)),
+            "costs.dated: DEMO has a row from after the research window, which ends 2024-12-31",
+            "drop the rows from after 2024-12-31",
         ),
         (
             _dated(("DEMO", "2023-01-01", 9.0), ("EURO", "2023-01-01", 9.0)),
@@ -345,9 +352,10 @@ def test_a_dated_spread_that_would_charge_a_traded_name_nothing_or_out_of_order_
     ws: Workspace, costs: dict[str, Any], said: str, remedy: str
 ) -> None:
     """No rows, rows without a dated spread, rows out of order, a negative width, a row of a
-    name outside the universe or from inside the certification window, and a traded name with
-    no row in force on the New York date the research window opens on — the evening before its
-    first UTC day: each exits 3, naming `costs.dated` and the remedy."""
+    name outside the universe or from after the research window — the certification year's
+    row, in force from 1 January inside the embargo, among them — and a traded name with no row
+    in force on the New York date the research window opens on — the evening before its first
+    UTC day: each exits 3, naming `costs.dated` and the remedy."""
     failure = refused(ws, document(costs=costs))
 
     assert said in failure.message
