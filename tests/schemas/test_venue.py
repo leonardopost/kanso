@@ -695,7 +695,12 @@ def test_a_dated_spread_from_a_broker_or_a_venue_entry_is_refused_naming_the_ven
         resolve_venue_model("ARCX", **layers)  # type: ignore[arg-type]
     where = "the broker's declaration" if layer == "declaration" else "venues.ARCX.costs"
     assert f"costs.spread: dated on ARCX is stated in {where}" in refused.value.message
-    assert "venues.ARCX.costs in portfolio.yaml" in (refused.value.remedy or "")
+    remedy = refused.value.remedy or ""
+    if layer == "declaration":  # its adapter's code: no portfolio.yaml entry takes a key out
+        assert "from the costs the broker's adapter declares for ARCX" in remedy
+        assert "portfolio.yaml" not in remedy
+    else:
+        assert "from venues.ARCX.costs in portfolio.yaml" in remedy
 
 
 def test_a_venue_entry_stating_a_dated_spread_parses_and_is_refused_where_a_model_resolves() -> (

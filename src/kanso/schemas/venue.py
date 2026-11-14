@@ -451,15 +451,22 @@ def _merge_costs(
 def _refuse_layer_dated(origin: Origin, override: CostsOverride, venue: str) -> None:
     """A dated spread is a hypothesis's alone: a broker's declaration or a `venues.<MIC>` entry
     that states one would hand its table to every hypothesis on the venue, and refuse each whose
-    universe the table does not cover. So it is refused here, naming the venue and the layer."""
+    universe the table does not cover. So it is refused here, naming the venue and the layer,
+    with the remedy where that layer is written: a broker's declaration is its adapter's code,
+    which no entry in `portfolio.yaml` takes a key out of."""
     if origin == "hypothesis" or (override.spread != "dated" and override.dated is None):
         return
-    where = "the broker's declaration" if origin == "broker" else f"venues.{venue}.costs"
+    if origin == "broker":
+        where = "the broker's declaration"
+        drop = f"the costs the broker's adapter declares for {venue}"
+    else:
+        where = f"venues.{venue}.costs"
+        drop = f"venues.{venue}.costs in portfolio.yaml"
     raise ValidationError(
         f"costs.spread: dated on {venue} is stated in {where}; a dated spread is stated in a "
         "hypothesis's own costs and nowhere else",
-        remedy=f"drop spread: dated and dated from venues.{venue}.costs in portfolio.yaml, and "
-        "state them under costs in each hypothesis.yaml that trades on it",
+        remedy=f"drop spread: dated and dated from {drop}, and state them under costs in each "
+        "hypothesis.yaml that trades on it",
     )
 
 
