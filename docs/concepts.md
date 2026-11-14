@@ -2200,6 +2200,58 @@ host's own certificate and its combined baseline are therefore different numbers
 construction, and a composed version that carries such an overlay is measured and deployed
 under both grains, so a stage sees what composition measured.
 
+**A point's session is the New York minute it covers.** A `strategy.py` may not import
+`zoneinfo`, so the harness hands a sleeve New York time as values (what a strategy can still
+reach past that is `docs/backlog.md` rows 253 and 254): `self.session` is the `segment` —
+`pre` from 04:00, `rth` from 09:30 to 16:00, `post` to 20:00 and `overnight` otherwise — the
+New York `day` and the `minute` of that day of the instant a nanosecond before `data_time`.
+kanso stamps a bar at its close, so that is the last minute the bar covers, whatever its
+size. Of one-minute bars, the bar stamped 09:30 is the pre-market's last, minute 569; the one
+stamped 09:31 is the first regular bar, minute 570; the one stamped 16:00 is the last regular
+bar, minute 959. A quote or a print stamped at 09:30:00 exactly reads as the instant before
+the open, and a daily bar stamped at the next New York midnight as minute 1439 of its
+session's date. `data_time` is the reference time of the point being handled, so a point
+published after it reads the minute it describes and not the one its handler runs in: a close
+stamped 16:00 and published at 16:15 reads `rth`, minute 959, and an order sent on it goes in
+during the post-market. Daylight saving moves the segments with the market, and no calendar
+stands behind them: a day the market was closed has segments like any other, and a day that
+closed early is `rth` to 16:00. It is a function of `data_time` alone, read off one clock in
+the package (`kanso.nautilus.clock`), so a card, a certificate, a replay and a stage read it
+alike. The shared book's regular-hours rule reads the same clock at the instant it places an
+entry, not the minute before it, so the two part at the edges of regular hours: an entry sent
+on the bar stamped 09:30, which a sleeve reads as `pre`, is placed in regular hours, and one
+sent on the bar stamped 16:00, which it reads as `rth`, is placed outside them and refused
+there while the book's leverage outside regular hours is unset (`outside_rth_unset`). An
+attached construct's `KansoModifier` has no `session`: in `evaluate` or `on_data` it reads
+its host's as `session_of(ctx.ts_event)`, which `kanso.nautilus.strategy` hands it.
+`session` is a name the sleeve's base class owns (*The embargo*, above): a sleeve's
+`strategy.py` written before it existed that binds `session` — `self.session = …`, `def
+session` or `session = …` in the class body — is refused by `strategy_integrity` once its
+workspace runs a kanso that has it, and `kanso doctor`'s `base names` check names it; rename
+yours. Of a card's or a version's stored bytes, kanso scans again only those a research run
+begins from, at its baseline, and `kanso doctor`'s `base names` check reads only
+`hypotheses/<id>/strategy.py`. Every other step runs them as they were stored: certification
+(`kanso cert run`), composition (`kanso strat compose`, and the one that follows a passing
+certificate), the measurement a deploy, a promotion or a demotion makes again of a version at
+another share, a replay, a stage, and the research of a construct attached to a version,
+which runs the host's bytes beside its own. So of the cards and versions made before it, one
+that binds `session` ahead of the base's — a `def session` or a `session = …` in the sleeve's
+own class body, or in a class before `KansoStrategy` in its method resolution order, such as
+a mixin listed before it — keeps its own, which shadows the base's; and one that assigns
+`self.session` with no binding ahead of the base's, one in a mixin listed after
+`KansoStrategy` included, raises at that assignment, which stops the step that ran it. A
+sleeve's research meets that raise only where the scan does not read the binding: the
+baseline a run begins from is scanned, so a best that binds the name as the scan reads it —
+`self.session = …` in a method, or a `def session` or a `session = …` in a class body — is
+refused before it runs, naming the name, and one that assigns it another way, through
+another name for `self` say, raises at its baseline, which refuses the run naming the
+error. A hypothesis whose best binds it, or whose certification raised at it, ends its run
+if one is active (`kanso research end ID`), renames the name in
+`hypotheses/<id>/strategy.py`, and begins again with
+`kanso research begin ID --from-workspace`, which starts from that file and clears the
+hypothesis's `best`. A version that raises at it is retired (`kanso strat retire
+STRATEGY@V`), and a construct researched on it is attached to another.
+
 ## Corporate actions
 
 A split is a bookkeeping change: a thousand shares at four dollars become a hundred at

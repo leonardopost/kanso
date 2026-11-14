@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import get_args
 
@@ -10,6 +11,7 @@ import yaml
 
 from kanso.config import EnvConfig, ResearchConfig
 from kanso.criteria import catalogue, check_params
+from kanso.nautilus.clock import NEW_YORK, session_of
 from kanso.schemas import CardStatus
 from tests.criteria.builders import make_hyp
 from tests.docs.test_pages import scope_names
@@ -102,6 +104,25 @@ def test_the_research_skill_names_every_status_a_card_can_carry() -> None:
         assert f"`{status}`" in text or f"**{status}**" in text, status
     assert "no card, no trial" not in text
     assert "so it is a trial, a `results.tsv` row and a coverage entry like any other" in text
+
+
+def test_the_research_skill_names_the_minute_a_bar_s_session_reads_as_the_clock_reads_it() -> None:
+    """The skill ships into every workspace beside `program.md` and states the same minutes;
+    they are the clock's in winter and in summer, so a change to the clock fails here too."""
+    line = next(
+        line for line in skill(PACKAGED, "kanso-research").splitlines() if "`self.session`" in line
+    )
+    stated = (
+        ((9, 30), "the bar stamped 09:30 is `pre`, minute 569", ("pre", 569)),
+        ((9, 31), "the first regular bar is the one stamped 09:31, minute 570", ("rth", 570)),
+    )
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        for (hour, minute), said, (segment, of_day) in stated:
+            assert said in line
+            stamp = int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+            assert session_of(stamp) == (segment, day, of_day)
+    assert "for the last minute the point covers" in line
+    assert "a `KansoModifier`, which has none, from `session_of(ctx.ts_event)`" in line
 
 
 def test_the_research_skill_names_every_field_a_re_pin_clears_the_best_on() -> None:

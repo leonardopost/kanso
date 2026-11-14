@@ -20,7 +20,13 @@ a late-published point can carry an earlier reference time than its predecessor;
 information the strategy is acting on. On a multi-instrument instant the last prices of
 every name that printed are current before any handler of that grain runs; `data_time`
 still belongs to the event whose handler is running, not to the last arrival of the
-instant.
+instant. `session` is New York time read off it — the segment (`pre`, `rth`, `post` or
+`overnight`), New York date and minute of the day of the instant a nanosecond before
+`data_time`, which for a bar stamped at its close is the last minute the bar covers
+(`kanso.nautilus.clock.session_of`) — so a strategy is handed the market's wall clock as
+values, never the zone it was read in, and reads it alike on every path. Like `data_time`
+it is the reference time's: a point published after it reads the minute it describes, not
+the one its handler runs in and its orders go in at.
 
 **It records every order intent.** `(ts_event, instrument, side, qty, order_type, price?)`
 per submitted order, stamped with `data_time` rather than a wall clock, captured by
@@ -239,6 +245,7 @@ from nautilus_trader.trading.strategy import Strategy
 from kanso.criteria.run import NS_PER_DAY, day_of
 from kanso.errors import ValidationError
 from kanso.nautilus import actions, splits
+from kanso.nautilus.clock import Session, session_of
 from kanso.nautilus.costs import (
     BookPolicy,
     at_touch,
@@ -305,6 +312,8 @@ __all__ = [
     "KansoModifierConfig",
     "KansoStrategy",
     "OrderIntent",
+    "Session",
+    "session_of",
     "tunable_fields",
 ]
 
@@ -1081,6 +1090,32 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         The only time source a strategy may read.
         """
         return self._data_time
+
+    @property
+    def session(self) -> Session:
+        """Where in its New York session the point being handled falls: `segment` (`pre`
+        04:00-09:30, `rth` 09:30-16:00, `post` 16:00-20:00, `overnight` otherwise), `day`
+        (the New York date) and `minute` (of that day), of the instant a nanosecond before
+        `data_time`.
+
+        A bar is stamped at its close, so that is the last minute the bar covers: of
+        one-minute bars, the one stamped 09:30 is `pre`, minute 569; the one stamped 09:31 is
+        the first `rth` bar, minute 570; the one stamped 16:00 the last, minute 959. A point
+        published after its reference time reads the minute it describes, not the one its
+        orders go in at. A function of `data_time` alone (`kanso.nautilus.clock.session_of`),
+        so it reads the same on every path; before the first point it reads the instant before
+        the epoch. It has no setter: `strategy_integrity` refuses a `strategy.py` that binds
+        it. Of a card's or a version's stored bytes, only those a research run begins from are
+        scanned again, so of those made before the name was the base's, run by any other step —
+        certification, composition, a deploy's measurement, a replay, a stage — one that binds
+        `session` ahead of this one in its method resolution order (in the sleeve's own class
+        body, or in a mixin listed before `KansoStrategy`) keeps its own, which shadows this
+        one, and one that assigns `self.session` with no such binding raises at the
+        assignment. So the harness never reads a sleeve's `session`, by whatever name it holds
+        the sleeve: what it reads off New York time it reads off the clock at the instant
+        (`kanso.nautilus.clock`), which no subclass replaces.
+        """
+        return session_of(self._data_time)
 
     @property
     def intents(self) -> tuple[OrderIntent, ...]:

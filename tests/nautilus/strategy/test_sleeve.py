@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import ast
+from datetime import date, datetime, time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
+from kanso import nautilus
+from kanso.criteria.integrity import clashes
 from kanso.errors import ValidationError
+from kanso.nautilus.backtest import SLEEVE_ENTRY, _entry, _module
+from kanso.nautilus.clock import NEW_YORK, Session, session_of
 from kanso.nautilus.strategy import ENTRY, EXIT_ORDER, KansoConfig, KansoStrategy
 
-from .conftest import DEMO, HEDGE, bar, every_grain, flat, quote, saw_tooth, trade
+from .conftest import DEMO, HEDGE, MINUTE_NS, bar, every_grain, flat, quote, saw_tooth, trade
 
 FREE = {"costs": {"commission_bps": 0.0, "slippage_bps": 0.0, "spread": "quotes"}}
 """A cost model that charges nothing, so a sizing assertion is exact arithmetic."""
@@ -99,6 +106,221 @@ def test_an_intent_is_stamped_with_data_time(backtest) -> None:
         eighth.ts_event,
     ]
     assert third.ts_init not in [intent.ts_event for intent in run.strategy.intents]
+
+
+def new_york(day: date, hour: int, minute: int) -> int:
+    """A New York wall-clock reading, in nanoseconds since the epoch."""
+    return int(datetime.combine(day, time(hour, minute), tzinfo=NEW_YORK).timestamp()) * 10**9
+
+
+def test_the_session_is_the_new_york_minute_each_bar_covers(backtest) -> None:
+    """Bars stamped at the edges of every segment, in winter and in summer: before each
+    handler the sleeve reads its bar's session off `data_time`, as `session_of` reads it —
+    the bar stamped 09:30 the pre-market's last minute, the one stamped 09:31 the first
+    regular one, 16:00 the last regular one, 20:00 the post-market's last and 20:30, which
+    UTC stamps on the next date, the overnight of its own. Before the first point
+    `data_time` is zero, and the session is the instant before the epoch's."""
+
+    class Clocked(KansoStrategy):
+        def on_start(self) -> None:
+            self.before = self.session
+            self.seen: list[tuple[int, Session]] = []
+
+        def on_bar(self, bar_: object) -> None:
+            self.seen.append((self.data_time, self.session))
+
+    winter, summer = date(2024, 1, 2), date(2024, 7, 2)
+    readings = ((4, 0), (9, 30), (9, 31), (16, 0), (16, 1), (20, 0), (20, 30))
+    stamps = [new_york(day, *reading) for day in (winter, summer) for reading in readings]
+
+    run = backtest(Clocked(config()), data=[bar(DEMO, ts // MINUTE_NS - 1, 10.0) for ts in stamps])
+
+    seen = run.strategy.seen
+    assert seen == [(ts, session_of(ts)) for ts in stamps]
+    for day, at in ((winter, 0), (summer, len(readings))):
+        assert [session for _, session in seen[at : at + len(readings)]] == [
+            Session("overnight", day, 239),
+            Session("pre", day, 569),
+            Session("rth", day, 570),
+            Session("rth", day, 959),
+            Session("post", day, 960),
+            Session("post", day, 1199),
+            Session("overnight", day, 1229),
+        ]
+    assert run.strategy.before == session_of(0) == Session("post", date(1969, 12, 31), 1139)
+
+
+def test_the_session_has_no_setter() -> None:
+    """`strategy_integrity` refuses a researched file that binds `session`. Every step but the
+    baseline a research run begins from runs stored bytes without scanning them again, so a
+    card or a version made before the name was the base's that assigns `self.session`, and
+    binds no `session` ahead of the base's, raises at the assignment rather than replacing the
+    clock: a plain assignment with `AttributeError`, an augmented one at its read or at its
+    write."""
+    sleeve = KansoStrategy(config())
+
+    with pytest.raises(AttributeError, match="session"):
+        sleeve.session = Session("rth", date(2024, 1, 2), 570)  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        sleeve.session += 1  # type: ignore[misc, operator]
+    with pytest.raises(AttributeError, match="session"):
+        sleeve.session += ()  # type: ignore[misc]
+    assert sleeve.session == session_of(0)
+
+
+STORED = (
+    "from kanso.nautilus.strategy import KansoStrategy\n\n\n"
+    "class Strategy(KansoStrategy):\n"
+    "{body}\n"
+    "    def on_start(self):\n"
+    "        self.session = 5\n"
+)
+"""A stored `strategy.py` made before `session` was the base's, which assigns it."""
+
+
+def stored(source: str) -> KansoStrategy:
+    """The sleeve these bytes hold, loaded as a replay or a stage loads them, with no scan."""
+    module = _module(source.encode(), "sleeve")
+    cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+    sleeve: KansoStrategy = cls(config())
+    return sleeve
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    session = None\n",
+        "    session: int = 0\n",
+        "    def session(self):\n        return 0\n",
+    ],
+    ids=["value", "annotated", "def"],
+)
+def test_a_class_body_that_binds_session_keeps_its_own(body: str) -> None:
+    """Of the cards and versions made before `session` was the base's, one whose class body
+    binds it keeps its own, which shadows the base's: loaded from its bytes as a replay or a
+    stage loads them, with no scan, it assigns `self.session` without raising and reads back
+    what it set. `strategy_integrity` refuses the same bytes now, so only one made before can
+    run so; one whose class body binds nothing raises at the assignment."""
+    source = STORED.format(body=body)
+    found = clashes(source)
+    assert found
+    assert {clash.name for clash in found} == {"session"}
+
+    sleeve = stored(source)
+    sleeve.on_start()
+    assert sleeve.session == 5
+
+    bare = stored(STORED.format(body="    pass\n"))
+    with pytest.raises(AttributeError, match="session"):
+        bare.on_start()
+
+
+MIXED = (
+    "from kanso.nautilus.strategy import KansoStrategy\n\n\n"
+    "class Mixin:\n"
+    "    session = None\n\n\n"
+    "class Strategy({bases}):\n"
+    "    def on_start(self):\n"
+    "        self.session = 5\n"
+)
+"""A stored `strategy.py` whose `session` is bound in a mixin's class body, not the sleeve's."""
+
+
+def test_a_mixin_s_session_shadows_the_base_s_only_listed_before_it() -> None:
+    """What decides whether stored bytes keep their own `session` is where it comes in the
+    method resolution order, not which class body of the file binds it. `strategy_integrity`
+    flags a mixin's binding whatever the order of the bases; listed before `KansoStrategy` it
+    shadows the base's property and the assignment runs, and listed after it the property
+    comes first and the assignment raises, as `docs/concepts.md` says."""
+    first = MIXED.format(bases="Mixin, KansoStrategy")
+    after = MIXED.format(bases="KansoStrategy, Mixin")
+    for source in (first, after):
+        assert {clash.name for clash in clashes(source)} == {"session"}
+
+    shadowing = stored(first)
+    shadowing.on_start()
+    assert shadowing.session == 5
+
+    with pytest.raises(AttributeError, match="session"):
+        stored(after).on_start()
+
+
+SESSION_MODULE = "kanso.nautilus.session"
+"""The node's session module, which a dotted path names as an attribute and is no sleeve's."""
+
+
+def names_session(node: ast.AST) -> bool:
+    """Whether the node names `session` as an attribute, on any receiver and in any context,
+    or by the string `getattr`, `setattr`, `attrgetter` and a `__dict__` lookup name it by."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "session" and ast.unparse(node) != SESSION_MODULE
+    if isinstance(node, ast.Call):
+        return any(isinstance(arg, ast.Constant) and arg.value == "session" for arg in node.args)
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == "session"
+    return False
+
+
+def lines_naming_session(source: str) -> list[int]:
+    return sorted({node.lineno for node in ast.walk(ast.parse(source)) if names_session(node)})
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "self.session",
+        "member.session.segment",
+        "pending.member.session",
+        "strategy.session.minute",
+        "run.strategy.session",
+        "sleeve.session = None",
+        "del sleeve.session",
+        "getattr(member, 'session')",
+        "setattr(sleeve, 'session', None)",
+        "operator.attrgetter('session')(sleeve)",
+        "vars(sleeve)['session']",
+        "sleeve.__dict__.get('session')",
+    ],
+)
+def test_the_guard_finds_a_sleeve_s_session_by_any_name_the_harness_holds_it_by(line: str) -> None:
+    """The shared book holds its sleeves as `member`, the runner as `strategy` and `sleeve`,
+    and a read by any of those names, or by a string, is the read the guard below forbids."""
+    assert lines_naming_session(
+        f"def _read(self, member, pending, strategy, run, sleeve):\n    {line}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from kanso.nautilus.session import SHUTDOWN_TOPIC",
+        "kanso.nautilus.session.SHUTDOWN_TOPIC",
+        "session_of(ts_ns).segment",
+        "self.sessions",
+        "{'session': 1}",
+    ],
+)
+def test_the_guard_passes_what_names_no_sleeve_s_session(line: str) -> None:
+    assert not lines_naming_session(line)
+
+
+def test_the_harness_reads_the_clock_and_never_a_sleeve_s_session() -> None:
+    """Stored bytes run without a scan may bind `session` ahead of the base's and replace it
+    with a value of their own, so what the harness itself reads off New York time —
+    `KansoStrategy`, the shared book, the runner, the costs — it reads off the clock at the
+    instant, never off a sleeve. No module under `kanso.nautilus`, its subpackages included,
+    names `session` as an attribute, by whatever name it holds the receiver, or as a string
+    an attribute is reached by."""
+    package = Path(nautilus.__file__).parent
+    modules = sorted(package.rglob("*.py"))
+    found = [
+        f"{path.relative_to(package)}:{line}"
+        for path in modules
+        for line in lines_naming_session(path.read_text(encoding="utf-8"))
+    ]
+    assert any(path.parent != package for path in modules)
+    assert {"book.py", "backtest.py", "node.py", "strategy.py"} <= {path.name for path in modules}
+    assert not found
 
 
 def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:

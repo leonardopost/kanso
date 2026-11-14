@@ -12,12 +12,12 @@ import asyncio
 import signal
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, time
 from typing import Any
 
 import pytest
 import uvloop
-from nautilus_trader.model.data import CustomData, DataType, QuoteTick, TradeTick
+from nautilus_trader.model.data import Bar, CustomData, DataType, QuoteTick, TradeTick
 from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import ClientId, InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
@@ -26,6 +26,7 @@ from kanso.criteria.run import midnight_ns
 from kanso.data.types import CorporateAction, Funding
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
+from kanso.nautilus.clock import NEW_YORK, session_of
 from kanso.nautilus.cross_section import coincident, is_marker
 from kanso.nautilus.session import Halt, measured, ordered
 from tests.replay.conftest import (
@@ -43,6 +44,7 @@ from tests.replay.conftest import (
     SPAN,
     SPLIT_EX,
     SPLIT_SCHEDULE,
+    bar_type,
     bars,
     flickering,
     hypothesis,
@@ -76,6 +78,65 @@ def test_the_live_path_submits_what_the_research_path_submits() -> None:
 
     assert node.intents == engine.intents
     assert node.intents
+
+
+SESSIONED = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    """Buys a day's first regular-hours bar and sells its first after-hours one, each read off
+    the New York session the harness hands it."""
+
+    config_cls = KansoConfig
+
+    def on_bar(self, bar) -> None:
+        name = bar.bar_type.instrument_id
+        now = self.session
+        if (now.segment, now.minute) == ("rth", 570) and self.held(name) == 0:
+            self.submit_entry(name, "BUY", qty=100)
+        elif now.segment == "post" and self.held(name) > 0:
+            self.submit_exit(name)
+'''
+
+
+def stamped(day: date, hour: int, minute: int) -> Bar:
+    """A bar of the name at 10.00, stamped at a New York reading and published a second on."""
+    ts = int(datetime.combine(day, time(hour, minute), tzinfo=NEW_YORK).timestamp()) * SECOND_NS
+    price = Price(10.0, 2)
+    return Bar(
+        bar_type(),
+        price,
+        price,
+        price,
+        price,
+        Quantity.from_int(10_000),
+        ts_event=ts,
+        ts_init=ts + SECOND_NS,
+    )
+
+
+def test_the_two_paths_hand_a_sleeve_the_same_new_york_session() -> None:
+    """On the Friday before New York's clocks went forward and the Monday after, the sleeve
+    buys the bar stamped 09:31 — not the one stamped 09:30, which covers a pre-market minute —
+    and sells the one stamped 16:01 — not the one stamped 16:00, the last regular minute — on
+    both paths, at the instants `session_of` reads those minutes at."""
+    readings = ((9, 30), (9, 31), (16, 0), (16, 1))
+    points = [stamped(day, *at) for day in (date(2024, 3, 8), date(2024, 3, 11)) for at in readings]
+
+    node, engine = both(request_for(source=SESSIONED), [instrument()], [tuple(points)])
+
+    assert node.intents == engine.intents
+    assert [(intent[0], intent[2]) for intent in engine.intents] == [
+        (points[1].ts_event, "BUY"),
+        (points[3].ts_event, "SELL"),
+        (points[5].ts_event, "BUY"),
+        (points[7].ts_event, "SELL"),
+    ]
+    assert [session_of(intent[0])[::2] for intent in engine.intents] == [
+        ("rth", 570),
+        ("post", 960),
+    ] * 2
 
 
 def test_the_two_paths_price_their_fills_at_the_quotes_alike() -> None:

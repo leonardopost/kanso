@@ -8,11 +8,13 @@ page that drifts is a defect and this is where it fails.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import pkgutil
 import re
 import sys
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,7 +26,9 @@ from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.errors import ValidationError
 from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
+from kanso.nautilus import clock
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
+from kanso.nautilus.clock import NEW_YORK, segment_of, session_of
 from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
 from kanso.schemas import CostsOverride
@@ -463,6 +467,208 @@ def test_the_pages_say_the_venue_is_settled_at_a_marker_as_the_research_path_set
     assert "**closed.**" in backlog
     assert "`SimulatedVenue.on_marker` settles the exchange at each marker's instant" in backlog
     assert "`handle_order_book_deltas` stamps `data_time`" in backlog
+
+
+def test_the_concepts_page_reads_a_bar_s_session_as_the_clock_reads_it() -> None:
+    """The minutes the page gives for the bars stamped 09:30, 09:31 and 16:00, and for a daily
+    bar stamped at the next midnight, are the clock's in winter and in summer, and the page
+    says a strategy that binds the name is refused."""
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    stated = (
+        ((9, 30), "the bar stamped 09:30 is the pre-market's last, minute 569", ("pre", 569)),
+        ((9, 31), "the one stamped 09:31 is the first regular bar, minute 570", ("rth", 570)),
+        ((16, 0), "the one stamped 16:00 is the last regular bar, minute 959", ("rth", 959)),
+    )
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        for (hour, minute), said, (segment, of_day) in stated:
+            assert said in concepts
+            stamp = int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+            assert session_of(stamp) == (segment, day, of_day)
+        midnight = (
+            int(datetime.combine(day + timedelta(days=1), time(), NEW_YORK).timestamp()) * 10**9
+        )
+        assert session_of(midnight) == ("overnight", day, 1439)
+    assert "a daily bar stamped at the next New York midnight as minute 1439" in concepts
+    assert "is refused by `strategy_integrity` once its workspace runs a kanso" in concepts
+
+
+def ny(day: date, hour: int, minute: int) -> int:
+    """A New York wall-clock reading, in nanoseconds since the epoch."""
+    return int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+
+
+def test_the_pages_say_where_a_bar_s_session_and_the_book_s_hours_part() -> None:
+    """A sleeve reads the minute a bar covers and the book the instant it places an entry, so
+    the two part at the bars stamped 09:30 and 16:00; and a close published after its 16:00
+    reference time reads the minute it describes while its orders go in after it. The page
+    says so, the release note says what the book does with an entry sent on the second — it
+    refuses it — the clock reads so, and `test_shared_book.py` holds the book to it."""
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    assert "that is the last minute the bar covers, whatever its size" in concepts
+    for stated in (concepts, changelog):
+        assert (
+            "an entry sent on the bar stamped 09:30, which a sleeve reads as `pre`, is placed in "
+            "regular hours, and one sent on the bar stamped 16:00, which it reads as `rth`, is "
+            "placed outside them and refused there while the book's leverage outside regular "
+            "hours is unset (`outside_rth_unset`)"
+        ) in stated
+    assert (
+        "a close stamped 16:00 and published at 16:15 reads `rth`, minute 959, and an order "
+        "sent on it goes in during the post-market"
+    ) in concepts
+    assert "it reads its host's as `session_of(ctx.ts_event)`" in concepts
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        assert session_of(ny(day, 9, 30))[::2] == ("pre", 569)
+        assert segment_of(ny(day, 9, 30)) == ("rth", day)
+        assert session_of(ny(day, 16, 0))[::2] == ("rth", 959)
+        assert segment_of(ny(day, 16, 0)) == ("post", day)
+        assert segment_of(ny(day, 16, 15)) == ("post", day)
+        assert session_of(ny(day, 10, 0))[::2] == ("rth", 599)
+
+    clock_doc = prose(clock.__doc__ or "")
+    assert "the ledger places an entry sent on the first in regular hours" in clock_doc
+    assert "refuses one sent on the second as outside them" in clock_doc
+
+
+def test_the_workspace_page_names_the_session_among_a_sleeve_s_readers() -> None:
+    """An operator writing a seed `strategy.py` from the workspace page learns the base hands
+    it the session, and that the name is the base's."""
+    hypotheses = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "`self.session` is New York time for the point being handled" in hypotheses
+    assert "of one-minute bars the one stamped 09:31 is the first regular bar" in hypotheses
+    assert "`session` is a name the base owns" in hypotheses
+    day = date(2024, 1, 2)
+    assert session_of(ny(day, 9, 31))[::2] == ("rth", 570)
+
+
+def test_the_routes_to_the_zone_the_clock_does_not_close_are_backlog_rows() -> None:
+    """The clock and the concepts page say a strategy is handed New York time as values, and
+    cite by number the rows that record what it can still reach past them; the clock cites the
+    row that records what a strategy's import can change in what every sleeve is handed."""
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 25[3456] \|", line)
+    }
+    assert '`splits.ZoneInfo("America/New_York")`' in rows["253"]
+    assert '`unix_nanos_to_dt(self.data_time).tz_convert("America/New_York")`' in rows["254"]
+    assert "`datetime.datetime.now()`" in rows["255"]
+    assert "`harness.session_of = …`" in rows["256"]
+    assert '`Session.segment = property(lambda self: "rth")`' in rows["256"]
+    assert "`docs/backlog.md` rows 253 and 254" in prose(clock.__doc__ or "")
+    assert "a store on `kanso.nautilus.strategy.session_of` or on `Session` — is row 256" in (
+        prose(clock.__doc__ or "")
+    )
+    assert "(what a strategy can still reach past that is `docs/backlog.md` rows 253 and 254)" in (
+        prose(section(page("concepts.md"), "Delivery"))
+    )
+
+
+SCANS = frozenset({"check", "clashes", "scan"})
+"""What `kanso.criteria.integrity` scans a strategy's bytes with."""
+
+
+def imports_a_scan(node: ast.AST) -> bool:
+    """Whether the node imports the integrity module, or a scan from it."""
+    if isinstance(node, ast.Import):
+        return any(alias.name == "kanso.criteria.integrity" for alias in node.names)
+    if not isinstance(node, ast.ImportFrom):
+        return False
+    names = {alias.name for alias in node.names}
+    return "integrity" in names or (
+        (node.module or "").endswith("integrity") and bool(SCANS & names)
+    )
+
+
+def scanning() -> tuple[set[str], set[str]]:
+    """The modules of the package that import a scan of a strategy's bytes, and those that
+    hand the `strategy_integrity` gate a lane directory, without which it skips."""
+    package = ROOT / "src"
+    imports: set[str] = set()
+    lanes: set[str] = set()
+    for path in sorted((package / "kanso").rglob("*.py")):
+        parts = path.relative_to(package).with_suffix("").parts
+        module = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if imports_a_scan(node):
+                imports.add(module)
+            elif isinstance(node, ast.Call) and any(
+                keyword.arg == "lane_dir" for keyword in node.keywords
+            ):
+                lanes.add(module)
+    return imports, lanes
+
+
+def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> None:
+    """Of a card's or a version's stored bytes, only the baseline a research run begins from is
+    scanned again: the scans are imported by the research loop, by the `strategy_integrity`
+    gate — which skips without a lane directory, and only the research loop hands it one — and
+    by the two commands that read the workspace's own files. So certification, composition, a
+    deploy's measurement, a replay, a stage and a construct's research on its host run them as
+    stored. The concepts page and the release note name each of those steps, what bytes made
+    before `session` was the base's do there, and the way back: `kanso research end` first
+    while a run is active, and `--from-workspace`, which clears the hypothesis's `best`. They
+    say research meets the raise where the scan does not read the binding, as
+    `tests/research/test_loop.py` shows it does."""
+    imports, lanes = scanning()
+    assert imports == {
+        "kanso.cli.doctor",
+        "kanso.criteria.gates",
+        "kanso.hyp.validate",
+        "kanso.research.loop",
+    }
+    assert lanes == {"kanso.research.loop"}
+
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    assert "kanso scans again only those a research run begins from, at its baseline" in concepts
+    assert (
+        "Every other step runs them as they were stored: certification (`kanso cert run`), "
+        "composition (`kanso strat compose`, and the one that follows a passing certificate), "
+        "the measurement a deploy, a promotion or a demotion makes again of a version at another "
+        "share, a replay, a stage, and the research of a construct attached to a version, which "
+        "runs the host's bytes beside its own"
+    ) in concepts
+    assert (
+        "or in a class before `KansoStrategy` in its method resolution order, such as a mixin "
+        "listed before it — keeps its own"
+    ) in concepts
+    assert "one in a mixin listed after `KansoStrategy` included, raises at that assignment" in (
+        concepts
+    )
+    assert (
+        "ends its run if one is active (`kanso research end ID`), renames the name in "
+        "`hypotheses/<id>/strategy.py`, and begins again with `kanso research begin ID "
+        "--from-workspace`, which starts from that file and clears the hypothesis's `best`"
+    ) in concepts
+    assert "(`kanso strat retire STRATEGY@V`)" in concepts
+    assert (
+        "kanso scans again only those a research run begins from; certification, composition, "
+        "the measurement a deploy, a promotion or a demotion makes again at another share, a "
+        "replay, a stage and the research of a construct attached to a version run them as stored"
+    ) in changelog
+    assert (
+        "end its run if one is active (`kanso research end ID`), rename the name in "
+        "`hypotheses/<id>/strategy.py` and begin again with `kanso research begin ID "
+        "--from-workspace`, which also clears its `best`; retire such a version with "
+        "`kanso strat retire STRATEGY@V`"
+    ) in changelog
+    assert "Certification, a replay and a stage run" not in concepts + changelog
+    assert "never meets that raise" not in concepts
+    assert "refused at its baseline's scan instead" not in changelog
+    assert (
+        "A sleeve's research meets that raise only where the scan does not read the binding"
+    ) in concepts
+    assert (
+        "one that assigns it another way, through another name for `self` say, raises at its "
+        "baseline, which refuses the run naming the error"
+    ) in concepts
+    assert (
+        "a sleeve's research is refused at its baseline instead: by the scan, naming the name, "
+        "where the best binds it as `self.session = …` or in a class body, and by the raise "
+        "where it assigns it another way"
+    ) in changelog
 
 
 def test_the_pages_say_kanso_checks_each_name_s_book_itself_of_every_point() -> None:

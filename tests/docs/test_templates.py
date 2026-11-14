@@ -8,6 +8,7 @@ is a page that lies where it is trusted most.
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, get_args
 
@@ -15,8 +16,10 @@ import pytest
 import yaml
 
 from kanso.config import Config, render_config
-from kanso.criteria.integrity import DENIED_UNDER_SIZING
+from kanso.criteria.integrity import DENIED_UNDER_SIZING, scan
 from kanso.errors import ValidationError
+from kanso.nautilus.clock import NEW_YORK, segment_of, session_of
+from kanso.nautilus.strategy import KansoModifier
 from kanso.research import driver
 from kanso.schemas import CardStatus
 from kanso.schemas.screen import Screen
@@ -164,6 +167,52 @@ def test_the_program_tells_the_strategy_an_entry_past_its_rate_is_dropped_not_re
         assert named in bullet, named
     assert "an entry, a modify or an order list refuses the card" not in bullet
     assert "is owed as you asked it" not in bullet
+
+
+def test_the_program_names_the_minute_a_bar_s_session_reads_as_the_clock_reads_it() -> None:
+    """The loop reads `program.md` and not the clock's source: the bar it names as the first
+    regular one, and the minutes it gives, are the clock's in winter and in summer."""
+    bullet = line_with(template("program.md"), "- `self.session`")
+    stated = (
+        ((9, 30), "the bar stamped 09:30 is `pre`, minute 569", ("pre", 569)),
+        ((9, 31), "the first regular bar is the one stamped 09:31, minute 570", ("rth", 570)),
+        ((16, 0), "the bar stamped 16:00 is the last regular one, minute 959", ("rth", 959)),
+    )
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        for (hour, minute), said, (segment, of_day) in stated:
+            assert said in bullet
+            stamp = int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+            assert session_of(stamp) == (segment, day, of_day)
+
+
+def test_the_program_says_a_late_close_reads_its_own_minute_and_a_modifier_reads_its_host_s() -> (
+    None
+):
+    """The bullet speaks to a sleeve: a close published after 16:00 still reads `rth` while
+    its order lands in the post-market, and an attached construct, whose base has no
+    `session`, reads its host's by a call `strategy_integrity` passes."""
+    bullet = line_with(template("program.md"), "- `self.session`")
+    assert bullet.startswith("- `self.session` is a sleeve's New York time")
+    assert (
+        "a close published fifteen minutes after its 16:00 reference time still reads `rth`, "
+        "and an order sent on it goes in during the post-market"
+    ) in bullet
+    day = date(2024, 1, 2)
+    close = int(datetime.combine(day, time(16, 0), NEW_YORK).timestamp()) * 10**9
+    assert session_of(close)[::2] == ("rth", 959)
+    assert segment_of(close + 15 * 60 * 10**9) == ("post", day)
+
+    said = "read its host's as `session_of(ctx.ts_event)`, imported from `kanso.nautilus.strategy`"
+    assert said in bullet
+    assert not hasattr(KansoModifier, "session")
+    modifier = (
+        "from kanso.nautilus.strategy import Decision, KansoModifier, session_of\n"
+        "class Gate(KansoModifier):\n"
+        "    construct = 'filter'\n"
+        "    def evaluate(self, ctx):\n"
+        "        return Decision(allow=session_of(ctx.ts_event).segment == 'rth')\n"
+    )
+    assert scan(modifier) == []
 
 
 def test_the_program_and_the_scaffold_say_an_overlay_s_closing_leg_or_clip_refuses_the_card() -> (

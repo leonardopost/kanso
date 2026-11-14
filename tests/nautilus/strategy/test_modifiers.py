@@ -15,6 +15,7 @@ from nautilus_trader.model.enums import AggregationSource, BarAggregation, Order
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.errors import ValidationError
+from kanso.nautilus.clock import Session
 from kanso.nautilus.hooks import EXIT, FILTER, OVERLAY
 from kanso.nautilus.sizing import ORDER_RATE, SizingError
 from kanso.nautilus.strategy import (
@@ -26,6 +27,7 @@ from kanso.nautilus.strategy import (
     KansoModifierConfig,
     KansoStrategy,
     _resolution_of_bar,
+    session_of,
 )
 
 from .conftest import DEEP, DEMO, HEDGE, bar, flat, saw_tooth, second_bar
@@ -192,6 +194,34 @@ def test_a_filter_sees_the_order_it_is_gating(backtest) -> None:
     assert ctx.last_bar is not None
     assert ctx.cache is run.engine.cache
     assert ctx.book["DEMO.XNAS"] == 0.0
+
+
+def test_a_modifier_reads_its_host_s_session_off_the_context(backtest) -> None:
+    """A `KansoModifier` has no `session` of its own; `session_of(ctx.ts_event)`, which
+    `kanso.nautilus.strategy` hands it, is the session its host reads as it sends."""
+
+    class Clocked(Host):
+        def on_bar(self, bar_: object) -> None:
+            self.bars += 1
+            if self.bars == 3:
+                self.sent = self.session
+                self.submit_entry(DEMO, "BUY", qty=100)
+
+    class Timed(KansoModifier):
+        construct = FILTER
+        config_cls = Attached
+
+        def evaluate(self, ctx: HookContext) -> Decision:
+            self.read = session_of(ctx.ts_event)
+            return Decision(allow=True)
+
+    modifier = attached_for(Timed, "Clocked")
+    sleeve = Clocked(host().kanso_config)
+    backtest(sleeve, [modifier])
+
+    assert not hasattr(KansoModifier, "session")
+    assert isinstance(sleeve.sent, Session)
+    assert modifier.read == sleeve.sent == session_of(saw_tooth(DEMO)[2].ts_event)
 
 
 # --- overlay: Decision.scale via size ----------------------------------------
