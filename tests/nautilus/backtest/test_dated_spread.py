@@ -700,3 +700,72 @@ def test_a_replay_charges_both_halves_of_a_flip_the_row_the_backtest_does(tmp_pa
     assert len(researched.fills) == 4
     assert replayed.fills == researched.fills
     assert replayed.equity == researched.equity
+
+
+FRIDAY = date(2023, 12, 29)
+"""The last session of 2023; the next is Tuesday 2 January 2024, after New Year's Day."""
+
+LAST_YEAR = {"pre": 700.0, "open": 600.0, "rth": 500.0, "post": 800.0}
+"""Each name's widths through 2023 in the year-boundary run, every part its own."""
+
+ACROSS = ((FRIDAY, "15:58"), (FRIDAY, "15:59"), (FRIDAY, "16:00"), (DAY, "04:01"), (DAY, "04:02"))
+"""The days and New York minutes each name's bars are stamped at across the year's end."""
+
+OVERNIGHT = b"""
+from datetime import date
+
+from kanso.nautilus.strategy import KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    def on_bar(self, bar):
+        session = self.session
+        if session.day == date(2023, 12, 29) and session.minute == 958:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=100)
+        elif session.day == date(2023, 12, 29) and session.minute == 959:
+            self.submit_exit(bar.bar_type.instrument_id)
+"""
+
+
+def _across(symbol: str) -> tuple[Bar, ...]:
+    kind = _bars(symbol)[0].bar_type
+    made = []
+    for index, (day, hhmm) in enumerate(ACROSS):
+        close = Price(_close(symbol, index), 2)
+        ts = _stamp(hhmm) + (midnight_ns(day) - midnight_ns(DAY))
+        made.append(Bar(kind, close, close, close, close, Quantity.from_int(100_000), ts, ts))
+    return tuple(made)
+
+
+@pytest.mark.parametrize("order", [(FIRST, SECOND), (SECOND, FIRST)])
+def test_an_exit_sent_on_the_last_bar_of_a_year_pays_the_row_of_the_bar_it_fills_at(
+    order: tuple[str, str],
+) -> None:
+    """An exit sent on Friday 29 December's bar stamped 16:00 lands, under 10 ms, on the next
+    instant: Tuesday's 04:01, in 2024. The name whose bar opens it fills there and pays 2024's
+    `pre`; the other fills at its Friday 16:00 close and pays 2023's `rth`, though its fill is
+    stamped on Tuesday: the row, like the part, is the price's."""
+    window = (date(2023, 12, 1), RESEARCH[1])
+    hyp = _hypothesis(10.0).model_dump(mode="json")
+    hyp["windows"]["research"]["start"] = window[0].isoformat()
+    hyp["costs"]["dated"] = [
+        {**row, **(LAST_YEAR if row["from"] == "2023-01-01" else {})}
+        for symbol in (FIRST, SECOND)
+        for row in _rows(symbol)
+    ]
+    request = replace(
+        _request(10.0), hyp=Hypothesis.model_validate(hyp), window=window, strategy_source=OVERNIGHT
+    )
+    request = replace(request, venue_model=_dated_model(request, hyp["costs"]["dated"]))
+    card = execute(
+        request, [instrument(FIRST), instrument(SECOND)], [_across(symbol) for symbol in order]
+    ).run
+
+    friday, tuesday = _stamp("16:00") + midnight_ns(FRIDAY) - midnight_ns(DAY), _stamp("04:01")
+    sold = {fill.instrument_id.split(".")[0]: fill for fill in card.fills if fill.side == "SELL"}
+    lead, lag = order
+    assert {fill.ts_ns for fill in sold.values()} == {tuesday}
+    assert sold[lead].price_ts_ns == tuesday
+    assert sold[lead].cost == pytest.approx(sold[lead].notional * WIDTHS[lead]["pre"] / 2 / BPS)
+    assert sold[lag].price_ts_ns == friday
+    assert sold[lag].cost == pytest.approx(sold[lag].notional * LAST_YEAR["rth"] / 2 / BPS)
