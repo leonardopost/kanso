@@ -2240,10 +2240,14 @@ own class body, or in a class before `KansoStrategy` in its method resolution or
 a mixin listed before it — keeps its own, which shadows the base's; and one that assigns
 `self.session` with no binding ahead of the base's, one in a mixin listed after
 `KansoStrategy` included, raises at that assignment, which stops the step that ran it. A
-sleeve's research never meets that raise: the baseline a run begins from is scanned, so a
-best that binds the name is refused before it runs. A hypothesis whose best binds it, or
-whose certification raised at it, ends its run if one is active (`kanso research end ID`),
-renames the name in `hypotheses/<id>/strategy.py`, and begins again with
+sleeve's research meets that raise only where the scan does not read the binding: the
+baseline a run begins from is scanned, so a best that binds the name as the scan reads it —
+`self.session = …` in a method, or a `def session` or a `session = …` in a class body — is
+refused before it runs, naming the name, and one that assigns it another way, through
+another name for `self` say, raises at its baseline, which refuses the run naming the
+error. A hypothesis whose best binds it, or whose certification raised at it, ends its run
+if one is active (`kanso research end ID`), renames the name in
+`hypotheses/<id>/strategy.py`, and begins again with
 `kanso research begin ID --from-workspace`, which starts from that file and clears the
 hypothesis's `best`. A version that raises at it is retired (`kanso strat retire
 STRATEGY@V`), and a construct researched on it is attached to another.

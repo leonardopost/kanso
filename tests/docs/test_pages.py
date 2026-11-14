@@ -602,7 +602,9 @@ def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> N
     deploy's measurement, a replay, a stage and a construct's research on its host run them as
     stored. The concepts page and the release note name each of those steps, what bytes made
     before `session` was the base's do there, and the way back: `kanso research end` first
-    while a run is active, and `--from-workspace`, which clears the hypothesis's `best`."""
+    while a run is active, and `--from-workspace`, which clears the hypothesis's `best`. They
+    say research meets the raise where the scan does not read the binding, as
+    `tests/research/test_loop.py` shows it does."""
     imports, lanes = scanning()
     assert imports == {
         "kanso.cli.doctor",
@@ -647,6 +649,20 @@ def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> N
         "`kanso strat retire STRATEGY@V`"
     ) in changelog
     assert "Certification, a replay and a stage run" not in concepts + changelog
+    assert "never meets that raise" not in concepts
+    assert "refused at its baseline's scan instead" not in changelog
+    assert (
+        "A sleeve's research meets that raise only where the scan does not read the binding"
+    ) in concepts
+    assert (
+        "one that assigns it another way, through another name for `self` say, raises at its "
+        "baseline, which refuses the run naming the error"
+    ) in concepts
+    assert (
+        "a sleeve's research is refused at its baseline instead: by the scan, naming the name, "
+        "where the best binds it as `self.session = …` or in a class body, and by the raise "
+        "where it assigns it another way"
+    ) in changelog
 
 
 def test_the_pages_say_kanso_checks_each_name_s_book_itself_of_every_point() -> None:
