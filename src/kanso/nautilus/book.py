@@ -82,7 +82,8 @@ smallest of:
   closing side adds nothing. The balance is the capital plus every member's realised net
   profit; `L` is the block's regular-hours leverage, and outside 09:30–16:00 New York time,
   on every venue, no entry is placed while the leverage there is not set
-  (`outside_rth_unset`);
+  (`outside_rth_unset`) — the instant the entry is placed at, read on the harness's New York
+  clock (`kanso.nautilus.clock.segment_of`);
 * the cap on the name, `max_name_c` of the capital, less what the book already holds, rests
   and has in flight in it;
 * for a taker — a market entry, or a limit marketable at the latest quote — what is left of
@@ -127,12 +128,12 @@ from datetime import date, datetime
 from math import fsum, isfinite
 from pathlib import Path
 from typing import Any, Final, cast
-from zoneinfo import ZoneInfo
 
 from kanso.criteria import CardRun
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, splits
 from kanso.nautilus.backtest import RunRequest
+from kanso.nautilus.clock import RTH, segment_of
 from kanso.nautilus.sizing import BOOK_ENTRY, Refusal, SizingError
 from kanso.nautilus.strategy import _id_of, _order_price
 from kanso.schemas import NetPerTrade, SharedBook, VenueModel
@@ -180,36 +181,6 @@ COUNTERS: Final = (
     UNFILLED,
 )
 """What the ledger counts, per member and per session: each refused entry once."""
-
-NEW_YORK: Final = ZoneInfo("America/New_York")
-RTH: Final = "rth"
-PRE: Final = "pre"
-POST: Final = "post"
-OVERNIGHT: Final = "overnight"
-_SEGMENTS: Final = (
-    (4 * 3600, PRE),
-    (9 * 3600 + 1800, RTH),
-    (16 * 3600, POST),
-    (20 * 3600, OVERNIGHT),
-)
-"""Each segment from the New York second of the day it opens at; before 04:00 is overnight."""
-
-_NS: Final = 1_000_000_000
-
-
-def segment_of(ts_ns: int) -> tuple[str, date]:
-    """Which segment of the session an instant is in, and the New York date of its session.
-
-    Regular hours are 09:30 to 16:00 New York time, the pre-market from 04:00 and the
-    post-market to 20:00; anything else is overnight.
-    """
-    local = datetime.fromtimestamp(ts_ns // _NS, tz=NEW_YORK)
-    second = local.hour * 3600 + local.minute * 60 + local.second
-    found = OVERNIGHT
-    for opens, name in _SEGMENTS:
-        if second >= opens:
-            found = name
-    return found, local.date()
 
 
 @dataclass(frozen=True)
