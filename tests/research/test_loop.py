@@ -341,6 +341,37 @@ def test_a_baseline_taken_from_the_best_that_fails_names_from_workspace(
     assert records.active(store, registered) is None
 
 
+SETS_SESSION = FLAT.replace(
+    b"    def on_bar(self, bar) -> None:\n",
+    b"    def on_start(self) -> None:\n        self.session = None\n\n"
+    b"    def on_bar(self, bar) -> None:\n",
+)
+"""A best kept before `session` was the sleeve base's name, which assigns it."""
+
+
+def test_a_best_that_binds_session_is_refused_by_the_baseline_scan_before_it_runs(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A run never meets the raise such a best's assignment would make: the baseline it begins
+    from is scanned and refused, naming the name. Beginning again from the workspace file, as
+    the remedy and `docs/concepts.md` say, begins the run and clears the hypothesis's best."""
+    run = loop.begin(ws, store, registered)
+    loop.end(ws, store, registered)
+    assert SETS_SESSION != FLAT
+    records.set_best(store, run, store.put_blob(SETS_SESSION), 9.0)
+
+    with pytest.raises(PreconditionError, match="'session' belongs to KansoStrategy") as caught:
+        loop.begin(ws, store, registered)
+    assert "baseline card of demo_mr did not run" in str(caught.value)
+    assert "AttributeError" not in str(caught.value)
+    assert f"kanso research begin {registered} --from-workspace" in (caught.value.remedy or "")
+    assert records.active(store, registered) is None
+
+    restarted = loop.begin(ws, store, registered, from_workspace=True)
+    assert restarted.base_sha == sha256(FLAT).hexdigest()
+    assert "best_cleared" in [event.kind for event in store.events(subject=registered)]
+
+
 def test_a_baseline_whose_rows_are_gone_carries_the_data_remedy(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:

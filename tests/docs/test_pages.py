@@ -8,6 +8,7 @@ page that drifts is a defect and this is where it fails.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import pkgutil
@@ -553,6 +554,96 @@ def test_the_routes_to_the_zone_the_clock_does_not_close_are_backlog_rows() -> N
     assert "(what a strategy can still reach past that is `docs/backlog.md` rows 253 and 254)" in (
         prose(section(page("concepts.md"), "Delivery"))
     )
+
+
+SCANS = frozenset({"check", "clashes", "scan"})
+"""What `kanso.criteria.integrity` scans a strategy's bytes with."""
+
+
+def imports_a_scan(node: ast.AST) -> bool:
+    """Whether the node imports the integrity module, or a scan from it."""
+    if isinstance(node, ast.Import):
+        return any(alias.name == "kanso.criteria.integrity" for alias in node.names)
+    if not isinstance(node, ast.ImportFrom):
+        return False
+    names = {alias.name for alias in node.names}
+    return "integrity" in names or (
+        (node.module or "").endswith("integrity") and bool(SCANS & names)
+    )
+
+
+def scanning() -> tuple[set[str], set[str]]:
+    """The modules of the package that import a scan of a strategy's bytes, and those that
+    hand the `strategy_integrity` gate a lane directory, without which it skips."""
+    package = ROOT / "src"
+    imports: set[str] = set()
+    lanes: set[str] = set()
+    for path in sorted((package / "kanso").rglob("*.py")):
+        parts = path.relative_to(package).with_suffix("").parts
+        module = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if imports_a_scan(node):
+                imports.add(module)
+            elif isinstance(node, ast.Call) and any(
+                keyword.arg == "lane_dir" for keyword in node.keywords
+            ):
+                lanes.add(module)
+    return imports, lanes
+
+
+def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> None:
+    """Of a card's or a version's stored bytes, only the baseline a research run begins from is
+    scanned again: the scans are imported by the research loop, by the `strategy_integrity`
+    gate — which skips without a lane directory, and only the research loop hands it one — and
+    by the two commands that read the workspace's own files. So certification, composition, a
+    deploy's measurement, a replay, a stage and a construct's research on its host run them as
+    stored. The concepts page and the release note name each of those steps, what bytes made
+    before `session` was the base's do there, and the way back: `kanso research end` first
+    while a run is active, and `--from-workspace`, which clears the hypothesis's `best`."""
+    imports, lanes = scanning()
+    assert imports == {
+        "kanso.cli.doctor",
+        "kanso.criteria.gates",
+        "kanso.hyp.validate",
+        "kanso.research.loop",
+    }
+    assert lanes == {"kanso.research.loop"}
+
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    assert "kanso scans again only those a research run begins from, at its baseline" in concepts
+    assert (
+        "Every other step runs them as they were stored: certification (`kanso cert run`), "
+        "composition (`kanso strat compose`, and the one that follows a passing certificate), "
+        "the measurement a deploy, a promotion or a demotion makes again of a version at another "
+        "share, a replay, a stage, and the research of a construct attached to a version, which "
+        "runs the host's bytes beside its own"
+    ) in concepts
+    assert (
+        "or in a class before `KansoStrategy` in its method resolution order, such as a mixin "
+        "listed before it — keeps its own"
+    ) in concepts
+    assert "one in a mixin listed after `KansoStrategy` included, raises at that assignment" in (
+        concepts
+    )
+    assert (
+        "ends its run if one is active (`kanso research end ID`), renames the name in "
+        "`hypotheses/<id>/strategy.py`, and begins again with `kanso research begin ID "
+        "--from-workspace`, which starts from that file and clears the hypothesis's `best`"
+    ) in concepts
+    assert "(`kanso strat retire STRATEGY@V`)" in concepts
+    assert (
+        "kanso scans again only those a research run begins from; certification, composition, "
+        "the measurement a deploy, a promotion or a demotion makes again at another share, a "
+        "replay, a stage and the research of a construct attached to a version run them as stored"
+    ) in changelog
+    assert (
+        "end its run if one is active (`kanso research end ID`), rename the name in "
+        "`hypotheses/<id>/strategy.py` and begin again with `kanso research begin ID "
+        "--from-workspace`, which also clears its `best`; retire such a version with "
+        "`kanso strat retire STRATEGY@V`"
+    ) in changelog
+    assert "Certification, a replay and a stage run" not in concepts + changelog
 
 
 def test_the_pages_say_kanso_checks_each_name_s_book_itself_of_every_point() -> None:

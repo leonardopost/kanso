@@ -1105,10 +1105,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders go in at. A function of `data_time` alone (`kanso.nautilus.clock.session_of`),
         so it reads the same on every path; before the first point it reads the instant before
         the epoch. It has no setter: `strategy_integrity` refuses a `strategy.py` that binds
-        it. Certification, a replay and a stage run stored bytes without scanning them again,
-        so of a card or a version made before the name was the base's, one whose class body
-        binds `session` keeps its own, which shadows this one, and one that assigns
-        `self.session` and binds none of its own raises at the assignment.
+        it. Of a card's or a version's stored bytes, only those a research run begins from are
+        scanned again, so of those made before the name was the base's, run by any other step —
+        certification, composition, a deploy's measurement, a replay, a stage — one that binds
+        `session` ahead of this one in its method resolution order (in the sleeve's own class
+        body, or in a mixin listed before `KansoStrategy`) keeps its own, which shadows this
+        one, and one that assigns `self.session` with no such binding raises at the
+        assignment. So the harness never reads `self.session`: what it reads off New York time
+        it reads as `session_of` of the instant, which no subclass replaces.
         """
         return session_of(self._data_time)
 

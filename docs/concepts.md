@@ -2228,14 +2228,25 @@ its host's as `session_of(ctx.ts_event)`, which `kanso.nautilus.strategy` hands 
 `strategy.py` written before it existed that binds `session` — `self.session = …`, `def
 session` or `session = …` in the class body — is refused by `strategy_integrity` once its
 workspace runs a kanso that has it, and `kanso doctor`'s `base names` check names it; rename
-yours. Certification, a replay and a stage run a card's or a version's stored bytes without
-scanning them again, and `kanso doctor`'s `base names` check reads only
-`hypotheses/<id>/strategy.py`. So of the cards and versions made before it, one whose class
-body binds `session` — a `def session` or a `session = …` — keeps its own, which shadows the
-base's, and one that assigns `self.session` and binds none of its own raises at that
-assignment, which stops a certification of it (`kanso cert run`). A run whose best raises
-begins again, once the name is renamed in `hypotheses/<id>/strategy.py`, with
-`kanso research begin ID --from-workspace`, which starts from that file.
+yours. Of a card's or a version's stored bytes, kanso scans again only those a research run
+begins from, at its baseline, and `kanso doctor`'s `base names` check reads only
+`hypotheses/<id>/strategy.py`. Every other step runs them as they were stored: certification
+(`kanso cert run`), composition (`kanso strat compose`, and the one that follows a passing
+certificate), the measurement a deploy, a promotion or a demotion makes again of a version at
+another share, a replay, a stage, and the research of a construct attached to a version,
+which runs the host's bytes beside its own. So of the cards and versions made before it, one
+that binds `session` ahead of the base's — a `def session` or a `session = …` in the sleeve's
+own class body, or in a class before `KansoStrategy` in its method resolution order, such as
+a mixin listed before it — keeps its own, which shadows the base's; and one that assigns
+`self.session` with no binding ahead of the base's, one in a mixin listed after
+`KansoStrategy` included, raises at that assignment, which stops the step that ran it. A
+sleeve's research never meets that raise: the baseline a run begins from is scanned, so a
+best that binds the name is refused before it runs. A hypothesis whose best binds it, or
+whose certification raised at it, ends its run if one is active (`kanso research end ID`),
+renames the name in `hypotheses/<id>/strategy.py`, and begins again with
+`kanso research begin ID --from-workspace`, which starts from that file and clears the
+hypothesis's `best`. A version that raises at it is retired (`kanso strat retire
+STRATEGY@V`), and a construct researched on it is attached to another.
 
 ## Corporate actions
 

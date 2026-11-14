@@ -148,11 +148,12 @@ def test_the_session_is_the_new_york_minute_each_bar_covers(backtest) -> None:
 
 
 def test_the_session_has_no_setter() -> None:
-    """`strategy_integrity` refuses a researched file that binds `session`. Certification, a
-    replay and a stage run stored bytes without scanning them again, so a card or a version
-    made before the name was the base's that assigns `self.session`, and binds no `session` of
-    its own in a class body, raises at the assignment rather than replacing the clock: a plain
-    assignment with `AttributeError`, an augmented one at its read or at its write."""
+    """`strategy_integrity` refuses a researched file that binds `session`. Every step but the
+    baseline a research run begins from runs stored bytes without scanning them again, so a
+    card or a version made before the name was the base's that assigns `self.session`, and
+    binds no `session` ahead of the base's, raises at the assignment rather than replacing the
+    clock: a plain assignment with `AttributeError`, an augmented one at its read or at its
+    write."""
     sleeve = KansoStrategy(config())
 
     with pytest.raises(AttributeError, match="session"):
@@ -174,6 +175,14 @@ STORED = (
 """A stored `strategy.py` made before `session` was the base's, which assigns it."""
 
 
+def stored(source: str) -> KansoStrategy:
+    """The sleeve these bytes hold, loaded as a replay or a stage loads them, with no scan."""
+    module = _module(source.encode(), "sleeve")
+    cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+    sleeve: KansoStrategy = cls(config())
+    return sleeve
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -189,13 +198,6 @@ def test_a_class_body_that_binds_session_keeps_its_own(body: str) -> None:
     stage loads them, with no scan, it assigns `self.session` without raising and reads back
     what it set. `strategy_integrity` refuses the same bytes now, so only one made before can
     run so; one whose class body binds nothing raises at the assignment."""
-
-    def stored(source: str) -> KansoStrategy:
-        module = _module(source.encode(), "sleeve")
-        cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
-        sleeve: KansoStrategy = cls(config())
-        return sleeve
-
     source = STORED.format(body=body)
     found = clashes(source)
     assert found
@@ -208,6 +210,36 @@ def test_a_class_body_that_binds_session_keeps_its_own(body: str) -> None:
     bare = stored(STORED.format(body="    pass\n"))
     with pytest.raises(AttributeError, match="session"):
         bare.on_start()
+
+
+MIXED = (
+    "from kanso.nautilus.strategy import KansoStrategy\n\n\n"
+    "class Mixin:\n"
+    "    session = None\n\n\n"
+    "class Strategy({bases}):\n"
+    "    def on_start(self):\n"
+    "        self.session = 5\n"
+)
+"""A stored `strategy.py` whose `session` is bound in a mixin's class body, not the sleeve's."""
+
+
+def test_a_mixin_s_session_shadows_the_base_s_only_listed_before_it() -> None:
+    """What decides whether stored bytes keep their own `session` is where it comes in the
+    method resolution order, not which class body of the file binds it. `strategy_integrity`
+    flags a mixin's binding whatever the order of the bases; listed before `KansoStrategy` it
+    shadows the base's property and the assignment runs, and listed after it the property
+    comes first and the assignment raises, as `docs/concepts.md` says."""
+    first = MIXED.format(bases="Mixin, KansoStrategy")
+    after = MIXED.format(bases="KansoStrategy, Mixin")
+    for source in (first, after):
+        assert {clash.name for clash in clashes(source)} == {"session"}
+
+    shadowing = stored(first)
+    shadowing.on_start()
+    assert shadowing.session == 5
+
+    with pytest.raises(AttributeError, match="session"):
+        stored(after).on_start()
 
 
 def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:
