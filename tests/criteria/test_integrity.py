@@ -22,6 +22,7 @@ from kanso.criteria.integrity import (
     DENIED_MODULES,
     DENIED_NUMPY_FILE,
     DENIED_SCHEDULE,
+    DENIED_SPREAD,
     DENIED_STALE_BASIS,
     DENIED_UNDER_DEPTH,
     RATE_MARKS,
@@ -199,6 +200,33 @@ def test_everything_the_runner_hands_the_harness_for_a_book_policy_is_denied() -
     book(sleeve, BookPolicy(reset="monthly"), 0, 1, cushion=1.0, settled_ns=0)
 
     assert set(vars(sleeve)) <= DENIED_BOOK
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_SPREAD))
+def test_the_dated_spread_table_and_what_reads_it_are_out_of_reach(name: str) -> None:
+    """Each row is a year's median, in force from its first day: a `strategy.py` that read
+    one would know a width the market had not shown yet, so it is discarded."""
+    (problem,) = scan(f"x = self.{name}")
+
+    assert f"attribute '.{name}' is denied" in problem
+    assert "reserve for the spread through `cost_rate`, which reads no date" in problem
+
+
+def test_everything_the_harness_keeps_of_a_dated_spread_is_denied() -> None:
+    """The table the runner hands, and everything the harness keeps or reads it through, is
+    out of reach the moment it is added."""
+    from types import SimpleNamespace
+
+    from kanso.nautilus.cross_section import dated
+    from tests.nautilus.strategy.test_sleeve import config
+
+    handed = SimpleNamespace()
+    dated(handed, ())
+    kept = {name for name in vars(KansoStrategy(config())) if name.startswith("_spread")}
+    reading = {name for name in dir(KansoStrategy) if name.startswith("_spread")}
+
+    assert set(vars(handed)) <= DENIED_SPREAD
+    assert kept | reading | {"_half_of", "_charge"} <= DENIED_SPREAD
 
 
 @pytest.mark.parametrize("name", sorted(DENIED_DEPTH))

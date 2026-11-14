@@ -28,9 +28,12 @@ document is parsed. Everything else needs the workspace, and that is this module
   account currency. A spread taken from quotes needs quotes, and is admitted with a warning
   where it states no width (`fixed_bps`) over an instrument of its venue asked for neither
   quote nor book, since a fill there has no quote to read one from (`cost_warnings`); a fixed
-  spread needs its width; a universe spanning two account currencies would have a leg priced
-  at a rate nothing in the workspace records, so it is refused — and so, for the same reason,
-  is an instrument that settles in a currency other than its venue's account currency;
+  spread needs its width; a dated spread is the hypothesis's own, and one a broker's
+  declaration or a `venues.<MIC>` entry states is refused, naming the venue (the table's own
+  rules are the file's, `kanso.schemas.Hypothesis`); a universe spanning two account
+  currencies would have a leg priced at a rate nothing in the workspace records, so it is
+  refused — and so, for the same reason, is an instrument that settles in a currency other
+  than its venue's account currency;
 * a venue model whose `limit_fill` is `print_through` or `print_through_whole` fills a
   resting limit on prints and a taker on quotes, on the top-of-book venue, so the hypothesis
   must require `quote` and `trade`, may not require `book`, and may not ask an instrument for

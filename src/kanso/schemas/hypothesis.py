@@ -24,6 +24,7 @@ catalogue and whether an objective applies are checked where those catalogues li
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Final, Literal
 
@@ -39,7 +40,7 @@ from kanso.schemas.base import (
     Versioned,
 )
 from kanso.schemas.duration import Duration, Resolution, is_duration, parse_duration
-from kanso.schemas.venue import CostsOverride
+from kanso.schemas.venue import CostsOverride, DatedSpread
 
 Mechanism = Literal[
     "mean_reversion",
@@ -470,6 +471,16 @@ class Hypothesis(Versioned):
                 "data_by_instrument is read; drop it, or ask an instrument for it"
             )
 
+    def unpriced(self, rows: Sequence[DatedSpread], day: date) -> list[str]:
+        """The names this hypothesis trades — every name asked for `bar`, `quote` or `trade` —
+        for which no row of a dated spread table is in force on `day`."""
+        return [
+            name
+            for name in self.universe
+            if {"bar", "quote", "trade"} & set(self.required_of(name))
+            and not any(row.instrument == name and row.from_ <= day for row in rows)
+        ]
+
     def required_of(self, instrument: str) -> tuple[str, ...]:
         """The types `instrument` must carry: its own list, else every required type."""
         return tuple(self.data_by_instrument.get(instrument, self.data_requirements))
@@ -555,6 +566,31 @@ class Hypothesis(Versioned):
             )
         if self.costs.spread == "fixed_bps" and self.costs.fixed_bps is None:
             raise ValueError("costs.fixed_bps: required when spread is fixed_bps")
+        if self.costs.dated is not None:
+            self._check_dated(self.costs.dated)
+
+    def _check_dated(self, rows: Sequence[DatedSpread]) -> None:
+        """A dated table names the universe's instruments, and holds a row in force from the
+        research window's first day for each one the hypothesis trades — every name asked for
+        `bar`, `quote` or `trade` — or its fills there would be charged no spread. A row stays
+        in force until the next, so a row from that day covers every window after it; the
+        warmup sessions before it are held to the table where a run is built
+        (`kanso.nautilus.backtest.RunRequest`), since only the catalog says which they are."""
+        outside = sorted({row.instrument for row in rows} - set(self.universe))
+        if outside:
+            raise RemedyError(
+                f"costs.dated: names {', '.join(outside)}, which is not in the universe",
+                remedy="drop the rows of instruments the hypothesis does not trade, or add them "
+                "to the universe",
+            )
+        start = self.windows.research.start
+        uncovered = self.unpriced(rows, start)
+        if uncovered:
+            raise RemedyError(
+                f"costs.dated: {', '.join(uncovered)} has no row in force on {start}, the "
+                "research window's first day, so its fills there would be charged no spread",
+                remedy=f"state a row from {start} or earlier for {', '.join(uncovered)}",
+            )
 
     def _check_constraints(self) -> None:
         if self.constraints is None:

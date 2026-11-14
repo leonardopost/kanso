@@ -266,3 +266,123 @@ def test_a_fold_keeps_what_the_0_20_fold_kept(drawn: list) -> None:
     assert [list(fold.lows) for fold in marks.periods()] == [
         list(fold.lows) for fold in reference.periods()
     ]
+
+
+# --- the instant a dated fill's price was struck at --------------------------------
+
+
+def _dated_marks(latency_ms: float) -> Marks:
+    row = {"pre": 1.0, "open": 1.0, "rth": 1.0, "post": 1.0, "n_sessions": 1, "n_open": 1}
+    costs: dict[str, object] = {
+        "commission_bps": 0.0,
+        "spread": "dated",
+        "latency_ms": latency_ms,
+        "dated": [
+            {"instrument": name, "from": "2023-01-01", **row} for name in (INSTRUMENT, OTHER)
+        ],
+    }
+    hyp = hypothesis(universe=(INSTRUMENT, OTHER), data_requirements=("bar",), costs=costs)
+    request = RunRequest(
+        hyp=hyp,
+        strategy_source=b"",
+        window=WINDOW,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(hyp),
+        capital=100_000.0,
+        prefix=PREFIX,
+    )
+    return Marks(request, VenueModel.model_validate(request.venue_model))
+
+
+def _dated_fill(event_id: str, name: str, ts: int) -> _Filled:
+    return _Filled(event_id, name, ts, 1.0, OrderSide.BUY)
+
+
+def _daily(name: str, ts: int) -> Bar:
+    spec = BarSpecification(1, BarAggregation.DAY, PriceType.LAST)
+    bar_type = BarType(InstrumentId.from_str(name), spec, AggregationSource.EXTERNAL)
+    px = Price(1.0, 2)
+    return Bar(bar_type, px, px, px, px, Quantity.from_int(1), ts, ts)
+
+
+T0 = midnight_ns(WINDOW[0]) + 15 * 3_600 * 1_000_000_000
+STEP = 60 * 1_000_000_000
+
+
+def test_under_a_latency_a_fill_reads_its_bar_of_the_instant_only_where_one_opened_it() -> None:
+    """The other name's point opened the instant, so the venue had this name's bar before it;
+    where this name's bar opened it, the venue had that bar."""
+    marks = _dated_marks(10.0)
+    marks.take(
+        [
+            _point("bar", INSTRUMENT, T0, 100, 2),
+            _point("bar", OTHER, T0 + STEP, 100, 2),
+            _point("bar", INSTRUMENT, T0 + STEP, 100, 2),
+            _point("bar", INSTRUMENT, T0 + 2 * STEP, 100, 2),
+        ]
+    )
+    behind = _dated_fill("1", INSTRUMENT, T0 + STEP)
+    ahead = _dated_fill("2", INSTRUMENT, T0 + 2 * STEP)
+    before_any = _dated_fill("3", OTHER, T0)
+    marks.price([behind, ahead, before_any])
+
+    assert marks.priced(behind) == T0
+    assert marks.priced(ahead) == T0 + 2 * STEP
+    assert marks.priced(before_any) == T0  # no bar of its name before it: its own instant
+    assert marks.half(behind) == pytest.approx(0.5 / 10_000.0)
+
+
+def test_with_no_latency_every_bar_of_the_instant_is_had() -> None:
+    marks = _dated_marks(0.0)
+    marks.take([_point("bar", OTHER, T0, 100, 2), _point("bar", INSTRUMENT, T0, 100, 2)])
+    filled = _dated_fill("1", INSTRUMENT, T0)
+    marks.price([filled])
+    assert marks.priced(filled) == T0
+
+
+def test_a_name_of_two_grains_taken_group_by_group_reads_its_bars_in_time_order() -> None:
+    """`checked` hands a window over a group at a time, so a name's daily bars can come before
+    its minute bars; the instant a point was first taken at is still the stream's first."""
+    marks = _dated_marks(10.0)
+    marks.take(
+        [
+            _daily(INSTRUMENT, T0 + 2 * STEP),
+            _point("bar", INSTRUMENT, T0, 100, 2),
+            _point("bar", INSTRUMENT, T0 + STEP, 100, 2),
+            _point("bar", INSTRUMENT, T0 + 2 * STEP, 100, 2),
+        ]
+    )
+    filled = _dated_fill("1", INSTRUMENT, T0 + 2 * STEP)
+    marks.price([filled])
+    assert marks.priced(filled) == T0 + 2 * STEP
+
+
+def test_a_name_s_last_bar_is_carried_into_the_next_chunk() -> None:
+    """Whether the name has no bar in the next chunk, or none the venue had by its fill."""
+    marks = _dated_marks(10.0)
+    marks.take([_point("bar", INSTRUMENT, T0, 100, 2), _point("bar", OTHER, T0, 100, 2)])
+    marks.next_chunk()
+    marks.take([_point("bar", INSTRUMENT, T0 + STEP, 100, 2)])
+    silent = _dated_fill("1", OTHER, T0 + STEP)
+    marks.price([silent])
+    marks.next_chunk()
+    marks.take(
+        [
+            _point("bar", OTHER, T0 + 2 * STEP, 100, 2),
+            _point("bar", INSTRUMENT, T0 + 2 * STEP, 100, 2),
+        ]
+    )
+    behind = _dated_fill("2", INSTRUMENT, T0 + 2 * STEP)
+    marks.price([behind])
+
+    assert marks.priced(silent) == T0
+    assert marks.priced(behind) == T0 + STEP
+
+
+def test_a_model_without_a_dated_spread_notes_no_instant() -> None:
+    marks = Marks(
+        _request(quoted=False), VenueModel.model_validate(_request(quoted=False).venue_model)
+    )
+    filled = _dated_fill("1", INSTRUMENT, T0)
+    marks.price([filled])
+    assert marks.priced(filled) is None

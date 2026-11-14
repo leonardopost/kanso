@@ -267,6 +267,75 @@ def test_a_cost_model_that_cannot_be_completed_is_refused(ws: Workspace) -> None
     assert "no quotes" in failure.message
 
 
+def _dated(*rows: tuple[str, str, float]) -> dict[str, Any]:
+    """A dated spread over these `(instrument, from, pre)` rows, the other widths fixed."""
+    return {
+        "commission_bps": 0.0,
+        "slippage_bps": 1.0,
+        "spread": "dated",
+        "dated": [
+            {
+                "instrument": name,
+                "from": day,
+                "pre": pre,
+                "open": 40.0,
+                "rth": 5.0,
+                "post": 80.0,
+                "n_sessions": 5,
+                "n_open": 25,
+            }
+            for name, day, pre in rows
+        ],
+    }
+
+
+def test_a_dated_spread_in_force_from_the_research_window_is_admissible(ws: Workspace) -> None:
+    parsed = accepted(
+        ws, document(costs=_dated(("DEMO", "2023-01-01", 90.0), ("DEMO", "2024-01-01", 9.0)))
+    )
+
+    assert parsed.costs.spread == "dated"
+    assert [row.pre for row in parsed.costs.dated] == [90.0, 9.0]
+
+
+@pytest.mark.parametrize(
+    ("costs", "said", "remedy"),
+    [
+        (
+            {"spread": "dated"},
+            "costs.dated: required when spread is dated",
+            "{instrument, from, pre, open, rth, post, n_sessions, n_open}",
+        ),
+        (
+            _dated(("DEMO", "2024-01-01", 9.0), ("DEMO", "2023-01-01", 90.0)),
+            "DEMO's row from 2023-01-01 follows its row from 2024-01-01",
+            "order each instrument's rows by `from`",
+        ),
+        (_dated(("DEMO", "2023-01-01", -1.0)), "pre", None),
+        (
+            _dated(("DEMO", "2023-01-01", 9.0), ("EURO", "2023-01-01", 9.0)),
+            "costs.dated: names EURO, which is not in the universe",
+            "drop the rows of instruments the hypothesis does not trade",
+        ),
+        (
+            _dated(("DEMO", "2024-01-03", 9.0)),
+            "costs.dated: DEMO has no row in force on 2024-01-02, the research window's first day",
+            "state a row from 2024-01-02 or earlier for DEMO",
+        ),
+    ],
+)
+def test_a_dated_spread_that_would_charge_a_traded_name_nothing_or_out_of_order_is_refused(
+    ws: Workspace, costs: dict[str, Any], said: str, remedy: str | None
+) -> None:
+    """No rows, rows out of order, a negative width, a row of a name outside the universe, and
+    a traded name with no row in force on the research window's first day: each exits 3."""
+    failure = refused(ws, document(costs=costs))
+
+    assert said in failure.message
+    if remedy is not None:
+        assert remedy in (failure.remedy or "")
+
+
 def test_quotes_complete_the_cost_model_without_a_width(ws: Workspace) -> None:
     doc = document(costs={"spread": "quotes"}, data_requirements=["bar", "quote"], resolution="1m")
 

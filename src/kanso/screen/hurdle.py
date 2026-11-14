@@ -20,6 +20,9 @@ follower read as bars or prints is priced at its last price and charged the venu
 spread and `slippage_bps`. Under `spread: quotes` that spread is the stated `fixed_bps`, the
 width a card's fill with no quote before it pays; a model whose spread comes from quotes and
 states no width, over a leg that has no quotes, is refused (exit 3): nothing could price it.
+A model charged a dated spread (`spread: dated`), from the screen's own `costs` or from a bound
+hypothesis's, is refused (exit 3): its rows are read at the instant a fill's price was struck at,
+and a screen strikes no fill.
 
 A condition's position is charged one round trip, struck at its entry and its exit, however
 many sessions apart the two are: a state held for days close to close pays once, as a card
@@ -257,6 +260,15 @@ def hurdles(
                 remedy=f"state `spread: fixed_bps` and `fixed_bps` under {where}, or under "
                 f"venues.{venue} in portfolio.yaml",
             ) from None
+    for venue, model in sorted(models.items()):
+        if model.costs.spread == "dated":
+            where = f"{hypothesis.id}'s costs" if hypothesis else f"costs.{venue} in the screen"
+            raise ValidationError(
+                f"{venue}: {where} state spread: dated, and a screen's hurdle charges no dated "
+                "spread: it strikes no fill, so there is no instant to read a row at",
+                remedy=f"screen under a flat width: state `spread: fixed_bps` and `fixed_bps` "
+                f"under costs.{venue} in the screen and leave it unbound (docs/backlog.md row 259)",
+            )
     for leg in legs:
         model = models[venue_of[leg]]
         unquoted = screen.legs[leg].type not in TOUCHED

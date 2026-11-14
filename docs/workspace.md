@@ -126,6 +126,8 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| state `costs.spread: dated` without rows, rows without it, an instrument's rows out of order by `from`, a negative width, a row of an instrument outside the universe, or no row in force on the research window's first day for a name asked for `bar`, `quote` or `trade` | 3 · at `hyp validate` and wherever the file is read, naming `costs.dated` and the remedy; a run whose warmup sessions reach before a traded name's first row is refused (3) where it is built, naming the first day it is delivered |
+| state `spread: dated` or `dated` under `venues.<MIC>.costs`, or in a broker's declaration | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the venue: a dated spread is a hypothesis's own |
 | require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
 | attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution`, and over a host at `quote` or `trade` that kind required in `data_requirements` and in every `data_by_instrument` entry that asks for more than `bar` |
 | attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same, requiring the host's kind too over a host at `quote` or `trade` |
@@ -933,7 +935,7 @@ nor a replay could tell apart. Classification never touches the key.
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
-`venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
+`venues.<MIC>.costs` in `portfolio.yaml`, or state a dated table of its own (below). The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason. The spread is charged where the price does not already
@@ -961,6 +963,55 @@ is gross of what another charges, and `hyp add` clears `best` when any key of it
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
 from the state store; only when the store no longer holds those bytes, or this kanso cannot
 read them as a hypothesis, does the missing key read as unchanged.
+
+`costs.spread: dated` charges a width that moves with the year and the hour, where `fixed_bps`
+states one for every fill: a table of rows under `costs.dated`, each the full widths, in basis
+points of the mid, one instrument pays from its `from` day on, by part of the New York session,
+with the sample it was measured on:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  slippage_bps: 1.0
+  spread: dated
+  dated:                           # one row per instrument and year; the last stays in force
+  - {instrument: DEMO.SIM, from: 2023-01-01, pre: 40, open: 12, rth: 3, post: 60, n_sessions: 5, n_open: 25}
+  - {instrument: DEMO.SIM, from: 2024-01-01, pre: 20, open: 8, rth: 2, post: 30, n_sessions: 5, n_open: 25}
+```
+
+A fill pays half of one width of one row, as it pays half of `fixed_bps`, plus `slippage_bps`
+where its price does not carry the spread (above): the latest row of its instrument whose
+`from` is on or before the New York date of the instant its price was struck at, and of that
+row the part of the session that instant is in — the minute the bar covers, a bar being stamped
+at its close, so `pre` is 04:00 to 09:30 (the bar stamped 09:30 among them), `open` the bars
+stamped 09:31 to 09:35, `rth` the rest of regular hours to the bar stamped 16:00, `post` to
+20:00, and before 04:00 or after 20:00 the larger of `pre` and `post`. The instant is the
+price's, never the fill's: under a `latency_ms` an order lands at the first point of any name
+after it arrives, and fills at its own name's bar of that instant only where a bar of the name
+was that point, and at its last bar before it otherwise — so an exit sent on the bar stamped
+16:00 that lands on the 16:01 instant pays `rth` in a name another name's bar opened that
+instant ahead of, and `post` in the name whose bar opened it (`docs/concepts.md`, Delivery).
+Each recorded fill keeps that instant as `price_ts_ns`. The last row stays in force, so a
+certification window or a stage past the table pays the table's last year, which no
+measurement past it moved. No calendar of early closes is read: a fill between an early close
+and 16:00 pays `rth` (`docs/backlog.md` row 257).
+
+The rows are each a year's median, in force from that year's first day, so a strategy that read
+one would know a width the market had not shown yet. They are stated in the hypothesis's own
+`costs` and nowhere else: a `venues.<MIC>.costs` entry or a broker's declaration that states
+`spread: dated` or `dated` is refused (exit 3) wherever the model is resolved, naming the venue.
+They reach no `strategy.py`: the venue model a sleeve is handed (`self.venue_model`, its
+configuration) carries `spread: dated` without the rows, the runner hands the harness the table
+apart, and `strategy_integrity` discards a strategy that reads it. What a sleeve reserves when it
+sizes is the largest width any row of the name states for the part of the session the point it
+is handling is in — every year's, so it reads the same on any day — and `cost_rate`, which names
+no instrument, the largest of every row and part. What a fill was charged still reaches the
+strategy once it fills, through `balance`, as every charge does (row 262). A `cost_scenario`
+on such a hypothesis states `fixed_bps`, which re-prices every fill at that flat width: a
+scenario's parameters are numbers and cannot carry a table, and one without the width would
+re-price every fill at no spread, so `cert plan` and `cert run` refuse it. A screen whose model
+is dated, from its own `costs` or a bound hypothesis's, is refused (exit 3; row 259), and so is a
+shared book member charged one (row 260).
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 

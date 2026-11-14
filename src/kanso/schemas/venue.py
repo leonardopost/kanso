@@ -70,6 +70,16 @@ Unset, each is left out of the resolved model's serialised form altogether, so a
 no layer states either, the broker's declaration included, dumps, digests and records exactly
 as one did before the keys existed.
 
+A spread may be dated (`spread: dated`): a table of widths by instrument, by the day each row
+is in force from, and by the part of the New York session a fill's price was struck in — the
+pre-market, the open (the bars covering 09:30 to 09:35), the rest of regular hours and the
+post-market — stated under `dated` (`DatedSpread`), each row in force from its `from` until
+the next row of its instrument, the last for ever after. It is stated in a hypothesis's own
+`costs` alone: a broker's declaration or a `venues.<MIC>` entry that states it is refused
+where the model is resolved, naming the venue, so no table reaches a hypothesis that did not
+state one. Unset, `dated` is left out of what the model dumps, as the rate is. Which row and
+which part a fill pays is `kanso.nautilus.costs.dated_half_spread`'s to say.
+
 The resolved model records the origin of every field, so a number on a card, a certificate
 or a strategy version is always traceable to the venue that produced it.
 
@@ -80,21 +90,25 @@ feeding a broker that matches against current prices.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import date
 from typing import Annotated, Any, Final, Literal
 
 from pydantic import (
+    ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
     StringConstraints,
+    field_serializer,
     model_serializer,
     model_validator,
 )
 
 from kanso.errors import ApprovalError, PreconditionError, ValidationError
-from kanso.schemas.base import KansoModel, NonEmpty
+from kanso.schemas.base import KansoModel, NonEmpty, RemedyError
 
 Account = Literal["margin", "cash"]
-Spread = Literal["quotes", "fixed_bps"]
+Spread = Literal["quotes", "fixed_bps", "dated"]
 LimitFill = Literal["touch", "through", "print_through", "print_through_whole"]
 Origin = Literal["default", "config", "broker", "venue_override", "hypothesis"]
 Funding = Literal["simulated", "broker_paper", "real"]
@@ -123,8 +137,74 @@ REPLAY_DATA_CLIENT = "replay"
 """The catalog replay data client; every other data client id belongs to an adapter."""
 
 
-UNWRITTEN_UNSTATED: Final = ("orders_per_minute", "requests_per_cancel")
+UNWRITTEN_UNSTATED: Final = ("orders_per_minute", "requests_per_cancel", "dated")
 """The cost keys a resolved model leaves out of what it dumps when no layer states them."""
+
+Width = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+"""A full spread width in basis points of the mid: what a round trip crossing it pays."""
+
+
+class DatedSpread(KansoModel):
+    """One row of a dated spread table: the full widths, in basis points of the mid, one
+    instrument's fills pay from `from` on, by the part of the New York session the fill's price
+    was struck in — `pre` from 04:00, `open` for the bars covering 09:30 to 09:35, `rth` for the
+    rest of regular hours to 16:00, `post` to 20:00 — and how many sessions and how many marks
+    of the open the widths were measured on. A fill pays half its row's width, as it pays half
+    of `fixed_bps`. It dumps `from` under its own name and as a date written out, so a model
+    that carries the table records and digests as text."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
+
+    instrument: NonEmpty
+    from_: date = Field(alias="from")
+    pre: Width
+    open: Width
+    rth: Width
+    post: Width
+    n_sessions: int = Field(ge=1)
+    n_open: int = Field(ge=1)
+
+    @field_serializer("from_")
+    def _written(self, value: date) -> str:
+        return value.isoformat()
+
+
+def _unordered(rows: Sequence[DatedSpread]) -> str | None:
+    """Why a table's rows are not in force one after another, or `None` when every
+    instrument's rows are strictly increasing in `from`."""
+    last: dict[str, date] = {}
+    for row in rows:
+        before = last.get(row.instrument)
+        if before is not None and row.from_ <= before:
+            return (
+                f"costs.dated: {row.instrument}'s row from {row.from_} follows its row from "
+                f"{before}; each instrument's rows are strictly increasing in `from`"
+            )
+        last[row.instrument] = row.from_
+    return None
+
+
+def _check_dated(spread: str | None, rows: Sequence[DatedSpread] | None) -> None:
+    """Refuse a dated spread without rows, rows without a dated spread, and rows out of order.
+
+    Raised as `RemedyError`, so the refusal a model leaves as carries what to do about it."""
+    if spread == "dated" and not rows:
+        raise RemedyError(
+            "costs.dated: required when spread is dated, and it states no row",
+            remedy="state the widths under costs.dated, one row per instrument and year: "
+            "{instrument, from, pre, open, rth, post, n_sessions, n_open}",
+        )
+    if rows is not None and spread != "dated":
+        raise RemedyError(
+            f"costs.dated: states {len(rows)} row(s) and costs.spread is {spread or 'unstated'}, "
+            "so nothing would charge them",
+            remedy="state costs.spread: dated beside the rows, or drop costs.dated",
+        )
+    unordered = _unordered(rows or ())
+    if unordered is not None:
+        raise RemedyError(
+            unordered, remedy="order each instrument's rows by `from`, one row per date"
+        )
 
 
 class CostsOverride(KansoModel):
@@ -144,6 +224,13 @@ class CostsOverride(KansoModel):
     latency_ms: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     orders_per_minute: int | None = Field(default=None, ge=1)
     requests_per_cancel: int | None = Field(default=None, ge=1)
+    dated: tuple[DatedSpread, ...] | None = None
+
+    @model_validator(mode="after")
+    def _dated_stated_whole(self) -> CostsOverride:
+        if self.spread == "dated" or self.dated is not None:
+            _check_dated(self.spread, self.dated)
+        return self
 
 
 class Costs(KansoModel):
@@ -162,6 +249,7 @@ class Costs(KansoModel):
     increments, and no further than the order's limit allows.
     `sell_fee_bps` and `sell_fee_per_share` are charged on every sale, maker or taker, on top
     of everything else: the regulatory fees an account passes through on sells alone.
+    `dated` is the table a `spread: dated` charges (`DatedSpread`), and is required with it.
     """
 
     commission_bps: float = Field(ge=0)
@@ -178,11 +266,18 @@ class Costs(KansoModel):
     latency_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     orders_per_minute: int | None = Field(default=None, ge=1)
     requests_per_cancel: int | None = Field(default=None, ge=1)
+    dated: tuple[DatedSpread, ...] | None = None
 
     @model_validator(mode="after")
     def _fixed_bps_present(self) -> Costs:
         if self.spread == "fixed_bps" and self.fixed_bps is None:
             raise ValueError("fixed_bps: required when spread is fixed_bps")
+        return self
+
+    @model_validator(mode="after")
+    def _dated_present(self) -> Costs:
+        if self.spread == "dated" or self.dated is not None:
+            _check_dated(self.spread, self.dated)
         return self
 
     @model_validator(mode="after")
@@ -194,14 +289,14 @@ class Costs(KansoModel):
 
     @model_serializer(mode="wrap")
     def _unstated_rate_unwritten(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """The model as it dumps, without `orders_per_minute` or `requests_per_cancel` when
-        no layer states it.
+        """The model as it dumps, without `orders_per_minute`, `requests_per_cancel` or `dated`
+        when no layer states it.
 
         Every card, certificate and strategy version records the venue model it was
         measured under, and a research run digests it into what a stored number was measured
         under (`kanso.research.loop.Setup.measured_under`). A model that states no rate dumps
         exactly as one did before the keys existed, so neither a record nor that digest moves
-        for a workspace that states none.
+        for a workspace that states none; nor does one that states no dated table.
         """
         dumped: dict[str, Any] = handler(self)
         for key in UNWRITTEN_UNSTATED:
@@ -282,6 +377,7 @@ def _merge_costs(
     for layer_origin, override in layers:
         if override is None:
             continue
+        _refuse_layer_dated(layer_origin, override, venue)
         stated = override.model_dump(exclude_none=True)
         if stated:
             values.update(stated)
@@ -301,6 +397,21 @@ def _merge_costs(
             f"venues.{venue}.costs in portfolio.yaml",
         )
     return Costs.model_validate(values), origin
+
+
+def _refuse_layer_dated(origin: Origin, override: CostsOverride, venue: str) -> None:
+    """A dated spread is a hypothesis's alone: a broker's declaration or a `venues.<MIC>` entry
+    that states one would hand its table to every hypothesis on the venue, and refuse each whose
+    universe the table does not cover. So it is refused here, naming the venue and the layer."""
+    if origin == "hypothesis" or (override.spread != "dated" and override.dated is None):
+        return
+    where = "the broker's declaration" if origin == "broker" else f"venues.{venue}.costs"
+    raise ValidationError(
+        f"costs.spread: dated on {venue} is stated in {where}; a dated spread is stated in a "
+        "hypothesis's own costs and nowhere else",
+        remedy=f"drop spread: dated and dated from venues.{venue}.costs in portfolio.yaml, and "
+        "state them under costs in each hypothesis.yaml that trades on it",
+    )
 
 
 def _cancel_past_rate(rate: object, per_cancel: object, venue: str | None = None) -> str | None:

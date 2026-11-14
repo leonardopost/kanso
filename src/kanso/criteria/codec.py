@@ -111,7 +111,9 @@ def _decode_funding(payload: Mapping[str, Any]) -> FundingPayment:
 
 
 def _encode_fill(fill: Fill) -> dict[str, Any]:
-    return {
+    """A fill as stored; `price_ts_ns` only where a dated spread set it, so a fill no dated
+    spread charged is stored as it was before the field was kept."""
+    stored: dict[str, Any] = {
         "ts_ns": fill.ts_ns,
         "instrument_id": fill.instrument_id,
         "side": fill.side,
@@ -124,6 +126,9 @@ def _encode_fill(fill: Fill) -> dict[str, Any]:
         "limit": fill.limit,
         "touched": fill.touched,
     }
+    if fill.price_ts_ns is not None:
+        stored["price_ts_ns"] = fill.price_ts_ns
+    return stored
 
 
 def _decode_fill(payload: Mapping[str, Any]) -> Fill:
@@ -134,7 +139,9 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
     recorded before the increment and the limit were kept reads as an increment of zero and
     no limit, which no `slippage_ticks` charges. One recorded before fills said whether the
     venue struck them at the touch reads as not touched, which is how it was charged: a
-    model re-applied to it charges the half-spread it paid."""
+    model re-applied to it charges the half-spread it paid. One recorded without the instant
+    its price was struck at — every fill no dated spread charged — reads as priced at its own
+    instant."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
@@ -147,6 +154,7 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
         tick=float(payload.get("tick", 0.0)),
         limit=None if payload.get("limit") is None else float(payload["limit"]),
         touched=bool(payload.get("touched", False)),
+        price_ts_ns=None if payload.get("price_ts_ns") is None else int(payload["price_ts_ns"]),
     )
 
 

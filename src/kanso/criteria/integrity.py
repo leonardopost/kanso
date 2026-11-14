@@ -401,6 +401,22 @@ DENIED_DEPTH: Final = frozenset(
 """The harness's own copy of a book a `depth` hypothesis holds, at every change, and the
 methods that show the author its view of it."""
 
+DENIED_SPREAD: Final = frozenset(
+    {
+        "_spread_rows",
+        "_spread_bars",
+        "_spread_at",
+        "_spread_bar",
+        "_spread_instant",
+        "_half_of",
+        "_charge",
+    }
+)
+"""The harness's dated spread table and what reads it (`kanso.nautilus.cross_section.dated`):
+each row is a year's median width, in force from that year's first day, so a strategy that read
+one would know a width the market had not shown yet. A sleeve reserves for the spread through
+`cost_rate`, which reads no date."""
+
 DENIED_BUS: Final = frozenset({"msgbus", "_msgbus"})
 """The engine's message bus, under both the names every `Strategy` and `Actor` holds it by
 (nautilus_trader 1.231.0). Measured through the backtest runner in a book at no latency and
@@ -464,6 +480,12 @@ WHY: Final = {
         "what the book set aside; read the book the policy left from `balance`",
     ),
     **dict.fromkeys(DENIED_DEPTH, f"it is the harness's book at every change, and {WHY_DEPTH}"),
+    **dict.fromkeys(
+        DENIED_SPREAD,
+        "it is the harness's dated spread table, each row a year's median width in force from "
+        "that year's first day, or reads it; reserve for the spread through `cost_rate`, which "
+        "reads no date",
+    ),
     **dict.fromkeys(DENIED_BUS, WHY_BUS),
     **dict.fromkeys(DENIED_EVENTS, WHY_EVENTS),
 }
@@ -481,6 +503,7 @@ DENIED_ATTRIBUTES: Final = (
     | DENIED_HISTORY
     | DENIED_BOOK
     | DENIED_DEPTH
+    | DENIED_SPREAD
     | DENIED_BUS
     | DENIED_EVENTS
 )

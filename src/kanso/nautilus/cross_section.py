@@ -195,6 +195,18 @@ def book(
     )
 
 
+def dated(strategy: object, rows: Sequence[object]) -> None:
+    """Hand the harness the dated spread table its fills are charged from.
+
+    Set by the runner exactly as `book` is — a private attribute the harness reads, denied to a
+    `strategy.py` by `strategy_integrity`, and never a configuration field: the configuration a
+    sleeve is built with carries the venue model without the table (`kanso.nautilus.costs.
+    undated`), because each row is a year's median, in force from that year's first day, and
+    a strategy that read it would know a width the market had not shown yet.
+    """
+    strategy._spread_rows = tuple(rows)  # type: ignore[attr-defined]
+
+
 def deliver_from(strategy: object, from_ns: int) -> None:
     """Hand the strategy nothing of a shared feed that precedes `from_ns`.
 

@@ -16,15 +16,24 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   commission_per_share: 0.0055   # charged on every share of a fill that pays commission, on top of the rates; a maker's fill
 #                                  # under a stated maker_bps or maker_per_share pays that alone
 #   slippage_bps: 1.0              # override them for this hypothesis — the way to test an idea against costs worse than
-#   spread: fixed_bps              # your broker's. quotes | fixed_bps. `quotes` needs `quote` in data_requirements; without it
+#   spread: fixed_bps              # your broker's. quotes | fixed_bps | dated. `quotes` needs `quote` in data_requirements; without it
 #   fixed_bps: 2                   # `spread: fixed_bps` and a `fixed_bps` width are required here or under venues.<MIC>.costs,
-                                   # or `kanso hyp validate` refuses (exit 3): there are no quotes to take a spread from.
+                                   # or `spread: dated` and its rows here, or `kanso hyp validate` refuses (exit 3): there
+                                   # are no quotes to take a spread from.
                                    # The half-spread and slippage_bps are charged on a fill struck at a print or a bar's
                                    # close inside the quote; a fill at the touch of its name's last quote — a buy at the
                                    # ask, a sale at the bid — carries the spread and is charged neither: a taker's price
                                    # past the touch is slippage_ticks. Under `quotes`, fixed_bps prices a fill with no
                                    # quote before it; with none, an instrument asked for no quote or book is charged no
                                    # spread, and `kanso hyp validate` warns naming it
+#   dated:                         # with spread: dated, and here alone (portfolio.yaml and a broker may not state it): full
+#     - {instrument: DEMO.SIM, from: 2024-01-01, pre: 20, open: 8, rth: 2, post: 30, n_sessions: 5, n_open: 25}
+                                   # widths in bp of the mid, by instrument and the day each row is in force from, the last
+                                   # for ever after; a fill pays half its row's width for the part of the New York session
+                                   # its price's bar covers (pre, open = the bars stamped 09:31-09:35, rth, post; the larger
+                                   # of pre and post overnight). Each name asked for bar, quote or trade needs a row in
+                                   # force from the research window's first day, warmup sessions too, or it is refused
+                                   # (exit 3). The rows never reach strategy.py; a cost_scenario must state fixed_bps
 #   slippage_ticks: 1              # a taker's fill pays this many of the instrument's ticks a share, never past its limit;
                                    # a maker's fill never pays it. Zero unless stated
 #   maker_bps: -0.2                # what a fill that rested on the book pays instead of the three above; negative is a

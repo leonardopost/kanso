@@ -466,6 +466,27 @@ def test_a_follower_with_no_spread_to_charge_is_refused(runner: CliRunner, loade
     assert "fixed_bps" in payload(result)["remedy"] and "in the screen" in payload(result)["remedy"]
 
 
+def test_a_screen_under_a_dated_spread_is_refused(runner: CliRunner, loaded: Path) -> None:
+    """A dated row is read at the instant a fill's price was struck at, and a screen strikes
+    no fill, so its hurdle cannot charge one: refused, with the flat width as the remedy."""
+    row = {"pre": 9.0, "open": 4.0, "rth": 1.0, "post": 9.0, "n_sessions": 5, "n_open": 25}
+    dated = {
+        **FADE,
+        "costs": {
+            "SIM": {
+                "spread": "dated",
+                "dated": [{"instrument": INSTRUMENT, "from": "2020-01-01", **row}],
+            }
+        },
+    }
+
+    result = at(runner, loaded, "screen", "validate", write_screen(loaded, dated), "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "costs.SIM in the screen state spread: dated" in payload(result)["error"]
+    assert payload(result)["remedy"].startswith("screen under a flat width")
+
+
 def test_a_bound_screen_is_charged_its_hypothesis_s_costs(
     runner: CliRunner, registered: Path
 ) -> None:

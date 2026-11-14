@@ -1380,6 +1380,32 @@ def test_the_workspace_page_s_block_for_the_operator_s_rule_validates_as_stated(
     )
 
 
+def test_the_workspace_page_s_dated_block_resolves_as_shown_and_charges_what_it_says() -> None:
+    """The dated table an operator copies resolves as written, and a bar the page says pays
+    `open` pays the open's width of the row the page says is in force."""
+    from datetime import UTC, datetime
+
+    from kanso.nautilus.costs import dated_half_spread
+    from kanso.schemas import CostsOverride, resolve_venue_model
+
+    hypotheses = section(page("workspace.md"), "`hypotheses/<id>/`")
+    start = hypotheses.index(
+        "```yaml\ncosts:\n  commission_bps: 0.0\n  slippage_bps: 1.0\n  spread: dated"
+    )
+    block = yaml.safe_load(hypotheses[start:].split("```")[1].removeprefix("yaml\n"))["costs"]
+    rows = resolve_venue_model(
+        "SIM", hypothesis_costs=CostsOverride.model_validate(block)
+    ).costs.dated
+    assert rows is not None
+    opened = int(datetime(2024, 7, 2, 13, 33, tzinfo=UTC).timestamp()) * 1_000_000_000  # 09:33 EDT
+
+    assert dated_half_spread(rows, "DEMO.SIM", opened) == pytest.approx(8 / 2 / 10_000)
+    text = prose(hypotheses)
+    assert "`open` the bars stamped 09:31 to 09:35" in text
+    assert "The instant is the price's, never the fill's" in text
+    assert "They are stated in the hypothesis's own `costs` and nowhere else" in text
+
+
 def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> None:
     costs = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
     assert (

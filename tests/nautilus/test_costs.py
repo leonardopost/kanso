@@ -8,8 +8,9 @@ expectation from either would prove only that the two agree with themselves.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from hypothesis import given
@@ -21,6 +22,10 @@ from kanso.nautilus.costs import (
     BookPolicy,
     at_touch,
     carry,
+    dated_half_spread,
+    dated_part,
+    dated_reserve_bps,
+    dated_rows,
     fill_cost,
     fill_rate,
     funding_payment,
@@ -31,8 +36,10 @@ from kanso.nautilus.costs import (
     reset,
     side_rate,
     tick_slip,
+    undated,
 )
 from kanso.schemas import Book
+from kanso.schemas.venue import DatedSpread
 
 CAPITAL = 100_000.0
 
@@ -590,3 +597,128 @@ def test_an_order_with_no_limit_has_none_to_cap() -> None:
     market = factory.market(InstrumentId.from_str("DEMO.XNAS"), OrderSide.BUY, Quantity.from_int(1))
     assert limit_at(market, TradeId("F-0")) is None
     assert limit_at(None, TradeId("F-0")) is None
+
+
+# --- a dated spread ----------------------------------------------------------------
+
+_NEW_YORK = ZoneInfo("America/New_York")
+
+_PARTS_AT = {
+    "04:00": "overnight",  # covers 03:59
+    "04:01": "pre",
+    "09:30": "pre",  # covers 09:29
+    "09:31": "open",  # the first regular bar
+    "09:35": "open",  # covers 09:34
+    "09:36": "rth",
+    "16:00": "rth",  # the last regular bar
+    "16:01": "post",
+    "20:00": "post",  # the last post-market bar
+    "20:01": "overnight",
+}
+"""The part of the session a bar stamped at each New York minute pays, read by hand."""
+
+_WIDTH = {"pre": 300.0, "open": 60.0, "rth": 20.0, "post": 400.0}
+
+
+def _row(name: str, day: str, scale: float = 1.0) -> DatedSpread:
+    return DatedSpread.model_validate(
+        {
+            "instrument": name,
+            "from": day,
+            **{part: width * scale for part, width in _WIDTH.items()},
+            "n_sessions": 5,
+            "n_open": 25,
+        }
+    )
+
+
+def _stamp(day: date, hhmm: str) -> int:
+    hours, minutes = (int(part) for part in hhmm.split(":"))
+    local = datetime(day.year, day.month, day.day, hours, minutes, tzinfo=_NEW_YORK)
+    return int(local.timestamp()) * 1_000_000_000
+
+
+@given(
+    day=st.dates(min_value=date(2008, 1, 1), max_value=date(2027, 12, 31)),
+    stamp=st.sampled_from(sorted(_PARTS_AT)),
+)
+def test_a_dated_fill_pays_its_row_s_width_for_the_minute_its_bar_covers(
+    day: date, stamp: str
+) -> None:
+    """At every stamp, in either season of the clocks: a bar is stamped at its close, so the
+    one at 09:30 is pre-market, the ones at 09:31 to 09:35 are the open, 16:00 is regular and
+    20:00 post-market; overnight pays the larger of the two ends. The row in force is the
+    latest whose `from` is on or before the New York day, and the last stays in force."""
+    rows = (
+        _row("A.X", "2000-01-01", 0.5),
+        _row("A.X", f"{day.year}-01-01"),
+        _row("B.X", "2000-01-01", 9),
+    )
+    part = _PARTS_AT[stamp]
+    width = max(_WIDTH["pre"], _WIDTH["post"]) if part == "overnight" else _WIDTH[part]
+    at = _stamp(day, stamp)
+
+    assert dated_half_spread(rows, "A.X", at) == pytest.approx(width / 2.0 / 10_000.0)
+    assert dated_part(at)[1] == day
+    assert dated_half_spread(rows[:1], "A.X", at) == pytest.approx(width / 4.0 / 10_000.0)
+    assert dated_half_spread(rows, "C.X", at) == 0.0
+
+
+@pytest.mark.parametrize("day", [date(2024, 1, 2), date(2024, 7, 2)])
+def test_the_open_is_the_bars_stamped_09_31_to_09_35_in_both_seasons(day: date) -> None:
+    parts = [dated_part(_stamp(day, f"09:{minute:02d}"))[0] for minute in range(29, 38)]
+    assert parts == ["pre", "pre", "open", "open", "open", "open", "open", "rth", "rth"]
+
+
+def test_a_row_is_in_force_from_its_first_new_york_day_and_none_before_the_first() -> None:
+    """A bar stamped at New York midnight covers the minute before it, the day before's."""
+    rows = (_row("A.X", "2024-01-02"),)
+    assert dated_half_spread(rows, "A.X", _stamp(date(2024, 1, 2), "00:00")) == 0.0
+    assert dated_half_spread(rows, "A.X", _stamp(date(2024, 1, 2), "00:01")) > 0.0
+    assert dated_half_spread(rows, "A.X", _stamp(date(2025, 6, 2), "12:00")) == pytest.approx(
+        20.0 / 2.0 / 10_000.0
+    )
+
+
+@given(
+    instants=st.lists(
+        st.integers(
+            min_value=_stamp(date(2008, 1, 1), "00:00"),
+            max_value=_stamp(date(2027, 12, 31), "23:59"),
+        ),
+        min_size=1,
+        max_size=20,
+    ),
+    scales=st.lists(st.floats(min_value=0.0, max_value=50.0), min_size=1, max_size=6),
+)
+def test_the_width_reserved_is_at_least_what_a_fill_priced_then_pays_and_reads_no_date(
+    instants: list[int], scales: list[float]
+) -> None:
+    """Of one instrument at one part of the session, the whole width reserved is the largest
+    any year states, so it covers what a fill priced at that instant pays, half of its own
+    year's; with no instrument or no instant, it covers every row and part."""
+    rows = tuple(_row("A.X", f"{2008 + index}-01-01", scale) for index, scale in enumerate(scales))
+    for at in instants:
+        reserved = dated_reserve_bps(rows, "A.X", at) / 10_000.0
+        assert reserved >= dated_half_spread(rows, "A.X", at)
+        assert dated_reserve_bps(rows) / 10_000.0 >= reserved
+        assert dated_reserve_bps(rows, "A.X") == dated_reserve_bps(rows)
+        same_part = _stamp(date(2027, 6, 1), "12:00") if dated_part(at)[0] == "rth" else None
+        if same_part is not None:
+            assert dated_reserve_bps(rows, "A.X", same_part) == dated_reserve_bps(rows, "A.X", at)
+    assert dated_reserve_bps(rows, "B.X", instants[0]) == 0.0
+    assert dated_reserve_bps(()) == 0.0
+
+
+def test_a_venue_model_s_table_is_read_back_and_taken_off_what_a_sleeve_is_handed() -> None:
+    model = {
+        "venue": "X",
+        "costs": {"spread": "dated", "dated": [_row("A.X", "2020-01-01").model_dump()]},
+    }
+    assert dated_rows(model) == (_row("A.X", "2020-01-01"),)
+    assert undated(model) == {"venue": "X", "costs": {"spread": "dated"}}
+    assert dated_rows({"venue": "X"}) == ()
+    assert undated({"venue": "X", "costs": {"spread": "quotes"}}) == {
+        "venue": "X",
+        "costs": {"spread": "quotes"},
+    }

@@ -151,6 +151,8 @@ from kanso.nautilus import splits
 from kanso.nautilus.costs import (
     at_touch,
     carry,
+    dated_half_spread,
+    dated_rows,
     fill_cost,
     fixed_half_spread,
     funding_payment,
@@ -161,6 +163,7 @@ from kanso.nautilus.costs import (
     quote_half_spread,
     reset,
     tick_slip,
+    undated,
 )
 from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
@@ -497,13 +500,34 @@ class RunRequest:
     version_hyp: str | None = None
 
     def __post_init__(self) -> None:
-        if self.prefix is None:
+        if self.prefix is not None:
+            first, last = self.prefix
+            if first > last or last > self.window[0]:
+                raise ValidationError(
+                    f"prefix: {first}..{last} is not a span of sessions before the window "
+                    f"opening {self.window[0]}"
+                )
+        self._check_dated()
+
+    def _check_dated(self) -> None:
+        """Under a dated spread, a row in force on the first day delivered for every name the
+        hypothesis trades — every name asked for `bar`, `quote` or `trade` — warmup sessions
+        included: an order is dropped there, but under a latency a name that has not printed
+        in the window yet fills at its last close in them. The file holds its rows to the
+        research window's first day (`kanso.schemas.Hypothesis`); this holds them to the
+        sessions only the catalog resolves."""
+        rows = dated_rows(self.venue_model)
+        if not rows:
             return
-        first, last = self.prefix
-        if first > last or last > self.window[0]:
+        day = self.span[0]
+        uncovered = self.hyp.unpriced(rows, day)
+        if uncovered:
             raise ValidationError(
-                f"prefix: {first}..{last} is not a span of sessions before the window "
-                f"opening {self.window[0]}"
+                f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the first "
+                f"day {self.hyp.id}'s run is delivered, warmup included, so a fill priced "
+                "there would be charged no spread",
+                remedy=f"state a row from {day} or earlier for {', '.join(uncovered)} in "
+                f"hypotheses/{self.hyp.id}/hypothesis.yaml",
             )
 
     @property
@@ -1250,7 +1274,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             max_position_pct=hyp.risk_limits.max_position_pct,
             max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
             max_leverage=hyp.risk_limits.max_leverage,
-            venue_model=dict(request.venue_model),
+            venue_model=undated(request.venue_model),
             # The venue a run fills against is simulated and settles no funding, so the
             # sleeve's balance books it as this extraction does.
             books_funding=True,
@@ -1613,14 +1637,19 @@ def _refuse_unbooked(
 
 
 def booked(strategy: object, request: RunRequest) -> None:
-    """Hand a sleeve the book policy its request runs under, when the hypothesis has one.
+    """Hand a sleeve the book policy its request runs under, when the hypothesis has one, and
+    the dated spread table its venue model states, when it states one.
 
     Every path that runs a sleeve calls this beside `arm` and `warm`, with the request its
     run is extracted from, so the harness cuts the periods the extraction cuts and settles
-    them with the same policy from the same place.
+    them with the same policy from the same place, and charges each fill the row the
+    extraction charges it.
     """
-    from kanso.nautilus.cross_section import book
+    from kanso.nautilus.cross_section import book, dated
 
+    rows = dated_rows(request.venue_model)
+    if rows:
+        dated(strategy, rows)
     policy = policy_of(request.hyp.book)
     if policy is None:
         return
@@ -1678,7 +1707,8 @@ class Marks:
     inside it, and each name's quoted half-spread for the fills that follow. Everything is
     folded point by point, so a run may be fed its window in chunks and hold no chunk
     beyond the marks it leaves; a whole window fed at once folds to the same values,
-    because nothing here depends on the order the points arrive in.
+    because nothing here depends on the order the points arrive in — but which point was
+    taken first at each instant, which a dated spread reads (below).
 
     A point is admitted over the delivered span — the warmup prefix the request names and
     the window — and refused outside it. Points before the window's open leave marks and
@@ -1707,6 +1737,20 @@ class Marks:
     time-sorted series, and chunks are cut in time. A settlement of a name that has not
     printed by then is marked at nothing, and nothing can be held at it, since a fill
     needs a price.
+
+    Under a dated spread a fill pays the row in force at the instant its price was struck at,
+    which is a bar's: its name's bar of the fill's instant where the venue had it, and its
+    name's last bar before it otherwise (`price`). The venue settles the commands due at an
+    instant after each point (`docs/concepts.md`, Delivery), so with no latency stated every
+    bar of an instant is had by an order sent at it, but under a latency an order arriving
+    before an instant lands after that instant's first point alone, and fills at its name's
+    bar of the instant only when a bar of the name was that point. So the bars are kept per
+    chunk, each name's instants with whether a bar of it was the first point of its instant —
+    the first a point at that instant was taken in, which is the stream's first whether a
+    chunk is handed over in time order or, as `checked` hands it, group after group, since
+    the engine's sort is stable — and each name's last instant is carried across chunks, as
+    a quote is. What the venue does with a resting order filled by its own name's bar at an
+    instant another point opened is read by the same rule (`docs/backlog.md` row 261).
     """
 
     def __init__(self, request: RunRequest, model: VenueModel) -> None:
@@ -1729,6 +1773,17 @@ class Marks:
         self._settled: list[tuple[int, str, float]] = []
         self._instants: dict[str, list[int]] = {}
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
+        self.dated = model.costs.dated or ()
+        self.lagged = model.costs.latency_ms > 0
+        self._bars: dict[str, tuple[array[int], array[int]]] = {}
+        """This chunk's bar instants of each name, and whether a bar of it was its instant's
+        first point, under a dated spread."""
+        self._opened: set[int] = set()
+        """The instants this chunk has taken a point at, under a dated spread."""
+        self._last_bar: dict[str, int] = {}
+        """Each name's last bar instant before this chunk, under a dated spread."""
+        self._priced_at: dict[str, int | None] = {}
+        """The instant each fill's price was struck at, by event id, under a dated spread."""
 
     def take(self, points: Iterable[object]) -> None:
         """Fold a chunk of points, its funding settlements first (see the class).
@@ -1737,6 +1792,9 @@ class Marks:
         and a flush marker folds nothing, so it is not handed on; a card folds every point of
         its window here, once.
         """
+        if self.dated:
+            points = tuple(points)
+            self._note_bars(points)
         later: list[object] = []
         for point in points:
             kind = type(point)
@@ -1752,6 +1810,25 @@ class Marks:
                 self.feed(point)
         for point in later:
             self.feed(point)
+
+    def _note_bars(self, points: Sequence[object]) -> None:
+        """Keep each bar's instant and whether it was the first point taken at its instant."""
+        opened = self._opened
+        for point in points:
+            kind = type(point)
+            if kind not in _MARKET and is_marker(point):
+                continue
+            ts = int(point.ts_init)  # type: ignore[attr-defined]
+            first = ts not in opened
+            if first:
+                opened.add(ts)
+            if kind is Bar:
+                name = point.bar_type.instrument_id.value  # type: ignore[attr-defined]
+                held = self._bars.get(name)
+                if held is None:
+                    held = self._bars[name] = (array("q"), array("b"))
+                held[0].append(ts)
+                held[1].append(first)
 
     def feed(self, point: object) -> None:
         """Fold one point: its instant, its mark, its range and, for a quote, its spread.
@@ -1911,8 +1988,10 @@ class Marks:
     def price(self, events: Sequence[Any]) -> None:
         """Read every fill not yet priced against the last quote of its name at or before it,
         in this chunk or carried from the last one; a fill before any quote of its name is
-        read against none."""
+        read against none. Under a dated spread, note the instant its price was struck at
+        (`_struck_at`)."""
         ordered: dict[str, tuple[Any, Any, Any]] = {}
+        barred: dict[str, tuple[Any, Any]] = {}
         for event in events:
             key = str(event.id)
             if key in self._quote_of:
@@ -1931,6 +2010,48 @@ class Marks:
                 self._quote_of[key] = (
                     (carried[1], carried[2]) if carried is not None and carried[0] <= ts else None
                 )
+            if self.dated:
+                bars = barred.get(name)
+                if bars is None:
+                    bars = barred[name] = self._bars_of(name)
+                self._priced_at[key] = self._struck_at(name, ts, *bars)
+
+    def _bars_of(self, name: str) -> tuple[Any, Any]:
+        """This chunk's bar instants of `name` in time order, an instant's in the order taken,
+        with whether each was its instant's first point: a name of two grains is taken group
+        by group by `checked`, so its instants are sorted here, stably."""
+        held = self._bars.get(name)
+        if held is None:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int8)
+        times = np.frombuffer(held[0], dtype=np.int64)
+        firsts = np.frombuffer(held[1], dtype=np.int8)
+        if times.size > 1 and bool(np.any(times[1:] < times[:-1])):
+            order = np.argsort(times, kind="stable")
+            return times[order], firsts[order]
+        return times, firsts
+
+    def _struck_at(self, name: str, ts: int, times: Any, firsts: Any) -> int | None:
+        """The instant a fill of `name` at `ts` had its price struck at: its name's bar of `ts`
+        when the venue had it — with no latency, always; under one, when a bar of the name was
+        the instant's first point — and otherwise its last bar before `ts`, in this chunk or
+        carried from the last; `None` before any bar of the name."""
+        index = int(np.searchsorted(times, ts, side="right"))
+        while index > 0:
+            index -= 1
+            at = int(times[index])
+            if at < ts or not self.lagged or firsts[index]:
+                return at
+        carried = self._last_bar.get(name)
+        return carried if carried is not None and carried <= ts else None
+
+    def priced(self, event: Any) -> int | None:
+        """The instant a fill's dated width is read at, as its record keeps it: its price's
+        instant, or the fill's own where its name had no bar before it. `None` when no dated
+        spread is charged, which the record leaves unwritten."""
+        if not self.dated:
+            return None
+        at = self._priced_at.get(str(event.id))
+        return int(event.ts_event) if at is None else at
 
     def _ordered(self, name: str) -> tuple[Any, Any, Any]:
         """This chunk's quotes of `name` in time order, an instant's in the order folded: the
@@ -1949,9 +2070,13 @@ class Marks:
 
     def half(self, event: Any) -> float:
         """The fraction of notional one side of the spread costs this fill: the stated
-        width's half, or under `spread: quotes` the half of the quote `price` read it against
+        width's half, under `spread: quotes` the half of the quote `price` read it against
         — the stated width's half, when the model states one, for a fill with no quote before
-        it, and nothing when it states none."""
+        it, and nothing when it states none — and under `spread: dated` the half of its row's
+        width at the instant its price was struck at (`priced`)."""
+        at = self.priced(event)
+        if at is not None:
+            return dated_half_spread(self.dated, str(event.instrument_id), at)
         if not self.quotes:
             return self.fixed_half
         quote = self._quote_of.get(str(event.id))
@@ -1970,7 +2095,12 @@ class Marks:
         )
 
     def next_chunk(self) -> None:
-        """Let this chunk's quotes go, keeping each name's last for the fills that follow."""
+        """Let this chunk's quotes and bars go, keeping each name's last for the fills that
+        follow."""
+        for name, (times, _) in self._bars.items():
+            self._last_bar[name] = max(times)
+        self._bars.clear()
+        self._opened.clear()
         for name in self._series:
             times, bids, asks = self._ordered(name)
             if times.size:
@@ -2196,6 +2326,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
             increments.get(str(event.instrument_id), 0.0),
             limit_at(cache.order(event.client_order_id), event.trade_id),
             touched=marks.struck(event),
+            priced_ns=marks.priced(event),
         )
         for event in events
     )
@@ -2327,6 +2458,7 @@ def _fill(
     limit: float | None = None,
     *,
     touched: bool = False,
+    priced_ns: int | None = None,
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
@@ -2337,8 +2469,10 @@ def _fill(
     increment `tick` on each share, no further than the order's `limit`; a sale pays the
     sell-side fees the model states on top, maker or taker (`costs.fill_cost`). A fill
     struck at the touch (`touched`, `Marks.struck`) pays neither the half-spread nor
-    `slippage_bps`, since its price carries the spread. The increment, the limit and whether it
-    was touched are recorded on the fill, so a model re-applied to it charges the same.
+    `slippage_bps`, since its price carries the spread. Under a dated spread `half` is its
+    row's at the instant its price was struck at, `priced_ns` (`Marks.priced`). The increment,
+    the limit, whether it was touched and that instant are recorded on the fill, so a model
+    re-applied to it charges the same.
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -2379,6 +2513,7 @@ def _fill(
         tick=tick,
         limit=limit,
         touched=touched,
+        price_ts_ns=priced_ns,
     )
 
 
