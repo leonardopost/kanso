@@ -14,7 +14,7 @@ from datetime import date, timedelta, tzinfo
 from typing import Any
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from kanso.data.closures import US_EQUITY_CLOSURES, closed_days
@@ -26,6 +26,7 @@ HOUR = 3_600
 DAY = 86_400
 EPOCH = date(1970, 1, 1)
 MONDAY = 0
+SUNDAY = 6
 FOUR_AM = 4 * 60
 """The opening the weekly target is stated at: Monday, 04:00 New York."""
 
@@ -232,13 +233,63 @@ def test_a_week_is_the_span_from_the_last_opening_to_the_next(
     assert week_opening(next_opens - 1, weekday, minute) == (opens, next_opens)
 
 
+@given(st.integers(2007, 2027), st.integers(0, 6), st.integers(0, 1439))
+@example(2024, MONDAY, FOUR_AM)
+@example(2024, SUNDAY, 90)
+@example(2024, SUNDAY, 120)
+@example(2024, SUNDAY, 121)
+@example(2024, SUNDAY, 150)
+@example(2024, SUNDAY, 179)
+@example(2024, SUNDAY, 180)
+@example(2024, SUNDAY, 181)
+def test_the_weeks_either_side_of_a_change_share_its_hour(
+    year: int, weekday: int, minute: int
+) -> None:
+    """The two weeks either side of a change of clock are together an hour short in March and
+    an hour long in November, and the week that holds the change carries the whole hour — for
+    every opening but a Sunday one past 02:00 and no later than 03:00, which the March change
+    skips or meets. Such an opening is the change itself, and the week before it is a minute
+    short for each minute the opening is past 02:00: at 02:30 the two weeks are half an hour
+    short each, and at 03:00 the week from the change is a full seven days."""
+    week = 7 * DAY * NS
+    for change, hour in (
+        (utc(second_sunday_of_march(year), 7), -HOUR * NS),
+        (utc(first_sunday_of_november(year), 6), HOUR * NS),
+    ):
+        opens, next_opens = week_opening(change, weekday, minute)
+        before, _ = week_opening(opens - 1, weekday, minute)
+        met = hour < 0 and weekday == SUNDAY and 120 < minute <= 180
+
+        assert (next_opens - opens - week) + (opens - before - week) == hour
+        assert opens - before - week == (-(minute - 120) * 60 * NS if met else 0)
+        assert opens == change or not met
+
+
+def test_the_module_states_the_weeks_the_property_above_holds() -> None:
+    """The module once said the week holding a change is an hour short in March for every
+    opening, which a Sunday opening past 02:00 does not keep; it says what the property above
+    holds, the exception included."""
+    stated = " ".join((clock.__doc__ or "").split())
+    assert "the week that holds a change of clocks is an hour short in March" not in stated
+    assert (
+        "the two weeks either side of a change of clocks are together an hour short in March "
+        "and an hour long in November, and the hour falls on the week that holds the change "
+        "for every opening"
+    ) in stated
+    assert "but a Sunday one past 02:00 and no later than 03:00" in stated
+    assert "the week before it is a minute short for each minute the opening is past 02:00" in (
+        stated
+    )
+
+
 # --- the zone stays in the package ---------------------------------------------------
 
 
 def test_the_strategy_module_hands_a_strategy_no_zone() -> None:
     """A `strategy.py` may import any name `kanso.nautilus.strategy` binds, and may not import
-    `zoneinfo`; the module binds the clock's functions of plain values and never the zone, its
-    class, the zone database or the clock module."""
+    `zoneinfo`; the module itself binds the clock's functions of plain values and never the
+    zone, its class, the zone database or the clock module. What a module it binds reaches in
+    turn — the zone's class through `splits` — is `docs/backlog.md` row 253."""
     bound = list(vars(strategy).values())
 
     assert not [value for value in bound if isinstance(value, tzinfo)]
