@@ -2228,9 +2228,14 @@ its host's as `session_of(ctx.ts_event)`, which `kanso.nautilus.strategy` hands 
 `strategy.py` written before it existed that binds `session` — `self.session = …`, `def
 session` or `session = …` in the class body — is refused by `strategy_integrity` once its
 workspace runs a kanso that has it, and `kanso doctor`'s `base names` check names it; rename
-yours. A version certified before it is not scanned again when it is replayed or staged, and
-`doctor` reads only `hypotheses/`, so one whose `strategy.py` assigns `self.session` raises
-`AttributeError` at that assignment there.
+yours. Certification, a replay and a stage run a card's or a version's stored bytes without
+scanning them again, and `kanso doctor`'s `base names` check reads only
+`hypotheses/<id>/strategy.py`. So of the cards and versions made before it, one whose class
+body binds `session` — a `def session` or a `session = …` — keeps its own, which shadows the
+base's, and one that assigns `self.session` and binds none of its own raises at that
+assignment, which stops a certification of it (`kanso cert run`). A run whose best raises
+begins again, once the name is renamed in `hypotheses/<id>/strategy.py`, with
+`kanso research begin ID --from-workspace`, which starts from that file.
 
 ## Corporate actions
 

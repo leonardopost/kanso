@@ -9,7 +9,9 @@ import pytest
 from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.objects import Quantity
 
+from kanso.criteria.integrity import clashes
 from kanso.errors import ValidationError
+from kanso.nautilus.backtest import SLEEVE_ENTRY, _entry, _module
 from kanso.nautilus.clock import NEW_YORK, Session, session_of
 from kanso.nautilus.strategy import ENTRY, EXIT_ORDER, KansoConfig, KansoStrategy
 
@@ -146,14 +148,66 @@ def test_the_session_is_the_new_york_minute_each_bar_covers(backtest) -> None:
 
 
 def test_the_session_has_no_setter() -> None:
-    """`strategy_integrity` refuses a researched file that binds `session`; a version
-    certified before the name was the base's is not scanned again on a replay or a stage, and
-    an assignment there raises rather than replacing the clock."""
+    """`strategy_integrity` refuses a researched file that binds `session`. Certification, a
+    replay and a stage run stored bytes without scanning them again, so a card or a version
+    made before the name was the base's that assigns `self.session`, and binds no `session` of
+    its own in a class body, raises at the assignment rather than replacing the clock: a plain
+    assignment with `AttributeError`, an augmented one at its read or at its write."""
     sleeve = KansoStrategy(config())
 
     with pytest.raises(AttributeError, match="session"):
         sleeve.session = Session("rth", date(2024, 1, 2), 570)  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        sleeve.session += 1  # type: ignore[misc, operator]
+    with pytest.raises(AttributeError, match="session"):
+        sleeve.session += ()  # type: ignore[misc]
     assert sleeve.session == session_of(0)
+
+
+STORED = (
+    "from kanso.nautilus.strategy import KansoStrategy\n\n\n"
+    "class Strategy(KansoStrategy):\n"
+    "{body}\n"
+    "    def on_start(self):\n"
+    "        self.session = 5\n"
+)
+"""A stored `strategy.py` made before `session` was the base's, which assigns it."""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    session = None\n",
+        "    session: int = 0\n",
+        "    def session(self):\n        return 0\n",
+    ],
+    ids=["value", "annotated", "def"],
+)
+def test_a_class_body_that_binds_session_keeps_its_own(body: str) -> None:
+    """Of the cards and versions made before `session` was the base's, one whose class body
+    binds it keeps its own, which shadows the base's: loaded from its bytes as a replay or a
+    stage loads them, with no scan, it assigns `self.session` without raising and reads back
+    what it set. `strategy_integrity` refuses the same bytes now, so only one made before can
+    run so; one whose class body binds nothing raises at the assignment."""
+
+    def stored(source: str) -> KansoStrategy:
+        module = _module(source.encode(), "sleeve")
+        cls = _entry(module, SLEEVE_ENTRY, KansoStrategy, "sleeve")
+        sleeve: KansoStrategy = cls(config())
+        return sleeve
+
+    source = STORED.format(body=body)
+    found = clashes(source)
+    assert found
+    assert {clash.name for clash in found} == {"session"}
+
+    sleeve = stored(source)
+    sleeve.on_start()
+    assert sleeve.session == 5
+
+    bare = stored(STORED.format(body="    pass\n"))
+    with pytest.raises(AttributeError, match="session"):
+        bare.on_start()
 
 
 def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:

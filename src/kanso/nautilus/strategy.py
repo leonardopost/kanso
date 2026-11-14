@@ -1103,9 +1103,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         orders go in at. A function of `data_time` alone (`kanso.nautilus.clock.session_of`),
         so it reads the same on every path; before the first point it reads the instant before
         the epoch. It has no setter: `strategy_integrity` refuses a `strategy.py` that binds
-        it, and a version certified before the name was the base's, and that assigns it,
-        raises `AttributeError` at the assignment on a replay or a stage, neither of which
-        scans a version again.
+        it. Certification, a replay and a stage run stored bytes without scanning them again,
+        so of a card or a version made before the name was the base's, one whose class body
+        binds `session` keeps its own, which shadows this one, and one that assigns
+        `self.session` and binds none of its own raises at the assignment.
         """
         return session_of(self._data_time)
 
