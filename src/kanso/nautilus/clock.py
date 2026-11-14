@@ -55,7 +55,10 @@ from here only `session_of` and `Session` — a function of an integer and the p
 returns — so a strategy is handed New York time as values (`KansoStrategy.session`) and never
 the zone it was read in. What a strategy can still reach past what it is handed — the zone's
 class through `splits`, a timestamp the engine converts — is `docs/backlog.md` rows 253 and
-254.
+254, and what its import can change in what every sleeve beside it is handed — a store on
+`kanso.nautilus.strategy.session_of` or on `Session` — is row 256. So a harness rule reads
+New York time as `segment_of` and `minute_of` give it, a plain tuple and an integer, and
+never as an attribute of a `Session`.
 
 This module relies on no fact of NautilusTrader (1.231.0) beyond the one every engine
 timestamp carries: an instant is an integer of nanoseconds since the Unix epoch.

@@ -544,16 +544,22 @@ def test_the_workspace_page_names_the_session_among_a_sleeve_s_readers() -> None
 
 def test_the_routes_to_the_zone_the_clock_does_not_close_are_backlog_rows() -> None:
     """The clock and the concepts page say a strategy is handed New York time as values, and
-    cite by number the rows that record what it can still reach past them."""
+    cite by number the rows that record what it can still reach past them; the clock cites the
+    row that records what a strategy's import can change in what every sleeve is handed."""
     rows = {
         line.split("|")[1].strip(): line
         for line in page("backlog.md").splitlines()
-        if re.match(r"\| 25[345] \|", line)
+        if re.match(r"\| 25[3456] \|", line)
     }
     assert '`splits.ZoneInfo("America/New_York")`' in rows["253"]
     assert '`unix_nanos_to_dt(self.data_time).tz_convert("America/New_York")`' in rows["254"]
     assert "`datetime.datetime.now()`" in rows["255"]
+    assert "`harness.session_of = …`" in rows["256"]
+    assert '`Session.segment = property(lambda self: "rth")`' in rows["256"]
     assert "`docs/backlog.md` rows 253 and 254" in prose(clock.__doc__ or "")
+    assert "a store on `kanso.nautilus.strategy.session_of` or on `Session` — is row 256" in (
+        prose(clock.__doc__ or "")
+    )
     assert "(what a strategy can still reach past that is `docs/backlog.md` rows 253 and 254)" in (
         prose(section(page("concepts.md"), "Delivery"))
     )
