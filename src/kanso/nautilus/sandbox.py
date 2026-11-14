@@ -191,6 +191,7 @@ from nautilus_trader.model.instruments import Instrument
 from kanso.errors import ValidationError
 from kanso.nautilus import actions
 from kanso.nautilus.cross_section import MARKER_TYPE, is_marker
+from kanso.nautilus.struck import Struck
 
 __all__ = [
     "ACCOUNT_SUFFIX",
@@ -390,7 +391,9 @@ class SimulatedVenue(LiveExecutionClient):
     float nearest it.
     """
 
-    def __init__(self, kernel: Any, venue: BacktestVenueConfig) -> None:
+    def __init__(
+        self, kernel: Any, venue: BacktestVenueConfig, struck: Struck | None = None
+    ) -> None:
         identifier = Venue(venue.name)
         account_type = get_account_type(venue)
         base_currency = get_base_currency(venue)
@@ -426,7 +429,9 @@ class SimulatedVenue(LiveExecutionClient):
             # instant on both code paths, the venue applies every quote and print the sleeve
             # is handed, and under `print_through` what is due by a print lands before it; see
             # `kanso.nautilus.actions`, `kanso.nautilus.availability` and `kanso.nautilus.tape`.
-            modules=actions.modules(venue.name),
+            # Under a dated spread it keeps each name's last point for the fills priced at it
+            # (`kanso.nautilus.struck`).
+            modules=actions.modules(venue.name, struck),
             portfolio=kernel.portfolio,
             msgbus=self.relay,
             cache=kernel.cache,
@@ -606,18 +611,23 @@ def attach(
     kernel: Any,
     venues: Sequence[BacktestVenueConfig],
     points: Sequence[Any],
+    struck: Struck | None = None,
 ) -> tuple[SimulatedVenue, ...]:
     """One simulated venue per configured venue, registered and bound to this window's bars
-    and, when the window is marked, to its flush markers.
+    and, when the window is marked, to its flush markers — and, given `struck`, keeping each
+    name's last point in it and hearing every fill the node's execution engine applies, the
+    record a dated spread is read at (`kanso.nautilus.struck`).
 
     Returns the clients in the order the venues were given, so a caller can reach an
     exchange afterwards — to read the book a position was marked at, or to check that a
     flattening order was matched. A caller handing the window over a chunk at a time binds
     each later chunk with `wire` before releasing it.
     """
+    if struck is not None:
+        struck.listen(kernel.msgbus)
     made: list[SimulatedVenue] = []
     for venue in venues:
-        client = SimulatedVenue(kernel, venue)
+        client = SimulatedVenue(kernel, venue, struck)
         kernel.exec_engine.register_client(client)
         kernel.exec_engine.register_venue_routing(client, Venue(venue.name))
         made.append(client)

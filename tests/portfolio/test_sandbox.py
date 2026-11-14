@@ -97,17 +97,18 @@ TRADER = TraderId("KANSO-SANDBOX")
 # --- the two paths ------------------------------------------------------------
 
 
-def kanso_venues(request: Any, kernel: Any, points: Any) -> None:
+def kanso_venues(request: Any, kernel: Any, points: Any, struck: Any = None) -> None:
     """The wiring a stage node already uses, applied to a replay session's node too.
 
     `kanso.nautilus.node` builds its simulated venues through `sandbox.attach`; a replay
     session still builds its own inline. Pointing the session at the same function is what
     makes the two one piece of code, and it is what the comparisons below measure.
     """
-    sandbox.attach(kernel, venue_configs(request.hyp, request.venue_model, request.capital), points)
+    configs = venue_configs(request.hyp, request.venue_model, request.capital)
+    sandbox.attach(kernel, configs, points, struck)
 
 
-def vendor_venues(request: Any, kernel: Any, points: Any) -> None:
+def vendor_venues(request: Any, kernel: Any, points: Any, struck: Any = None) -> None:
     """The same wiring around the engine's own convenience client, kept as the control.
 
     This is what kanso ran before it built its own venue, and it is the arm of the

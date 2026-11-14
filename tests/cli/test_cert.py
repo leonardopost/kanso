@@ -26,7 +26,7 @@ from kanso.state import StateStore
 from tests.params import pairs
 
 from . import mocked
-from .conftest import DRAFT, HYP_ID, at, payload, write_hypothesis
+from .conftest import DRAFT, HYP_ID, INSTRUMENT, at, classify, payload, write_hypothesis
 
 
 def begin(runner: CliRunner, root: Path) -> dict[str, Any]:
@@ -352,6 +352,51 @@ def test_a_pinned_plan_that_does_not_price_the_search_is_refused_by_plan_and_run
     assert certificates(researched) == []
     replanned = at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json")
     assert replanned.exit_code == Exit.OK and payload(replanned)["plan_version"] == 2
+
+
+DATED = {
+    "commission_bps": 0.5,
+    "slippage_bps": 1.0,
+    "spread": "dated",
+    "dated": [
+        {
+            "instrument": INSTRUMENT,
+            "from": "2020-01-01",
+            **{"pre": 9.0, "open": 4.0, "rth": 2.0, "post": 9.0, "n_sessions": 5, "n_open": 25},
+        }
+    ],
+}
+"""A dated spread over the demo's one name, in force from long before its windows."""
+
+
+def test_a_pinned_plan_that_would_re_price_a_dated_run_at_no_spread_is_refused(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A scenario's parameters are numbers and carry no table, so on a hypothesis charged a
+    dated spread a `cost_scenario` without a `fixed_bps` above zero would re-price every fill at
+    none: `cert plan` and `cert run` refuse a plan pinned with one, with the replan as the
+    remedy, as they refuse one that does not price the search."""
+    path = write_hypothesis(loaded, mocked.SEED, costs=DATED)
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    classify(loaded)
+    mocked.scripted(loaded)
+    begin(runner, loaded)
+    assert keep(runner, loaded)["best_sha"]
+    assert at(runner, loaded, "cert", "plan", HYP_ID, "--json").exit_code == Exit.OK
+    document = plan_document(loaded)
+    scenario = {"id": "cost_scenario", "stage": "cert", "params": {"fixed_bps": 0.0}}
+    document["gates"] = [*document["gates"], {**scenario, "rationale": "a flat width"}]
+    (loaded / "certificates" / HYP_ID / "plan.yaml").write_text(
+        yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
+    )
+
+    for command in ("plan", "run"):
+        result = at(runner, loaded, "cert", command, HYP_ID, "--json")
+        refused = payload(result)
+        assert result.exit_code == Exit.VALIDATION, refused
+        assert "gates.cost_scenario.fixed_bps: is 0.0" in refused["error"]
+        assert refused["remedy"] == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+    assert certificates(loaded) == []
 
 
 def test_a_hypothesis_with_no_card_has_nothing_to_certify(

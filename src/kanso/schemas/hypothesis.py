@@ -40,7 +40,12 @@ from kanso.schemas.base import (
     Versioned,
 )
 from kanso.schemas.duration import Duration, Resolution, is_duration, parse_duration
-from kanso.schemas.venue import CostsOverride, DatedSpread
+from kanso.schemas.venue import (
+    CostsOverride,
+    DatedSpread,
+    check_dated_paired,
+    first_new_york_day,
+)
 
 Mechanism = Literal[
     "mean_reversion",
@@ -566,16 +571,25 @@ class Hypothesis(Versioned):
             )
         if self.costs.spread == "fixed_bps" and self.costs.fixed_bps is None:
             raise ValueError("costs.fixed_bps: required when spread is fixed_bps")
+        check_dated_paired(self.costs.spread, self.costs.dated)
         if self.costs.dated is not None:
             self._check_dated(self.costs.dated)
 
     def _check_dated(self, rows: Sequence[DatedSpread]) -> None:
-        """A dated table names the universe's instruments, and holds a row in force from the
-        research window's first day for each one the hypothesis trades — every name asked for
-        `bar`, `quote` or `trade` — or its fills there would be charged no spread. A row stays
-        in force until the next, so a row from that day covers every window after it; the
-        warmup sessions before it are held to the table where a run is built
-        (`kanso.nautilus.backtest.RunRequest`), since only the catalog says which they are."""
+        """A dated table names the universe's instruments, states no width from inside the
+        certification window, and holds a row in force for each name the hypothesis trades —
+        every name asked for `bar`, `quote` or `trade` — from the first New York date a run of
+        it can read one on, or its fills there would be charged no spread.
+
+        A width from the certification window on is refused because the reserve a sleeve
+        sizes with reads every row of every year (`kanso.nautilus.costs.dated_reserve_bps`),
+        so research would read a width measured on the held-out window; the last row before
+        it stays in force there instead. The first date read is the New York evening before
+        the first UTC day delivered (`first_new_york_day`), and with a warmup of N sessions
+        the first day delivered is at least N days before the window, a session being a day
+        that printed: that is as far as the file can say, and the sessions the catalog
+        resolves are held to the table where they are known — by `hyp validate` when the
+        catalog holds them, and where a run is built (`kanso.nautilus.backtest.RunRequest`)."""
         outside = sorted({row.instrument for row in rows} - set(self.universe))
         if outside:
             raise RemedyError(
@@ -583,13 +597,30 @@ class Hypothesis(Versioned):
                 remedy="drop the rows of instruments the hypothesis does not trade, or add them "
                 "to the universe",
             )
-        start = self.windows.research.start
-        uncovered = self.unpriced(rows, start)
-        if uncovered:
+        held_out = self.windows.certification.start
+        late = sorted({row.instrument for row in rows if row.from_ >= held_out})
+        if late:
             raise RemedyError(
-                f"costs.dated: {', '.join(uncovered)} has no row in force on {start}, the "
-                "research window's first day, so its fills there would be charged no spread",
-                remedy=f"state a row from {start} or earlier for {', '.join(uncovered)}",
+                f"costs.dated: {', '.join(late)} has a row from inside the certification "
+                f"window, which opens {held_out}; the reserve a sleeve sizes with reads every "
+                "row, so research would read a width measured on the held-out window",
+                remedy=f"drop the rows from {held_out} on: the last row before it stays in "
+                "force there",
+            )
+        start = self.windows.research.start
+        sessions = 0 if self.warmup is None else self.warmup.sessions
+        day = first_new_york_day(start - timedelta(days=sessions))
+        uncovered = self.unpriced(rows, day)
+        if uncovered:
+            reached = (
+                "the research window's first instant falls on"
+                if sessions == 0
+                else f"a warmup of {sessions} session(s) before {start} delivers on at the latest"
+            )
+            raise RemedyError(
+                f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the New "
+                f"York date {reached}, so its fills there would be charged no spread",
+                remedy=f"state a row from {day} or earlier for {', '.join(uncovered)}",
             )
 
     def _check_constraints(self) -> None:

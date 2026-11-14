@@ -167,8 +167,10 @@ from kanso.nautilus.costs import (
 )
 from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
+from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Commands, Hypothesis, VenueModel, is_duration, parse_duration
+from kanso.schemas.venue import first_new_york_day
 
 __all__ = [
     "ALLOWED_ENV",
@@ -510,22 +512,23 @@ class RunRequest:
         self._check_dated()
 
     def _check_dated(self) -> None:
-        """Under a dated spread, a row in force on the first day delivered for every name the
-        hypothesis trades — every name asked for `bar`, `quote` or `trade` — warmup sessions
-        included: an order is dropped there, but under a latency a name that has not printed
-        in the window yet fills at its last close in them. The file holds its rows to the
-        research window's first day (`kanso.schemas.Hypothesis`); this holds them to the
-        sessions only the catalog resolves."""
+        """Under a dated spread, a row in force for every name the hypothesis trades — every
+        name asked for `bar`, `quote` or `trade` — on the New York date of the first instant
+        delivered, warmup sessions included: the evening before the first UTC day delivered
+        (`kanso.schemas.venue.first_new_york_day`). An order is dropped in the warmup, but under
+        a latency a name that has not printed in the window yet fills at its last price in it.
+        The file holds its rows as far as it can say without the catalog
+        (`kanso.schemas.Hypothesis`); this holds them to the sessions the catalog resolved."""
         rows = dated_rows(self.venue_model)
         if not rows:
             return
-        day = self.span[0]
+        day = first_new_york_day(self.span[0])
         uncovered = self.hyp.unpriced(rows, day)
         if uncovered:
             raise ValidationError(
-                f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the first "
-                f"day {self.hyp.id}'s run is delivered, warmup included, so a fill priced "
-                "there would be charged no spread",
+                f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the New "
+                f"York date of the first instant {self.hyp.id}'s run delivers, warmup included, "
+                "so a fill priced there would be charged no spread",
                 remedy=f"state a row from {day} or earlier for {', '.join(uncovered)} in "
                 f"hypotheses/{self.hyp.id}/hypothesis.yaml",
             )
@@ -1370,9 +1373,10 @@ def _unrecorded(*_: object, **__: object) -> None:
     nothing."""
 
 
-def add_venue(engine: Any, venue: Any) -> None:
+def add_venue(engine: Any, venue: Any, struck: Struck | None = None) -> None:
     """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
-    with the simulation modules every kanso venue loads."""
+    with the simulation modules every kanso venue loads — and, under a dated spread, the venue
+    half of `struck` (`kanso.nautilus.struck`)."""
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
@@ -1411,8 +1415,9 @@ def add_venue(engine: Any, venue: Any) -> None:
         # The venue applies a corporate action one call before it matches the point that
         # carried the market past it, applies every quote and print the sleeve is handed, and,
         # under `print_through`, lands what is due by a print before it; see
-        # `kanso.nautilus.actions`, `availability` and `tape`.
-        modules=modules(venue.name),
+        # `kanso.nautilus.actions`, `availability` and `tape`. Under a dated spread it also
+        # keeps each name's last point for the fills priced at it (`kanso.nautilus.struck`).
+        modules=modules(venue.name, struck),
     )
 
 
@@ -1475,7 +1480,9 @@ def execute_chunked(
     engine = engine_for()
     try:
         for venue in venue_configs(request.hyp, request.venue_model, request.capital):
-            add_venue(engine, venue)
+            add_venue(engine, venue, marks.pricing)
+        if marks.pricing is not None:
+            marks.pricing.listen(engine.kernel.msgbus)
         for instrument in instruments:
             engine.add_instrument(instrument)
         cls, config = _sleeve(request)
@@ -1486,7 +1493,7 @@ def execute_chunked(
             )
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
-        booked(strategy, request)
+        booked(strategy, request, marks.pricing)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
         marked = coincident(request.hyp)
@@ -1636,20 +1643,27 @@ def _refuse_unbooked(
         )
 
 
-def booked(strategy: object, request: RunRequest) -> None:
+def booked(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:
     """Hand a sleeve the book policy its request runs under, when the hypothesis has one, and
-    the dated spread table its venue model states, when it states one.
+    the dated spread table its venue model states, when it states one, with the venue's record
+    of the instant each fill was priced at (`struck`, `kanso.nautilus.struck`).
 
     Every path that runs a sleeve calls this beside `arm` and `warm`, with the request its
     run is extracted from, so the harness cuts the periods the extraction cuts and settles
     them with the same policy from the same place, and charges each fill the row the
-    extraction charges it.
+    extraction charges it, read off the same record.
     """
     from kanso.nautilus.cross_section import book, dated
 
     rows = dated_rows(request.venue_model)
     if rows:
-        dated(strategy, rows)
+        if struck is None:
+            raise PreconditionError(
+                f"costs.spread: dated and {request.hyp.id}'s run keeps no record of the "
+                "instant its venue priced each fill at, which the table is read at",
+                remedy="run the hypothesis through a kanso runner, which keeps one",
+            )
+        dated(strategy, rows, struck)
     policy = policy_of(request.hyp.book)
     if policy is None:
         return
@@ -1707,8 +1721,7 @@ class Marks:
     inside it, and each name's quoted half-spread for the fills that follow. Everything is
     folded point by point, so a run may be fed its window in chunks and hold no chunk
     beyond the marks it leaves; a whole window fed at once folds to the same values,
-    because nothing here depends on the order the points arrive in — but which point was
-    taken first at each instant, which a dated spread reads (below).
+    because nothing here depends on the order the points arrive in.
 
     A point is admitted over the delivered span — the warmup prefix the request names and
     the window — and refused outside it. Points before the window's open leave marks and
@@ -1739,18 +1752,11 @@ class Marks:
     needs a price.
 
     Under a dated spread a fill pays the row in force at the instant its price was struck at,
-    which is a bar's: its name's bar of the fill's instant where the venue had it, and its
-    name's last bar before it otherwise (`price`). The venue settles the commands due at an
-    instant after each point (`docs/concepts.md`, Delivery), so with no latency stated every
-    bar of an instant is had by an order sent at it, but under a latency an order arriving
-    before an instant lands after that instant's first point alone, and fills at its name's
-    bar of the instant only when a bar of the name was that point. So the bars are kept per
-    chunk, each name's instants with whether a bar of it was the first point of its instant —
-    the first a point at that instant was taken in, which is the stream's first whether a
-    chunk is handed over in time order or, as `checked` hands it, group after group, since
-    the engine's sort is stable — and each name's last instant is carried across chunks, as
-    a quote is. What the venue does with a resting order filled by its own name's bar at an
-    instant another point opened is read by the same rule (`docs/backlog.md` row 261).
+    which is the venue's to say and is read off it (`pricing`, `kanso.nautilus.struck`): the
+    venue keeps each name's last point as it applies it and each fill's when it is made, and
+    `priced` reads that, so nothing here depends on the order a chunk's points or its groups
+    arrive in. A run that builds its marks after its venue has run — a stage's, from each
+    version's own view — hands them the record its venue kept.
     """
 
     def __init__(self, request: RunRequest, model: VenueModel) -> None:
@@ -1774,16 +1780,9 @@ class Marks:
         self._instants: dict[str, list[int]] = {}
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
         self.dated = model.costs.dated or ()
-        self.lagged = model.costs.latency_ms > 0
-        self._bars: dict[str, tuple[array[int], array[int]]] = {}
-        """This chunk's bar instants of each name, and whether a bar of it was its instant's
-        first point, under a dated spread."""
-        self._opened: set[int] = set()
-        """The instants this chunk has taken a point at, under a dated spread."""
-        self._last_bar: dict[str, int] = {}
-        """Each name's last bar instant before this chunk, under a dated spread."""
-        self._priced_at: dict[str, int | None] = {}
-        """The instant each fill's price was struck at, by event id, under a dated spread."""
+        self.pricing: Struck | None = Struck() if self.dated else None
+        """The venue's record of the instant each fill's price was struck at, under a dated
+        spread: the run's own, loaded into its venue, or one a stage hands over."""
 
     def take(self, points: Iterable[object]) -> None:
         """Fold a chunk of points, its funding settlements first (see the class).
@@ -1792,9 +1791,6 @@ class Marks:
         and a flush marker folds nothing, so it is not handed on; a card folds every point of
         its window here, once.
         """
-        if self.dated:
-            points = tuple(points)
-            self._note_bars(points)
         later: list[object] = []
         for point in points:
             kind = type(point)
@@ -1810,25 +1806,6 @@ class Marks:
                 self.feed(point)
         for point in later:
             self.feed(point)
-
-    def _note_bars(self, points: Sequence[object]) -> None:
-        """Keep each bar's instant and whether it was the first point taken at its instant."""
-        opened = self._opened
-        for point in points:
-            kind = type(point)
-            if kind not in _MARKET and is_marker(point):
-                continue
-            ts = int(point.ts_init)  # type: ignore[attr-defined]
-            first = ts not in opened
-            if first:
-                opened.add(ts)
-            if kind is Bar:
-                name = point.bar_type.instrument_id.value  # type: ignore[attr-defined]
-                held = self._bars.get(name)
-                if held is None:
-                    held = self._bars[name] = (array("q"), array("b"))
-                held[0].append(ts)
-                held[1].append(first)
 
     def feed(self, point: object) -> None:
         """Fold one point: its instant, its mark, its range and, for a quote, its spread.
@@ -1988,10 +1965,8 @@ class Marks:
     def price(self, events: Sequence[Any]) -> None:
         """Read every fill not yet priced against the last quote of its name at or before it,
         in this chunk or carried from the last one; a fill before any quote of its name is
-        read against none. Under a dated spread, note the instant its price was struck at
-        (`_struck_at`)."""
+        read against none."""
         ordered: dict[str, tuple[Any, Any, Any]] = {}
-        barred: dict[str, tuple[Any, Any]] = {}
         for event in events:
             key = str(event.id)
             if key in self._quote_of:
@@ -2010,47 +1985,15 @@ class Marks:
                 self._quote_of[key] = (
                     (carried[1], carried[2]) if carried is not None and carried[0] <= ts else None
                 )
-            if self.dated:
-                bars = barred.get(name)
-                if bars is None:
-                    bars = barred[name] = self._bars_of(name)
-                self._priced_at[key] = self._struck_at(name, ts, *bars)
-
-    def _bars_of(self, name: str) -> tuple[Any, Any]:
-        """This chunk's bar instants of `name` in time order, an instant's in the order taken,
-        with whether each was its instant's first point: a name of two grains is taken group
-        by group by `checked`, so its instants are sorted here, stably."""
-        held = self._bars.get(name)
-        if held is None:
-            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int8)
-        times = np.frombuffer(held[0], dtype=np.int64)
-        firsts = np.frombuffer(held[1], dtype=np.int8)
-        if times.size > 1 and bool(np.any(times[1:] < times[:-1])):
-            order = np.argsort(times, kind="stable")
-            return times[order], firsts[order]
-        return times, firsts
-
-    def _struck_at(self, name: str, ts: int, times: Any, firsts: Any) -> int | None:
-        """The instant a fill of `name` at `ts` had its price struck at: its name's bar of `ts`
-        when the venue had it — with no latency, always; under one, when a bar of the name was
-        the instant's first point — and otherwise its last bar before `ts`, in this chunk or
-        carried from the last; `None` before any bar of the name."""
-        index = int(np.searchsorted(times, ts, side="right"))
-        while index > 0:
-            index -= 1
-            at = int(times[index])
-            if at < ts or not self.lagged or firsts[index]:
-                return at
-        carried = self._last_bar.get(name)
-        return carried if carried is not None and carried <= ts else None
 
     def priced(self, event: Any) -> int | None:
-        """The instant a fill's dated width is read at, as its record keeps it: its price's
-        instant, or the fill's own where its name had no bar before it. `None` when no dated
-        spread is charged, which the record leaves unwritten."""
-        if not self.dated:
+        """The instant a fill's dated width is read at, as its record keeps it: the instant
+        the venue struck its price at (`pricing`), or the fill's own where the venue had applied
+        nothing of its name. `None` when no dated spread is charged, which the record leaves
+        unwritten."""
+        if self.pricing is None:
             return None
-        at = self._priced_at.get(str(event.id))
+        at = self.pricing.at(event)
         return int(event.ts_event) if at is None else at
 
     def _ordered(self, name: str) -> tuple[Any, Any, Any]:
@@ -2095,12 +2038,7 @@ class Marks:
         )
 
     def next_chunk(self) -> None:
-        """Let this chunk's quotes and bars go, keeping each name's last for the fills that
-        follow."""
-        for name, (times, _) in self._bars.items():
-            self._last_bar[name] = max(times)
-        self._bars.clear()
-        self._opened.clear()
+        """Let this chunk's quotes go, keeping each name's last for the fills that follow."""
         for name in self._series:
             times, bids, asks = self._ordered(name)
             if times.size:

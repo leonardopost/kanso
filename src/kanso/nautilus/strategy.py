@@ -940,12 +940,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._spread_rows: tuple[Any, ...] = ()
         """The dated spread table a `spread: dated` charges, handed by the runner
         (`kanso.nautilus.cross_section.dated`) and never on the configuration a strategy reads."""
-        self._spread_bars: dict[str, tuple[int, bool, int | None]] = {}
-        """Under a dated spread, each name's last bar instant, whether a bar of the name was the
-        first point delivered at it, and the name's bar instant before it (`_spread_bar`)."""
-        self._spread_at: dict[object, int | None] = {}
-        """The instant each fill's price was struck at, pinned when it arrives (`_spread_instant`)
-        and moved when its own bar is delivered after it (`_spread_bar`)."""
+        self._spread_struck: Any = None
+        """The venue's record of the instant each fill's price was struck at, handed with the
+        table (`kanso.nautilus.struck`): the one the extraction reads."""
         self._kept_day: tuple[int, date] | None = None
         """The last UTC day a scoped point fell on, and its index from the epoch
         (`_out_of_scope`)."""
@@ -1671,8 +1668,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._show_book(int(bar.ts_init))
         self._turn(int(bar.ts_init))
-        if self._spread_rows:
-            self._spread_bar(key, int(bar.ts_init), int(bar.ts_init) > self._delivered_ns)
         self._delivered_ns = int(bar.ts_init)
         self._printed(key, float(bar.close), int(bar.ts_event), int(bar.ts_init))
         if not self._is_extra_bar(bar):
@@ -4262,10 +4257,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._refs[event.id] = (
             None if quote is None else (float(quote.bid_price), float(quote.ask_price))
         )
-        if self._spread_rows:
-            self._spread_at[event.id] = self._spread_instant(
-                event.instrument_id.value, int(event.ts_event)
-            )
         if int(event.ts_event) >= self._instant_ns:
             self._open_fills[event.id] = event
 
@@ -4297,7 +4288,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             del self._open_fills[event_id]
             if self._booked_open.pop(event_id, None) is not None:
                 self._refs.pop(event_id, None)
-                self._spread_at.pop(event_id, None)
         self._instant_ns = ts_ns
 
     def _book_fill(self, event: Any) -> None:
@@ -4312,7 +4302,6 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._booked_open[event.id] = charged
         else:
             self._refs.pop(event.id, None)
-            self._spread_at.pop(event.id, None)
 
     def _charge(self, event: Any) -> float:
         """What the runner charges one fill: commission, per share included where the model
@@ -4360,69 +4349,27 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _half_of(self, quote: tuple[float, float] | None, event: Any) -> float:
         """Half the spread one fill pays: the stated width, under `spread: quotes` the half of
         the quote it is read against — the stated width when there is none before it — and
-        under `spread: dated` the half its row states for the instant its price was struck at
-        (`_spread_instant`), as the extraction reads it (`kanso.nautilus.backtest.Marks`)."""
+        under `spread: dated` the half its row states for the instant the venue struck its
+        price at, read off the record the extraction reads (`kanso.nautilus.struck`), or the
+        fill's own where the venue had applied nothing of its name."""
         spread = self._charges.get("spread")
         if spread == "dated":
-            if not self._spread_rows:
+            if not self._spread_rows or self._spread_struck is None:
                 raise PreconditionError(
                     f"costs.spread: dated and {self._cfg.hyp_id}'s sleeve was handed no table, "
                     "so its balance would charge no spread where the runner charges one",
                     remedy="run the sleeve through a kanso runner, which hands it the table",
                 )
-            priced = self._spread_at.get(event.id)
+            at = self._spread_struck.at(event)
             return dated_half_spread(
                 self._spread_rows,
                 event.instrument_id.value,
-                int(event.ts_event) if priced is None else priced,
+                int(event.ts_event) if at is None else at,
             )
         fixed = fixed_half_spread(self._charges.get("fixed_bps"))
         if spread != "quotes" or quote is None:
             return fixed
         return quote_half_spread(*quote)
-
-    def _spread_bar(self, key: str, ts_ns: int, first: bool) -> None:
-        """A bar of `key` delivered at `ts_ns`, `first` when no point was delivered at that
-        instant before it: kept as the name's last bar, and where it is the bar the venue
-        struck the name's fills of its instant at — always with no latency stated, and under a
-        latency when a bar of the name was the instant's first point — each of those fills
-        already booked is struck again at it and the difference booked, as `_quoted` does for
-        a quote. A fill arrives before the bar the venue made it on (`_quoted`), so this is
-        where such a fill finds its instant."""
-        held = self._spread_bars.get(key)
-        if held is not None and held[0] == ts_ns:
-            kept = (ts_ns, held[1] or first, held[2])
-        else:
-            kept = (ts_ns, first, None if held is None else held[0])
-        self._spread_bars[key] = kept
-        if not (self._instant() or kept[1]):
-            return
-        for event_id, event in self._open_fills.items():
-            if event.instrument_id.value != key or int(event.ts_event) != ts_ns:
-                continue
-            if self._spread_at.get(event_id) == ts_ns:
-                continue
-            self._spread_at[event_id] = ts_ns
-            booked = self._booked_open.get(event_id)
-            if booked is not None:
-                charged = self._charge(event)
-                self._cash -= charged - booked
-                self._booked_open[event_id] = charged
-
-    def _spread_instant(self, key: str, ts_ns: int) -> int | None:
-        """The instant a fill of `key` at `ts_ns` had its price struck at, as the venue strikes
-        it: the name's bar of that instant when there is one and the venue had it — always with
-        no latency stated, and under a latency when a bar of the name was the instant's first
-        point, since an order arriving then lands after that point alone — and otherwise the
-        name's last bar before it; `None` for a name with no bar yet, whose fill reads its own
-        instant. The extraction reads the same rule off the stream (`Marks`)."""
-        held = self._spread_bars.get(key)
-        if held is None:
-            return None
-        last, first, before = held
-        if last < ts_ns or (last == ts_ns and (self._instant() or first)):
-            return last
-        return before
 
     def _worth(self, position: Any) -> float:
         """One open position's market value at its last print, quoted in the shares held now.

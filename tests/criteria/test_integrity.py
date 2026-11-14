@@ -221,7 +221,7 @@ def test_everything_the_harness_keeps_of_a_dated_spread_is_denied() -> None:
     from tests.nautilus.strategy.test_sleeve import config
 
     handed = SimpleNamespace()
-    dated(handed, ())
+    dated(handed, (), object())
     kept = {name for name in vars(KansoStrategy(config())) if name.startswith("_spread")}
     reading = {name for name in dir(KansoStrategy) if name.startswith("_spread")}
 

@@ -34,19 +34,23 @@ is the equity the runner strikes.
 A dated spread (`spread: dated`) is the half-width of one row of a table
 (`dated_half_spread`): the latest row of the fill's instrument whose `from` is on or before the
 New York date of the instant its price was struck at, and of that row the width of the part of
-the session that instant is in. The instant is the price's, never the fill's own: under a
-latency the venue fills an order at the first point of any name after it arrives, at its own
-name's last close, which can be a bar of another part of the session or another day. The part
-is read off the minute the bar covers (`kanso.nautilus.clock.session_of`, the instant a
-nanosecond before the bar's stamp): `pre`, `rth` and `post` as the clock reads them, `open` for
-the bars stamped 09:31 to 09:35, which cover 09:30 to 09:35 — a cost window inside regular
-hours, so the clock's segments, and a strategy's `self.session`, keep their four values — and
-the larger of `pre` and `post` overnight. The last row of an instrument stays in force, so a
-window past the table is charged its last year. No calendar of early closes is read: a fill
-between an early close and 16:00 is charged `rth`. A fill with no row in force is charged no
-spread, which `Hypothesis` refuses for every name the hypothesis trades from its research
-window on and `RunRequest` from the first day it delivers. What a sleeve reserves for a dated
-spread when it sizes is `dated_reserve_bps`, which reads no date.
+the session that instant is in. The instant is the price's, never the fill's own, and the venue
+says which it was (`kanso.nautilus.struck`): the `ts_event` of the fill's name's last point the
+venue had applied when it filled — a bar's close, or a print's own stamp. Under a latency an
+order lands after the first point of an instant, whichever name's, and fills at its own name's
+last price, which can be a bar of another part of the session or another day. The part is read
+off the minute that point covers (`kanso.nautilus.clock.session_of`, the instant a nanosecond
+before its stamp, so a print stamped on a part's first instant reads as the part before it):
+`pre`, `rth` and `post` as the clock reads them, `open` for the bars stamped 09:31 to 09:35,
+which cover 09:30 to 09:35 — a cost window inside regular hours, so the clock's segments, and a
+strategy's `self.session`, keep their four values — and the larger of `pre` and `post`
+overnight. The last row of an instrument stays in force, so a window past the table is charged
+its last year. No calendar of early closes is read: a fill between an early close and 16:00 is
+charged `rth`. A fill with no row in force is charged no spread, which `Hypothesis` refuses for
+every name the hypothesis trades on the New York date its research window's first instant falls
+on, and on the date a warmup reaches at the latest, and `RunRequest` on the date of the first
+instant it delivers. What a sleeve reserves for a dated spread when it sizes is
+`dated_reserve_bps`, which reads no date.
 
 A perpetual's funding is the third charge, and the only one that is neither a fill cost nor
 a period-end policy: at each settlement the holder pays the realised rate on the notional it
@@ -139,8 +143,9 @@ def fixed_half_spread(fixed_bps: float | None) -> float:
 
 def dated_part(price_ts_ns: int) -> tuple[str, date]:
     """The part of the session a price struck at `price_ts_ns` pays a dated width for, and the
-    New York date its row is read on: those of the minute the bar stamped there covers, with
-    `open` for the bars stamped 09:31 to 09:35 and `overnight` before 04:00 and from 20:00."""
+    New York date its row is read on: those of the minute a point stamped there covers — a
+    bar's, stamped at its close — with `open` for the bars stamped 09:31 to 09:35 and
+    `overnight` before 04:00 and from 20:00."""
     segment, day, minute = session_of(price_ts_ns)
     if segment == RTH and minute in OPEN_MINUTES:
         return OPEN, day
@@ -176,7 +181,10 @@ def dated_reserve_bps(
     no instrument or no instant, the largest of every row's every part. It is the whole width
     where a fill pays half, as `fixed_bps` is reserved; and every row of every year stands in
     it, so what it says is the same on any day of the window and nothing of which row is in
-    force reaches the strategy through it."""
+    force reaches the strategy through it. It covers a fill priced in the part of the session
+    it was sized in, and only that: under a latency an order sized on the bar stamped 16:00
+    can be priced at its name's bar of 16:01, in `post`, and pay a half-width larger than the
+    `rth` width reserved (`docs/backlog.md` row 261)."""
     held = [row for row in rows if instrument is None or row.instrument == instrument]
     if instrument is None or at_ns is None:
         return max((_width(row, part) for row in held for part in PARTS), default=0.0)

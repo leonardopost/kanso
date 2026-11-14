@@ -7,6 +7,7 @@ so the test asserts both rather than only that something went wrong.
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 import pytest
@@ -311,29 +312,81 @@ def test_a_dated_spread_in_force_from_the_research_window_is_admissible(ws: Work
             "DEMO's row from 2023-01-01 follows its row from 2024-01-01",
             "order each instrument's rows by `from`",
         ),
-        (_dated(("DEMO", "2023-01-01", -1.0)), "pre", None),
+        (
+            _dated(("DEMO", "2023-01-01", -1.0)),
+            "costs.dated.0: pre: -1.0 in DEMO's row from 2023-01-01",
+            "state pre of DEMO's row from 2023-01-01 as the full width measured",
+        ),
+        (
+            {**_dated(("DEMO", "2023-01-01", 9.0)), "spread": "fixed_bps", "fixed_bps": 2},
+            "costs.dated: states 1 row(s) and costs.spread is fixed_bps",
+            "state costs.spread: dated beside the rows, or drop costs.dated",
+        ),
+        (
+            _dated(("DEMO", "2023-01-01", 9.0), ("DEMO", "2025-01-06", 9.0)),
+            "costs.dated: DEMO has a row from inside the certification window, which opens "
+            "2025-01-06",
+            "drop the rows from 2025-01-06 on",
+        ),
         (
             _dated(("DEMO", "2023-01-01", 9.0), ("EURO", "2023-01-01", 9.0)),
             "costs.dated: names EURO, which is not in the universe",
             "drop the rows of instruments the hypothesis does not trade",
         ),
         (
-            _dated(("DEMO", "2024-01-03", 9.0)),
-            "costs.dated: DEMO has no row in force on 2024-01-02, the research window's first day",
-            "state a row from 2024-01-02 or earlier for DEMO",
+            _dated(("DEMO", "2024-01-02", 9.0)),
+            "costs.dated: DEMO has no row in force on 2024-01-01, the New York date the research "
+            "window's first instant falls on",
+            "state a row from 2024-01-01 or earlier for DEMO",
         ),
     ],
 )
 def test_a_dated_spread_that_would_charge_a_traded_name_nothing_or_out_of_order_is_refused(
-    ws: Workspace, costs: dict[str, Any], said: str, remedy: str | None
+    ws: Workspace, costs: dict[str, Any], said: str, remedy: str
 ) -> None:
-    """No rows, rows out of order, a negative width, a row of a name outside the universe, and
-    a traded name with no row in force on the research window's first day: each exits 3."""
+    """No rows, rows without a dated spread, rows out of order, a negative width, a row of a
+    name outside the universe or from inside the certification window, and a traded name with
+    no row in force on the New York date the research window opens on — the evening before its
+    first UTC day: each exits 3, naming `costs.dated` and the remedy."""
     failure = refused(ws, document(costs=costs))
 
     assert said in failure.message
-    if remedy is not None:
-        assert remedy in (failure.remedy or "")
+    assert remedy in (failure.remedy or "")
+
+
+def test_a_dated_spread_is_held_as_far_back_as_a_warmup_reaches(ws: Workspace) -> None:
+    """Three sessions before 2 January reach 30 December at the latest, whose New York evening
+    before it is the first a fill can be priced on; the sessions the catalog holds reach
+    further, past a weekend, and are held to the table where the catalog resolves them."""
+    warmed = {"warmup": {"sessions": 3}}
+    failure = refused(ws, document(costs=_dated(("DEMO", "2023-12-30", 9.0)), **warmed))
+
+    assert "DEMO has no row in force on 2023-12-29" in failure.message
+    assert "a warmup of 3 session(s) before 2024-01-02 delivers on at the latest" in failure.message
+    assert accepted(ws, document(costs=_dated(("DEMO", "2023-12-29", 9.0)), **warmed))
+
+
+def test_a_dated_spread_is_held_to_the_warmup_the_catalog_resolves(
+    ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest
+
+    resolved = (date(2023, 12, 27), date(2023, 12, 29))
+    monkeypatch.setattr(backtest, "warmup_prefix", lambda *_: resolved)
+    warmed = document(costs=_dated(("DEMO", "2023-12-29", 9.0)), warmup={"sessions": 3})
+
+    failure = refused(ws, warmed)
+    assert "DEMO has no row in force on 2023-12-26" in failure.message
+    assert "the 3 warmup session(s) the catalog holds before 2024-01-02" in failure.message
+    assert failure.remedy == "state a row from 2023-12-26 or earlier for DEMO"
+    assert accepted(ws, document(costs=_dated(("DEMO", "2023-12-26", 9.0)), warmup={"sessions": 3}))
+
+    def unresolved(*_: object) -> None:
+        raise PreconditionError("the catalog holds 0 sessions")
+
+    monkeypatch.setattr(backtest, "warmup_prefix", unresolved)
+    assert accepted(ws, warmed)
 
 
 def test_quotes_complete_the_cost_model_without_a_width(ws: Workspace) -> None:

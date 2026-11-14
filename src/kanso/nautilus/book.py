@@ -766,9 +766,9 @@ def _refuse_members(book: SharedBook, members: Sequence[BookMember]) -> None:
     window or period, a member under a `book` policy, with an attached construct, holding
     a level-two book or charged a dated spread, and a window its hypothesis does not declare.
 
-    A dated spread reads which point opened each instant of the member's own stream, and a
-    book's members share one stream another member's series can open (`docs/backlog.md`
-    row 260)."""
+    A dated spread is read at the instant the venue priced each fill at, and a book's runner
+    neither keeps that record nor hands its members the table (`kanso.nautilus.struck`), so a
+    member charged one is refused rather than charged nothing (`docs/backlog.md` row 260)."""
     from kanso.nautilus.costs import dated_rows
     from kanso.nautilus.cross_section import BOOK
 

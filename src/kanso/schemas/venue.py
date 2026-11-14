@@ -90,8 +90,9 @@ feeding a broker that matches against current prices.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Any, Final, Literal
 
 from pydantic import (
@@ -99,7 +100,6 @@ from pydantic import (
     Field,
     SerializerFunctionWrapHandler,
     StringConstraints,
-    field_serializer,
     model_serializer,
     model_validator,
 )
@@ -140,8 +140,11 @@ REPLAY_DATA_CLIENT = "replay"
 UNWRITTEN_UNSTATED: Final = ("orders_per_minute", "requests_per_cancel", "dated")
 """The cost keys a resolved model leaves out of what it dumps when no layer states them."""
 
-Width = Annotated[float, Field(ge=0, allow_inf_nan=False)]
-"""A full spread width in basis points of the mid: what a round trip crossing it pays."""
+PARTS: Final = ("pre", "open", "rth", "post")
+"""The parts of the New York session a dated row states a width for."""
+
+COUNTS: Final = ("n_sessions", "n_open")
+"""The sizes of the sample a dated row was measured on."""
 
 
 class DatedSpread(KansoModel):
@@ -150,23 +153,51 @@ class DatedSpread(KansoModel):
     was struck in — `pre` from 04:00, `open` for the bars covering 09:30 to 09:35, `rth` for the
     rest of regular hours to 16:00, `post` to 20:00 — and how many sessions and how many marks
     of the open the widths were measured on. A fill pays half its row's width, as it pays half
-    of `fixed_bps`. It dumps `from` under its own name and as a date written out, so a model
-    that carries the table records and digests as text."""
+    of `fixed_bps`. A width is a finite number, zero or more, and each count at least one; a row
+    that breaks either is refused naming the row and what to state. It dumps `from` under its
+    own name, second after the instrument, and as a date written out, so a model that carries
+    the table records and digests as text whatever pydantic dumps an alias by."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     instrument: NonEmpty
     from_: date = Field(alias="from")
-    pre: Width
-    open: Width
-    rth: Width
-    post: Width
-    n_sessions: int = Field(ge=1)
-    n_open: int = Field(ge=1)
+    pre: float
+    open: float
+    rth: float
+    post: float
+    n_sessions: int
+    n_open: int
 
-    @field_serializer("from_")
-    def _written(self, value: date) -> str:
-        return value.isoformat()
+    @model_validator(mode="after")
+    def _measured(self) -> DatedSpread:
+        for part in PARTS:
+            width = float(getattr(self, part))
+            if not math.isfinite(width) or width < 0:
+                raise RemedyError(
+                    f"{part}: {width} in {self.instrument}'s row from {self.from_}; a width is "
+                    "a finite number of basis points of the mid, zero or more",
+                    remedy=f"state {part} of {self.instrument}'s row from {self.from_} as the "
+                    "full width measured, in bp of the mid",
+                )
+        for count in COUNTS:
+            if getattr(self, count) < 1:
+                raise RemedyError(
+                    f"{count}: {getattr(self, count)} in {self.instrument}'s row from "
+                    f"{self.from_}; a row is measured on at least one session and one mark of "
+                    "the open",
+                    remedy=f"state {count} of {self.instrument}'s row from {self.from_} as the "
+                    "count its widths were measured on",
+                )
+        return self
+
+    @model_serializer(mode="wrap")
+    def _written(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        dumped: dict[str, Any] = handler(self)
+        dumped.pop("from_", None)
+        dumped.pop("from", None)
+        instrument = dumped.pop("instrument")
+        return {"instrument": instrument, "from": self.from_.isoformat(), **dumped}
 
 
 def _unordered(rows: Sequence[DatedSpread]) -> str | None:
@@ -184,10 +215,14 @@ def _unordered(rows: Sequence[DatedSpread]) -> str | None:
     return None
 
 
-def _check_dated(spread: str | None, rows: Sequence[DatedSpread] | None) -> None:
-    """Refuse a dated spread without rows, rows without a dated spread, and rows out of order.
+def check_dated_paired(spread: str | None, rows: Sequence[DatedSpread] | None) -> None:
+    """Refuse a dated spread without rows, and rows without a dated spread: where the spread a
+    fill pays is read, by the hypothesis that states it and by the model it resolves to.
 
-    Raised as `RemedyError`, so the refusal a model leaves as carries what to do about it."""
+    Not by a cost layer itself, which a venue entry or a broker's declaration is too: a dated
+    spread is the hypothesis's alone, and one stated there is refused naming that layer
+    (`_refuse_layer_dated`) rather than told to complete itself. Raised as `RemedyError`, so
+    the refusal a model leaves as carries what to do about it."""
     if spread == "dated" and not rows:
         raise RemedyError(
             "costs.dated: required when spread is dated, and it states no row",
@@ -200,11 +235,26 @@ def _check_dated(spread: str | None, rows: Sequence[DatedSpread] | None) -> None
             "so nothing would charge them",
             remedy="state costs.spread: dated beside the rows, or drop costs.dated",
         )
+
+
+def _check_ordered(rows: Sequence[DatedSpread] | None) -> None:
+    """Refuse a table whose rows of one instrument are not in force one after another."""
     unordered = _unordered(rows or ())
     if unordered is not None:
         raise RemedyError(
             unordered, remedy="order each instrument's rows by `from`, one row per date"
         )
+
+
+def first_new_york_day(day: date) -> date:
+    """The New York date the first instant of the UTC day `day` falls on: the day before.
+
+    A run is delivered from 00:00 UTC of its first day, and New York runs four or five hours
+    behind UTC at every instant, so that instant, and every point stamped before New York's own
+    midnight, is the evening of the New York day before — the date a dated row is read on
+    (`kanso.nautilus.costs.dated_part`, `kanso.nautilus.clock`). It is the earliest date a fill
+    priced at a point the run delivers can read a row on."""
+    return day - timedelta(days=1)
 
 
 class CostsOverride(KansoModel):
@@ -227,9 +277,8 @@ class CostsOverride(KansoModel):
     dated: tuple[DatedSpread, ...] | None = None
 
     @model_validator(mode="after")
-    def _dated_stated_whole(self) -> CostsOverride:
-        if self.spread == "dated" or self.dated is not None:
-            _check_dated(self.spread, self.dated)
+    def _dated_in_order(self) -> CostsOverride:
+        _check_ordered(self.dated)
         return self
 
 
@@ -276,8 +325,8 @@ class Costs(KansoModel):
 
     @model_validator(mode="after")
     def _dated_present(self) -> Costs:
-        if self.spread == "dated" or self.dated is not None:
-            _check_dated(self.spread, self.dated)
+        check_dated_paired(self.spread, self.dated)
+        _check_ordered(self.dated)
         return self
 
     @model_validator(mode="after")

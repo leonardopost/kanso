@@ -101,11 +101,13 @@ class Fill:
     no quote before it, pays both. A fill recorded before the field was kept reads as not
     touched, which is how it was charged.
 
-    `price_ts_ns` is, under a dated spread, the instant the fill's price was struck at — its
-    name's bar, which under a latency can be another part of the session or another day than
-    the fill's own — whose row and part of the session it was charged
-    (`kanso.nautilus.costs.dated_half_spread`). `None` where no dated spread was charged, and on
-    every fill recorded before the field was kept: it reads as the fill's own instant.
+    `price_ts_ns` is, under a dated spread, the instant the fill's price was struck at — the
+    `ts_event` of its name's last point the venue had applied when it filled, a bar's close or
+    a print's own stamp (`kanso.nautilus.struck`), which under a latency can be another part of
+    the session or another day than the fill's own — whose row and part of the session it was
+    charged (`kanso.nautilus.costs.dated_half_spread`). `None` where no dated spread was
+    charged, and on every fill recorded before the field was kept: it reads as the fill's own
+    instant.
     """
 
     ts_ns: int

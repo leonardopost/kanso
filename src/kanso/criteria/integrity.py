@@ -404,18 +404,16 @@ methods that show the author its view of it."""
 DENIED_SPREAD: Final = frozenset(
     {
         "_spread_rows",
-        "_spread_bars",
-        "_spread_at",
-        "_spread_bar",
-        "_spread_instant",
+        "_spread_struck",
         "_half_of",
         "_charge",
     }
 )
-"""The harness's dated spread table and what reads it (`kanso.nautilus.cross_section.dated`):
-each row is a year's median width, in force from that year's first day, so a strategy that read
-one would know a width the market had not shown yet. A sleeve reserves for the spread through
-`cost_rate`, which reads no date."""
+"""The harness's dated spread table, the venue's record of the instant each fill was priced at
+that it is read at, and what reads them (`kanso.nautilus.cross_section.dated`): each row is a
+year's median width, in force from that year's first day, so a strategy that read one would know
+a width the market had not shown yet. A sleeve reserves for the spread through `cost_rate`,
+which reads no date."""
 
 DENIED_BUS: Final = frozenset({"msgbus", "_msgbus"})
 """The engine's message bus, under both the names every `Strategy` and `Actor` holds it by

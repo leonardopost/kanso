@@ -698,9 +698,10 @@ returns the card's metric and error exactly (`kanso.research.records.Measurement
 `compute` is that call and whose `between` cuts the run, its host and its benchmark to any
 span of the window for a reading the loop never took).
 A fill charged a dated spread (`docs/workspace.md`, `costs.spread: dated`) keeps the instant
-its price was struck at as `price_ts_ns` — under a latency, another part of the session or
-another day than its own — so the row and the part it paid are read again from the record; a
-fill no dated spread charged keeps none, and its record is what it was before the field.
+its price was struck at as `price_ts_ns` — the reference time of the point the venue priced it
+at, under a latency another part of the session or another day than its own — so the row and
+the part it paid are read again from the record; a fill no dated spread charged keeps none,
+and its record is what it was before the field.
 
 Under another kanso, `compute` is that kanso's objective on the same run, and a release can
 compute an objective differently: 0.17.0 made an objective's error the error of its mean,
@@ -2120,24 +2121,24 @@ nothing and no multiple moves it (`docs/backlog.md` row 224).
 **A dated spread is read at the instant a fill's price was struck at.** Under `spread: dated`
 (`docs/workspace.md`) a fill not struck at the touch pays half the width of the row its
 instrument had in force on the New York date of its price, for the part of the session that
-price's bar covers: `pre`, `open` (the bars stamped 09:31 to 09:35), `rth` and `post`, read off
-the New York clock a nanosecond before the bar's stamp (`kanso.nautilus.clock.session_of`), so
+price covers: `pre`, `open` (the bars stamped 09:31 to 09:35), `rth` and `post`, read off the
+New York clock a nanosecond before the price's stamp (`kanso.nautilus.clock.session_of`), so
 the open is a cost window inside regular hours and a strategy's `self.session` keeps its four
-segments. The price is a bar's, and which bar is the venue's to say: it settles the commands
-due at an instant after each point, so with no latency an order sent at an instant fills at
-its name's bar of it, and under a latency an order lands after the first point of the instant
-it arrives at, and fills at its name's bar of that instant only where a bar of the name was
-that point, at its last bar before it otherwise. The extraction reads that off the stream:
-`Marks` keeps each name's bar instants, and whether a bar of the name opened its instant, per
-chunk, and carries the last across chunks. The harness reads the same rule as the points
-arrive: a fill is pinned to its name's last bar when the engine hands it over, and a fill the
-venue made on a bar it has not handed the sleeve yet — a resting order the bar reached — is
-struck again when that bar is delivered and the difference booked, as a fill a quote made is,
-so `self.balance` stays the equity. A resting limit filled under a latency by its own name's bar
-at an instant another point opened is read at its bar before by both (row 261). The rows reach
-the harness apart from the configuration a strategy reads, and the reserve it sizes with
-reads every year's row, not the one in force: each row is its year's median, in force from the
-year's first day.
+segments. Which price a fill took is the venue's to say, and it is read off the venue: kanso's
+venue keeps each name's last point as it applies it, at the point's own reference time — a
+bar's close, a print's stamp — and each fill's when the execution engine applies it, before
+the sleeve is handed it (`kanso.nautilus.struck`). The venue settles the commands due at an
+instant after each point, so under a latency an order lands after the first point of the
+instant it arrives at, and fills at its name's bar of that instant only where a bar of the
+name was that point, at its last price before it otherwise; with none, an order sent once the
+author is handed an instant's points fills at its name's price of that instant, and one a fill
+handler sends while the venue is still applying them fills at what it has applied so far. The
+extraction (`Marks.priced`) and the harness read that one record, so `self.balance` stays the
+equity on every path: a card, a replay, and a stage, whose venue is handed every version's
+series in an order of its own and, on a restart, its warmup sessions again — neither of which
+a version's own view of the window shows. The rows reach the harness apart from the
+configuration a strategy reads, and the reserve it sizes with reads every year's row, not the
+one in force: each row is its year's median, in force from the year's first day.
 
 **A fill that rested can be charged as one, and a sale pays its fees whoever filled it.** Every fill pays commission, once, in the runner's
 extraction, and slippage and half the spread where its price does not carry the spread

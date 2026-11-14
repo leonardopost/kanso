@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from kanso.nautilus.backtest import execute
+from kanso.nautilus.costs import dated_half_spread
 
-from .conftest import RESEARCH, bars, hypothesis, instrument, quotes, trades
+from .conftest import INSTRUMENT, RESEARCH, bars, hypothesis, instrument, quotes, trades
 
 PROBE = b"""
 from pathlib import Path
@@ -47,18 +48,34 @@ class Strategy(KansoStrategy):
 
 FIXED = {"commission_bps": 1.0, "slippage_bps": 2.0, "spread": "fixed_bps", "fixed_bps": 4.0}
 QUOTED = {"commission_bps": 1.0, "slippage_bps": 2.0, "spread": "quotes"}
+DATED = {
+    "commission_bps": 1.0,
+    "slippage_bps": 2.0,
+    "spread": "dated",
+    "dated": [
+        {"instrument": INSTRUMENT, "from": day, "pre": 30.0, "open": 20.0, "rth": rth, "post": 40.0}
+        | {"n_sessions": 5, "n_open": 25}
+        for day, rth in (("2023-01-01", 6.0), ("2024-01-15", 8.0))
+    ],
+}
+"""Two rows, so a run through the middle of January charges two years' worth of widths."""
 
 
-@pytest.mark.parametrize("quoted", [False, True], ids=["fixed spread", "quoted spread"])
+@pytest.mark.parametrize(
+    ("quoted", "costs"),
+    [(False, FIXED), (True, QUOTED), (False, DATED)],
+    ids=["fixed spread", "quoted spread", "dated spread"],
+)
 def test_the_balance_read_before_acting_is_the_equity_struck_at_that_period_end(
-    tmp_path: Path, request_for, quoted: bool
+    tmp_path: Path, request_for, quoted: bool, costs: dict[str, object]
 ) -> None:
     """Compared on every session the probe does not trade on: a session it trades on is
     struck after the fills its own orders made, which the balance it read before them
-    cannot hold."""
+    cannot hold. Under a dated spread every fill pays its row's half-width, the row changing in
+    the middle of the window."""
     hyp = hypothesis(
         data_requirements=("bar", "quote") if quoted else ("bar",),
-        costs=QUOTED if quoted else FIXED,
+        costs=costs,
     )
     record = tmp_path / "balance.txt"
     request = request_for(
@@ -77,6 +94,14 @@ def test_the_balance_read_before_acting_is_the_equity_struck_at_that_period_end(
     assert card.fills
     assert all(fill.cost > 0 for fill in card.fills)
     assert_the_same(card, record, at_least=15)
+    if costs is DATED:
+        assert hyp.costs is not None and hyp.costs.dated is not None
+        for fill in card.fills:
+            assert fill.price_ts_ns is not None
+            half = dated_half_spread(hyp.costs.dated, INSTRUMENT, fill.price_ts_ns)
+            assert fill.cost == pytest.approx(fill.notional * (3.0 / 10_000 + half))
+        paid = {round(fill.cost / fill.notional * 10_000 - 3.0, 9) for fill in card.fills}
+        assert paid == {3.0, 4.0}  # half the regular-hours width of each row in turn
 
 
 def assert_the_same(card, record: Path, *, at_least: int) -> None:

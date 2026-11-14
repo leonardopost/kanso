@@ -90,6 +90,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from kanso.nautilus import availability, splits, tape
 from kanso.nautilus.availability import Availability
 from kanso.nautilus.splits import Split
+from kanso.nautilus.struck import Struck, StruckPart
 from kanso.nautilus.tape import Tape
 
 __all__ = [
@@ -353,7 +354,7 @@ def last_price(book: Any, position: Any) -> float:
     return float(position.last_event.last_px)
 
 
-def parts(venue: str) -> list[SimulationModule]:
+def parts(venue: str, struck: Struck | None = None) -> list[SimulationModule]:
     """kanso's simulation modules for one venue, in the order a venue runs them, each named
     for the venue it serves: the corporate actions first, which read the book a split
     restates and pays in lieu from, then `Availability`, which may empty a top-of-book book
@@ -362,17 +363,23 @@ def parts(venue: str) -> list[SimulationModule]:
     nothing to restate, and no quote to value the fraction at. Then `Tape`, which under
     `limit_fill: print_through` lands what is due by a print and tells the fill model the
     point in hand, after a split has restated the book and before the point is applied, and
-    under any other rule does nothing. A venue loads them as one module (`modules`)."""
-    return [
+    under any other rule does nothing. Last, under a dated spread, the venue half of `struck`
+    (`kanso.nautilus.struck`), which keeps each name's last point as the matching engine is
+    about to apply it — after `Tape`, so an order landed before a print is struck at the
+    market before that print. A venue loads them as one module (`modules`)."""
+    loaded: list[SimulationModule] = [
         CorporateActions(SimulationModuleConfig(component_id=f"{NAME}-{venue}")),
         Availability(SimulationModuleConfig(component_id=f"{availability.NAME}-{venue}")),
         Tape(SimulationModuleConfig(component_id=f"{tape.NAME}-{venue}")),
     ]
+    if struck is not None:
+        loaded.append(StruckPart(venue, struck))
+    return loaded
 
 
-def modules(venue: str) -> list[SimulationModule]:
+def modules(venue: str, struck: Struck | None = None) -> list[SimulationModule]:
     """The simulation modules one venue loads: kanso's `parts` for it, as one module."""
-    return [KansoModules(venue, parts(venue))]
+    return [KansoModules(venue, parts(venue, struck))]
 
 
 class KansoModules(SimulationModule):  # type: ignore[misc]
@@ -450,5 +457,5 @@ class KansoModules(SimulationModule):  # type: ignore[misc]
             part.reset()
 
 
-_POINTED: Final = (CorporateActions, Availability, Tape)
+_POINTED: Final = (CorporateActions, Availability, Tape, StruckPart)
 """The parts that take a quote or a print beside the id `KansoModules` read once (`point`)."""

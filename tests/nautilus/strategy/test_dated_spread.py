@@ -1,5 +1,5 @@
 """The harness under a dated spread: handed the table apart, reserving a width no day moves,
-and reading each fill's instant as the extraction does.
+and reading each fill's instant off the venue's record the extraction reads.
 
 The rows are each a year's median, in force from its first day, so a strategy that read one
 would know a width the market had not shown yet: the configuration a sleeve is built with
@@ -23,6 +23,7 @@ from kanso.nautilus import backtest
 from kanso.nautilus.costs import dated_half_spread, dated_part, dated_reserve_bps
 from kanso.nautilus.cross_section import dated
 from kanso.nautilus.strategy import KansoStrategy
+from kanso.nautilus.struck import Struck
 from kanso.schemas.venue import DatedSpread
 from tests.nautilus.backtest.test_dated_spread import FIRST, _request
 from tests.nautilus.strategy.test_sleeve import config
@@ -49,9 +50,9 @@ ROWS = tuple(
 )
 
 
-def _sleeve(latency_ms: float = 0.0) -> KansoStrategy:
+def _sleeve(latency_ms: float = 0.0, struck: Struck | None = None) -> KansoStrategy:
     sleeve = KansoStrategy(config(venue_model={"costs": {**COSTS, "latency_ms": latency_ms}}))
-    dated(sleeve, ROWS)
+    dated(sleeve, ROWS, Struck() if struck is None else struck)
     return sleeve
 
 
@@ -80,11 +81,23 @@ def test_the_sleeve_is_configured_without_the_table_and_handed_it_apart() -> Non
     assert sleeve.venue_model["costs"]["spread"] == "dated"  # type: ignore[index]
     assert "dated" not in sleeve.kanso_config.venue_model["costs"]  # type: ignore[operator]
     assert sleeve._spread_rows == ()
-    backtest.booked(sleeve, request)
+    struck = Struck()
+    backtest.booked(sleeve, request, struck)
     assert {row.instrument for row in sleeve._spread_rows} == {
         f"{FIRST}.XNAS",
         "LAGG.XNAS",
     }
+    assert sleeve._spread_struck is struck
+
+
+def test_a_dated_sleeve_booked_without_the_venue_s_record_is_refused() -> None:
+    """The harness reads each fill's instant off the record its venue keeps, so a path that
+    kept none would charge each fill another instant than the extraction does."""
+    request = _request(10.0)
+    cls, configured = backtest._sleeve(request)
+
+    with pytest.raises(PreconditionError, match="keeps no record of the instant"):
+        backtest.booked(cls(config=configured), request)
 
 
 @given(
@@ -93,12 +106,13 @@ def test_the_sleeve_is_configured_without_the_table_and_handed_it_apart() -> Non
     ),  # 2010 to the end of 2023
     price=st.floats(min_value=0.5, max_value=500.0),
 )
-def test_the_reserve_is_at_least_every_fill_s_charged_rate_and_reads_no_date(
+def test_the_reserve_covers_a_fill_priced_where_it_sized_and_reads_no_date(
     at: int, price: float
 ) -> None:
     """What `cost_rate_at` reserves for a name at the part of the session the point being
-    handled is in covers what a fill priced at that instant is charged, in any year; and it
-    is the same at that part of the session in every year."""
+    handled is in covers what a fill priced in that part is charged, in any year; and it is
+    the same at that part of the session in every year. A fill priced in a later part of the
+    session than it was sized in can pay more (`docs/backlog.md` row 261)."""
     sleeve = _sleeve()
     sleeve._data_time = at
     reserved = sleeve.cost_rate_at(price, instrument=NAME)
@@ -123,44 +137,23 @@ def test_a_sleeve_charged_a_dated_spread_and_handed_no_table_refuses_to_charge_n
 DAY = date(2023, 7, 3)
 
 
-@pytest.mark.parametrize("latency_ms", [0.0, 10.0])
-def test_a_fill_reads_its_bar_of_the_instant_where_the_venue_had_it(latency_ms: float) -> None:
-    """As the extraction reads it: with no latency every bar of the instant is had; under one,
-    the name's bar of the instant only where a bar of it opened the instant — a second grain
-    of the name at the instant keeps what the first said — and the bar before it otherwise."""
-    sleeve = _sleeve(latency_ms)
+def _filled(event_id: str, name: str, ts: int) -> SimpleNamespace:
+    return SimpleNamespace(id=event_id, instrument_id=SimpleNamespace(value=name), ts_event=ts)
+
+
+def test_a_fill_is_charged_at_the_instant_the_venue_recorded_for_it() -> None:
+    """The record the venue keeps names the bar a fill's price came from, which can be another
+    part of the session than the fill's own instant; a fill it recorded nothing for is read
+    at its own."""
+    struck = Struck()
+    sleeve = _sleeve(struck=struck)
     before, at = _ns(DAY, "09:30"), _ns(DAY, "09:31")
+    struck._at["priced"] = before
 
-    assert sleeve._spread_instant(NAME, at) is None
-    sleeve._spread_bar(NAME, before, True)
-    assert sleeve._spread_instant(NAME, at) == before
-    sleeve._spread_bar(NAME, at, False)  # another name's point opened the instant
-    sleeve._spread_bar(NAME, at, False)  # and a second grain of this one followed
-    assert sleeve._spread_instant(NAME, at) == (at if latency_ms == 0.0 else before)
-    sleeve._spread_bar("OTHER.XNAS", at, True)
-    sleeve._spread_bar("OTHER.XNAS", at, False)
-    assert sleeve._spread_instant("OTHER.XNAS", at) == at
+    priced = sleeve._half_of(None, _filled("priced", NAME, at))
+    unheard = sleeve._half_of(None, _filled("unheard", NAME, at))
 
-
-def test_a_bar_moves_only_its_own_name_s_fills_of_its_instant_not_read_at_it_yet() -> None:
-    """A fill of another name, of another instant, or already read at the bar is left as it
-    was; one not booked yet is only moved, and booked when the balance is next read."""
-    sleeve = _sleeve(0.0)
-    before, at = _ns(DAY, "09:30"), _ns(DAY, "09:31")
-
-    def fill(event_id: str, name: str, ts: int) -> SimpleNamespace:
-        return SimpleNamespace(id=event_id, instrument_id=SimpleNamespace(value=name), ts_event=ts)
-
-    fills = [
-        fill("mine", NAME, at),
-        fill("other", "OTHER.XNAS", at),
-        fill("earlier", NAME, before),
-        fill("read", NAME, at),
-    ]
-    sleeve._open_fills = {event.id: event for event in fills}
-    sleeve._spread_at = {"mine": before, "other": before, "earlier": before, "read": at}
-
-    sleeve._spread_bar(NAME, at, True)
-
-    assert sleeve._spread_at == {"mine": at, "other": before, "earlier": before, "read": at}
-    assert sleeve._booked_open == {}
+    assert priced == dated_half_spread(ROWS, NAME, before)
+    assert dated_part(before)[0] == "pre"
+    assert unheard == dated_half_spread(ROWS, NAME, at)
+    assert dated_part(at)[0] == "open"
