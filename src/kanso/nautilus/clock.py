@@ -36,7 +36,7 @@ week at its own 04:00 like any other. A reading a change skips opens at the chan
 it repeats at its first instant — the reading the `trading_hours` gate opens a session by
 (`kanso.criteria.gates.first_reading`). So the two weeks either side of a change of clocks
 are together an hour short in March and an hour long in November, and the hour falls on the
-week that holds the change for every opening — Monday 04:00, `week_opening(ts, 0, 240)`,
+week that holds the change for every opening — Monday 04:00, `week_opening(ts, 0, minute=240)`,
 among them — but a Sunday one past 02:00 and no later than 03:00, which the March change
 skips or meets. Such an opening is the change itself, and the week before it is a minute
 short for each minute the opening is past 02:00: at 03:00 the whole hour, and the week from
@@ -142,13 +142,15 @@ def session_of(ts_ns: int) -> Session:
     return Session(segment, day, minute_of(before))
 
 
-def week_opening(ts_ns: int, weekday: int, minute: int) -> tuple[int, int]:
+def week_opening(ts_ns: int, weekday: int, *, minute: int) -> tuple[int, int]:
     """The New York week an instant falls in, as the half-open span `[opens, next_opens)`.
 
     A week opens at the first instant the New York clock reads `minute` (0 to 1439) past
     midnight on `weekday` (Monday 0, as `date.weekday` counts) or later, and the next opens
     at the same reading seven days on; both are nanoseconds since the epoch. `minute` counts
-    minutes, as `minute_of` does, so Monday 04:00 is `(0, 240)`.
+    minutes, as `minute_of` does, so Monday 04:00 is `week_opening(ts_ns, 0, minute=240)`. It
+    is named at every call, because a wall time written as hours and minutes (`400` for
+    04:00) is a minute count too — 06:40 — and would move every opening silently.
     """
     _, today = segment_of(ts_ns)
     day = today - timedelta(days=(today.weekday() - weekday) % 7)

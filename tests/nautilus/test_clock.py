@@ -20,7 +20,9 @@ from hypothesis import strategies as st
 from kanso.criteria.run import midnight_ns
 from kanso.data.closures import US_EQUITY_CLOSURES, closed_days
 from kanso.nautilus import clock, strategy
+from kanso.nautilus.backtest import RunRequest
 from kanso.nautilus.clock import Session, minute_of, segment_of, session_of, week_opening
+from tests.nautilus.backtest.conftest import hypothesis as a_hypothesis
 
 NS = 1_000_000_000
 HOUR = 3_600
@@ -182,7 +184,20 @@ def test_an_evening_point_keeps_its_session_s_date_and_a_daily_bar_its_last_minu
 def test_a_week_opens_at_monday_04_00_new_york_on_either_side_of_a_change(
     instant: int, opens: int, next_opens: int
 ) -> None:
-    assert week_opening(instant, MONDAY, FOUR_AM) == (opens, next_opens)
+    assert week_opening(instant, MONDAY, minute=FOUR_AM) == (opens, next_opens)
+
+
+def test_the_minute_a_week_opens_at_is_named_at_every_call() -> None:
+    """`minute` counts minutes past midnight, so a wall time written as hours and minutes —
+    `400` for 04:00 — is read as 06:40 and moves every opening by 2 h 40 min. The argument is
+    keyword-only, so a call that passes a wall time where the minute goes is refused rather
+    than read."""
+    instant = new_york(date(2024, 1, 9), 12)
+
+    with pytest.raises(TypeError):
+        week_opening(instant, MONDAY, 400)  # type: ignore[misc]
+    assert week_opening(instant, MONDAY, minute=FOUR_AM)[0] == new_york(date(2024, 1, 8), 4)
+    assert week_opening(instant, MONDAY, minute=400)[0] == new_york(date(2024, 1, 8), 6, 40)
 
 
 def test_a_closed_monday_opens_its_week_at_its_own_04_00() -> None:
@@ -194,7 +209,7 @@ def test_a_closed_monday_opens_its_week_at_its_own_04_00() -> None:
     assert closed(holiday)
 
     tuesday_open = new_york(holiday + timedelta(days=1), 9, 31)
-    assert week_opening(tuesday_open, MONDAY, FOUR_AM) == (
+    assert week_opening(tuesday_open, MONDAY, minute=FOUR_AM) == (
         new_york(holiday, 4),
         new_york(holiday + timedelta(days=7), 4),
     )
@@ -209,7 +224,7 @@ def test_a_closed_monday_opens_its_week_at_its_own_04_00() -> None:
     assert len(mondays) > 50
     for day in mondays:
         assert closed(day)
-        assert week_opening(new_york(day, 12), MONDAY, FOUR_AM)[0] == new_york(day, 4), day
+        assert week_opening(new_york(day, 12), MONDAY, minute=FOUR_AM)[0] == new_york(day, 4), day
 
 
 @given(instants, st.integers(0, 6), st.integers(0, 1439))
@@ -221,7 +236,7 @@ def test_a_week_is_the_span_from_the_last_opening_to_the_next(
     instant — and the instant lies between the last opening and the next, seven dates on,
     whatever the weekday and the minute. The two openings name the same week from anywhere
     inside it."""
-    opens, next_opens = week_opening(ts_ns, weekday, minute)
+    opens, next_opens = week_opening(ts_ns, weekday, minute=minute)
 
     assert opens <= ts_ns < next_opens
     first, _ = wall(opens)
@@ -230,8 +245,8 @@ def test_a_week_is_the_span_from_the_last_opening_to_the_next(
         assert found % NS == 0
         assert wall(found) >= (day, minute * 60)
         assert wall(found - NS) < (day, minute * 60)
-    assert week_opening(opens, weekday, minute) == (opens, next_opens)
-    assert week_opening(next_opens - 1, weekday, minute) == (opens, next_opens)
+    assert week_opening(opens, weekday, minute=minute) == (opens, next_opens)
+    assert week_opening(next_opens - 1, weekday, minute=minute) == (opens, next_opens)
 
 
 @given(st.integers(2007, 2027), st.integers(0, 6), st.integers(0, 1439))
@@ -257,8 +272,8 @@ def test_the_weeks_either_side_of_a_change_share_its_hour(
         (utc(second_sunday_of_march(year), 7), -HOUR * NS),
         (utc(first_sunday_of_november(year), 6), HOUR * NS),
     ):
-        opens, next_opens = week_opening(change, weekday, minute)
-        before, _ = week_opening(opens - 1, weekday, minute)
+        opens, next_opens = week_opening(change, weekday, minute=minute)
+        before, _ = week_opening(opens - 1, weekday, minute=minute)
         met = hour < 0 and weekday == SUNDAY and 120 < minute <= 180
 
         assert (next_opens - opens - week) + (opens - before - week) == hour
@@ -288,13 +303,28 @@ def test_the_runner_cuts_its_weekly_periods_from_a_utc_midnight_not_from_this_cl
     returns are cut one `return_period` after another from the UTC midnight that opens its
     window, so a `1w` period of a window that opens on a Monday starts on the Sunday evening
     in New York, inside the week before: eight hours before that Monday's 04:00 under
-    daylight saving and nine without it. The module says so."""
+    daylight saving and nine without it. The module says so. The cut is read off a
+    `RunRequest` over a window that opens on the Monday, as the runner reads it, so a cut
+    moved to New York's midnight or to the week's opening fails here."""
     for monday, hours in ((date(2010, 3, 15), 8), (date(2024, 1, 8), 9)):
         assert monday.weekday() == MONDAY
-        anchor = midnight_ns(monday)  # `RunRequest.bounds` opens a window starting on it here
-        opens, next_opens = week_opening(anchor, MONDAY, FOUR_AM)
+        request = RunRequest(
+            hyp=a_hypothesis(),
+            strategy_source=b"",
+            window=(monday, monday + timedelta(days=13)),
+            snapshot_id="",
+            venue_model={},
+            capital=1.0,
+            period="1w",
+        )
+        anchor, _ = request.bounds
+        assert anchor == midnight_ns(monday)
+        assert request.period_ns == 7 * DAY * NS
+        opens, next_opens = week_opening(anchor, MONDAY, minute=FOUR_AM)
         assert next_opens == new_york(monday, 4) == anchor + hours * HOUR * NS
         assert opens < anchor
+        # The first period runs past the Monday's 04:00 into the week that opens there.
+        assert (next_opens - anchor) // request.period_ns == 0
 
     stated = " ".join((clock.__doc__ or "").split())
     assert "minute and week here and only here" not in stated
