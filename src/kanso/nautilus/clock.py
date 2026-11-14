@@ -67,7 +67,8 @@ from datetime import date, datetime, timedelta
 from typing import Final, NamedTuple
 from zoneinfo import ZoneInfo
 
-from kanso.criteria.gates import first_reading
+from kanso.criteria.gates import MINUTES_PER_DAY, first_reading
+from kanso.errors import ValidationError
 
 __all__ = [
     "NEW_YORK",
@@ -150,8 +151,20 @@ def week_opening(ts_ns: int, weekday: int, *, minute: int) -> tuple[int, int]:
     at the same reading seven days on; both are nanoseconds since the epoch. `minute` counts
     minutes, as `minute_of` does, so Monday 04:00 is `week_opening(ts_ns, 0, minute=240)`. It
     is named at every call, because a wall time written as hours and minutes (`400` for
-    04:00) is a minute count too — 06:40 — and would move every opening silently.
+    04:00) is a minute count too — 06:40 — and would move every opening silently. A weekday
+    or a minute out of those ranges is refused, never carried onto another day: `7` is not
+    Monday, and `2359` (23:59 written as hours and minutes) is not the next day's 15:19.
     """
+    if not 0 <= weekday <= 6:
+        raise ValidationError(
+            f"weekday {weekday} is not a weekday: Monday is 0 and Sunday 6",
+            remedy="name the weekday as date.weekday counts it, 0 to 6",
+        )
+    if not 0 <= minute < MINUTES_PER_DAY:
+        raise ValidationError(
+            f"minute {minute} is not a minute of a day: 0 is midnight and 1439 is 23:59",
+            remedy="name the minute past midnight, as minute_of counts it: 04:00 is 240",
+        )
     _, today = segment_of(ts_ns)
     day = today - timedelta(days=(today.weekday() - weekday) % 7)
     opens = first_reading(day, minute, NEW_YORK)

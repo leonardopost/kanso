@@ -19,6 +19,7 @@ from hypothesis import strategies as st
 
 from kanso.criteria.run import midnight_ns
 from kanso.data.closures import US_EQUITY_CLOSURES, closed_days
+from kanso.errors import ValidationError
 from kanso.nautilus import clock, strategy
 from kanso.nautilus.backtest import RunRequest
 from kanso.nautilus.clock import Session, minute_of, segment_of, session_of, week_opening
@@ -198,6 +199,31 @@ def test_the_minute_a_week_opens_at_is_named_at_every_call() -> None:
         week_opening(instant, MONDAY, 400)  # type: ignore[misc]
     assert week_opening(instant, MONDAY, minute=FOUR_AM)[0] == new_york(date(2024, 1, 8), 4)
     assert week_opening(instant, MONDAY, minute=400)[0] == new_york(date(2024, 1, 8), 6, 40)
+
+
+@pytest.mark.parametrize(
+    "weekday, minute, refused",
+    [
+        (7, FOUR_AM, "weekday 7 is not a weekday"),
+        (-1, FOUR_AM, "weekday -1 is not a weekday"),
+        (-7, FOUR_AM, "weekday -7 is not a weekday"),
+        (MONDAY, -1, "minute -1 is not a minute of a day"),
+        (MONDAY, 1440, "minute 1440 is not a minute of a day"),
+        (MONDAY, 2359, "minute 2359 is not a minute of a day"),
+    ],
+)
+def test_a_weekday_or_a_minute_out_of_range_is_refused(
+    weekday: int, minute: int, refused: str
+) -> None:
+    """A weekday past Sunday would wrap onto Monday and a minute past 23:59 run onto the next
+    day — `2359`, 23:59 written as hours and minutes, onto the next day's 15:19 — so either is
+    refused rather than read as another opening."""
+    instant = new_york(date(2024, 1, 9), 12)
+
+    with pytest.raises(ValidationError, match=refused) as caught:
+        week_opening(instant, weekday, minute=minute)
+    assert caught.value.remedy
+    assert week_opening(instant, SUNDAY, minute=1439)[0] == new_york(date(2024, 1, 7), 23, 59)
 
 
 def test_a_closed_monday_opens_its_week_at_its_own_04_00() -> None:
