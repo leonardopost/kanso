@@ -17,6 +17,7 @@ import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
+from kanso.criteria.run import midnight_ns
 from kanso.data.closures import US_EQUITY_CLOSURES, closed_days
 from kanso.nautilus import clock, strategy
 from kanso.nautilus.clock import Session, minute_of, segment_of, session_of, week_opening
@@ -280,6 +281,28 @@ def test_the_module_states_the_weeks_the_property_above_holds() -> None:
     assert "the week before it is a minute short for each minute the opening is past 02:00" in (
         stated
     )
+
+
+def test_the_runner_cuts_its_weekly_periods_from_a_utc_midnight_not_from_this_clock() -> None:
+    """The module once said the harness read a point's week here; no part of it does. A run's
+    returns are cut one `return_period` after another from the UTC midnight that opens its
+    window, so a `1w` period of a window that opens on a Monday starts on the Sunday evening
+    in New York, inside the week before: eight hours before that Monday's 04:00 under
+    daylight saving and nine without it. The module says so."""
+    for monday, hours in ((date(2010, 3, 15), 8), (date(2024, 1, 8), 9)):
+        assert monday.weekday() == MONDAY
+        anchor = midnight_ns(monday)  # `RunRequest.bounds` opens a window starting on it here
+        opens, next_opens = week_opening(anchor, MONDAY, FOUR_AM)
+        assert next_opens == new_york(monday, 4) == anchor + hours * HOUR * NS
+        assert opens < anchor
+
+    stated = " ".join((clock.__doc__ or "").split())
+    assert "minute and week here and only here" not in stated
+    assert "which week it falls in" not in stated
+    assert "No part of the harness reads a week here" in stated
+    assert (
+        "eight hours before that Monday's 04:00 under daylight saving and nine without it"
+    ) in stated
 
 
 # --- the zone stays in the package ---------------------------------------------------

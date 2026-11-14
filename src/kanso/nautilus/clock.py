@@ -1,14 +1,14 @@
 """The New York clock: which part of a US session an instant is in, and which week.
 
 A US equity trades from 04:00 to 20:00 New York time, and what a point means — whether an
-entry is in regular hours, which part of the session a bar covers, which week it falls in —
-is read off the New York wall clock, which daylight saving moves against UTC twice a year.
-The harness reads a point's segment, minute and week here and only here, so a sleeve and the
-shared book's ledger read one clock. They read it at different instants: the ledger labels
-the instant it places an entry at (`segment_of`), and a sleeve the minute its point covers
-(`session_of`). So the two part at the bars stamped 09:30 and 16:00: a sleeve reads the first
-as `pre` and the second as `rth`, and the ledger places an entry sent on the first in regular
-hours and refuses one sent on the second as outside them while its leverage there is unset.
+entry is in regular hours, which part of the session a bar covers — is read off the New York
+wall clock, which daylight saving moves against UTC twice a year. The harness reads a point's
+segment and minute here and only here, so a sleeve and the shared book's ledger read one
+clock. They read it at different instants: the ledger labels the instant it places an entry
+at (`segment_of`), and a sleeve the minute its point covers (`session_of`). So the two part
+at the bars stamped 09:30 and 16:00: a sleeve reads the first as `pre` and the second as
+`rth`, and the ledger places an entry sent on the first in regular hours and refuses one sent
+on the second as outside them while its leverage there is unset.
 
 **Segments.** Regular hours (`rth`) run from 09:30 to 16:00, the pre-market (`pre`) from
 04:00 and the post-market (`post`) to 20:00; anything else is `overnight`. No calendar is
@@ -41,6 +41,13 @@ among them — but a Sunday one past 02:00 and no later than 03:00, which the Ma
 skips or meets. Such an opening is the change itself, and the week before it is a minute
 short for each minute the opening is past 02:00: at 03:00 the whole hour, and the week from
 the change is a full seven days.
+
+No part of the harness reads a week here: `week_opening` is offered to a rule that counts New
+York weeks, and the periods a run's returns are cut into are not these weeks. The runner cuts
+those one `[research] return_period` after another from the UTC midnight that opens the
+window (`RunRequest.bounds` in `kanso.nautilus.backtest`), so a `1w` period of a window that
+opens on a Monday starts at 00:00 UTC, which is the Sunday evening in New York: eight hours
+before that Monday's 04:00 under daylight saving and nine without it.
 
 **The zone stays in the package.** A researched `strategy.py` may not import `zoneinfo`
 (`kanso.criteria.integrity`), and `kanso.nautilus.strategy`, which it may import, binds
