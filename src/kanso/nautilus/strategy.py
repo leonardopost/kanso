@@ -1111,8 +1111,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         `session` ahead of this one in its method resolution order (in the sleeve's own class
         body, or in a mixin listed before `KansoStrategy`) keeps its own, which shadows this
         one, and one that assigns `self.session` with no such binding raises at the
-        assignment. So the harness never reads `self.session`: what it reads off New York time
-        it reads as `session_of` of the instant, which no subclass replaces.
+        assignment. So the harness never reads a sleeve's `session`, by whatever name it holds
+        the sleeve: what it reads off New York time it reads off the clock at the instant
+        (`kanso.nautilus.clock`), which no subclass replaces.
         """
         return session_of(self._data_time)
 

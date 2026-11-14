@@ -245,22 +245,81 @@ def test_a_mixin_s_session_shadows_the_base_s_only_listed_before_it() -> None:
         stored(after).on_start()
 
 
-def test_the_harness_reads_the_clock_and_never_self_session() -> None:
+SESSION_MODULE = "kanso.nautilus.session"
+"""The node's session module, which a dotted path names as an attribute and is no sleeve's."""
+
+
+def names_session(node: ast.AST) -> bool:
+    """Whether the node names `session` as an attribute, on any receiver and in any context,
+    or by the string `getattr`, `setattr`, `attrgetter` and a `__dict__` lookup name it by."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "session" and ast.unparse(node) != SESSION_MODULE
+    if isinstance(node, ast.Call):
+        return any(isinstance(arg, ast.Constant) and arg.value == "session" for arg in node.args)
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == "session"
+    return False
+
+
+def lines_naming_session(source: str) -> list[int]:
+    return sorted({node.lineno for node in ast.walk(ast.parse(source)) if names_session(node)})
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "self.session",
+        "member.session.segment",
+        "pending.member.session",
+        "strategy.session.minute",
+        "run.strategy.session",
+        "sleeve.session = None",
+        "del sleeve.session",
+        "getattr(member, 'session')",
+        "setattr(sleeve, 'session', None)",
+        "operator.attrgetter('session')(sleeve)",
+        "vars(sleeve)['session']",
+        "sleeve.__dict__.get('session')",
+    ],
+)
+def test_the_guard_finds_a_sleeve_s_session_by_any_name_the_harness_holds_it_by(line: str) -> None:
+    """The shared book holds its sleeves as `member`, the runner as `strategy` and `sleeve`,
+    and a read by any of those names, or by a string, is the read the guard below forbids."""
+    assert lines_naming_session(
+        f"def _read(self, member, pending, strategy, run, sleeve):\n    {line}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from kanso.nautilus.session import SHUTDOWN_TOPIC",
+        "kanso.nautilus.session.SHUTDOWN_TOPIC",
+        "session_of(ts_ns).segment",
+        "self.sessions",
+        "{'session': 1}",
+    ],
+)
+def test_the_guard_passes_what_names_no_sleeve_s_session(line: str) -> None:
+    assert not lines_naming_session(line)
+
+
+def test_the_harness_reads_the_clock_and_never_a_sleeve_s_session() -> None:
     """Stored bytes run without a scan may bind `session` ahead of the base's and replace it
     with a value of their own, so what the harness itself reads off New York time —
-    `KansoStrategy`, the shared book, the runner, the costs — reads `session_of` of the
-    instant, never `self.session`. No module of `kanso.nautilus` reads or sets it."""
+    `KansoStrategy`, the shared book, the runner, the costs — it reads off the clock at the
+    instant, never off a sleeve. No module under `kanso.nautilus`, its subpackages included,
+    names `session` as an attribute, by whatever name it holds the receiver, or as a string
+    an attribute is reached by."""
     package = Path(nautilus.__file__).parent
+    modules = sorted(package.rglob("*.py"))
     found = [
-        f"{path.name}:{node.lineno}"
-        for path in sorted(package.glob("*.py"))
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-        if isinstance(node, ast.Attribute)
-        and node.attr == "session"
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "self"
+        f"{path.relative_to(package)}:{line}"
+        for path in modules
+        for line in lines_naming_session(path.read_text(encoding="utf-8"))
     ]
-    assert len(list(package.glob("*.py"))) > 10
+    assert any(path.parent != package for path in modules)
+    assert {"book.py", "backtest.py", "node.py", "strategy.py"} <= {path.name for path in modules}
     assert not found
 
 
