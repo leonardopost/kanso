@@ -145,6 +145,17 @@ def test_the_session_is_the_new_york_minute_each_bar_covers(backtest) -> None:
     assert run.strategy.before == session_of(0) == Session("post", date(1969, 12, 31), 1139)
 
 
+def test_the_session_has_no_setter() -> None:
+    """`strategy_integrity` refuses a researched file that binds `session`; a version
+    certified before the name was the base's is not scanned again on a replay or a stage, and
+    an assignment there raises rather than replacing the clock."""
+    sleeve = KansoStrategy(config())
+
+    with pytest.raises(AttributeError, match="session"):
+        sleeve.session = Session("rth", date(2024, 1, 2), 570)  # type: ignore[misc]
+    assert sleeve.session == session_of(0)
+
+
 def test_a_historical_bar_does_not_move_the_stream_clock(backtest) -> None:
     class Catchup(KansoStrategy):
         def on_start(self) -> None:

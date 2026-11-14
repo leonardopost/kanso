@@ -25,8 +25,9 @@ from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.errors import ValidationError
 from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
+from kanso.nautilus import clock
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
-from kanso.nautilus.clock import NEW_YORK, session_of
+from kanso.nautilus.clock import NEW_YORK, segment_of, session_of
 from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
 from kanso.schemas import CostsOverride
@@ -488,6 +489,70 @@ def test_the_concepts_page_reads_a_bar_s_session_as_the_clock_reads_it() -> None
         assert session_of(midnight) == ("overnight", day, 1439)
     assert "a daily bar stamped at the next New York midnight as minute 1439" in concepts
     assert "is refused by `strategy_integrity` once its workspace runs a kanso" in concepts
+
+
+def ny(day: date, hour: int, minute: int) -> int:
+    """A New York wall-clock reading, in nanoseconds since the epoch."""
+    return int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * 10**9
+
+
+def test_the_pages_say_where_a_bar_s_session_and_the_book_s_hours_part() -> None:
+    """A sleeve reads the minute a bar covers and the book the instant it places an entry, so
+    the two part at the bars stamped 09:30 and 16:00; and a close published after its 16:00
+    reference time reads the minute it describes while its orders go in after it. The page
+    says so, the clock reads so, and `test_shared_book.py` holds the book to it."""
+    concepts = prose(section(page("concepts.md"), "Delivery"))
+    assert "that is the last minute the bar covers, whatever its size" in concepts
+    assert (
+        "an entry sent on the bar stamped 09:30, which a sleeve reads as `pre`, is placed in "
+        "regular hours, and one sent on the bar stamped 16:00, which it reads as `rth`, is "
+        "placed outside them and refused there while the book's leverage outside regular "
+        "hours is unset (`outside_rth_unset`)"
+    ) in concepts
+    assert (
+        "a close stamped 16:00 and published at 16:15 reads `rth`, minute 959, and an order "
+        "sent on it goes in during the post-market"
+    ) in concepts
+    assert "it reads its host's as `session_of(ctx.ts_event)`" in concepts
+    for day in (date(2024, 1, 2), date(2024, 7, 2)):
+        assert session_of(ny(day, 9, 30))[::2] == ("pre", 569)
+        assert segment_of(ny(day, 9, 30)) == ("rth", day)
+        assert session_of(ny(day, 16, 0))[::2] == ("rth", 959)
+        assert segment_of(ny(day, 16, 0)) == ("post", day)
+        assert segment_of(ny(day, 16, 15)) == ("post", day)
+        assert session_of(ny(day, 10, 0))[::2] == ("rth", 599)
+
+    clock_doc = prose(clock.__doc__ or "")
+    assert "the ledger places an entry sent on the first in regular hours" in clock_doc
+    assert "refuses one sent on the second as outside them" in clock_doc
+
+
+def test_the_workspace_page_names_the_session_among_a_sleeve_s_readers() -> None:
+    """An operator writing a seed `strategy.py` from the workspace page learns the base hands
+    it the session, and that the name is the base's."""
+    hypotheses = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert "`self.session` is New York time for the point being handled" in hypotheses
+    assert "of one-minute bars the one stamped 09:31 is the first regular bar" in hypotheses
+    assert "`session` is a name the base owns" in hypotheses
+    day = date(2024, 1, 2)
+    assert session_of(ny(day, 9, 31))[::2] == ("rth", 570)
+
+
+def test_the_routes_to_the_zone_the_clock_does_not_close_are_backlog_rows() -> None:
+    """The clock and the concepts page say a strategy is handed New York time as values, and
+    cite by number the rows that record what it can still reach past them."""
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if re.match(r"\| 25[345] \|", line)
+    }
+    assert '`splits.ZoneInfo("America/New_York")`' in rows["253"]
+    assert '`unix_nanos_to_dt(self.data_time).tz_convert("America/New_York")`' in rows["254"]
+    assert "`datetime.datetime.now()`" in rows["255"]
+    assert "`docs/backlog.md` rows 253 and 254" in prose(clock.__doc__ or "")
+    assert "(what a strategy can still reach past that is `docs/backlog.md` rows 253 and 254)" in (
+        prose(section(page("concepts.md"), "Delivery"))
+    )
 
 
 def test_the_pages_say_kanso_checks_each_name_s_book_itself_of_every_point() -> None:

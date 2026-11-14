@@ -22,9 +22,11 @@ every name that printed are current before any handler of that grain runs; `data
 still belongs to the event whose handler is running, not to the last arrival of the
 instant. `session` is New York time read off it — the segment (`pre`, `rth`, `post` or
 `overnight`), New York date and minute of the day of the instant a nanosecond before
-`data_time`, which for a bar stamped at its close is the minute the bar covers
+`data_time`, which for a bar stamped at its close is the last minute the bar covers
 (`kanso.nautilus.clock.session_of`) — so a strategy is handed the market's wall clock as
-values, never the zone it was read in, and reads it alike on every path.
+values, never the zone it was read in, and reads it alike on every path. Like `data_time`
+it is the reference time's: a point published after it reads the minute it describes, not
+the one its handler runs in and its orders go in at.
 
 **It records every order intent.** `(ts_event, instrument, side, qty, order_type, price?)`
 per submitted order, stamped with `data_time` rather than a wall clock, captured by
@@ -1094,11 +1096,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (the New York date) and `minute` (of that day), of the instant a nanosecond before
         `data_time`.
 
-        A bar is stamped at its close, so that is the minute the bar covers: the bar stamped
-        09:30 is `pre`, minute 569; the one stamped 09:31 is the first `rth` bar, minute 570;
-        the one stamped 16:00 the last, minute 959. A function of `data_time` alone
-        (`kanso.nautilus.clock.session_of`), so it reads the same on every path; before the
-        first point it reads the instant before the epoch.
+        A bar is stamped at its close, so that is the last minute the bar covers: of
+        one-minute bars, the one stamped 09:30 is `pre`, minute 569; the one stamped 09:31 is
+        the first `rth` bar, minute 570; the one stamped 16:00 the last, minute 959. A point
+        published after its reference time reads the minute it describes, not the one its
+        orders go in at. A function of `data_time` alone (`kanso.nautilus.clock.session_of`),
+        so it reads the same on every path; before the first point it reads the instant before
+        the epoch. It has no setter: `strategy_integrity` refuses a `strategy.py` that binds
+        it, and a version certified before the name was the base's, and that assigns it,
+        raises `AttributeError` at the assignment on a replay or a stage, neither of which
+        scans a version again.
         """
         return session_of(self._data_time)
 

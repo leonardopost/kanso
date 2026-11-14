@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import pickle
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from math import fsum
 from pathlib import Path
 from typing import Any
 
 import pytest
-from nautilus_trader.model.data import QuoteTick
+from nautilus_trader.model.data import Bar, QuoteTick
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
-from nautilus_trader.model.objects import Quantity
+from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import book as shared
@@ -36,6 +36,7 @@ from kanso.nautilus.book import (
     run_book,
     segment_of,
 )
+from kanso.nautilus.clock import NEW_YORK, session_of
 from kanso.nautilus.sizing import BOOK_ENTRY, SizingError
 from kanso.schemas import Hypothesis, NetPerTrade, SharedBook
 from tests.own_bar_size import hidden_after_its_body
@@ -46,6 +47,7 @@ from .conftest import (
     SECOND_NS,
     SLEEVE,
     SNAPSHOT,
+    bar_type,
     bars,
     catalog,
     hypothesis,
@@ -574,6 +576,53 @@ def test_an_entry_outside_regular_hours_is_refused_while_their_leverage_is_unset
 
     assert made.counts["a"][OUTSIDE_RTH_UNSET] == 1
     assert made.runs[0].fills == ()
+
+
+ONCE = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    \"\"\"Enters on its first bar, whatever its session.\"\"\"
+
+    config_cls = KansoConfig
+
+    def on_start(self):
+        self.done = False
+
+    def on_bar(self, bar):
+        if not self.done:
+            self.done = True
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_000.0)
+"""
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "session", "refused"),
+    [(9, 30, ("pre", 569), 0), (16, 0, ("rth", 959), 1)],
+)
+def test_the_book_reads_regular_hours_at_the_instant_a_sleeve_s_session_does_not(
+    hour: int, minute: int, session: tuple[str, int], refused: int
+) -> None:
+    """A sleeve reads the minute its bar covers and the book the instant it places the entry,
+    so they part at the edges of regular hours: an entry sent on the bar stamped 09:30, which
+    the sleeve reads as `pre`, is placed and fills, and one sent on the bar stamped 16:00,
+    which it reads as `rth`, is refused outside regular hours, whose leverage is unset."""
+    day = date(2024, 1, 2)
+    stamp = int(datetime.combine(day, time(hour, minute), NEW_YORK).timestamp()) * SECOND_NS
+    ten = Price(10.0, 2)
+    points = tuple(
+        Bar(bar_type(), ten, ten, ten, ten, Quantity.from_int(10_000), ts_event=ts, ts_init=ts)
+        for ts in (stamp, stamp + 60 * SECOND_NS)
+    )
+    assert session_of(stamp)[::2] == session
+
+    made = execute_book(
+        block(), [member("a", request(hyp((DEMO,)), ONCE), 1.0)], [instrument()], [(points,)]
+    )
+
+    assert made.counts["a"][OUTSIDE_RTH_UNSET] == refused
+    assert [fill.ts_ns for fill in made.runs[0].fills] == ([] if refused else [stamp])
 
 
 def replace_ts(bar: Any, shift: int) -> Any:

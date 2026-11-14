@@ -560,6 +560,11 @@ nothing else: read where a sleeve reads `balance` it changes nothing the sleeve 
 on a point where it reads nothing else it books them there rather than at the next read, as
 `balance` read there would, which can add the same sums in another order and leave the cash a
 unit in its last place apart.
+`self.session` is New York time for the point being handled — its `segment` (`pre`, `rth`,
+`post` or `overnight`), New York `day` and `minute` of that day — of the last minute the
+point covers, so of one-minute bars the one stamped 09:31 is the first regular bar
+(`docs/concepts.md`, *Delivery*); `session` is a name the base owns, as `held` and `balance`
+are.
 `strategy_integrity` discards a `strategy.py`
 that names a size knob, builds an order by hand or reads `self.portfolio`, and — sized or
 not — one that overrides a harness method or binds any other name its base class owns, calls
