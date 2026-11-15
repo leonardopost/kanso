@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from kanso.criteria.codec import decode_run, encode_run
 from kanso.criteria.run import CardRun
+from kanso.schemas import PeriodStops
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.nautilus.node import Realised
@@ -53,6 +54,7 @@ __all__ = [
     "stage_results",
     "staged",
     "subject_of",
+    "target_seed",
 ]
 
 STAGE_RUN: Final = "stage_run"
@@ -279,16 +281,24 @@ def stage_results(
     version: int | None = None,
     stage: str | None = None,
 ) -> list[StageResult]:
-    """Every realised window recorded, oldest first, narrowed to one version or stage."""
-    subject = None if strategy_id is None or version is None else subject_of(strategy_id, version)
-    found = [
+    """Every realised window recorded, oldest first, narrowed to one strategy, version or stage.
+
+    The store narrows to a strategy's events before any is read — to the version's subject, or
+    to every subject its versions are named by (`subject_of`) — so a strategy's windows are read
+    without reading or decoding any other strategy's, and each is narrowed to the stage before
+    its run is decoded."""
+    if strategy_id is None:
+        read = store.events(kind=STAGE_RUN)
+    elif version is None:
+        read = store.events(kind=STAGE_RUN, prefix=f"{strategy_id}@")
+    else:
+        read = store.events(kind=STAGE_RUN, subject=subject_of(strategy_id, version))
+    return [
         _result(event.detail)
-        for event in store.events(kind=STAGE_RUN, subject=subject)
-        if stage is None or event.detail.get("stage") == stage
+        for event in read
+        if (stage is None or event.detail.get("stage") == stage)
+        and (strategy_id is None or event.detail.get("strategy") == strategy_id)
     ]
-    if strategy_id is not None and subject is None:
-        found = [one for one in found if one.strategy_id == strategy_id]
-    return found
 
 
 def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
@@ -306,6 +316,48 @@ def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
         if run.period_ends_ns:
             return (run.cushion[-1] if run.cushion else 0.0), run.period_ends_ns[-1]
     return 0.0, None
+
+
+def target_seed(results: Sequence[StageResult], capital: float) -> PeriodStops | None:
+    """Where a strategy's `period_target` stood when its newest window that had a week open
+    closed, whichever of its versions ran it (`results`, one strategy's windows on one stage).
+
+    That window's record narrowed to the week open at its last point (`PeriodStops.last`) and
+    the week's stop when it had stopped, which the next window lists again; `None` when no
+    window has had a week open. The week's P&L is read where the window left the sleeve: after
+    the node's own flatten, so it carries that close's cost; on a window a halt ended, which
+    the node flattens nothing of, with what the sleeve holds never closed and marked at the
+    last price it was handed, so a move the stage's marks reach after that — at the point the
+    halt came at, among others — is in no seed, and the next window, restarting flat after
+    that point, never reads it (`docs/backlog.md` row 283). A window that had no week open —
+    an idle stage's, which runs no harness, or one handed no point after its warmup that
+    resumed none — moved nothing, so the one before it still holds the answer; one handed no
+    point of its own that resumed a week records the week as it resumed it — what it had
+    made, its threshold and its stop the window before's, at its own share — so reading it
+    reads the same week. The week's anchor, threshold and P&L are stated at `capital`, the
+    share the next window runs at, scaled from the one that window ran at, so the basis points
+    made and left carry across a share that moved; the stop is kept as it was struck. The next
+    window resumes the week when it resumes trading inside it
+    (`kanso.nautilus.backtest.RunRequest.resumed`): every window restarts flat at the capital,
+    and what carries across is the week.
+    """
+    for result in reversed(results):
+        stops = result.run.period_stops
+        if stops is not None and stops.last is not None:
+            last = stops.last
+            scale = capital / result.capital
+            return PeriodStops(
+                openings=[last.opening_ns],
+                stops=[stop for stop in stops.stops if stop.opening_ns == last.opening_ns],
+                last=last.model_copy(
+                    update={
+                        "anchor": last.anchor * scale,
+                        "threshold": last.threshold * scale,
+                        "pnl": last.pnl * scale,
+                    }
+                ),
+            )
+    return None
 
 
 def _result(detail: Mapping[str, Any]) -> StageResult:

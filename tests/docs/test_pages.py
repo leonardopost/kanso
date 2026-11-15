@@ -615,6 +615,81 @@ def test_the_pages_say_nothing_sent_in_a_stopped_week_takes_the_sleeve_past_flat
     assert rows["279"].split("|")[3].strip().startswith("`submit_exit` sizes an exit against")
 
 
+def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() -> None:
+    """A stage restart reads the week the strategy's newest window left open and resumes it
+    (`tests/portfolio/test_stage_run.py`): the workspace page and the Stages section say so, no
+    page still says a window opens with no stopped week or is seeded with nothing, and the
+    backlog row that recorded it is struck through and closed."""
+    workspace = prose(page("workspace.md"))
+    stages = prose(section(page("concepts.md"), "Stages"))
+    assert "the week carries across the restart" in workspace
+    assert "one that had made 600 of a 1,000 bp target stops at 400 more" in workspace
+    assert "A week that had stopped stays stopped" in workspace
+    assert "seeded on a restart with the week its strategy's newest window on that stage" in stages
+    assert "a new version that replaces one on the stage" in workspace
+    assert "resumes it when it resumes trading inside that week" in workspace
+    assert "an entry sent from `on_start` among them" in workspace
+    assert "an order sent from `on_start` is held to it too" in stages
+    assert "resumes it when its own first point falls in" not in workspace
+    assert "resumes when its first point falls in it" not in stages
+    assert "does not carry to the other at a promotion or a demotion" in workspace
+    assert any(line.startswith("| 282 |") for line in page("backlog.md").splitlines())
+    assert "The week keeps its bounds as it keeps its threshold" in workspace
+    assert "with another `opens` leaves a week struck under the old reading in force" in workspace
+    assert "the new reading's week holds the stop, whichever way the reading moved" in workspace
+    assert "so the `stops` line counts two weeks over the span they share" in workspace
+    assert "falls later in the week than the old" not in workspace
+    repin = next(line for line in page("backlog.md").splitlines() if line.startswith("| 284 |"))
+    assert "whichever way the reading moved: later in the week or earlier" in repin
+    assert "counts two weeks over the span they share" in repin
+    assert "a week the target had stopped stays stopped" in stages
+    for text in (workspace, stages):
+        assert "opens flat at the capital with no stopped week" not in text
+        assert "seeded with nothing" not in text
+        assert "row 270" not in text
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 270 |"))
+    assert row.split("|")[3].strip().startswith("~~A stage window opens with no week")
+    assert "**closed** by seeding a restart with the week" in row
+
+
+def test_the_restart_seed_is_said_as_it_is_read() -> None:
+    """The seed is the week the newest window that had one open left (`records.target_seed`),
+    a newer idle window passed over (`tests/portfolio/test_records.py`), where several
+    docstrings once said the strategy's last window; and a week a halt ended marks each name at
+    the last price the sleeve was handed of it, a fill struck after that price included
+    (`tests/portfolio/test_stage_run.py`), where `_target_record` and row 283 once said a fill
+    handed no price after was marked at its own."""
+    from kanso.criteria import integrity
+    from kanso.nautilus import backtest, cross_section, node, strategy
+
+    sources = {
+        "RunRequest": prose(backtest.RunRequest.__doc__ or ""),
+        "Placement.target_seed": prose(
+            inspect.getsource(node.Placement).split("target_seed:")[1].split("@property")[0]
+        ),
+        "cross_section.target": prose(cross_section.target.__doc__ or ""),
+        "DENIED_TARGET": prose(
+            inspect.getsource(integrity).split("\nDENIED_TARGET: Final")[1].split('"""')[1]
+        ),
+        "strategy": prose(strategy.__doc__ or ""),
+        "_target_resume": prose(strategy.KansoStrategy._target_resume.__doc__ or ""),
+    }
+    for name, text in sources.items():
+        assert "last window on the stage" not in text, name
+        assert "the last window of the same strategy" not in text, name
+        assert "newest window" in text, name
+    halted = {
+        "_target_record": prose(strategy.KansoStrategy._target_record.__doc__ or ""),
+        "row 283": next(
+            line for line in page("backlog.md").splitlines() if line.startswith("| 283 |")
+        ),
+    }
+    for name, text in halted.items():
+        assert "at the fill's own" not in text, name
+        assert "a fill struck after that price at that price" in text, name
+        assert "at all at its own split-aware cost" in text, name
+
+
 SCANS = frozenset({"check", "clashes", "scan"})
 """What `kanso.criteria.integrity` scans a strategy's bytes with."""
 

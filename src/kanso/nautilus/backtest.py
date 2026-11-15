@@ -477,6 +477,15 @@ class RunRequest:
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
 
+    `target_seed` is where a `period_target` stood when the newest window of the same strategy
+    on the same stage that had a week open closed, whichever of its versions ran it: that
+    window's record narrowed to the week open at its last point and the week's stop when it had
+    one, stated at this window's capital (`kanso.portfolio.records.target_seed`). A newer window
+    that had no week open — an idle stage's, or a version's with no target — is passed over, so
+    the seed is the week that window left. `None` for a card, a certificate, a replay and a
+    strategy with no window on the stage that had a week open. The harness resumes it only
+    when this window resumes trading inside that week (`resumed`).
+
     `version_source` is the file a composed version's implementation holds the sleeve's bytes
     in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a
     version's expectation (`kanso.strategy.composition`), so that a `Config` giving
@@ -505,6 +514,7 @@ class RunRequest:
     cushion: float = 0.0
     settled_ns: int | None = None
     resumes_ns: int | None = None
+    target_seed: PeriodStops | None = None
     version_source: str | None = None
     version_hyp: str | None = None
 
@@ -544,6 +554,32 @@ class RunRequest:
     def bounds(self) -> tuple[int, int]:
         """The window as a half-open instant span `[opens, closes)` in nanoseconds."""
         return midnight_ns(self.window[0]), midnight_ns(self.window[1]) + NS_PER_DAY
+
+    @property
+    def resumed(self) -> PeriodStops | None:
+        """The week of `target_seed` this window resumes trading in: the seed when the instant a
+        stage restart trades from (`resumes_ns`, the one after the stage's clock) falls in the
+        week it leaves open, and `None` when the restart is past that week or there is no seed.
+
+        The week is the one the seed's window struck, from its own opening to its own close
+        (`kanso.nautilus.clock.week_closing`), and never re-read from the rule as it stands: a
+        re-pin of the hypothesis between windows that moves `period_target.opens` leaves a week
+        struck under the old reading to close where that reading closes it, as one that moves
+        `target_bp` or `of` leaves it its threshold, so a stopped week stays stopped until it
+        closes whatever the rule now names a week. The harness opens that week before the
+        author's `on_start` (`kanso.nautilus.strategy.KansoStrategy._target_resume`), so the
+        week is in force from the run's first instant and not from its first point: an order the
+        sleeve sends before that point is held to it, and a stopped week stays stopped until the
+        next opens, though the window's first point falls after the week has closed. One that
+        had made part of its target is held to what is left of it.
+        """
+        seed, target = self.target_seed, self.hyp.period_target
+        if seed is None or seed.last is None or target is None or self.resumes_ns is None:
+            return None
+        from kanso.nautilus.clock import week_closing
+
+        opens = seed.last.opening_ns
+        return seed if opens <= self.resumes_ns < week_closing(opens) else None
 
     @property
     def carried_from_ns(self) -> int:
@@ -1655,7 +1691,8 @@ def _refuse_unbooked(
 def targeted(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:
     """Hand a sleeve the period target its hypothesis declares, when it declares one, with the
     venue's record of the instant each fill's price was struck at (`struck`,
-    `kanso.nautilus.struck`), which the run's venue keeps wherever a target is declared.
+    `kanso.nautilus.struck`), which the run's venue keeps wherever a target is declared, and
+    the week a stage restart resumes in (`RunRequest.resumed`), where it resumes in one.
 
     Every path that runs a sleeve calls this beside `booked`, with the request its run is
     extracted from, so a card, a certificate, a replay and a stage hold one sleeve to one
@@ -1667,7 +1704,7 @@ def targeted(strategy: object, request: RunRequest, struck: Struck | None = None
     from kanso.nautilus.cross_section import target
 
     if request.hyp.period_target is not None:
-        target(strategy, request.hyp.period_target, struck)
+        target(strategy, request.hyp.period_target, struck, request.resumed)
 
 
 def booked(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:

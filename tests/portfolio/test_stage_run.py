@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -695,6 +695,28 @@ def test_a_restart_seeds_the_book_from_where_the_last_window_left_it(
     assert restored == pytest.approx(second.equity[1], rel=1e-12), "the seed, restored"
 
 
+def test_a_book_with_no_target_reads_only_its_own_version_s_windows(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A book is per version, so a restart of a version with a book and no period target reads
+    its own windows on the stage from the store and no other version's or strategy's, which a
+    stage's events would otherwise all be loaded for; only a target reads the strategy's."""
+    deployable(ws, store, "booked", sleeve=BUYER, doc=BOOKED)
+    deploy(ws, store, "paper")
+    asked: list[dict[str, object]] = []
+    stage_results = records.stage_results
+
+    def reading(store: StateStore, **narrowed: Any) -> list[records.StageResult]:
+        asked.append(narrowed)
+        return stage_results(store, **narrowed)
+
+    monkeypatch.setattr(records, "stage_results", reading)
+
+    deploy(ws, store, "paper")
+
+    assert asked == [{"strategy_id": "booked", "version": 1, "stage": "paper"}]
+
+
 def recording_buyer(record: Path, notional: str = "5_000.0") -> bytes:
     """A sleeve that buys once on its first bar and writes down every balance it reads."""
     return f'''
@@ -825,3 +847,611 @@ def test_a_node_restart_charges_its_first_carry_from_the_instant_it_resumed(
     assert second.carry[0] == pytest.approx(
         borrowed * 0.05 * (end - MARCH_15_CLOSE_NS - 1) / NS_PER_YEAR
     )
+
+
+# --- the period target ------------------------------------------------------------
+
+WEEKLY = document(
+    id="weekly",
+    risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+    period_target={
+        "period": "week",
+        "opens": "Mon 04:00",
+        "tz": "America/New_York",
+        "target_bp": 1000,
+        "of": "capital",
+    },
+)
+"""A sleeve held to a tenth of its capital a New York week, each week opening on Monday at
+04:00 there: 08:00 UTC from March 11, 2024, the day after the clocks change."""
+
+RETRYING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Buys 36,000 of its name at every bar it holds none of it, and holds."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        if self.held(bar.bar_type.instrument_id) == 0:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=36_000.0)
+'''
+
+NS = 1_000_000_000
+WEEK_NS = int(datetime(2024, 3, 11, 8, tzinfo=UTC).timestamp()) * NS
+"""Monday March 11, 04:00 New York: the week the version's last window ended inside."""
+NEXT_WEEK_NS = int(datetime(2024, 3, 18, 8, tzinfo=UTC).timestamp()) * NS
+WEEK_BEFORE_NS = int(datetime(2024, 3, 4, 9, tzinfo=UTC).timestamp()) * NS
+"""Monday March 4, 04:00 New York, still five hours behind UTC."""
+TUESDAY_CLOSE_NS = int(datetime(2024, 3, 12, 16, 0, 1, tzinfo=UTC).timestamp()) * NS
+"""The availability instant of the March 12 bar, a Tuesday: the clock the stage stopped at."""
+SUNDAY_CLOSE_NS = int(datetime(2024, 3, 17, 16, 0, 1, tzinfo=UTC).timestamp()) * NS
+"""The availability instant of the March 17 bar, a Sunday: the week's last point."""
+
+
+def tuesday_close(opening_ns: int) -> int:
+    """The availability instant of the bar of the Tuesday of the week opening at `opening_ns`."""
+    monday = datetime.fromtimestamp(opening_ns // NS, tz=UTC).date()
+    return int(datetime.combine(monday + timedelta(days=1), time(16, 0, 1), UTC).timestamp()) * NS
+
+
+def ended_tuesday(
+    store: StateStore,
+    first: records.StageResult,
+    *,
+    pnl: float,
+    stopped: bool = False,
+    opening_ns: int = WEEK_NS,
+    capital: float | None = None,
+    anchor: float | None = None,
+    threshold: float | None = None,
+    ends_ns: int | None = None,
+    clock_ns: int = TUESDAY_CLOSE_NS,
+    hit_ns: int | None = None,
+) -> None:
+    """Record a window of version 1 that ended at the Tuesday close of the week opening at
+    `opening_ns`, or at `hit_ns`, or at `ends_ns`, having made `pnl` in that week and stopped
+    at that close or at `hit_ns` or not, at `capital` — the first window's own unless stated —
+    the week anchored at `anchor`, the capital unless stated, and held to `threshold`, a tenth
+    of the capital unless stated; and stand the stage's clock at `clock_ns`, March 12's close
+    unless stated, which a stage-mate moves past a window's own end."""
+    from dataclasses import replace
+
+    from kanso.criteria.run import day_of
+    from kanso.nautilus.node import Realised
+    from kanso.schemas import PeriodStops
+
+    capital = first.capital if capital is None else capital
+    anchor = capital if anchor is None else anchor
+    threshold = 0.1 * capital if threshold is None else threshold
+    hit_ns = tuesday_close(opening_ns) if hit_ns is None else hit_ns
+    ends_ns = hit_ns if ends_ns is None else ends_ns
+    hit = {
+        "opening_ns": opening_ns,
+        "anchor": anchor,
+        "threshold": threshold,
+        "hit_ns": hit_ns,
+        "segment": "rth",
+        "equity": anchor + threshold,
+    }
+    kept = PeriodStops.model_validate(
+        {
+            "openings": [opening_ns],
+            "stops": [hit] if stopped else [],
+            "last": {
+                "opening_ns": opening_ns,
+                "anchor": anchor,
+                "threshold": threshold,
+                "pnl": pnl,
+                "stopped": stopped,
+            },
+        }
+    )
+    ended = replace(
+        first.run.between(opening_ns, ends_ns + 1),
+        window=(day_of(opening_ns), day_of(ends_ns)),
+        capital=capital,
+        period_stops=kept,
+    )
+    records.record_stage_run(
+        store, "paper", "a-window-to-tuesday", [Realised("weekly", 1, capital, ended, ())]
+    )
+    store.connection.execute("UPDATE sessions SET clock_ts = ?", (str(clock_ns),))
+
+
+def bought_on(run: Any) -> list[date]:
+    """The UTC days of a window's buys, in order: every bar of the fixture is published at
+    16:00:01 UTC, which is the same day in New York."""
+    from kanso.criteria.run import day_of
+
+    return [day_of(fill.ts_ns) for fill in run.fills if fill.side == "BUY"]
+
+
+WEEKLY_WARMED = {**WEEKLY, "warmup": {"sessions": 2}}
+"""`WEEKLY`, warmed on the two sessions before its window, and on a restart on the two at or
+before the stage's clock."""
+
+
+@pytest.mark.parametrize(
+    ("doc", "opening_ns", "first_buy"),
+    [
+        (WEEKLY, WEEK_NS, date(2024, 3, 18)),
+        (WEEKLY_WARMED, WEEK_NS, date(2024, 3, 18)),
+        (WEEKLY, WEEK_BEFORE_NS, date(2024, 3, 13)),
+    ],
+    ids=["that-week", "that-week-warmed", "a-week-before"],
+)
+def test_a_week_stopped_on_tuesday_and_restarted_on_wednesday_enters_nothing_until_monday(
+    doc: dict[str, Any], opening_ns: int, first_buy: date, ws: Workspace, store: StateStore
+) -> None:
+    """Every window restarts flat at the version's capital; the week its target had stopped
+    carries across. The version's newest window ended at Tuesday March 12's close with its week
+    stopped there: restarted after that close, the sleeve's entry is dropped at every bar from
+    Wednesday through Sunday and goes at Monday March 18's, the next week's first, and the
+    window lists the stop it resumed under as the window before struck it, with the five
+    entries it dropped. Warmed on Monday's and Tuesday's sessions again, it drops the same five:
+    the week is open over the warmup, which is read for nothing and counts nothing, as any
+    warmup's orders are dropped unsent and uncounted. A stopped week the restart is already past
+    is let go — the version's newest window stopped the week before at its Tuesday's close, and
+    a stage-mate has since moved the clock to March 12's: it buys at Wednesday's bar."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=doc)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True, opening_ns=opening_ns)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == first_buy
+    record = run.period_stops
+    assert record is not None and record.openings[0] == WEEK_NS
+    if opening_ns == WEEK_NS:
+        (resumed, *_) = record.stops
+        assert (resumed.opening_ns, resumed.hit_ns, resumed.anchor) == (
+            WEEK_NS,
+            TUESDAY_CLOSE_NS,
+            first.capital,
+        )
+        assert (resumed.dropped, resumed.fills) == (5, [])
+        assert all(stop.opening_ns >= NEXT_WEEK_NS for stop in record.stops[1:])
+    else:
+        assert all(stop.opening_ns != WEEK_NS for stop in record.stops)
+
+
+LIMIT_ON_START = b'''
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Price, Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Rests a buy of 1,000 at 12.00, above every price of the saw-tooth, from on_start."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        (name,) = self.universe
+        order = self.order_factory.limit(
+            name, OrderSide.BUY, Quantity.from_int(1_000), Price.from_str("12.00")
+        )
+        self.submit_order(order)
+
+    def on_bar(self, bar) -> None:
+        pass
+'''
+
+ENTRY_ON_START = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Asks for an entry of 1,000 limited at 12.00 from on_start."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        (name,) = self.universe
+        self.submit_entry(name, "BUY", qty=1_000, price=12.0)
+
+    def on_bar(self, bar) -> None:
+        pass
+'''
+
+KEEPS_ASKING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Asks for an entry of 1,000 limited at 12.00 from on_start, and for 100 more at every
+    bar."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        (name,) = self.universe
+        self.submit_entry(name, "BUY", qty=1_000, price=12.0)
+
+    def on_bar(self, bar) -> None:
+        self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=100, price=12.0)
+'''
+
+
+@pytest.mark.parametrize(
+    ("sleeve", "ends_ns", "first_buy", "dropped"),
+    [
+        (LIMIT_ON_START, TUESDAY_CLOSE_NS, None, 1),
+        (ENTRY_ON_START, TUESDAY_CLOSE_NS, None, 1),
+        (KEEPS_ASKING, TUESDAY_CLOSE_NS, (date(2024, 3, 18), 100.0), 6),
+        (KEEPS_ASKING, SUNDAY_CLOSE_NS, (date(2024, 3, 18), 100.0), 1),
+    ],
+    ids=["built-by-hand", "submit-entry", "and-at-every-bar", "resumed-on-sunday"],
+)
+def test_what_a_restart_sends_before_its_first_point_is_held_to_the_week_it_resumes_in(
+    sleeve: bytes,
+    ends_ns: int,
+    first_buy: tuple[date, float] | None,
+    dropped: int,
+    ws: Workspace,
+    store: StateStore,
+) -> None:
+    """A stopped week is in force from the restarted window's first instant, not from its first
+    point. An entry the sleeve sends from on_start — built by hand or asked of submit_entry,
+    with no warmup to drop it — is dropped under the stop it resumed, and never rests at the
+    venue to fill at Wednesday's bar inside the stopped week; the stop lifts at Monday March
+    18's bar, where the sleeve is flat, and its entries go. Restarted at Sunday's close, the
+    last point of the stopped week, the window resumes in it though its first point is
+    Monday's: the on_start entry is dropped there, the week is the window's first, and
+    Monday's entry goes."""
+    deployable(ws, store, "weekly", sleeve=sleeve, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    assert buys_of(first.run)[0] == (date(2024, 3, 1), 1_000.0), "a first deploy fills it"
+    ended_tuesday(
+        store, first, pnl=0.1 * first.capital, stopped=True, ends_ns=ends_ns, clock_ns=ends_ns
+    )
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    buys = buys_of(run)
+    assert (buys[0] if buys else None) == first_buy
+    assert all(qty == 100.0 for _, qty in buys), "the 1,000 sent from on_start never filled"
+    assert all(fill.ts_ns >= NEXT_WEEK_NS for fill in run.fills)
+    record = run.period_stops
+    assert record is not None and record.openings[:2] == [WEEK_NS, NEXT_WEEK_NS]
+    (resumed, *later) = record.stops
+    assert (resumed.hit_ns, resumed.dropped, resumed.fills) == (TUESDAY_CLOSE_NS, dropped, [])
+    assert all(stop.opening_ns >= NEXT_WEEK_NS for stop in later)
+
+
+def buys_of(run: Any) -> list[tuple[date, float]]:
+    """The UTC day and the quantity of each of a window's buys, in order."""
+    from kanso.criteria.run import day_of
+
+    return [(day_of(fill.ts_ns), fill.qty) for fill in run.fills if fill.side == "BUY"]
+
+
+@pytest.mark.parametrize(
+    ("made_bp", "stops", "share"),
+    [(600.0, True, 1.0), (600.0, True, 2.0), (0.0, False, 1.0)],
+    ids=["600-made", "600-made-at-twice-the-share", "nothing-made"],
+)
+def test_a_week_that_had_made_600_bp_stops_at_400_more(
+    made_bp: float, stops: bool, share: float, ws: Workspace, store: StateStore
+) -> None:
+    """Restarted after Tuesday's close in a week that had made 600 bp of a 1,000 bp target,
+    the window is read against the capital less those 600: it buys 3,600 at Wednesday's 10.00
+    and stops at Thursday's 10.50 close, 450 bp up, with 400 left. The basis points carry
+    across a share that moved: 600 bp made at twice the capital is 600 bp here. Having made
+    nothing, the window's 450 on Thursday and 900 on Friday stop nothing that week."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    capital = first.capital
+    ended_tuesday(store, first, pnl=made_bp / 10_000 * share * capital, capital=share * capital)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 13)
+    record = run.period_stops
+    assert record is not None
+    week = [stop for stop in record.stops if stop.opening_ns == WEEK_NS]
+    if not stops:
+        assert week == []
+        return
+    (stop,) = week
+    thursday = int(datetime(2024, 3, 14, 16, 0, 1, tzinfo=UTC).timestamp()) * NS
+    assert stop.hit_ns == thursday
+    assert stop.anchor == pytest.approx(capital - 0.06 * capital)
+    assert stop.threshold == pytest.approx(0.1 * capital)
+    assert 0.04 * capital <= stop.equity - capital < 0.1 * capital, "400 bp more, not 1,000"
+
+
+RAISES_THURSDAY = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Trades nothing, and raises at the bar of Thursday March 14, 2024."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        if 1710374400000000000 <= bar.ts_event < 1710460800000000000:
+            raise RuntimeError("the stage-mate asked the impossible")
+'''
+"""A stage-mate whose id sorts ahead of `weekly`, so it is handed each bar first and the node
+halts at Thursday's before `weekly` is handed it."""
+
+
+def test_a_window_a_halt_ended_leaves_its_week_where_the_halt_left_the_sleeve(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A halted node flattens nothing. Restarted after Tuesday's close in a week that had made
+    600 bp, the sleeve buys 3,600 at Wednesday's bar, 2,500 at 10.00 and 1,100 at 10.01, and the
+    stage-mate raises at Thursday's, before the sleeve is handed it: the window ends holding the
+    3,600, and the week open there is read where the halt left the sleeve, every share marked at
+    Wednesday's 10.00, the last price it was handed — the 1,100 too, struck after it — about
+    595 bp made after the entry's costs. The window's own marks reach Thursday's 10.50, which
+    takes the week past its 1,000 bp; the seed never reads it, and the next restart, after
+    Thursday's bar, is handed the week at what the sleeve read, resumes it and buys at Friday's
+    (`docs/backlog.md` row 283)."""
+    from kanso.criteria.run import day_of
+    from kanso.nautilus import cross_section
+
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    capital = first.capital
+    ended_tuesday(store, first, pnl=0.06 * capital)
+    deployable(ws, store, "aboomer", sleeve=RAISES_THURSDAY, doc=document(id="aboomer"))
+
+    made = deploy(ws, store, "paper")
+
+    assert made.halted is not None
+    (halted,) = [one for one in made.results if one.strategy_id == "weekly"]
+    assert {(fill.side, fill.px) for fill in halted.run.fills} == {("BUY", 10.0), ("BUY", 10.01)}
+    assert halted.positions == (("DEMO.XNAS", 3_600.0, 11.0, 1.0),), "nothing was flattened"
+    record = halted.run.period_stops
+    assert record is not None and record.last is not None
+    assert (record.last.opening_ns, record.last.stopped) == (WEEK_NS, False)
+    assert record.last.pnl / capital * 10_000 == pytest.approx(595, abs=1)
+    costs = sum(fill.cost for fill in halted.run.fills)
+    marked = 0.06 * capital - costs + sum(f.qty * (10.0 - f.px) for f in halted.run.fills)
+    assert record.last.pnl == pytest.approx(marked, abs=1e-6), "the 10.01 fill marked at 10.00"
+    ends = [day_of(end) for end in halted.run.period_ends_ns]
+    thursday = halted.run.equity[ends.index(date(2024, 3, 14))] - record.last.anchor
+    assert thursday / capital * 10_000 == pytest.approx(1_045, abs=1), "past the target"
+    seed = records.target_seed(
+        records.stage_results(store, strategy_id="weekly", stage="paper"), capital
+    )
+    assert seed is not None and seed.last == record.last
+    handed: list[object] = []
+    harness = cross_section.target
+
+    def handing(
+        strategy: object, target: object, struck: object = None, week: object = None
+    ) -> None:
+        handed.append(week)
+        harness(strategy, target, struck, week)
+
+    monkeypatch.setattr(cross_section, "target", handing)
+
+    (resumed,) = [one for one in deploy(ws, store, "paper").results if one.strategy_id == "weekly"]
+
+    assert handed == [seed], "the week resumed at what the sleeve read, not let go"
+    assert bought_on(resumed.run)[0] == date(2024, 3, 15)
+
+
+WEEKLY_OPEN = document(
+    id="weekly",
+    risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+    period_target={
+        "period": "week",
+        "opens": "Mon 04:00",
+        "tz": "America/New_York",
+        "target_bp": 1000,
+        "of": "period_open",
+    },
+)
+"""`WEEKLY`, its tenth read of the equity each week opens at rather than of the capital."""
+
+
+def test_a_resumed_week_is_held_to_the_threshold_it_opened_with(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Under `of: period_open` a week is held to a tenth of the equity it opened at, struck at
+    its opening. Restarted in a week that opened at 1.2 times the capital, so held to 1,200 bp
+    of it, and had made 600, the window is held to that week's own threshold and not to a tenth
+    of the capital it restarts at: Thursday's 450 leave the week 1,050 up, short of it, and
+    Friday's 900 take it to 1,500 and stop it."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY_OPEN)
+    first = deploy(ws, store, "paper").results[0]
+    capital = first.capital
+    ended_tuesday(store, first, pnl=0.06 * capital, anchor=1.2 * capital, threshold=0.12 * capital)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 13)
+    assert run.period_stops is not None
+    (stop,) = [stop for stop in run.period_stops.stops if stop.opening_ns == WEEK_NS]
+    friday = int(datetime(2024, 3, 15, 16, 0, 1, tzinfo=UTC).timestamp()) * NS
+    assert stop.hit_ns == friday
+    assert (stop.anchor, stop.threshold) == pytest.approx((0.94 * capital, 0.12 * capital))
+
+
+def repinned(ws: Workspace, store: StateStore, opens: str) -> None:
+    """Re-pin `weekly` with its target's week opening at `opens`, as `kanso hyp add` does."""
+    from kanso.hyp import add as register
+    from tests.replay.conftest import write_hypothesis
+
+    moved = {**WEEKLY, "period_target": {**WEEKLY["period_target"], "opens": opens}}
+    register(ws, store, write_hypothesis(ws, moved, RETRYING))
+
+
+@pytest.mark.parametrize(
+    ("opens", "next_opens"),
+    [
+        ("Mon 09:30", datetime(2024, 3, 18, 13, 30, tzinfo=UTC)),
+        ("Sun 18:00", datetime(2024, 3, 17, 22, tzinfo=UTC)),
+    ],
+    ids=["later", "earlier"],
+)
+def test_a_week_struck_before_a_re_pin_that_moves_opens_is_resumed_by_its_own_bounds(
+    opens: str, next_opens: datetime, ws: Workspace, store: StateStore
+) -> None:
+    """A week is resumed as it was struck: its threshold, and its bounds. The week opening at
+    Monday 04:00 stopped at Tuesday's close; the hypothesis is re-pinned since with the week
+    opening at Monday 09:30, or at Sunday 18:00, and the stage restarts after that close. It is
+    inside the stopped week, so the week is resumed though the new reading names a week opened
+    at another instant, and every entry is dropped until it closes at Monday March 18's 04:00:
+    the sleeve buys at that Monday's bar, in the new reading's week, which the window lists
+    after the one it resumed."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True)
+    repinned(ws, store, opens)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 18)
+    record = run.period_stops
+    assert record is not None
+    assert record.openings[:2] == [WEEK_NS, int(next_opens.timestamp()) * NS]
+    (resumed, *_) = record.stops
+    assert (resumed.opening_ns, resumed.hit_ns, resumed.dropped) == (WEEK_NS, TUESDAY_CLOSE_NS, 5)
+
+
+FRIDAY_WEEK_NS = int(datetime(2024, 3, 8, 21, tzinfo=UTC).timestamp()) * NS
+"""Friday March 8, 16:00 New York: a week struck under `opens: Fri 16:00`."""
+
+
+def test_a_re_pin_to_an_earlier_reading_trades_after_the_old_close_in_a_week_holding_the_stop(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A reading moved earlier in the week holds a resumed stop no longer than one moved later
+    (`docs/backlog.md` row 284). Struck under `Fri 16:00` at Friday March 8's 16:00 and stopped
+    at Tuesday March 12's close, the week is re-pinned with `Mon 04:00` and resumed after the
+    stop, and held to its own close at Friday March 15's 16:00. No Monday 04:00 comes between
+    Tuesday's stop and Saturday's bar, the first after that close, so the sleeve buys there, in
+    the week of the new reading opened at March 11's 04:00, which holds the stop; and that week
+    opened before the old one closed, so the record lists both over the span they share."""
+    from kanso.nautilus.clock import week_closing
+
+    friday = {**WEEKLY, "period_target": {**WEEKLY["period_target"], "opens": "Fri 16:00"}}
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=friday)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(
+        store,
+        first,
+        pnl=0.1 * first.capital,
+        stopped=True,
+        opening_ns=FRIDAY_WEEK_NS,
+        hit_ns=TUESDAY_CLOSE_NS,
+    )
+    repinned(ws, store, "Mon 04:00")
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 16)
+    record = run.period_stops
+    assert record is not None
+    assert record.openings[:2] == [FRIDAY_WEEK_NS, WEEK_NS]
+    assert WEEK_NS <= TUESDAY_CLOSE_NS < NEXT_WEEK_NS, "the new reading's week holds the stop"
+    assert week_closing(FRIDAY_WEEK_NS) > WEEK_NS, "the new week opened before the old closed"
+    (resumed, *_) = record.stops
+    assert (resumed.opening_ns, resumed.hit_ns) == (FRIDAY_WEEK_NS, TUESDAY_CLOSE_NS)
+
+
+def test_a_window_a_halt_ends_after_a_re_pin_joins_the_week_it_resumed(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Re-pinned with the week opening at Sunday 18:00, a restart after Tuesday's close resumes
+    the week its window before left open at Monday 04:00, and a halt on Thursday ends the
+    window inside it: the two windows' records join as one week, the one both traded in, where
+    reading the week from the new rule would have opened the newer window's before the older's
+    and left the joined record no last week that is its newest."""
+    from kanso.monitor import combined
+
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(store, first, pnl=0.06 * first.capital)
+    repinned(ws, store, "Sun 18:00")
+    deployable(ws, store, "aboomer", sleeve=RAISES_THURSDAY, doc=document(id="aboomer"))
+
+    assert deploy(ws, store, "paper").halted is not None
+
+    *_, before, halted = records.stage_results(store, strategy_id="weekly", stage="paper")
+    record = halted.run.period_stops
+    assert record is not None and record.openings == [WEEK_NS]
+    joined = combined([before, halted])
+    assert joined is not None and joined.period_stops is not None
+    assert joined.period_stops.openings == [WEEK_NS]
+    assert joined.period_stops.last == record.last
+
+
+NEXT_BEST = RETRYING + b"\n# the next best snapshot the loop kept\n"
+"""The same sleeve with other bytes: what a research stall certifies, which composes the next
+version."""
+
+
+@pytest.mark.parametrize(
+    ("sleeve", "version"), [(RETRYING, 1), (NEXT_BEST, 2)], ids=["same-bytes", "new-bytes"]
+)
+def test_a_version_deployed_by_its_certificate_resumes_a_stopped_week(
+    sleeve: bytes, version: int, ws: Workspace, store: StateStore
+) -> None:
+    """A passing certificate composes its version and deploys the paper stage with no one
+    asked. The same bytes certified again return that version and deploy the stage again,
+    restarting it; other bytes — what a research stall certifies — compose the next version,
+    which replaces the one on paper. The week is the strategy's, so either resumes the week
+    its newest window stopped at Tuesday's close: it enters nothing until Monday."""
+    from kanso.certify import certificate
+    from kanso.portfolio.lifecycle import on_certified
+    from tests.portfolio.test_lifecycle import a_certificate
+
+    file = deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    made = a_certificate(ws, sha=file.versions[0].sleeve.strategy_sha).model_copy(
+        update={"hyp_id": "weekly"}
+    )
+    certificate.write(ws, store, made, RETRYING)
+    adopted = on_certified(ws, store, made)
+    assert adopted.deployment is not None and adopted.state == "paper"
+    first = adopted.deployment.results[0]
+    ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True)
+    best = made
+    if sleeve != RETRYING:
+        # A second later than the first, so composition reads it as the newest by its stamp
+        # and never by how far the wall clock moved between the two.
+        best = a_certificate(ws, sha=store.put_blob(sleeve)).model_copy(
+            update={"hyp_id": "weekly", "created_at": made.created_at + timedelta(seconds=1)}
+        )
+        certificate.write(ws, store, best, sleeve)
+
+    again = on_certified(ws, store, best)
+
+    assert again.version is not None and again.version.version == version
+    assert again.deployment is not None
+    (window,) = again.deployment.results
+    assert (window.version, window.capital) == (version, first.capital)
+    assert bought_on(window.run)[0] == date(2024, 3, 18)
+    assert window.run.period_stops is not None
+    assert window.run.period_stops.stops[0].hit_ns == TUESDAY_CLOSE_NS
+    assert window.run.period_stops.stops[0].dropped == 5

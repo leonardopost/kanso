@@ -49,7 +49,7 @@ from tests.nautilus.strategy.test_period_target import (
     request,
 )
 
-from .conftest import VENUE, catalog, instrument
+from .conftest import CAPITAL, VENUE, catalog, instrument
 from .test_dated_stage import _placed, _stage
 from .test_period_target import COSTS, _pair
 
@@ -503,13 +503,11 @@ def test_a_stage_window_s_marks_hold_the_record_its_venue_was_loaded_with(
 
 
 @pytest.mark.parametrize("targeted", [True, False])
-def test_an_idle_stage_window_records_what_a_window_handed_no_point_does(
-    targeted: bool, tmp_path: Path
-) -> None:
+def test_an_idle_stage_window_records_an_empty_record(targeted: bool, tmp_path: Path) -> None:
     """A stage whose clock already stands at the last point the catalog holds has nothing to
-    replay, so it builds no node: a version under a target records the empty record of a
-    window handed no point — no week, no stop, none open — and one with no target records
-    none, so an idle window never reads as one of a version with no target."""
+    replay, so it builds no node: a version under a target records an empty record — no week,
+    no stop, none open — and one with no target records none, so an idle window never reads
+    as one of a version with no target."""
     lead, lagg, plan = _pair()
     made = request(plan, tmp_path / "card.txt", costs=COSTS)
     if not targeted:
@@ -527,6 +525,111 @@ def test_an_idle_stage_window_records_what_a_window_handed_no_point_does(
     assert ran_idle.released == 0
     (realised,) = ran_idle.realised
     assert realised.run.period_stops == (PeriodStops() if targeted else None)
+
+
+def resumed_seed(opening_ns: int, *, stopped: bool) -> PeriodStops:
+    """What a window before left of the week opening at `opening_ns`: 600 made and stopped by a
+    hit at 04:01 that Monday, or 120 made and open."""
+    stop = {
+        "opening_ns": opening_ns,
+        "anchor": 100_000.0,
+        "threshold": 500.0,
+        "hit_ns": opening_ns + 60 * 10**9,
+        "segment": "pre",
+        "equity": 100_600.0,
+    }
+    return PeriodStops.model_validate(
+        {
+            "openings": [opening_ns],
+            "stops": [stop] if stopped else [],
+            "last": {
+                "opening_ns": opening_ns,
+                "anchor": 100_000.0,
+                "threshold": 500.0,
+                "pnl": 600.0 if stopped else 120.0,
+                "stopped": stopped,
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize("opens", ["Mon 04:00", "Mon 09:30", "Mon 03:00", "Sun 18:00"])
+def test_a_restart_resumes_a_week_by_the_bounds_it_was_struck_with(
+    opens: str, tmp_path: Path
+) -> None:
+    """A week is resumed from its own opening to its own close, never re-read from the rule as
+    it stands. Struck at Monday 04:00 and re-pinned since with another `opens`, the week is
+    resumed by a restart anywhere inside it — though the new reading names a week that opened
+    at another instant, and one that holds the stop all the same — and by none at or past its
+    close at the next Monday's 04:00."""
+    made = request({}, tmp_path / "seen.txt")
+    target = made.hyp.period_target
+    assert target is not None
+    moved = made.hyp.model_copy(
+        update={"period_target": target.model_copy(update={"opens": opens})}
+    )
+    opening_ns, closes_ns = ny(MONDAY, "04:00"), ny(NEXT_MONDAY, "04:00")
+    seed = resumed_seed(opening_ns, stopped=True)
+
+    def resumed(resumes_ns: int) -> PeriodStops | None:
+        return replace(made, hyp=moved, target_seed=seed, resumes_ns=resumes_ns).resumed
+
+    tuesday = ny(date(2024, 1, 9), "16:00")
+    assert [resumed(at) for at in (opening_ns, tuesday, closes_ns - 1)] == [seed] * 3
+    assert resumed(closes_ns) is None
+    assert replace(made, target_seed=seed, resumes_ns=closes_ns - 1).resumed == seed
+
+
+@pytest.mark.parametrize("stopped", [False, True], ids=["open", "stopped"])
+def test_a_resumed_window_handed_no_point_of_its_own_records_the_week_it_resumed(
+    stopped: bool, tmp_path: Path
+) -> None:
+    """A stage restart opens the week it resumes in at the window's first instant, before any
+    point. A version whose name has nothing after the stage's clock, beside a stage-mate whose
+    name still prints, is handed no point while the node runs: its window fills nothing and
+    measures no period, and records the week it resumed all the same — listed, open at its last
+    point with the P&L it was seeded with, and with the stop it resumed under. Alone, with
+    nothing after the clock to replay, the stage builds no node and the same version records
+    the empty record: no harness ran to resume the week."""
+    lead = [(ny(MONDAY, stamp), 10.0) for stamp in ("04:01", "04:02")]
+    lagg = [(ny(MONDAY, stamp), 11.0) for stamp in ("04:01", "04:02", "09:33", "09:34")]
+    held = catalog(
+        tmp_path / "catalog",
+        [*volumed(LEAD, lead), *volumed(LAGG, lagg)],
+        [instrument(LEAD), instrument(LAGG)],
+    )
+    after = max(int(bar.ts_init) for bar in volumed(LEAD, lead))
+    opening_ns = ny(MONDAY, "04:00")
+    seed = resumed_seed(opening_ns, stopped=stopped)
+    assert seed.last is not None
+
+    def placed(name: str, universe: tuple[str, ...]) -> Any:
+        made = request({}, tmp_path / f"{name}.txt", universe=universe)
+        staged = replace(made, overrides={"record": str(tmp_path / f"{name}.txt")})
+        return replace(_placed(staged, tmp_path), strategy_id=name)
+
+    quiet = replace(placed("quiet", (LEAD_ID,)), target_seed=seed)
+    assert quiet.request((MONDAY, MONDAY), None, after + 1).resumed == seed
+
+    ran = node.run(
+        replace(
+            _stage(quiet, held, MONDAY, after=after), placements=(quiet, placed("mate", (LAGG_ID,)))
+        )
+    )
+
+    assert ran.released == 2, "the mate's 09:33 and 09:34 keep the node running"
+    window = ran.realised[0].run
+    assert (window.period_ends_ns, window.fills) == ((), ())
+    record = window.period_stops
+    assert record is not None and record.openings == [opening_ns]
+    assert record.last == seed.last.model_copy(update={"anchor": CAPITAL - seed.last.pnl})
+    assert [stop.hit_ns for stop in record.stops] == [stop.hit_ns for stop in seed.stops]
+
+    lone = _stage(quiet, held, MONDAY, after=max(int(bar.ts_init) for bar in volumed(LAGG, lagg)))
+    ran_idle = node.run(lone)
+
+    assert ran_idle.released == 0
+    assert ran_idle.realised[0].run.period_stops == PeriodStops()
 
 
 def test_a_stage_s_own_flatten_is_no_stop_s_and_the_open_week_is_read_after_it(

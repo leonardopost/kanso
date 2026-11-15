@@ -25,7 +25,11 @@ recorded no hold has no benchmark, rather than one that skips a window.
 **A period target's record is joined by its weeks.** Each window records what the version's
 `period_target` did there, and two windows restarted inside one New York week both traded in
 it, so the joined record holds each week once, every window's stops in turn, and the week
-open at the last point of the newest window that was handed one.
+open at the last point of the newest window that had one open — one handed a point after its
+warmup, or one a stage restart resumed a week in, handed a point of its own or not. A window
+restarted inside a stopped week lists the stop it resumed under again, as the window before
+recorded it, so the two are one stop: joined once, with what both windows dropped under it and
+the first's fills.
 
 **The book is the last window's, not every window's.** Positions are recorded before the
 flatten, so each window's book is what that window ended holding; only the most recent one is
@@ -40,7 +44,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from kanso.criteria.run import NS_PER_DAY, CardRun, day_of, midnight_ns
-from kanso.schemas import PeriodStops
+from kanso.schemas import PeriodStop, PeriodStops
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.portfolio.records import StageResult
@@ -169,15 +173,32 @@ def joined(runs: Sequence[CardRun]) -> CardRun | None:
 
 def _stops(runs: Sequence[CardRun]) -> PeriodStops | None:
     """The windows' period-target records as one: every week any of them traded in, once,
-    each window's stops in turn, and the newest open week; `None` when no window kept one."""
+    each window's stops in turn — a stop a restart resumed under joined to the one it resumed
+    (`_resumed`) — and the newest open week; `None` when no window kept one."""
     records = [run.period_stops for run in runs if run.period_stops is not None]
     if not records:
         return None
+    stops: list[PeriodStop] = []
+    for stop in (stop for record in records for stop in record.stops):
+        if stops and (stops[-1].opening_ns, stops[-1].hit_ns) == (stop.opening_ns, stop.hit_ns):
+            stops[-1] = _resumed(stops[-1], stop)
+        else:
+            stops.append(stop)
     return PeriodStops(
         openings=sorted({at for record in records for at in record.openings}),
-        stops=[stop for record in records for stop in record.stops],
+        stops=stops,
         last=next((record.last for record in reversed(records) if record.last is not None), None),
     )
+
+
+def _resumed(first: PeriodStop, then: PeriodStop) -> PeriodStop:
+    """One stop two windows recorded: the window a stage restarted inside the stopped week
+    lists the stop it resumed under as the window before struck it, with what it dropped under
+    it itself — the hit, the fills and the equity after them are the first's, and the drops
+    both's. The window that resumed it fills nothing under it: it restarts flat with nothing
+    working, stopped before its first instant (`KansoStrategy._target_resume`), and a stopped
+    week sends only what closes."""
+    return first.model_copy(update={"dropped": first.dropped + then.dropped})
 
 
 def _lower(held: float | None, found: float | None) -> float | None:

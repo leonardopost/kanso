@@ -13,7 +13,7 @@ from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
 from kanso.errors import Exit, KansoError
 from kanso.nautilus import adapters
 from kanso.portfolio import approvals, approve, approved, capital, clients, files, records
-from kanso.schemas import SANDBOX, Deployment, Limits, Stage
+from kanso.schemas import SANDBOX, Deployment, Limits, PeriodStops, Stage
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -397,6 +397,38 @@ def test_stage_runs_can_be_narrowed_to_a_stage_or_a_strategy(store: StateStore) 
     assert [r.strategy_id for r in records.stage_results(store, strategy_id="beta")] == ["beta"]
 
 
+def test_a_strategy_s_windows_are_read_without_decoding_another_s(
+    store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restart reads one strategy's windows on one stage, whichever of its versions ran them,
+    and every deploy does it for each version under a target: the events are narrowed before
+    any run is decoded, so the read costs that strategy's windows and not the stage's. The store
+    narrows them by subject before it parses any, so another strategy's events — `alphabet`'s,
+    whose id begins with this one's, among them — are never parsed at all."""
+    import kanso.state.store as state_store
+    from kanso.nautilus.node import Realised
+
+    def realised(strategy_id: str, version: int) -> Realised:
+        return Realised(
+            strategy_id=strategy_id, version=version, capital=1.0, run=a_run(), positions=()
+        )
+
+    records.record_stage_run(store, "paper", "s1", (realised("alpha", 1), realised("beta", 1)))
+    records.record_stage_run(store, "paper", "s2", (realised("alpha", 2), realised("beta", 1)))
+    records.record_stage_run(store, "live", "s3", (realised("alpha", 1), realised("alphabet", 1)))
+    decoded: list[object] = []
+    monkeypatch.setattr(records, "decode_run", lambda payload: decoded.append(payload) or a_run())
+    parsed: list[str] = []
+    loads = state_store._loads
+    monkeypatch.setattr(state_store, "_loads", lambda text: parsed.append(text) or loads(text))
+
+    read = records.stage_results(store, strategy_id="alpha", stage="paper")
+
+    assert [(one.strategy_id, one.version) for one in read] == [("alpha", 1), ("alpha", 2)]
+    assert len(decoded) == 2
+    assert len(parsed) == 3, "alpha's two windows on paper and its one on live, and no other's"
+
+
 def test_clearing_a_stage_reports_what_held_it(store: StateStore) -> None:
     store.connection.execute(
         "INSERT INTO strategies (strategy_id, created_at) VALUES ('alpha', '2024-01-01')"
@@ -440,6 +472,66 @@ def test_a_window_measured_without_a_policy_seeds_no_cushion_but_its_last_end() 
 
 def test_a_version_that_never_measured_a_period_starts_from_nothing() -> None:
     assert records.book_seed([]) == (0.0, None)
+
+
+def weeks(*opened: int, stopped: tuple[int, ...] = (), pnl: float = 6.0) -> PeriodStops:
+    """A window's target record: the weeks it opened, a stop in each of `stopped`, and the last
+    week open at its end, 1,000 bp of the 100 capital to make and `pnl` made, stopped when it
+    is one of `stopped`."""
+    return PeriodStops.model_validate(
+        {
+            "openings": list(opened),
+            "stops": [
+                {
+                    "opening_ns": at,
+                    "anchor": 100.0,
+                    "threshold": 10.0,
+                    "hit_ns": at + 1,
+                    "segment": "rth",
+                    "equity": 110.0,
+                }
+                for at in stopped
+            ],
+            "last": None
+            if not opened
+            else {
+                "opening_ns": opened[-1],
+                "anchor": 100.0,
+                "threshold": 10.0,
+                "pnl": pnl,
+                "stopped": opened[-1] in stopped,
+            },
+        }
+    )
+
+
+def test_a_target_is_seeded_from_the_week_its_newest_window_left_open() -> None:
+    """The newest window that had a week open holds the answer, narrowed to its last week and
+    that week's stop; a window that had none open — an idle stage's, or one handed no point that
+    resumed no week — says nothing, and nor does one with no target."""
+    older = a_run(period_stops=weeks(10, 20, stopped=(10, 20)))
+    newest = a_run(period_stops=weeks(30, 40, stopped=(30, 40), pnl=12.0))
+    idle = a_run(period_stops=PeriodStops())
+
+    seed = records.target_seed([a_result(older), a_result(newest), a_result(idle)], 100.0)
+
+    assert seed == weeks(40, stopped=(40,), pnl=12.0)
+    assert seed is not None and seed.stops[0].hit_ns == 41
+    assert records.target_seed([a_result(a_run()), a_result(idle)], 100.0) is None
+    assert records.target_seed([], 100.0) is None
+
+
+def test_a_target_seed_is_stated_at_the_share_the_next_window_runs_at() -> None:
+    """A version whose share halved carries the basis points it made and has left: 600 of
+    1,000 made on 100 is 3 of 5 on 50, the week's anchor halved with them; the stop is kept as
+    it was struck."""
+    made = a_result(a_run(period_stops=weeks(10, stopped=(10,))))
+
+    seed = records.target_seed([made], 50.0)
+
+    assert seed is not None and seed.last is not None
+    assert (seed.last.anchor, seed.last.threshold, seed.last.pnl) == (50.0, 5.0, 3.0)
+    assert seed.stops == weeks(10, stopped=(10,)).stops
 
 
 def test_each_fill_s_increment_and_limit_survive_the_round_trip() -> None:

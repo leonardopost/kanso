@@ -883,7 +883,8 @@ with, and its last period end, against which the next window's first month turn 
 The first carry is charged from the instant the restart resumes trading, not from that end:
 every window ends flat, so the time the version spent off the stage — a stop, or a tenure
 on live before a demotion back to paper — held nothing to borrow against. A new version, or
-a version on a stage it has not run on, starts with nothing set aside.
+a version on a stage it has not run on, starts with nothing set aside. A `period_target`'s
+week carries across a restart too (below).
 
 **`period_target` is yours, and it is scope.** It stops a sleeve for the rest of a week once
 the week has made a return you state, and flattens what it holds:
@@ -949,9 +950,52 @@ reads whether its week is stopped from `self.period_stopped`, and its position f
 harness keeps of the rule is denied to it (`strategy_integrity`). The rule adds no charge: a
 flatten is a fill like any other, charged once by the runner. It is the same code on a card, a
 certificate, a replay and a stage node, and each records what it did as `period_stops` — every
-week traded in (handed a point in, whether or not the sleeve placed an order), each stop with
+week traded in (handed a point in, whether or not the sleeve placed an order, or on a stage
+restart resumed in), each stop with
 its flatten's fills, and the week open at the last point (`docs/concepts.md`, Card) — which `research show --measured`, `cert show`, `monitor run` and
 `kanso replay` print, and `kanso replay parity` compares.
+
+On a paper or live stage the node restarts flat at the version's capital every window, and the
+week carries across the restart. The next window reads the week open at the last point of the
+strategy's newest window on that stage that had one open, whichever of its versions ran it —
+read after the node's own flatten, so what it made there carries that close's cost, or, on a
+window a halt ended, where the halt left the sleeve (below) — and resumes it when it resumes
+trading inside that week: when the instant after the stage's clock falls in it. The week is
+then the window's first, open from its first instant and listed among the weeks it traded in
+though its first point falls in a later one, or never comes, so whatever the sleeve sends
+before that point, from `on_start` with no warmup to drop it, is held to the week as anything
+sent in it is. A window whose names print nothing after the clock while a stage-mate's do
+records the week it resumed and nothing else, so the next restart reads the same week from it;
+a stage with nothing at all to replay builds no node, records no week and leaves its clock where
+it stood, so the next restart resumes the week from the window before. A week that had stopped stays stopped: every entry is dropped until the
+next week opens — an entry sent from `on_start` among them, rather than resting at the venue to
+fill inside the week — and the window lists that stop again, as the window before struck it,
+with what it dropped under it; it restarts holding nothing with nothing working, so there is
+nothing to flatten, and the stop lifts as any does, at the first point of a later week. A week
+that had made part of its target is read against the capital less what it made, and held to
+the threshold it was struck with, so it stops at what is left: one that had made 600 of a
+1,000 bp target stops at 400 more, and under `of: period_open` a week that opened at 1.2 times
+the capital stays held to 1,200 bp of it. What was made and the threshold are stated at the
+share the window runs at, so the basis points carry across a share the limits moved. The week
+keeps its bounds as it keeps its threshold, from its own opening to the same New York reading a
+week on: a hypothesis re-pinned between windows with another `opens` leaves a week struck under
+the old reading in force, stopped or not, until that reading closes it, and the new reading's
+weeks begin at the first point after. That point falls in a week of the new reading that
+opened before the old one closed, unless a reading of the new `opens` comes between that close
+and the point, and `openings` then lists both weeks, so the `stops` line counts two weeks over
+the span they share. Where no reading of the new `opens` comes between the old week's stop and
+that point, the new reading's week holds the stop, whichever way the reading moved — from
+`Mon 04:00` to `Mon 09:30` with a pre-market point before Monday's 09:30, or from `Fri 16:00` to
+`Mon 04:00` with a point after Friday's 16:00 — and the window trades in it, as a window that
+opens mid-week trades first in a week opened before it (`docs/backlog.md` row 284). A week the
+restart resumes past is let go, and the window's first week opens at the capital as any run's
+does; so does the week after a resumed one that the window was handed no point of. The week is
+the strategy's, not the version's: a new version that replaces one on the stage — which a
+passing certificate composes and deploys to paper with no one asked — resumes the week the
+version before it left, read at its own share, while a strategy on a stage it has not run on
+begins no week, and a week stopped on one stage does not carry to the other at a promotion or a
+demotion (`docs/backlog.md` row 282). `monitor run` joins a version's windows' records, a stop
+two windows list as one.
 
 What the rule does not do, said here so a card is read as it ran:
 
@@ -972,8 +1016,12 @@ What the rule does not do, said here so a card is read as it ran:
 - `cost_stress` and `cost_scenario` re-price the recorded fills and keep the path, so the
   weeks a card stopped stand as recorded, though a cheaper scenario would have stopped more of
   them and a dearer one fewer (row 269).
-- A stage window opens flat at the capital with no stopped week: its first week is anchored at
-  the capital, and trades, whatever the window before it earned or stopped (row 270).
+- A stage window a halt ends — a version on the stage raised and the node stopped itself — is
+  not flattened, and the week it leaves open is read where the halt left the sleeve: what it
+  holds never closed and marked at the last price it was handed. The window's own marks run on
+  past that point, the one the halt came at among them, so a week they take past its target is
+  resumed short of it, and the next window, which restarts flat after that point, enters in it
+  (row 283).
 
 `kanso hyp validate` refuses (exit 3) a missing key, a zone other than `America/New_York` — a
 run's return periods are cut from a UTC midnight, which meets a week's opening only where no

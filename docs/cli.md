@@ -312,7 +312,7 @@ the one nothing may backtest.
 
 | command | what it does |
 |---|---|
-| `kanso monitor run` | one pass of the watch every deployed version lives under. The daemon runs it on `[monitor] interval`; this runs it once. A version under a `period_target` carries `period_stops` under `--json` — what the target did over its whole life on the stage, every window joined — and a `stops` line beneath its gates; any other judgement carries no such field |
+| `kanso monitor run` | one pass of the watch every deployed version lives under. The daemon runs it on `[monitor] interval`; this runs it once. A version under a `period_target` carries `period_stops` under `--json` — what the target did over its whole life on the stage, every window joined, a stop a restart resumed under joined to the one it resumed — and a `stops` line beneath its gates; any other judgement carries no such field |
 
 A pass judges each deployed version against the paper or live gates of its **sleeve
 hypothesis's** plan, with the bands from the version's own `expectation`, and acts on the

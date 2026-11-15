@@ -233,7 +233,9 @@ class PeriodStop(KansoModel):
     the run ended. `fills` are the fills of every order the sleeve sent while stopped
     (`FlattenFill`), `flat_equity` the `balance` after the last of them, and `carried` whether
     that fill landed at or after the next week's opening, so in a week whose anchor was struck
-    before it.
+    before it. A stage window restarted inside a stopped week lists the week's stop again, as
+    the window before struck it, with what it dropped under it itself; it restarts flat with
+    nothing working, stopped from its first instant, so it fills nothing under it.
     """
 
     opening_ns: Instant
@@ -271,8 +273,12 @@ class PeriodStop(KansoModel):
 class OpenPeriod(KansoModel):
     """The week of a `period_target` open at a run's last point: its opening, its anchor and
     threshold, the P&L it had made there — `balance` less the anchor, read after a stage
-    node's own flatten — and whether the week itself was stopped. What a restart inside the
-    week resumes from."""
+    node's own flatten, or on a window a halt ended, which nothing flattens, where the halt left
+    the sleeve, what it holds never closed and marked at the last price it was handed — and
+    whether the week itself was stopped. What a stage restart inside the week resumes from
+    (`kanso.portfolio.records.target_seed`); on a window that resumed it, the anchor is the
+    window's capital less what the week had made before it, so the P&L is the week's across
+    both."""
 
     opening_ns: Instant
     anchor: Finite
@@ -286,10 +292,15 @@ class PeriodStops(KansoModel):
     and the week open at its last point.
 
     `openings` is the opening of each New York week the run was handed a point in after its
-    warmup, in order (`kanso.nautilus.clock.week_opening`), so `periods` counts the target's
-    weeks and never the return periods; `stops` is every week it stopped, in order, and
-    `stopped` how many weeks that is. `last` is `None` for a run handed no point. A run of a
-    hypothesis that declares no `period_target` records none of this at all.
+    warmup, and on a stage restart of the week it resumes trading in, which is open from its
+    first instant whether or not a point of it follows, in order
+    (`kanso.nautilus.clock.week_opening`), so `periods` counts the target's weeks and never the
+    return periods; `stops` is every week it stopped, in order, and
+    `stopped` how many weeks that is. `last` is `None` for a run handed no point after its
+    warmup that resumed no week. A stage window that resumed a week and was handed no point of
+    its own — its names quiet while a stage-mate's printed — records that week all the same: in
+    `openings`, as `last`, and with the stop it resumed under. A run of a hypothesis that
+    declares no `period_target` records none of this at all.
     """
 
     openings: list[Instant] = Field(default_factory=list)

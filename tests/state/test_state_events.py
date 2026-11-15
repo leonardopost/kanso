@@ -40,6 +40,19 @@ def test_events_filter_by_kind_and_subject_and_limit(store: StateStore) -> None:
     assert store.events(kind="never-happened") == []
 
 
+def test_events_filter_by_what_their_subject_begins_with_as_written(store: StateStore) -> None:
+    """A prefix is matched as it is written: `_` and `%` are characters, not a pattern."""
+    for subject in ("a_b@1", "axb@1", "a_b@2", "a_bc@1", "a%b@1", "zz"):
+        store.event("ran", subject, {"subject": subject})
+    store.event("noted", "a_b@1", {})
+
+    assert [e.subject for e in store.events(prefix="a_b@")] == ["a_b@1", "a_b@2", "a_b@1"]
+    assert [e.subject for e in store.events(kind="ran", prefix="a_b@")] == ["a_b@1", "a_b@2"]
+    assert [e.subject for e in store.events(prefix="a%")] == ["a%b@1"]
+    assert [e.subject for e in store.events(prefix="")] == [e.subject for e in store.events()]
+    assert store.events(prefix="a_b@3") == []
+
+
 def test_a_detail_that_is_not_json_is_refused(store: StateStore) -> None:
     with pytest.raises(ValidationError, match="JSON-serialisable") as caught:
         store.event("bad", "demo_mr", {"conn": object()})
