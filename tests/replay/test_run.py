@@ -6,7 +6,7 @@ import importlib
 import importlib.util
 import inspect
 import pkgutil
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -534,7 +534,9 @@ def test_a_replay_records_what_its_period_target_did_and_parity_compares_it(
 ) -> None:
     """A target whose hypothesis declares `period_target` records it on each path's session —
     every week it traded in and each week it stopped — and the two records are the same, so
-    parity holds and its payload counts them."""
+    parity holds and its payload counts them. March 2024 spans the change of clocks on the
+    10th: the weeks open at Monday 04:00 New York, 09:00 UTC before it and 08:00 UTC after,
+    written here as UTC by hand."""
     targeted = carded(ws, store, doc=document(period_target=TARGET))
 
     result = replay.parity(ws, store, hyp=targeted)
@@ -543,6 +545,11 @@ def test_a_replay_records_what_its_period_target_did_and_parity_compares_it(
     assert node.period_stops is not None and node.period_stops.stops
     assert node.period_stops == engine.period_stops
     assert node.period_stops.periods == 5, "March 2024 opens five New York weeks"
+    mondays = [(2, 26, 9), (3, 4, 9), (3, 11, 8), (3, 18, 8), (3, 25, 8)]
+    assert node.period_stops.openings == [
+        int(datetime(2024, month, day, hour, tzinfo=UTC).timestamp()) * 10**9
+        for month, day, hour in mondays
+    ]
     assert result.identical, result.divergence and result.divergence.render()
     assert result.payload()["node_period_stops"] == {
         "periods": 5,

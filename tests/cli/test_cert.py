@@ -488,13 +488,20 @@ def test_a_certificate_prints_its_period_stops_only_where_it_recorded_them(
     runner: CliRunner, researched: Path
 ) -> None:
     """The demo declares no period target, so its certificate records no stops: `--json`
-    carries `period_stops` as `null` and no `stops` line is printed. One that recorded them
-    prints how many of its target's weeks the certification run stopped."""
+    carries `period_stops` as `null` and no `stops` line is printed. One that recorded them —
+    the same certificate written again, under the next plan version, with a record of three
+    weeks, one stopped, as a certification run under a target keeps it — reads back from its
+    row, and `cert show`
+    prints how many of its target's weeks the run stopped and carries the record under
+    `--json`."""
+    from datetime import timedelta
     from types import SimpleNamespace
     from typing import cast
 
+    from kanso.certify import certificate as certificates
     from kanso.cli.cert import _stops_line
     from kanso.schemas import Certificate, PeriodStops
+    from kanso.workspace import find
 
     made = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))
     shown = at(runner, researched, "cert", "show", HYP_ID).stdout
@@ -505,6 +512,39 @@ def test_a_certificate_prints_its_period_stops_only_where_it_recorded_them(
     assert _stops_line(cast("Certificate", SimpleNamespace(period_stops=weeks))) == [
         "stops      0 of 3 target periods"
     ]
+
+    stopped = PeriodStops.model_validate(
+        {
+            "openings": [100, 200, 300],
+            "stops": [
+                {
+                    "opening_ns": 200,
+                    "anchor": 100_000.0,
+                    "threshold": 500.0,
+                    "hit_ns": 250,
+                    "segment": "rth",
+                    "equity": 100_600.0,
+                }
+            ],
+        }
+    )
+    ws = find(researched)
+    with StateStore(researched / "state.db") as store:
+        held = certificates.latest(store, HYP_ID)
+        assert held is not None
+        source = certificates.source_file(ws, HYP_ID, held.strategy_sha).read_bytes()
+        again = {
+            "period_stops": stopped,
+            "plan_version": held.plan_version + 1,
+            "created_at": held.created_at + timedelta(seconds=1),
+        }
+        certificates.write(ws, store, held.model_copy(update=again), source)
+
+    recorded = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
+    printed = at(runner, researched, "cert", "show", HYP_ID).stdout
+
+    assert recorded["period_stops"] == stopped.model_dump(mode="json")
+    assert "stops      1 of 3 target periods" in printed.splitlines()
 
 
 def test_the_certificate_states_the_power_the_plan_stated(
