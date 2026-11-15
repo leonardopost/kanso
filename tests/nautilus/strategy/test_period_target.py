@@ -18,8 +18,9 @@ the price that made it due, hours later or in the next week; under a latency eac
 fills at the close its order lands on, under both same-instant point orders; an entry in flight
 at the hit fills and is flattened; entries of every kind are dropped until the next week has
 opened and every name is flat — an order built by hand behind an exit, one by one or in a list
-read order by order, an overlay's clip, which then holds nothing, and a hedge leg that opens,
-while a held clip's `FLAT` goes; a new week's entry waits for the old week's legs to be flat;
+read order by order, an overlay's clip, which then holds nothing — asked at a finer bar the
+overlay reads that took the week to its target among them — and a hedge leg that opens, while a
+held clip's `FLAT` goes; a new week's entry waits for the old week's legs to be flat;
 nothing sent while stopped takes the position past flat — one order bigger than it, an exit
 beside a working one, one sized in dollars, a modify that grows a resting exit by any amount,
 a regrowth behind a shrink the venue has yet to apply, and an exit built by hand beside a
@@ -72,7 +73,7 @@ from kanso.nautilus.hooks import Clip, Hedge
 from kanso.nautilus.strategy import Decision, HookContext, KansoStrategy
 from kanso.schemas import CostsOverride, Hypothesis, PeriodTarget, resolve_venue_model
 from tests.nautilus.backtest.conftest import CAPITAL, SNAPSHOT, VENUE, hypothesis, instrument
-from tests.nautilus.strategy.conftest import DEMO, HEDGE, MINUTE_NS, bar
+from tests.nautilus.strategy.conftest import DEMO, HEDGE, MINUTE_NS, bar, second_bar
 from tests.nautilus.strategy.test_clips import CLIP_BUDGET, HEDGE_CLIP, Clipper, clipper
 from tests.nautilus.strategy.test_sizing import Enters, sized
 
@@ -954,6 +955,47 @@ def test_a_clip_dropped_while_stopped_holds_nothing_after(backtest: Any, asked: 
         intent.instrument_id == asked.instrument and intent.ts_event >= 30 * MINUTE_NS
         for intent in stopped.intents
     )
+
+
+@pytest.mark.parametrize("rise", [10.10, 10.02])
+def test_an_overlay_s_finer_bar_that_reaches_the_target_stops_the_week_before_its_clip(
+    backtest: Any, rise: float
+) -> None:
+    """A sized sleeve enters DEMO's 2,997 shares at 10.00 on its third one-minute bar, under a
+    target of ten basis points of the 100,000 capital, and an attached overlay reads one-second
+    bars, which the sleeve's own handler never sees. DEMO's first second bar after the fifth
+    minute closes at `rise`, and the overlay asks for a clip of HEDGE there. A rise to 10.10
+    marks 299.70 and reaches the target at that bar, so the week stops before the overlay is
+    consulted and the clip, which opens, is dropped; DEMO is flattened at the next minute bar.
+    A rise to 10.02 marks 59.94, short of it, and the clip goes."""
+
+    class Once(Clipper):
+        script = {1: (Clip("HEDGE.XNAS", "BUY"),)}
+
+    strategy = Enters(sized(extra_resolutions=("1s",)))
+    cross_section.target(
+        strategy,
+        PeriodTarget(
+            period="week", opens="Wed 19:30", tz="America/New_York", target_bp=10, of="capital"
+        ),
+    )
+    minutes = [
+        point
+        for index in range(10)
+        for point in (bar(DEMO, index, 10.0, volume=10**6), bar(HEDGE, index, 20.0, volume=10**6))
+    ]
+    seconds = [
+        second_bar(DEMO, 0, rise, origin_ns=int(minutes[9].ts_event)),
+        second_bar(HEDGE, 0, 20.0, origin_ns=int(minutes[9].ts_event)),
+    ]
+    data = [*minutes[:10], *seconds, *minutes[10:]]
+
+    run = backtest(strategy, [clipper(Once)], data=data, instruments=(DEMO, HEDGE)).strategy
+
+    reaches = rise == 10.10
+    assert run._target_dropped == (1 if reaches else 0)
+    hedged = [intent.side for intent in run.intents if intent.instrument_id == "HEDGE.XNAS"]
+    assert hedged == ([] if reaches else ["BUY"])
 
 
 def test_a_held_clip_is_taken_off_while_stopped_and_a_hedge_leg_that_opens_is_not_sent(

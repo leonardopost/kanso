@@ -906,7 +906,9 @@ struck at the previous week's last point, after that period's carry, or the capi
 first week; the threshold is `target_bp` of the capital, or of the anchor under `of:
 period_open`. At every bar, quote, print and custom point the harness hands the strategy, and
 before its handler, it reads the week's P&L as `balance` less the anchor — the equity marked at
-each name's last print, which on one-minute bars is each bar's close.
+each name's last print, which on one-minute bars is each bar's close — and at every finer bar an
+attached overlay reads, before the overlay is consulted on it, so a clip it asks once the week
+has reached its target is held to the stopped week.
 
 At the first point the P&L reaches the threshold the week is **stopped**: every working order
 of the sleeve is cancelled, and every name it holds — at the hit, or filled afterwards by an

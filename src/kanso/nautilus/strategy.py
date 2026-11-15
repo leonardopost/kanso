@@ -107,8 +107,9 @@ equity the runner strikes at the last point of the week before, struck when the 
 the new one is delivered, after a book policy's period close has booked its carry, so it is the
 card's period-end equity (`_target_turn`); a run's first week, which no warmup turns into, is
 anchored at the capital. At the head of every point dispatched — after what the rate held back
-is sent and before the author's handler — the week's P&L, `balance` less the anchor, reaching
-`target_bp` of the capital or of the anchor stops the week: every working order of every name is
+is sent and before the author's handler — and at a finer bar an attached overlay reads, before
+the overlay is consulted on it, the week's P&L, `balance` less the anchor, reaching `target_bp`
+of the capital or of the anchor stops the week: every working order of every name is
 cancelled, and every name the sleeve holds is due (`_target_step`). A name is due again at every
 fill it takes while stopped, so an entry the venue matches after the hit is flattened too, and a
 due name is sent its whole position at market (`submit_exit`) at the first point dispatched after
@@ -2149,9 +2150,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._consult_overlay(instrument_id, last_bar=last_bar, price=price)
 
     def _dispatch_bar(self, bar: Bar) -> None:
+        """Hand a bar to the author, then ask for the exits owed and the exit rules; a bar of
+        a finer grain an attached overlay reads is handed to the overlays alone.
+
+        The period target is read at that bar too, but only for its hit (`_target_step`): the
+        bar moves `balance` as any print does, so a week it takes to the target is stopped
+        before the overlays are consulted on it, and a clip they ask there is held to the
+        stopped week. The flatten, and the lift at the next week, wait for a point handed to
+        the author, as what the order rate holds back does."""
         self._data_time = int(bar.ts_event)
         instrument_id = bar.bar_type.instrument_id
         if self._is_extra_bar(bar):
+            if self._period_target is not None and self._target_until is None:
+                self._target_step()
             self._overlay_due = (instrument_id, bar, float(bar.close))
             return
         self._pay_rated()
