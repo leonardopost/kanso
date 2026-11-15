@@ -1819,6 +1819,28 @@ def test_a_modify_of_what_is_not_an_order_raises_the_engine_s_own_error_on_both_
     assert f'TypeError("{raised}' in str(node.traceback_tail)
 
 
+@pytest.mark.parametrize("count", ["50", "50.0", "150"])
+@pytest.mark.parametrize("per_minute", [None, 3], ids=["unset", "stated"])
+def test_a_modify_to_a_count_that_is_not_a_quantity_raises_the_engine_s_own_error(
+    count: str, per_minute: int | None
+) -> None:
+    """A strategy that moves its resting exit to a count of shares written as a number — a
+    shrink or a growth — hands `modify_order` no `Quantity`. kanso reads nothing of it but that
+    it is a change, which the rate takes a token for, so the engine's typed `quantity` refuses
+    it on both paths with the error that names the argument, as before the keys existed: with
+    neither key stated, and at three a minute, which leaves the third command a token."""
+    raised = "Argument 'quantity' has incorrect type"
+    call = f"self.modify_order(self.resting, quantity={count})"
+    request = rated(sleeve(f"        elif self.seen == 3:\n            {call}\n"), per_minute)
+    groups: list[tuple[object, ...]] = [tuple(steady(5))]
+
+    with pytest.raises(TypeError, match=raised):
+        backtest.execute(request, [instrument()], groups)
+    node = session.run_node(request, [instrument()], groups).result
+    assert node.crashed
+    assert f'TypeError("{raised}' in str(node.traceback_tail)
+
+
 OWED_BEFORE_AN_ENTRY = sleeve(
     """        elif self.seen == 3:
             self.submit_exit(name)

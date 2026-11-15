@@ -2657,7 +2657,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         another type — which the rate reads nothing of, so the engine raises its own error for
         it, as it did before the keys existed: in nautilus_trader 1.231.0
         `Strategy.modify_order` takes an `Order` and refuses `None` with `Condition.not_none`
-        (`trading/strategy.pyx`), a `TypeError` either way.
+        (`trading/strategy.pyx`), a `TypeError` either way. A quantity that is not a
+        `Quantity` — a count of shares as an `int` — is read as a change and asked of the rate
+        as on every hypothesis, and nothing else is read of it, under a period target too: the
+        engine's typed `quantity` parameter refuses it with a `TypeError` naming the argument.
 
         While a period target has stopped the sleeve, a modify the engine would send that grows
         the order, on either side and by any amount, is dropped before the rate is asked, and
@@ -2673,14 +2676,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             and _modify_sends(order, quantity, price, trigger_price)
             and not self._never_sent(order)
         ):
-            grows = quantity is not None and quantity.as_decimal() > order.quantity.as_decimal()
+            grows = (
+                self._period_target is not None
+                and isinstance(quantity, Quantity)
+                and quantity.as_decimal() > order.quantity.as_decimal()
+            )
             if grows and self._target_until is not None:
                 self._target_dropped += 1
                 return
             if not self._command_spend(MODIFY):
                 self._drop_rate(MODIFY)
                 return
-            if grows and self._period_target is not None:
+            if grows:
                 key = order.client_order_id
                 asked = quantity.as_decimal()  # type: ignore[union-attr]
                 self._target_grown[key] = max(asked, self._target_grown.get(key, asked))

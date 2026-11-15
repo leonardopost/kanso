@@ -148,6 +148,8 @@ class Strategy(KansoStrategy):
                     self.resting, quantity=Quantity.from_int(int(side)),
                     price=Price.from_str("10.00"),
                 )
+            elif act == "count":
+                self.modify_order(self.resting, quantity=int(side))
             elif act == "notional":
                 way, qty, price = self._sized(side)
                 made = (InstrumentId.from_str(name), OrderSide[way], Quantity.from_int(qty))
@@ -589,6 +591,31 @@ def test_nothing_sent_while_stopped_takes_the_position_past_flat(
     rows = [row for row in seen if row.ts >= ny(MONDAY, "04:02") and row.name == LAGG_ID]
     assert rows and all(row.lead >= 0.0 for row in rows)
     assert all(row.lead == 0.0 for row in rows if row.ts >= ny(MONDAY, "04:03"))
+
+
+@pytest.mark.parametrize(("when", "count"), [("04:01", "2000"), ("04:02", "2000"), ("04:02", "1")])
+def test_a_modify_to_a_count_that_is_not_a_quantity_raises_the_engine_s_own_error(
+    when: str, count: str, tmp_path: Path
+) -> None:
+    """LEAD is bought 1,000 at the 04:01 close and the 04:02 close of 10.60 stops the week. A
+    sale of 500 resting at 99.00, sent from LAGG's handler before the hit or after it, is
+    modified to a count of shares written as a number, larger or smaller. A stopped week
+    reads nothing of a quantity that is not a `Quantity`, so the modify is handed to the
+    engine as it is, and the engine's typed `quantity` refuses it with the error that names
+    the argument, as on a hypothesis with no target."""
+    stamps = ("04:01", "04:02", "04:03")
+    lead = list(zip((ny(MONDAY, s) for s in stamps), (10.00, 10.60, 10.70), strict=True))
+    lagg = [(ts, 11.00) for ts, _ in lead]
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, when), LAGG_ID): [
+            ("limit", LEAD_ID, "SELL:500@99.00"),
+            ("count", LEAD_ID, count),
+        ],
+    }
+
+    with pytest.raises(TypeError, match="Argument 'quantity' has incorrect type"):
+        card(plan, lead, lagg, tmp_path)
 
 
 TEN = tuple(f"04:{minute:02d}" for minute in range(1, 11))
