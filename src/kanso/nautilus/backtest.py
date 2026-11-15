@@ -1784,12 +1784,11 @@ class _Fold:
     A name whose instrument declares a split is folded by era as well — how many of its
     splits had taken effect when a point was printed — into `marked`, `era_lows` and
     `era_highs`, rather than into `lows` and `highs`, because its prices are published in the
-    shares of their own era (`Marks.periods` restates them). `reached` is kept only where
-    some name declares a split: the latest instant a point the venue applies was printed at,
-    by name, which is the venue's clock for a split.
+    shares of their own era (`Marks.periods` restates them). The venue's clock for a split is
+    the run's, not a period's, and is kept on `Marks` (`Marks.applied`).
     """
 
-    __slots__ = ("end", "era_highs", "era_lows", "highs", "lows", "marked", "marks", "reached")
+    __slots__ = ("end", "era_highs", "era_lows", "highs", "lows", "marked", "marks")
 
     def __init__(self) -> None:
         self.end = 0
@@ -1799,7 +1798,6 @@ class _Fold:
         self.marked: dict[str, tuple[int, float, int]] = {}
         self.era_lows: dict[tuple[str, int], float] = {}
         self.era_highs: dict[tuple[str, int], float] = {}
-        self.reached: dict[str, int] = {}
 
     def mark(self, key: str, ts: int, price: float) -> None:
         """The last price printed for a name; at one instant, the greatest — which is what
@@ -1866,15 +1864,23 @@ class Marks:
     into the era in force at its end (`_restated`): its adverse range, and its mark, carried
     forward from an earlier period when it has not printed since. The era in force is the
     venue's: the venue applies a split when a point of its own venue printed at or after the
-    split's instant reaches it, whichever name printed it, so the era is read off the latest
-    instant a point of the name's venue folded by the end was printed at. A one-for-five
-    held through its ex-date, with its week's low printed the day before at 10.19 and the
-    shares held at the week's end bought at 53.51, was valued at 10.19 a share; read in the
-    new shares the low is 50.95. Without a split, nothing is restated and a period is what it
-    folded. Engine facts this relies on (nautilus_trader 1.231.0): the backtest engine hands
-    each bar, quote, print, book change, instrument status and instrument close to the
-    exchange of its own instrument's venue, and the exchange hands it to each loaded module's
-    `pre_process`, the point itself with the `ts_event` its loader wrote, before matching it.
+    split's instant reaches it, whichever name printed it, at that point's `ts_init`, and the
+    runner books the split's adjustment at that same instant (`_adjusted`). So the venue's
+    clock (`applied`) is, for each split, the earliest `ts_init` of a point of the name's
+    venue printed at or after its instant, and a split is in force at an end when that is at
+    or before the end — the instant the runner booked the count it holds there, which is the
+    same instant by construction. The clock is the feed's, not a view's: a card and a replay
+    fold the whole feed their venue was handed, and a stage version and a book member, whose
+    marks fold their own points only, are handed the feed the shared venue was handed
+    (`clocked`), where a stage-mate's print may be the one that applied the split. A
+    one-for-five held through its ex-date, with its week's low printed the day before at
+    10.19 and the shares held at the week's end bought at 53.51, was valued at 10.19 a share;
+    read in the new shares the low is 50.95. Without a split, nothing is restated and a
+    period is what it folded. Engine facts this relies on (nautilus_trader 1.231.0): the
+    backtest engine hands each bar, quote, print, book change, instrument status and
+    instrument close to the exchange of its own instrument's venue in `ts_init` order, and
+    the exchange hands it to each loaded module's `pre_process`, the point itself with the
+    `ts_event` and `ts_init` its loader wrote, before matching it.
     """
 
     def __init__(self, request: RunRequest, model: VenueModel, instruments: Iterable[Any]) -> None:
@@ -1912,12 +1918,23 @@ class Marks:
         order, which a point's era is counted against."""
         self._ratios: dict[str, tuple[float, ...]] = {}
         """Each such name's split ratios, in the same order."""
+        instants: dict[str, set[int]] = {}
         for instrument in instruments:
             schedule = splits.schedule_of(instrument)
             if schedule:
                 key = str(instrument.id)
                 self._effective[key] = [split.effective_ns for split in schedule]
                 self._ratios[key] = tuple(split.ratio for split in schedule)
+                instants.setdefault(_venue_of(key), set()).update(self._effective[key])
+        self.applied: dict[str, tuple[list[int], list[int]]] = {
+            venue: (sorted(held), [_NEVER] * len(held)) for venue, held in instants.items()
+        }
+        """The venue's clock for a split: each venue whose names declare one, with every
+        instant one of them takes effect, in order, and beside each the earliest `ts_init` of
+        a point of the venue printed at or after it — the instant the venue applied the
+        splits that take effect then — or `_NEVER` while no such point has reached it. That
+        never falls as the instants rise, since a point printed past a later instant is
+        printed past every earlier one, so the instants applied by an end are a prefix."""
 
     def take(self, points: Iterable[object]) -> None:
         """Fold a chunk of points, its funding settlements first (see the class).
@@ -1952,7 +1969,7 @@ class Marks:
         printed at, its `ts_event` (`fold`), and any other with none.
         """
         kind = type(point)
-        split = bool(self._effective)
+        split = bool(self.applied)
         if kind is QuoteTick:
             ts = int(point.ts_init)  # type: ignore[attr-defined]
             if not self.opens <= ts < self.closes:
@@ -2018,8 +2035,9 @@ class Marks:
         printed: int | None = None,
     ) -> None:
         """Fold one mark, as `(ts_init, instrument, price, low, high)`, and the instant it was
-        printed at, `printed`, for a point the venue applies — `None` for one it does not, or
-        where no name declares a split.
+        printed at, `printed`, for a point the venue applies — `None` for one it does not; a
+        caller may pass `None` wherever no name declares a split, since a point of a venue
+        none of whose names declares one moves no clock.
 
         The period of the last point is kept, since a stream's points run through one period
         after another; and `min(held, low)` is `low` exactly when `low < held`, `max` the same
@@ -2027,7 +2045,9 @@ class Marks:
         likewise, and the mark as `_Fold.mark` moves it. A name that declares a split is folded
         the same way within each of its eras — the splits effective by `printed`, or by `ts`
         for a point printed at no other instant — and of two marks at one instant and one
-        price the later era's is kept, so that too is the same in any order."""
+        price the later era's is kept, so that too is the same in any order. A point the venue
+        applies moves its clock (`reach`), which takes the earliest instant and so is the same
+        in any order too."""
         era: int | None = None
         if self._effective:
             effective = self._effective.get(key)
@@ -2066,10 +2086,7 @@ class Marks:
                     if held is None or high > held:
                         target.era_highs[in_era] = high
         if printed is not None:
-            reached = target.reached
-            held_at = reached.get(key)
-            if held_at is None or printed > held_at:
-                reached[key] = printed
+            self.reach(key, ts, printed)
         if price is not None:
             if era is None:
                 marks = target.marks
@@ -2097,6 +2114,49 @@ class Marks:
                     or (ts == held_credit[0] and price > held_credit[1])
                 ):
                     self._credited[slot] = (ts, price)
+
+    def reach(self, key: str, ts: int, printed: int) -> None:
+        """Move the venue's clock (`applied`) for a point of `key` its venue was handed at
+        `ts`, printed at `printed`: every split of the venue's names effective at or before
+        `printed` was applied by `ts` at the latest. The clock never falls as the instants
+        rise, so the instants this point moves are the ones before the first already applied
+        by `ts`, read down from the last it reaches."""
+        held = self.applied.get(_venue_of(key))
+        if held is None:
+            return
+        effective, applied = held
+        index = bisect.bisect_right(effective, printed)
+        while index and applied[index - 1] > ts:
+            index -= 1
+            applied[index] = ts
+
+    def clocked(self, points: Iterable[object]) -> None:
+        """Read the venue's clock off `points`, the whole feed the venue was handed, where
+        these marks fold one view of it — a stage version's own points, or a book member's.
+
+        The shared venue applies a split at whichever point of its own venue first carries
+        the market past it, a stage-mate's or another member's among them, and books it into
+        the position the view holds; a view's own points need not hold that point, and read
+        alone they left the view's prices in the old count beside the new count it held —
+        measured on a book, a member holding 100 restated shares at the pre-split 10 struck
+        90,994.98 where the book and the member run alone struck 99,994.98. Each point the
+        venue applies moves the clock as `fold` moves it, and nothing else is folded: the
+        view's own periods, marks and ranges are its own. A view's points are in the feed,
+        and the clock takes the earliest instant, so reading the feed once, before or after
+        the view, gives the same clock."""
+        if not self.applied:
+            return
+        for point in points:
+            kind = type(point)
+            if kind is QuoteTick or kind is TradeTick:
+                key = point.instrument_id.value  # type: ignore[attr-defined]
+            elif kind is Bar:
+                key = point.bar_type.instrument_id.value  # type: ignore[attr-defined]
+            elif isinstance(point, _APPLIED):
+                key = _instrument_of(point) or ""
+            else:
+                continue
+            self.reach(key, int(point.ts_init), int(point.ts_event))  # type: ignore[attr-defined]
 
     def settle(self, ts: int, key: str, rate: float) -> None:
         """Record one funding settlement: `rate` on what `key` holds at `ts`."""
@@ -2144,56 +2204,52 @@ class Marks:
         return self._restated(folded) if self._effective else folded
 
     def _restated(self, folds: tuple[_Fold, ...]) -> tuple[_Fold, ...]:
-        """Each period with every price of a name that declares a split divided into the era
-        in force at its end: the era of the latest instant a point of the name's venue folded
-        by then was printed at, the prefix's included, which is when the venue applied it.
+        """Each period with every price of a name that declares a split put on the basis in
+        force at its end (`era`), the one function every price of such a name is read
+        through before anything values a position at it.
 
-        A range printed in an earlier era is divided by the ratios of the splits between, as
-        `splits.restating` multiplies them, and the lowest of the restated lows is the low —
-        of two equal, the earlier era's, so the result does not depend on the order the eras
-        were folded in. So is the name's mark, from the period it was last printed in, which
-        is carried into a period the name did not print in once a split it has not printed
-        since takes effect. Every other name, and a price already in the era in force, is
-        read as folded. The folds themselves keep what was printed; a new fold is handed
-        back for each period, so this can be read again and reads the same."""
-        venue_of = {key: key.rpartition(".")[2] for key in self._effective}
-        clocks: dict[str, int] = {}
-        carried: dict[str, tuple[int, float, int]] = {}
+        A range printed in another era is divided by the ratios of the splits between, as
+        `splits.restating` multiplies them (`_basis`), and the lowest of the restated lows is
+        the low — of two equal, the earlier era's, so the result does not depend on the order
+        the eras were folded in. So is the name's mark, from the period it was last printed
+        in, which is carried into a period the name did not print in once the era in force
+        moves past the one it was printed in. Every other name, and a price already in the
+        era in force, is read as folded. The folds themselves keep what was printed; a new
+        fold is handed back for each period, so this can be read again and reads the same."""
+        carried: dict[str, tuple[int, float, int]] = dict(self.prefix.marked)
         made: list[_Fold] = []
-        for fold in (self.prefix, *folds):
-            for key, at in fold.reached.items():
-                venue = key.rpartition(".")[2]
-                if at > clocks.get(venue, _BEFORE):
-                    clocks[venue] = at
+        for fold in folds:
             carried.update(fold.marked)
-            if fold is self.prefix:
-                continue
             read = _Fold()
             read.end = fold.end
             read.marks = dict(fold.marks)
             read.lows = dict(fold.lows)
             read.highs = dict(fold.highs)
-            ending: dict[str, int] = {}
-            for key, effective in self._effective.items():
-                era = ending[key] = bisect.bisect_right(
-                    effective, clocks.get(venue_of[key], _BEFORE)
-                )
+            ending = {key: self.era(key, fold.end) for key in self._effective}
+            for key, era in ending.items():
                 mark = carried.get(key)
-                if mark is not None and mark[2] < era:
-                    factor = _restating(self._ratios[key], mark[2], era)
-                    read.marks[key] = (mark[0], mark[1] / factor)
+                if mark is not None and mark[2] != era:
+                    read.marks[key] = (mark[0], mark[1] / _basis(self._ratios[key], mark[2], era))
             for (key, era), low in sorted(fold.era_lows.items()):
-                value = low / _restating(self._ratios[key], era, ending[key])
+                value = low / _basis(self._ratios[key], era, ending[key])
                 held = read.lows.get(key)
                 if held is None or value < held:
                     read.lows[key] = value
             for (key, era), high in sorted(fold.era_highs.items()):
-                value = high / _restating(self._ratios[key], era, ending[key])
+                value = high / _basis(self._ratios[key], era, ending[key])
                 held = read.highs.get(key)
                 if held is None or value > held:
                     read.highs[key] = value
             made.append(read)
         return tuple(made)
+
+    def era(self, key: str, end: int) -> int:
+        """How many of a split name's splits are in force at `end`: those whose instant the
+        venue's clock (`applied`) applied at or before it — the instants applied by an end
+        are a prefix of the venue's, and the name's are counted up to the last of them."""
+        effective, applied = self.applied[_venue_of(key)]
+        reached = bisect.bisect_right(applied, end)
+        return bisect.bisect_right(self._effective[key], effective[reached - 1]) if reached else 0
 
     def price(self, events: Sequence[Any]) -> None:
         """Read every fill not yet priced against the last quote of its name at or before it,
@@ -2282,18 +2338,26 @@ class Marks:
         self._series.clear()
 
 
-_BEFORE: Final = -(1 << 63)
-"""An instant before any a point is printed at: the clock of a venue nothing has reached."""
+_NEVER: Final = (1 << 63) - 1
+"""An instant after any a point is published at: when the venue applies a split no point
+has carried its market past."""
 
 
-def _restating(ratios: Sequence[float], since: int, until: int) -> float:
-    """What a price printed in a name's era `since` is divided by to be quoted in the shares of
-    era `until`: the product of the ratios of the splits between, multiplied in order from one,
-    as `splits.restating` multiplies them; one when nothing is between."""
+def _venue_of(key: str) -> str:
+    """The venue an instrument id names, after its last dot."""
+    return key.rpartition(".")[2]
+
+
+def _basis(ratios: Sequence[float], since: int, until: int) -> float:
+    """What a price printed in a name's era `since` is divided by to be quoted in the shares
+    of era `until`: the product of the ratios of the splits between, multiplied in order from
+    one, as `splits.restating` multiplies them — one when nothing is between, and its
+    reciprocal for an era already past `until`, a price printed in shares the venue has not
+    yet split into."""
     factor = 1.0
-    for ratio in ratios[since:until]:
+    for ratio in ratios[min(since, until) : max(since, until)]:
         factor *= ratio
-    return factor
+    return factor if since <= until else 1.0 / factor
 
 
 def _sold(event: Any) -> bool:
@@ -2795,8 +2859,18 @@ def _adjusted(
     positions: Sequence[Any], schedules: Mapping[str, Sequence[splits.Split]]
 ) -> tuple[Adjustment, ...]:
     """Every split adjustment the run applied, once each, in time order (`Adjustment`): the
-    quantity change, the cash the split paid in lieu of the fraction it left, and the split's
-    ratio from the instrument's schedule, matched as `splits.moves_of` matches it.
+    instant the venue applied it, the quantity change, the cash the split paid in lieu of the
+    fraction it left, and the ratio of the split the event names (`splits.applied_by`).
+
+    The instant is the event's `ts_init`, the `ts_init` of the point that applied the split,
+    and not its `ts_event`, that point's print instant: a fill is stamped when the venue
+    matched it and the venue clock is the one the marks read a split's era off
+    (`Marks.applied`), so a split booked at its print instant would precede fills the venue
+    matched before it and a period end the venue reached before it. The ratio is the one the
+    event names, never the latest split in force at its instant: two splits of one name the
+    venue applies at one point carry one instant, and matched by it each read the later
+    one's ratio — measured, a one-for-ten then a two-for-one restated a price of 10 to 2.5
+    where the book held it at 50, and the fill path read a 9.51% fall the book never took.
 
     Read off the positions the same way the fills are, and deduplicated by event id for
     the same reason: a netting position that closed and reopened lives in the cache twice,
@@ -2810,16 +2884,15 @@ def _adjusted(
             if key in seen or event.quantity_change is None:
                 continue
             seen.add(key)
-            ts = int(event.ts_event)
             name = str(event.instrument_id)
-            applied = [split.ratio for split in schedules.get(name, ()) if split.effective_ns <= ts]
+            split = splits.applied_by(event, schedules.get(name, ()))
             found.append(
                 Adjustment(
-                    ts_ns=ts,
+                    ts_ns=int(event.ts_init),
                     instrument_id=name,
                     qty=float(event.quantity_change),
                     paid=0.0 if event.pnl_change is None else event.pnl_change.as_double(),
-                    ratio=applied[-1] if applied else None,
+                    ratio=None if split is None else split.ratio,
                 )
             )
     return tuple(

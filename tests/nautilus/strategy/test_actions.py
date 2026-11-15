@@ -250,10 +250,14 @@ def test_the_portfolio_follows_the_adjustment_rather_than_the_fills(backtest) ->
 
 
 def test_the_adjustment_is_stamped_at_the_reference_time_that_triggered_it(backtest) -> None:
+    """At the instant the point that applied the split was printed, and beside it the instant
+    it was published, when the venue applied it; and it names the split it applied."""
     run = backtest(Holder(config()), instruments=[equity(DEMO, info=SCHEDULE)], data=series())
 
-    assert int(held(run).adjustments[0].ts_event) == run.strategy.seen[4][0]
-    assert held(run).adjustments[0].reason == "split"
+    (event,) = held(run).adjustments
+    assert int(event.ts_event) == run.strategy.seen[4][0]
+    assert int(event.ts_init) == int(event.ts_event) + 1_000_000_000
+    assert event.reason == f"split {EX.isoformat()}"
 
 
 def test_a_split_costs_the_position_nothing(backtest) -> None:

@@ -22,7 +22,7 @@ from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import ClientId, InstrumentId, TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
-from kanso.criteria.run import midnight_ns
+from kanso.criteria.run import day_of, midnight_ns
 from kanso.data.types import CorporateAction, Funding
 from kanso.errors import PreconditionError
 from kanso.nautilus import backtest, session
@@ -1165,6 +1165,42 @@ def test_the_two_paths_apply_a_corporate_action_identically() -> None:
     assert node.intents == engine.intents
     assert [(order[2], order[3]) for order in node.intents] == [("BUY", 1_005.0), ("SELL", 100.0)]
     assert node.run.equity == engine.run.equity
+
+
+HOLDING_DEMO = b"""
+from kanso.nautilus.strategy import KansoStrategy
+
+
+class Strategy(KansoStrategy):
+    def on_start(self) -> None:
+        self.bought = False
+
+    def on_bar(self, bar) -> None:
+        if not self.bought and bar.bar_type.instrument_id.symbol.value == "DEMO":
+            self.bought = True
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+"""
+"""Buys DEMO on its first bar and holds it to the window's close."""
+
+
+def test_the_two_paths_mark_a_held_name_unprinted_since_its_split_restated() -> None:
+    """DEMO prints nothing on its ex-date and OTHR, on DEMO's venue, does, which applies the
+    split: both paths hold 100 new shares at that end, mark DEMO's eve price restated into
+    them and strike what the eve struck. Marked as printed, the 100 were worth a tenth of
+    that, on either path."""
+    demo = [bar for bar in restated(FORWARD) if day_of(bar.ts_event) != SPLIT_EX]
+    node, engine = both(
+        request_for(source=HOLDING_DEMO, hyp=hypothesis(universe=[INSTRUMENT, OTHER_ID])),
+        [instrument(info=SPLIT_SCHEDULE), instrument(OTHER)],
+        [tuple(demo), tuple(bars(FORWARD, OTHER))],
+    )
+
+    ends = engine.run.period_ends_ns
+    ex = next(index for index, end in enumerate(ends) if day_of(end) == SPLIT_EX)
+    assert [held.qty for held in engine.run.held if held.ts_ns == ends[ex]] == [100.0]
+    assert engine.run.equity[ex] == pytest.approx(engine.run.equity[ex - 1])
+    assert node.run.equity == engine.run.equity
+    assert node.run.held == engine.run.held
 
 
 def test_the_two_paths_cancel_across_a_corporate_action_identically() -> None:

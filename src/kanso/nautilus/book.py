@@ -843,7 +843,9 @@ def execute_book(
     refused as a run of it alone refuses it (`backtest.checked`), it is fed only the span its
     own request delivers (`deliver_from`) and trades from its window's open (`warm`), and it is
     extracted from its own positions and its own points' marks, as a stage node extracts a
-    version.
+    version — with a split name's prices read in the era the shared venue had applied at
+    each end, off the whole feed (`Marks.clocked`), since another member's print can be the
+    point that applied a split to this member's position.
 
     The venues are the members', agreed as a stage's are (`kanso.nautilus.node.agree`), each
     opened at the book's capital and at the largest leverage the block declares, so the
@@ -893,6 +895,8 @@ def execute_book(
     union = backtest.Marks(measured, models[deepest.id], instruments)
     union.take(points)
     union.check()
+    for member in order:
+        marks[member.id].clocked(points)
     backtest._seed_globals(_seed_of(members))
     engine = backtest.engine_for()
     try:

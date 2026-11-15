@@ -703,11 +703,14 @@ at, under a latency another part of the session or another day than its own — 
 the part it paid are read again from the record; a fill no dated spread charged keeps none,
 and its record is what it was before the field.
 A run whose venue applied a split to a position it held keeps each as `adjustments` — the
-instant, the instrument, the quantity it changed, the cash it paid in lieu and the split's
-ratio — which the runner booked into its equity and which the fill path `intraday_drawdown`
-reads replays. A run that held nothing through a split keeps none and is stored as it was
-before the field, and a run stored before runs kept them reads as one that carries none,
-which the fill path cannot replay (`intraday_drawdown`, What a card must satisfy, below).
+instant the venue applied it, which is the instant the point that carried the market past
+the split was published at, the instrument, the quantity it changed, the cash it paid in lieu
+and the ratio of the split the venue's event names, so two splits applied at one point each
+keep their own — which the runner booked into its equity at that instant and which the fill
+path `intraday_drawdown` reads replays. A run that held nothing through a split keeps none and
+is stored as it was before the field, and a run stored before runs kept them reads as one
+that carries none, which the fill path cannot replay (`intraday_drawdown`, What a card must
+satisfy, below).
 
 Under another kanso, `compute` is that kanso's objective on the same run, and a release can
 compute an objective differently: 0.17.0 made an objective's error the error of its mean,
@@ -1239,7 +1242,7 @@ already over. There are eleven.
 | `strategy_integrity` | a file that reads what the embargo hides, imports outside the allow-list, calls the harness's own sends, reaches a method the base overrides past it, reaches the message bus, or applies an event to an order by hand; or one whose top-level class reaching a harness base binds in its body a name that base owns, or `bar_resolution` in a `Config`'s — a `Config` that gives `bar_resolution` a default of its own any other way is refused where the runner builds the class |
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits, read at the period ends |
-| `intraday_drawdown` | a run that fell further than the hypothesis permits between the period ends: the same limit read on the path through every fill — cash after each fill, every open position at the price it last traded at, or at the runner's mark at the last period end when it has not traded since — re-anchored at each period end to the equity the runner struck there, so a book flat at its ends is judged on the fall it took inside them. The path holds what the runner holds: each split the venue applied to a held position is replayed where the runner booked it — the quantity it changed, the last price divided by its ratio, the cash it paid in lieu — and at each end every position is set to what the runner held there, so a split's lost shares are never marked and a move to an end's mark is not counted again at the next fill. A run stored before runs kept their splits (`adjustments`) has none to replay, and its path holds a split's lost shares until the next end. Carries no parameter; its evidence carries the period-end reading beside it and the instant of the trough |
+| `intraday_drawdown` | a run that fell further than the hypothesis permits between the period ends: the same limit read on the path through every fill — cash after each fill, every open position at the price it last traded at, or at the runner's mark at the last period end when it has not traded since — re-anchored at each period end to the equity the runner struck there, so a book flat at its ends is judged on the fall it took inside them. The path holds what the runner holds: each split the venue applied to a held position is replayed where the runner booked it, the instant the venue applied it — the quantity it changed, the last price divided by the ratio of the split it names, the cash it paid in lieu — and at each end every position is replaced by what the runner held there, at the runner's mark, so a split's lost shares are never marked and a move to an end's mark is not counted again at the next fill. A run stored before runs kept their splits (`adjustments`) has none to replay, and its path holds a split's lost shares until the next end. Carries no parameter; its evidence carries the period-end reading beside it and the instant of the trough |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high, read in the shares held at the end, so a low printed before a split inside the period is divided by its ratio — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
@@ -2385,8 +2388,15 @@ before a split by the split's ratio wherever the period's end holds the new coun
 period's low and high, which `maintenance_margin` values a holding at, and its last price,
 which the equity curve marks it at — and the count in force at an end is the venue's: it
 applies a split when a point of the name's own venue printed past the split's instant reaches
-it. The run keeps each split it applied to a held position (`adjustments`), and the path
-`intraday_drawdown` reads replays them where the runner booked them.
+it, at the instant that point was published, and the runner books the split into what it
+holds at that same instant, so the prices and the count at an end are read off one clock. It
+is the clock of the whole feed the venue was handed: a stage version's and a book member's
+marks are struck from their own points, and a stage-mate's or another member's print can be
+the one that applied a split to their position, so their era is read off the stage's or the
+book's feed, not their own. A price of the split name printed in shares the venue has not
+yet split into is read back into the shares it still holds. The run keeps each split it
+applied to a held position (`adjustments`), and the path `intraday_drawdown` reads replays
+them where the runner booked them.
 
 **A window holding a split you have not declared is refused.** When the run's data carries a
 `corporate_action` point of kind `split` whose ex-date falls inside the window, and the

@@ -243,7 +243,7 @@ class CorporateActions(SimulationModule):  # type: ignore[misc]
             key=lambda held: str(held.id),
         ):
             price = last_price(book, position)
-            made.append(splits.apply_to(position, split, lot, ts_event, price, multiplier))
+            made.append(splits.apply_to(position, split, lot, ts_event, price, multiplier, ts_init))
             self.cache.update_position(position)
         self.portfolio.initialize_positions()
         self._applied.add((str(instrument_id), split.ex_date))

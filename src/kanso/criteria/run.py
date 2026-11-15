@@ -156,14 +156,16 @@ class FundingPayment:
 class Adjustment:
     """One split the venue applied to a position the run held, as the runner booked it.
 
-    `qty` is the signed change the split made to the quantity held — the venue's own
-    `PositionAdjusted.quantity_change`, floored onto the lot, never recomputed from a ratio —
-    and `paid` the cash it paid in lieu of the fraction it left, signed as cash moves: a long
-    is paid and a short pays. `ratio` is the split's, shares held after per share held
-    before, read off the instrument's schedule — the latest split effective at or before
-    `ts_ns`, the instant the venue applied it, as a trade's ledger matches it — and `None`
-    only where the schedule the extraction read names none, which a split the venue applied
-    from that schedule always finds.
+    `ts_ns` is the instant the venue applied it: the instant the point that carried the
+    market past the split was published at, its `ts_init`, which is when the venue matched
+    that point and every fill it made. `qty` is the signed change the split made to the
+    quantity held — the venue's own `PositionAdjusted.quantity_change`, floored onto the lot,
+    never recomputed from a ratio — and `paid` the cash it paid in lieu of the fraction it
+    left, signed as cash moves: a long is paid and a short pays. `ratio` is the split's,
+    shares held after per share held before, of the split the venue's event names
+    (`kanso.nautilus.splits.applied_by`) — so two splits the venue applies at one point each
+    carry their own — and `None` only for an event that names no split of the schedule the
+    extraction read, which a split the venue applied from that schedule always names.
     The runner books the change into what it holds and the payment into cash at `ts_ns`
     (`kanso.nautilus.backtest._equity`); a run recorded before runs kept the adjustments
     carries none, and a reading of it that needs them does without (`fill_path_drawdown_pct`).

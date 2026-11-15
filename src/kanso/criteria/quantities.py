@@ -317,21 +317,21 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
 
     **What the path holds is what the runner holds.** A split the venue applied
     (`run.adjustments`) changes a quantity no fill changed, so it is replayed at the instant
-    the runner booked it — before a fill at that instant, as the venue applies a split before
-    it matches the point that carried the market past it: the quantity changes by what the
-    split changed it, the last price is divided by the split's ratio into the new shares, and
-    what it paid in lieu goes into cash. Replaying the fills alone kept the shares a reverse
-    split took away and re-marked them at every later fill of the name: four-fifths of what
-    was bought through a one-for-five, valued at every later restatement's price, measured
-    on a card at a fall of 1,560.67% of its capital where its period ends fell 116.64%. And
-    at each
-    period end, before the re-anchor, every position is set to what the runner held there
-    (`run.held`) — its quantity, valued at its notional over that quantity, the runner's mark
-    times the multiplier — and a name it did not hold to nothing, so a fill after the end
-    moves the path by the move since the runner's mark and not again by the move from the
-    name's last fill to that mark, which the re-anchor already holds: bought at 10, marked
-    at 12 at an end and sold at 12, the book never fell, and the path read a fall of 2 a
-    share.
+    the runner booked it, the instant the venue applied it — before a fill at that instant,
+    as the venue applies a split before it matches the point that carried the market past
+    it: the quantity changes by what the split changed it, the last price is divided by the
+    ratio of the split the adjustment names into the new shares, and what it paid in lieu
+    goes into cash. Replaying the fills alone kept the shares a reverse split took away and
+    re-marked them at every later fill of the name: four-fifths of what was bought through a
+    one-for-five, valued at every later restatement's price, measured on a card at a fall
+    of 1,560.67% of its capital where its period ends fell 116.64%. And at each period end,
+    before the re-anchor, every position is replaced by what the runner held there
+    (`run.held`) — its quantity, valued at its notional over that quantity, the runner's
+    mark times the multiplier — and a name it did not hold is dropped, so a fill after the
+    end moves the path by the move since the runner's mark and not again by the move from
+    the name's last fill to that mark, which the re-anchor already holds: bought at 10,
+    marked at 12 at an end and sold at 12, the book never fell, and the path read a fall of
+    2 a share.
 
     A run recorded before runs kept their adjustments carries none, so its path keeps the
     shares a split took away from the split to the next period end, where the runner's

@@ -660,12 +660,12 @@ def test_the_pages_say_the_fill_path_replays_the_runner_s_splits_and_holdings() 
     gates = prose(section(page("concepts.md"), "What a card must satisfy"))
     concepts = prose(page("concepts.md"))
     assert "each split the venue applied to a held position is replayed" in gates
-    assert "every position is set to what the runner held there" in gates
+    assert "every position is replaced by what the runner held there" in gates
     assert "its path holds a split's lost shares until the next end" in gates
     assert "A run whose venue applied a split to a position it held keeps each as" in concepts
-    assert "`adjustments` — `ts_ns`, `instrument_id`, `qty`, `paid` and `ratio` each" in prose(
-        page("cli.md")
-    )
+    assert "the ratio of the split the venue's event names" in concepts
+    cli = prose(page("cli.md"))
+    assert "`adjustments` — `ts_ns`, `instrument_id`, `qty`, `paid` and `ratio` each" in cli
 
 
 def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
@@ -681,7 +681,12 @@ def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
     actions = prose(section(page("concepts.md"), "Corporate actions"))
     assert "**A period is read in the shares held at its end.**" in actions
     assert "printed past the split's instant reaches it" in actions
+    assert "at the instant that point was published, and the runner books the split" in actions
+    assert "read off the stage's or the book's feed, not their own" in actions
     assert "The runner reads a period in the shares held at its end." in workspace
+    assert "a stage-mate's or another member's — at the instant that point was published" in (
+        workspace
+    )
     assert "an eve's daily bar published after the midnight it is stamped at" in workspace
     assert "read in the shares held at the end, so a price printed before a split" in workspace
     assert "`corporate_actions` plays no part in it" in workspace
@@ -690,8 +695,11 @@ def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
     assert half[3].strip().startswith("**Half closed:** ~~At a period end where a held name")
     assert "The stage's end-of-window book still does" in half[3]
     assert half[4].strip().startswith("The runner reads every period in the shares held")
+    assert "read it off the whole feed the shared venue was handed" in half[4]
     key = next(line for line in rows if line.startswith("| 285 |"))
     assert "`corporate_actions` in `instruments.yaml` is read by nothing at run time" in key
+    found = {line.split("|")[1].strip(): line for line in rows if line.startswith("| 28")}
+    assert "matches an adjustment to the latest split of its name" in found["288"]
 
 
 def test_the_restart_seed_is_said_as_it_is_read() -> None:

@@ -16,39 +16,57 @@ from datetime import date
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.data import (
     Bar,
     BarSpecification,
     BarType,
     BookOrder,
     OrderBookDelta,
+    TradeTick,
 )
 from nautilus_trader.model.enums import (
     AggregationSource,
+    AggressorSide,
     BarAggregation,
     BookAction,
     OrderSide,
     PriceType,
 )
-from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId, Venue
+from nautilus_trader.model.instruments import Equity
 from nautilus_trader.model.objects import Price, Quantity
 
-from kanso.criteria import Adjustment
+from kanso.criteria import Adjustment, drawdown_pct
+from kanso.criteria.quantities import fill_path_drawdown_pct
 from kanso.criteria.run import NS_PER_SECOND, Fill, midnight_ns
 from kanso.data.types import CorporateAction
+from kanso.nautilus import backtest, node
 from kanso.nautilus.backtest import Marks, RunRequest, _equity, execute, folded
-from kanso.schemas import VenueModel
+from kanso.nautilus.book import execute_book
+from kanso.nautilus.node import Placement, StageNode
+from kanso.schemas import Hypothesis, Limits, VenueModel
+from kanso.strategy.impl import Built, Loaded
 
 from .conftest import (
     CAPITAL,
+    CLOSE_NS,
+    FLAT_SLEEVE,
     INSTRUMENT,
     RESEARCH,
+    SECOND_NS,
     SNAPSHOT,
     SYMBOL,
+    bar_type,
+    catalog,
+    hypothesis,
     instrument,
     venue_model,
 )
 from .test_book import booked
+from .test_shared_book import block, hyp, member
+from .test_shared_book import request as book_request
+from .test_splits import EX as REVERSE_EX
 from .test_splits import HOLDER, REVERSE, restated
 
 WEEK = (date(2024, 1, 1), date(2024, 1, 7))
@@ -335,3 +353,404 @@ def test_a_week_holding_a_split_reads_its_low_in_the_new_shares(request_for) -> 
     cash = CAPITAL - 10_050.0 - entry + 50.0
     assert card.worst_ratio[week] == pytest.approx((cash + 100 * 100.0) / (100 * 100.0))
     assert card.equity[week] == pytest.approx(cash + 100 * 100.0)
+
+
+# --- the venue's clock is the feed's ------------------------------------------------
+
+
+def _print(ts: int) -> TradeTick:
+    """A print of HEDGE, another name of DEMO's venue."""
+    return TradeTick(
+        InstrumentId.from_str(SAME_VENUE),
+        Price(5.0, 2),
+        Quantity.from_int(100),
+        AggressorSide.BUYER,
+        TradeId("1"),
+        ts,
+        ts,
+    )
+
+
+@pytest.mark.parametrize(
+    ("point", "mark"),
+    [
+        (_print, (at(date(2024, 1, 2)), 100.0)),
+        (_delta, (at(date(2024, 1, 2)), 100.0)),
+        (_action, None),
+    ],
+    ids=["print", "book change", "data"],
+)
+def test_a_view_is_read_in_the_era_the_feed_s_venue_applied(request_for, point, mark) -> None:
+    """A view that folds DEMO and a name of another venue holds no point of DEMO's venue past
+    the split; the feed the venue was handed holds HEDGE's, which applied it. Handed the feed
+    (`clocked`), the view's Wednesday carries DEMO's Tuesday 10 restated to 100, as the venue
+    split the shares; a point the venue is never handed applies nothing. Read off the view
+    alone, nothing was restated beside the 100 shares the venue left the view's position."""
+    made = request(request_for, period="1d")
+    view = Marks(made, VenueModel.model_validate(dict(made.venue_model)), [scheduled(0.1)])
+    tuesday, wednesday = at(date(2024, 1, 2)), at(EX)
+    view.fold(tuesday, INSTRUMENT, 10.0, 9.0, 10.5, tuesday)
+    view.fold(wednesday, OTHER_VENUE, 5.0, 5.0, 5.0, wednesday)
+
+    assert view.periods()[1].marks.get(INSTRUMENT) is None
+    view.clocked([point(wednesday), _bar(date(2024, 1, 2), 10.0, 9.0)])
+    assert view.periods()[1].marks.get(INSTRUMENT) == mark
+
+
+def test_a_price_printed_in_shares_the_venue_has_not_split_into_is_read_in_the_old(
+    request_for,
+) -> None:
+    """A point the venue is never handed carries no print instant and is counted in the era of
+    the instant it was published at: DEMO's 100, published past the split with nothing of its
+    venue past it, is read in the old shares the venue still holds — 10, and its low 9.90."""
+    made = request(request_for, period="1d")
+    marks = Marks(made, VenueModel.model_validate(dict(made.venue_model)), [scheduled(0.1)])
+    tuesday = at(date(2024, 1, 2))
+    marks.fold(tuesday, INSTRUMENT, 10.0, 9.0, 10.5, tuesday)
+    marks.fold(at(EX), INSTRUMENT, 100.0, 99.0, 101.0)
+
+    wednesday = marks.periods()[1]
+    assert wednesday.marks[INSTRUMENT] == (at(EX), pytest.approx(10.0))
+    assert wednesday.lows[INSTRUMENT] == pytest.approx(9.9)
+
+
+def _republished(bar: Bar, ts_init: int) -> Bar:
+    """The same bar, published at another instant."""
+    return Bar(
+        bar.bar_type,
+        bar.open,
+        bar.high,
+        bar.low,
+        bar.close,
+        bar.volume,
+        ts_event=bar.ts_event,
+        ts_init=ts_init,
+    )
+
+
+def test_a_split_applied_by_a_point_published_after_an_end_is_booked_after_it(
+    request_for,
+) -> None:
+    """DEMO's ex-date bar, printed at 16:00 on the 16th, is published at 00:30 on the 17th, and
+    the eve's bar, printed on the 15th, at 20:00 on the 16th, which ends that day's period. The
+    venue applies the one-for-ten when it is handed the ex-date's bar, and the runner books it
+    at that instant: the 16th ends holding the 1,005 old shares at the eve's 10, the 17th 100
+    new shares at 100, and the book is worth what it paid at every end before the sale.
+    Booked at the instant the ex-date's bar was printed, the 16th held 100 shares at the old
+    price, 9,000 under the book, and its ratio counted the same 100 at the old low."""
+    made = request_for(
+        RESEARCH, source=HOLDER, hypothesis_=booked({"maintenance_pct": 30.0}), period="1d"
+    )
+    points = restated()
+    eve = next(i for i, bar in enumerate(points) if bar.ts_event >= midnight_ns(REVERSE_EX)) - 1
+    sixteenth_end = midnight_ns(REVERSE_EX) + 20 * 3_600 * SECOND_NS
+    applied = midnight_ns(date(2024, 1, 17)) + 1_800 * SECOND_NS
+    points[eve] = _republished(points[eve], sixteenth_end)
+    points[eve + 1] = _republished(points[eve + 1], applied)
+
+    card = execute(made, [instrument(info=REVERSE)], [tuple(points)]).run
+
+    (split,) = card.adjustments
+    assert split.ts_ns == applied
+    bought, sold = card.fills
+    cash = CAPITAL - 10_050.0 - bought.cost
+    before_sale = [
+        index for index, end in enumerate(card.period_ends_ns) if bought.ts_ns <= end < sold.ts_ns
+    ]
+    assert sixteenth_end in card.period_ends_ns
+    assert [card.equity[index] for index in before_sale] == [pytest.approx(cash + 10_050.0)] * len(
+        before_sale
+    )
+    sixteenth = card.period_ends_ns.index(sixteenth_end)
+    assert [(held.qty, held.notional) for held in card.held if held.ts_ns == sixteenth_end] == [
+        (1_005.0, pytest.approx(10_050.0))
+    ]
+    assert card.worst_ratio[sixteenth] == pytest.approx((cash + 10_050.0) / 10_050.0)
+
+
+# --- a view on a shared venue --------------------------------------------------------
+
+EVE_NS = midnight_ns(REVERSE_EX)
+"""The midnight that closes the eve's session, in UTC, where DEMO's split is dated: the eve's
+daily bar is stamped there, a nanosecond before the split."""
+
+
+def _delayed(symbol: str, ts_event: int, ts_init: int, close: float) -> Bar:
+    return Bar(
+        bar_type(symbol),
+        Price(close, 2),
+        Price(close, 2),
+        Price(round(close * 0.99, 2), 2),
+        Price(close, 2),
+        Quantity.from_int(100_000),
+        ts_event=ts_event,
+        ts_init=ts_init,
+    )
+
+
+def _late_daily() -> tuple[Bar, ...]:
+    """DEMO's sessions of January: the first published at 16:00 UTC, inside regular hours,
+    and each later one stamped at the midnight that closes it and published a quarter of an
+    hour after, 10 in the old shares to the eve and 100 in the new ones from the ex-date."""
+    first = midnight_ns(RESEARCH[0]) + 86_400 * SECOND_NS + CLOSE_NS
+    made = [_delayed(SYMBOL, first, first + SECOND_NS, 10.0)]
+    for index in range(1, (RESEARCH[1] - RESEARCH[0]).days):
+        stamped = midnight_ns(RESEARCH[0]) + (index + 1) * 86_400 * SECOND_NS
+        close = 10.0 if stamped <= EVE_NS else 100.0
+        made.append(_delayed(SYMBOL, stamped, stamped + 900 * SECOND_NS, close))
+    return tuple(made)
+
+
+def _early_other() -> tuple[Bar, ...]:
+    """OTHR's sessions, each printed five minutes past a UTC midnight and published a second
+    later: on the ex-date the first point of DEMO's venue past the split."""
+    made = []
+    for index in range(1, (RESEARCH[1] - RESEARCH[0]).days + 1):
+        stamped = midnight_ns(RESEARCH[0]) + index * 86_400 * SECOND_NS + 300 * SECOND_NS
+        made.append(_delayed("OTHR", stamped, stamped + SECOND_NS, 5.0))
+    return tuple(made)
+
+
+def test_a_book_member_whose_split_another_member_applied_is_read_in_one_count() -> None:
+    """Member m holds 1,005 DEMO through its one-for-ten; member n holds nothing, and its OTHR
+    bar at 00:05 on the ex-date is the first point of their venue past the split, so the venue
+    applies it there and m holds 100 shares at the end its eve's bar, published at 00:15,
+    closes. m's own points hold nothing past the split; read in the feed's era, m's 100 are
+    worth 100 each, and m in the book strikes what m alone and the book's own curve strike,
+    at that end and along its fill path. Read in m's own era they were worth 10, 9,000 under
+    the book."""
+    instruments = (instrument(info=REVERSE), instrument("OTHR"))
+    alone = book_request(hyp((INSTRUMENT,)), HOLDER)
+    flat = book_request(hyp(("OTHR.XNAS",)), FLAT_SLEEVE)
+    demo, other = (_late_daily(),), (_early_other(),)
+
+    booked_run = execute_book(
+        block(), [member("m", alone, 2.0), member("n", flat, 1.0)], instruments, [demo, other]
+    )
+    solo = execute(alone, list(instruments), demo).run
+    run = booked_run.runs[booked_run.members.index("m")]
+
+    end = EVE_NS + 900 * SECOND_NS
+    (split,) = run.adjustments
+    assert split.ts_ns == EVE_NS + 301 * SECOND_NS
+    assert [(held.qty, held.notional) for held in run.held if held.ts_ns == end] == [
+        (100.0, pytest.approx(10_000.0))
+    ]
+    assert (
+        run.equity[run.period_ends_ns.index(end)]
+        == pytest.approx(solo.equity[solo.period_ends_ns.index(end)])
+        == pytest.approx(booked_run.equity[booked_run.period_ends_ns.index(end)])
+    )
+    assert fill_path_drawdown_pct(run) == fill_path_drawdown_pct(solo)
+
+
+ZED = "ZED.ARCX"
+
+
+def _listed(name: str, **extra: object) -> Equity:
+    """A US equity on the venue its id names."""
+    symbol, venue = name.split(".")
+    return Equity(
+        instrument_id=InstrumentId(Symbol(symbol), Venue(venue)),
+        raw_symbol=Symbol(symbol),
+        currency=USD,
+        price_precision=2,
+        price_increment=Price.from_str("0.01"),
+        lot_size=Quantity.from_int(1),
+        ts_event=0,
+        ts_init=0,
+        **extra,
+    )
+
+
+def _sessions(name: str, close) -> list[Bar]:
+    """One daily bar of `name` for each January day `close` prices, published a second after
+    its 16:00 UTC close."""
+    grain = BarType(
+        InstrumentId.from_str(name),
+        BarSpecification(1, BarAggregation.DAY, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    made = []
+    for index in range((RESEARCH[1] - RESEARCH[0]).days + 1):
+        day = date.fromordinal(RESEARCH[0].toordinal() + index)
+        price = close(day)
+        if price is not None:
+            ts = midnight_ns(day) + CLOSE_NS
+            made.append(
+                Bar(
+                    grain,
+                    Price(price, 2),
+                    Price(price, 2),
+                    Price(price, 2),
+                    Price(price, 2),
+                    Quantity.from_int(100_000),
+                    ts_event=ts,
+                    ts_init=ts + SECOND_NS,
+                )
+            )
+    return made
+
+
+HOLD_DEMO = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.done = False
+
+    def on_bar(self, bar):
+        if not self.done and str(bar.bar_type.instrument_id) == "DEMO.XNAS":
+            self.done = True
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+"""
+"""Buys 1,005 DEMO at 10 on its first bar and holds them."""
+
+
+def _staged(universe: tuple[str, ...], source: bytes) -> RunRequest:
+    """A daily request under a book that keeps the maintenance ratio."""
+    fields = hypothesis(universe=universe).model_dump(by_alias=True, mode="json")
+    fields["book"] = {"maintenance_pct": 30.0}
+    subject = Hypothesis.model_validate(fields)
+    return RunRequest(
+        hyp=subject,
+        strategy_source=source,
+        window=RESEARCH,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(subject),
+        capital=CAPITAL,
+        period="1d",
+    )
+
+
+def _placed(name: str, request: RunRequest, directory) -> Placement:
+    cls, config = backtest._sleeve(request)
+    return Placement(
+        strategy_id=name,
+        version=1,
+        capital=CAPITAL,
+        hyp=request.hyp,
+        venue_model=VenueModel.model_validate(dict(request.venue_model)),
+        snapshot_id=SNAPSHOT,
+        period="1d",
+        source=request.strategy_source,
+        loaded=Loaded(
+            manifest=None,  # type: ignore[arg-type]
+            directory=directory / name,
+            sleeve=Built(
+                "sleeve",
+                request.hyp.id,
+                cls,
+                node._reconfigured(config, order_id_tag=name[:3].upper()),
+            ),
+        ),
+    )
+
+
+def test_a_stage_version_whose_split_a_stage_mate_applied_is_read_in_one_count(tmp_path) -> None:
+    """A paper stage over the 15th to the 17th: alpha holds DEMO and trades ZED on another
+    venue, under a maintenance floor; beta trades OTHR on DEMO's venue. DEMO prints nothing on
+    its ex-date, the 16th, and beta's OTHR bar is the first point of the venue past the split,
+    so the venue applies it there and alpha holds 100 shares at the 16th's end, which ZED's
+    bar strikes. Read in the stage venue's era they are worth 100 each, the book is worth
+    what it was on the 15th, and the ratio counts 10,000 of stock; read in alpha's own, they
+    were worth 10, 9,000 under the book, at a ratio of 90.99 where one count reads 10.00."""
+
+    def demo(day: date) -> float | None:
+        return None if day == REVERSE_EX else 10.0 if day < REVERSE_EX else 100.0
+
+    points = [*_sessions(INSTRUMENT, demo), *_sessions(ZED, lambda _: 30.0)]
+    points += _sessions("OTHR.XNAS", lambda _: 20.0)
+    instruments = [_listed(INSTRUMENT, info=REVERSE), _listed(ZED), _listed("OTHR.XNAS")]
+    stage = StageNode(
+        stage="paper",
+        capital=CAPITAL,
+        limits=Limits(
+            max_gross_pct=100, max_net_pct=100, per_strategy_max_pct=100, daily_loss_pct=50
+        ),
+        placements=(
+            _placed("alpha", _staged((INSTRUMENT, ZED), HOLD_DEMO), tmp_path),
+            _placed("beta", _staged(("OTHR.XNAS",), FLAT_SLEEVE), tmp_path),
+        ),
+        window=(date(2024, 1, 15), date(2024, 1, 17)),
+        catalog=catalog(tmp_path / "catalog", points, instruments),
+    )
+
+    alpha = next(item.run for item in node.run(stage).realised if item.strategy_id == "alpha")
+
+    assert [item.qty for item in alpha.adjustments] == [-905.0]
+    cash = CAPITAL - 10_050.0 - alpha.fills[0].cost + 50.0 - sum(alpha.carry[:2])
+    assert alpha.equity[1] == pytest.approx(alpha.equity[0])
+    assert alpha.worst_ratio[1] == pytest.approx((cash + 10_000.0) / 10_000.0)
+
+
+# --- two splits at one point ---------------------------------------------------------
+
+TWO = {"splits": [{"ex_date": "2024-01-16", "ratio": 0.1}, {"ex_date": "2024-01-17", "ratio": 2.0}]}
+"""A one-for-ten on the 16th and a two-for-one on the 17th: DEMO's venue prints nothing on the
+16th, so the venue applies both at the 17th's first point."""
+
+BOTH_NAMES = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = {}
+
+    def on_bar(self, bar):
+        key = str(bar.bar_type.instrument_id)
+        self.seen[key] = self.seen.get(key, 0) + 1
+        if key == "DEMO.XNAS" and self.seen[key] == 1:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+        if key == "OTHR.XNAS" and self.seen[key] == 17:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=1_000.0)
+"""
+"""Buys 1,005 DEMO on its first bar and holds them; buys OTHR on its bar of the 18th."""
+
+
+def test_two_splits_applied_at_one_point_each_restate_by_their_own_ratio() -> None:
+    """1,005 DEMO at 10 are 100 at 100 after the one-for-ten and 200 at 50 after the
+    two-for-one, both applied at the 17th's first bar, so the book never moves and the fill
+    path falls by the costs alone. Matched by their one instant, both adjustments read the
+    two-for-one's ratio, DEMO's 10 was restated to 2.50 where the book held it at 50, and the
+    path read a fall of 9.51% at OTHR's purchase."""
+    subject = hypothesis(universe=(INSTRUMENT, "OTHR.XNAS"))
+    made = RunRequest(
+        hyp=subject,
+        strategy_source=BOTH_NAMES,
+        window=RESEARCH,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(subject),
+        capital=CAPITAL,
+        period="1w",
+    )
+    quiet = date(2024, 1, 16)
+
+    def demo(day: date) -> float | None:
+        return None if day == quiet else 10.0 if day < quiet else 50.0
+
+    groups = [
+        tuple(_sessions(INSTRUMENT, demo)),
+        tuple(_sessions("OTHR.XNAS", lambda day: None if day == quiet else 20.0)),
+    ]
+
+    card = execute(made, [instrument(info=TWO), instrument("OTHR")], groups).run
+
+    assert [(item.qty, item.ratio) for item in card.adjustments] == [(-905.0, 0.1), (100.0, 2.0)]
+    costs = sum(fill.cost for fill in card.fills) / CAPITAL * 100.0
+    assert fill_path_drawdown_pct(card)[0] == pytest.approx(costs)
+    assert drawdown_pct(card) == pytest.approx(costs)
