@@ -505,19 +505,28 @@ def test_a_period_target_s_record_holds_to_its_weeks(record: dict[str, Any], ref
 
 def test_a_span_of_the_record_holds_the_weeks_that_opened_in_it() -> None:
     """A week belongs to the span its opening falls in, with its stop; the week open at the
-    last point stays only in a span that runs to the run's end and holds its opening."""
+    last point stays only in a span that runs to the run's end and holds its opening. A span
+    that starts the run also holds the weeks that opened before it, so one span over the whole
+    run holds the whole record."""
     last = {"opening_ns": 200, "anchor": 1.0, "threshold": 1.0, "pnl": 0.0, "stopped": False}
     held = PeriodStops.model_validate({"openings": [100, 200], "stops": [STOP], "last": last})
 
-    assert held.between(100, 200, ends=False).model_dump() == {
+    assert held.between(100, 200, starts=False, ends=False).model_dump() == {
         "openings": [100],
         "stops": [STOP],
         "last": None,
     }
-    assert held.between(150, 300, ends=True).last == held.last
-    assert held.between(150, 300, ends=False).last is None
-    assert held.between(250, 300, ends=True).model_dump() == {
+    assert held.between(150, 300, starts=False, ends=True).last == held.last
+    assert held.between(150, 300, starts=False, ends=False).last is None
+    assert held.between(250, 300, starts=False, ends=True).model_dump() == {
         "openings": [],
         "stops": [],
+        "last": None,
+    }
+    assert held.between(150, 300, starts=False, ends=True).openings == [200]
+    assert held.between(150, 300, starts=True, ends=True) == held
+    assert held.between(150, 200, starts=True, ends=False).model_dump() == {
+        "openings": [100],
+        "stops": [STOP],
         "last": None,
     }

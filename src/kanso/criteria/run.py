@@ -298,8 +298,10 @@ class CardRun:
         whole run's holdings into each fold, so a gate reading them fold-wise would judge
         periods the fold does not contain. A funding payment belongs to the span holding its
         settlement instant. A week of the period target belongs to the span holding its
-        opening, with its stop, and the week open at the run's last point stays only in a span
-        that runs to the window's end (`PeriodStops.between`).
+        opening, with its stop — a week that opened before the window, as one does where the
+        window opens inside it, to the span that opens with the window — and the week open at
+        the run's last point stays only in a span that runs to the window's end
+        (`PeriodStops.between`), so the folds of a run hold every week it traded in.
         """
         kept = [i for i, ts in enumerate(self.period_ends_ns) if opens <= ts < closes]
         return replace(
@@ -317,5 +319,7 @@ class CardRun:
             worst_ratio=tuple(self.worst_ratio[i] for i in kept) if self.worst_ratio else (),
             period_stops=None
             if self.period_stops is None
-            else self.period_stops.between(opens, closes, ends=closes >= self.bounds[1]),
+            else self.period_stops.between(
+                opens, closes, starts=opens <= self.bounds[0], ends=closes >= self.bounds[1]
+            ),
         )

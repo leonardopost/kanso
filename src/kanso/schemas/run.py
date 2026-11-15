@@ -306,14 +306,22 @@ class PeriodStops(KansoModel):
         """How many of those weeks the target stopped."""
         return len({stop.opening_ns for stop in self.stops})
 
-    def between(self, opens: int, closes: int, *, ends: bool) -> PeriodStops:
+    def between(self, opens: int, closes: int, *, starts: bool, ends: bool) -> PeriodStops:
         """The weeks that opened in the half-open span `[opens, closes)` and their stops, and
-        the week open at the run's last point when the span `ends` the run and holds it."""
+        the week open at the run's last point when the span `ends` the run and holds it.
+
+        A span that `starts` the run also holds every week that opened before it: a window
+        that opens inside a week trades in a week opened before its first instant, and that
+        week is the first span's, so the spans of a run hold every one of its weeks."""
+
+        def held(opening_ns: int) -> bool:
+            return (starts or opens <= opening_ns) and opening_ns < closes
+
         last = self.last
         return PeriodStops(
-            openings=[at for at in self.openings if opens <= at < closes],
-            stops=[stop for stop in self.stops if opens <= stop.opening_ns < closes],
-            last=last if ends and last is not None and opens <= last.opening_ns < closes else None,
+            openings=[at for at in self.openings if held(at)],
+            stops=[stop for stop in self.stops if held(stop.opening_ns)],
+            last=last if ends and last is not None and held(last.opening_ns) else None,
         )
 
     @model_validator(mode="after")

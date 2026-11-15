@@ -325,6 +325,33 @@ def test_a_stop_names_the_part_of_the_session_its_point_covers(
     assert (stop.hit_ns, stop.segment) == (ny(MONDAY, hit) + delay, segment)
 
 
+def test_a_window_that_opens_midweek_holds_its_first_week_in_its_first_fold(
+    tmp_path: Path,
+) -> None:
+    """A window opening on Wednesday 10 January 2024 trades in the week that opened on Monday
+    the 8th at 04:00, before the window's first midnight: the sleeve buys at 09:31 and the
+    09:33 close stops that week. The run records it, and the window as one fold holds it, its
+    stop and the week open at the last point, as a gate reading the run fold-wise is handed."""
+    wednesday, friday = date(2024, 1, 10), date(2024, 1, 12)
+    lead: list[Point] = [
+        (ny(wednesday, "09:31"), 10.00),
+        (ny(wednesday, "09:32"), 10.00),
+        (ny(wednesday, "09:33"), 10.60),
+        (ny(wednesday, "09:34"), 10.60),
+    ]
+    plan = {(ny(wednesday, "09:31"), LEAD_ID): [("entry", LEAD_ID, "BUY")]}
+    made = request(plan, tmp_path / "seen.txt", universe=(LEAD_ID,), window=(wednesday, friday))
+
+    run = execute(made, [instrument(LEAD)], [volumed(LEAD, lead)]).run
+
+    record = run.period_stops
+    assert record is not None
+    assert (record.openings, record.stopped) == ([ny(date(2024, 1, 8), "04:00")], 1)
+    assert record.last is not None and record.last.stopped
+    (whole,) = run.folds(1)
+    assert whole.period_stops == record
+
+
 def test_a_card_with_no_period_target_records_none_and_stores_none(tmp_path: Path) -> None:
     """The same sleeve over the same weeks with no target: nothing is recorded, and the run is
     stored without the key, as it was before runs kept it."""

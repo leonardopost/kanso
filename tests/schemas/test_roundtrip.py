@@ -74,9 +74,15 @@ def test_command_counts_round_trip_and_read_off_what_was_sent(value: Commands) -
     assert (value.peak_60s == 0) == (value.sent == 0)
 
 
-@given(gen.period_stops(), st.integers(0, 2**62), st.integers(0, 2**62), st.booleans())
+@given(
+    gen.period_stops(),
+    st.integers(0, 2**62),
+    st.integers(0, 2**62),
+    st.booleans(),
+    st.booleans(),
+)
 def test_what_a_period_target_did_round_trips_and_any_span_of_it_is_a_record(
-    value: PeriodStops, opens: int, closes: int, ends: bool
+    value: PeriodStops, opens: int, closes: int, starts: bool, ends: bool
 ) -> None:
     """A run's period stops cross a card's process boundary, a stored run, a session file and
     a certificate row and read back whole; the weeks stopped are never more than the weeks
@@ -85,7 +91,7 @@ def test_what_a_period_target_did_round_trips_and_any_span_of_it_is_a_record(
     assert PeriodStops.model_validate(value.model_dump(mode="json")) == value
     assert parse_yaml(PeriodStops, dump_yaml(value)) == value
     assert value.stopped <= value.periods == len(value.openings)
-    cut = value.between(min(opens, closes), max(opens, closes), ends=ends)
+    cut = value.between(min(opens, closes), max(opens, closes), starts=starts, ends=ends)
     assert set(cut.openings) <= set(value.openings)
     assert all(stop in value.stops for stop in cut.stops)
     assert cut.last is None or cut.last == value.last

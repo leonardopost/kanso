@@ -929,7 +929,8 @@ that close's cost. `research show --measured`, `cert run`, `cert show`, `monitor
 `kanso replay` print it on a `stops` line — the weeks stopped of the target's weeks traded in,
 never the return periods — and carry it under `--json`, and `kanso replay parity` compares the
 two paths' records element by element (`docs/cli.md`). A week belongs to the fold its opening
-falls in, with its stop. `balance` marks each name at its last print or quote, so on a feed
+falls in, with its stop, and one that opened before the window — the week a window opening
+midweek opens inside — to the first fold. `balance` marks each name at its last print or quote, so on a feed
 that asks for `trade` one print well outside the quote can reach the target or keep it from
 being reached: measured on 2026-10-30 over the first second of nine opens of SPY, QQQ and IWM,
 1,744 of 4,791 prints lay outside the quote in force, and one NVDA print of a single share took

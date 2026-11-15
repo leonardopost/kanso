@@ -218,5 +218,37 @@ def test_a_fold_carries_the_target_s_weeks_that_opened_inside_it_and_the_last_ru
     assert all(fold.period_stops is None for fold in run.folds(2))
 
 
+def test_a_week_that_opened_before_the_window_belongs_to_the_first_fold() -> None:
+    """A window that opens inside a week trades in a week whose opening is before the window's
+    first midnight. That week and its stop belong to the first fold, and the whole window as
+    one fold holds the whole record, the week open at the last point included."""
+    run = build_run((0.0, 0.0, 0.0, 0.0))
+    before, third = (
+        at(run.window[0] - timedelta(days=2), 9),
+        at(run.window[0] + timedelta(days=2), 9),
+    )
+    stop = {
+        "opening_ns": before,
+        "anchor": 100.0,
+        "threshold": 1.0,
+        "hit_ns": at(run.window[0], 10),
+        "segment": "rth",
+        "equity": 101.0,
+    }
+    last = {"opening_ns": third, "anchor": 101.0, "threshold": 1.0, "pnl": 0.5, "stopped": False}
+    record = PeriodStops.model_validate(
+        {"openings": [before, third], "stops": [stop], "last": last}
+    )
+    stopped = replace(run, period_stops=record)
+
+    (whole,) = stopped.folds(1)
+    early, late = stopped.folds(2)
+
+    assert whole.period_stops == record
+    assert early.period_stops is not None and late.period_stops is not None
+    assert (early.period_stops.openings, early.period_stops.stops) == ([before], record.stops)
+    assert (late.period_stops.openings, late.period_stops.last) == ([third], record.last)
+
+
 def test_a_trade_that_paid_no_funding_says_so() -> None:
     assert trade(date(2024, 1, 1), 10.0).funding == 0.0
