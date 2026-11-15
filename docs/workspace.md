@@ -998,7 +998,9 @@ order a fill handler sends while the venue applies an instant's points fills at 
 has applied so far. Each recorded fill keeps that instant as `price_ts_ns`. The last row stays
 in force, so a certification window or a stage past the table pays the table's last year,
 which no measurement past it moved. No calendar of early closes is read: a fill between an
-early close and 16:00 pays `rth` (`docs/backlog.md` row 257).
+early close and 16:00 pays `rth` (`docs/backlog.md` row 257). A daily bar is stamped at the
+next New York midnight, so a fill at its close reads as overnight on its session's date and
+pays the larger of `pre` and `post` (row 266).
 
 The rows are each a year's median, in force from that year's first day, so a strategy that read
 one would know a width the market had not shown yet. They are stated in the hypothesis's own

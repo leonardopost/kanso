@@ -670,6 +670,19 @@ def test_the_open_is_the_bars_stamped_09_31_to_09_35_in_both_seasons(day: date) 
     assert parts == ["pre", "pre", "open", "open", "open", "open", "open", "rth", "rth"]
 
 
+def test_a_daily_bar_stamped_at_the_next_new_york_midnight_pays_the_overnight_width() -> None:
+    """A US listing's daily bar is stamped at the next New York midnight (`kanso.nautilus.splits`),
+    so the minute it covers is the last of its own session's date, an overnight one: a fill at
+    its close pays the larger of `pre` and `post`, not `rth` (`docs/backlog.md` row 266)."""
+    rows = (_row("A.X", "2024-01-01"),)
+    at = _stamp(date(2024, 3, 2), "00:00")
+
+    assert dated_part(at) == ("overnight", date(2024, 3, 1))
+    assert dated_half_spread(rows, "A.X", at) == pytest.approx(
+        max(_WIDTH["pre"], _WIDTH["post"]) / 2.0 / 10_000.0
+    )
+
+
 def test_a_row_is_in_force_from_its_first_new_york_day_and_none_before_the_first() -> None:
     """A bar stamped at New York midnight covers the minute before it, the day before's."""
     rows = (_row("A.X", "2024-01-02"),)
