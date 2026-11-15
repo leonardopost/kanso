@@ -598,7 +598,7 @@ def run(
                 window.instruments,
                 struck,
                 strategy._target_record(),
-                points[: client.released],
+                feed=points[: client.released],
             )
             for placed, request, groups, strategy in zip(
                 node.placements, requests, window.per_version, strategies, strict=True
@@ -958,7 +958,8 @@ def _realised(
     instruments: Sequence[Any],
     struck: Struck | None = None,
     period_stops: PeriodStops | None = None,
-    feed: Sequence[Any] = (),
+    *,
+    feed: Sequence[Any],
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
@@ -983,7 +984,9 @@ def _realised(
     stage venue's, read off the feed the node released to it (`feed`, `Marks.clocked`): a
     stage-mate's print can be the point that applied a split to the version's position, and
     the version's own view need not hold it; and a point a halt left unreleased applied
-    nothing, so it moves no clock.
+    nothing, so it moves no clock. The feed is required, by name: read off no feed, every
+    split would be in force at no end while the venue booked the new count, the old count's
+    prices beside the new count's shares.
 
     What the version's period target did over the window is its harness's record, read once
     the node has stopped — after its own flatten, or where a halt, which flattens nothing,

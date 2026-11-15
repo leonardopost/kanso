@@ -492,7 +492,7 @@ def test_a_version_with_nothing_new_gets_an_empty_window_rather_than_a_refusal(
 ) -> None:
     request = placement.request((date(2024, 3, 1), date(2024, 3, 2)))
 
-    realised = node._realised(placement, request, None, ((),), {}, ())
+    realised = node._realised(placement, request, None, ((),), {}, (), feed=())
 
     assert realised.run.returns == ()
     assert realised.run.trades == ()
@@ -511,7 +511,7 @@ def test_a_version_with_nothing_released_holds_nothing(
     )
     placed = a_placement(ws, composed_strategy.id, hyp=held)
     request = placed.request((date(2024, 3, 1), date(2024, 3, 2)))
-    realised = node._realised(placed, request, None, ((),), {}, ())
+    realised = node._realised(placed, request, None, ((),), {}, (), feed=())
 
     benchmarked = node._benchmarked(realised, placed, request, ((),), ())
 
@@ -554,9 +554,21 @@ def test_a_stage_window_holding_an_undeclared_split_is_refused_like_any_other(
             ((action,),),
             {},
             (instrument(),),
+            feed=(),
         )
 
     assert "the window holds a split effective 2024-03-01" in raised.value.message
+
+
+def test_a_version_is_extracted_only_beside_the_feed_its_venue_was_handed() -> None:
+    """A split name's era at each end is read off the feed the stage's venue was handed
+    (`Marks.clocked`). Defaulted to no feed, a caller that left it out read every split as in
+    force at no end beside the new count the venue booked; it has no default, and is named."""
+    import inspect
+
+    feed = inspect.signature(node._realised).parameters["feed"]
+
+    assert (feed.kind, feed.default) == (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.empty)
 
 
 def test_a_book_carries_its_signed_exposure() -> None:
