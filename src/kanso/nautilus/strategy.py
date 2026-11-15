@@ -3463,6 +3463,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self._command_deferred:
             self._send_deferred()
 
+    def _target_close(self, position: Any) -> None:
+        """Close a position for a stage node's flatten after its window's last point, which no
+        stopped week holds.
+
+        The flatten is the stage's, not the sleeve's (`kanso.nautilus.node`), and must go out
+        whole however the week stands, or the stage stops holding a position no restart
+        inherits. Read against what a stopped week leaves to close (`_target_sends`) it would
+        not: that counts an order whose cancel the flatten has just sent and that has not
+        landed under a latency, and an exit the order rate still owes, and leaves out a clip
+        the position carries, so the close was dropped whole and the stage stopped long. It is
+        sent as an exit kanso sized, as `submit_exit` marks its own (`_command_closing`). In
+        nautilus_trader 1.231.0 `Strategy.close_position` sends a reduce-only market order of
+        the position's quantity through `submit_order` (`trading/strategy.pyx`), and the
+        simulated venue holds a reduce-only fill to an open position in the name
+        (`kanso.nautilus.facts`), so it closes no more than is held. Without a target it is
+        `close_position`, sent as before the key existed. A researched strategy may not reach
+        it (`kanso.criteria.integrity.DENIED_TARGET`).
+        """
+        self._command_closing = (None, None)
+        try:
+            self.close_position(position)
+        finally:
+            self._command_closing = None
+
     # --- cost-aware helpers: where exposure is enforced ---------------------
 
     def submit_entry(

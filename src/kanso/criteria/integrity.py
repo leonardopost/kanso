@@ -433,16 +433,17 @@ DENIED_TARGET: Final = frozenset(
         "_target_sends",
         "_target_leaves",
         "_target_exact",
+        "_target_close",
     }
 )
 """The harness's period target (`kanso.nautilus.cross_section.target`): the rule, the instant
 the week closes, the equity it is read against and the return it stops at, the stopped week,
 the names due to be flattened, the orders dropped, the quantities each order's modifies asked
-until it closes, the three methods that keep them and the four that read what a stopped week
-sends and what is already working beside it. The week's opening is a clock of where each week
-starts and the anchor a number the strategy would otherwise have to strike itself; a strategy
-reads whether it is stopped through `period_stopped`, and its position through `held`, since
-the harness may flatten it."""
+until it closes, the three methods that keep them, the four that read what a stopped week
+sends and what is already working beside it, and the close a stage's flatten sends past it.
+The week's opening is a clock of where each week starts and the anchor a number the strategy
+would otherwise have to strike itself; a strategy reads whether it is stopped through
+`period_stopped`, and its position through `held`, since the harness may flatten it."""
 
 DENIED_BUS: Final = frozenset({"msgbus", "_msgbus"})
 """The engine's message bus, under both the names every `Strategy` and `Actor` holds it by

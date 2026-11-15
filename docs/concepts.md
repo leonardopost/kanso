@@ -2777,7 +2777,10 @@ measured window on that stage, and its first carry runs from the instant it resu
 under a `period_target` is held to it on the stage by the same harness as on its card, and is
 seeded with nothing: each window anchors its first week at the capital, so a window restarted
 inside a week the target had stopped trades again before the next week opens (`docs/backlog.md`
-row 270).
+row 270). A window that ends inside a stopped week still ends flat: the node's flatten after
+the window's last point is the stage's, not the version's, and is held neither to its order
+rate nor to its stopped week, so a sale still resting with its cancel in flight, or an exit the
+rate still owes, does not keep the close from going.
 
 **Two versions on one stage that trade one name each trade their own position.** They share
 one account, and what a version reads, sizes and exits by — `self.held(id)`, `submit_exit`,

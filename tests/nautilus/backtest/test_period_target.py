@@ -11,6 +11,7 @@ to the host leaves the weeks it stops as they were.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from tests.nautilus.strategy.test_period_target import (
     LEAD,
     LEAD_ID,
     MONDAY,
+    Seen,
     _two_weeks,
     card,
     fills,
@@ -165,3 +167,46 @@ def test_a_stage_window_stops_and_flattens_where_the_card_does(tmp_path: Path) -
         (f.instrument_id, f.side, f.px, f.ts_ns) for f in researched.run.fills
     ]
     assert any(f.side == "SELL" and f.ts_ns == ny(MONDAY, "09:34") for f in realised.run.fills)
+
+
+@pytest.mark.parametrize("ending", ["resting", "owed"])
+@pytest.mark.parametrize("target_bp", [50.0, 1e6])
+def test_a_stage_window_that_ends_in_a_stopped_week_ends_it_flat(
+    ending: str, target_bp: float, tmp_path: Path
+) -> None:
+    """A stage node over one Monday buys LEAD 1,000 at 04:01, and the window's last point is
+    a close that stops the week or the one after it. Under a latency of 10 ms the stopping
+    close is the last, and its handler rests a sale of 500 at 99.00, which the node's flatten
+    cancels with a cancel still in flight when the close is sent; under a rate of two requests
+    a minute, a cancel costing two, two buys rest far below the market, the 09:31 close stops
+    the week, and the flatten due at the 09:32 close, the last, is owed for want of a request.
+    The node's flatten after the window is the stage's, so it closes the 1,000 in both, as it
+    does with the target out of reach: read against what the stopped week leaves to close, the
+    resting sale and the owed exit left it nothing, and the stage ended long."""
+    if ending == "resting":
+        stamps, closes = ("04:01", "04:02", "09:33"), (10.00, 10.00, 10.60)
+        options: dict[str, object] = {"latency_ms": 10.0}
+    else:
+        stamps, closes = ("04:01", "04:02", "09:31", "09:32"), (10.00, 10.00, 10.50, 10.51)
+        options = {"stated": {"orders_per_minute": 2, "requests_per_cancel": 2}}
+    lead = list(zip((ny(MONDAY, s) for s in stamps), closes, strict=True))
+    lagg = [(ts, 11.00) for ts, _ in lead]
+    plan: dict[object, object] = {(ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")]}
+    if ending == "resting":
+        plan[(ny(MONDAY, stamps[-1]), LEAD_ID)] = [("limit", LEAD_ID, "SELL:500@99.00")]
+    else:
+        plan[(ny(MONDAY, "04:02"), LAGG_ID)] = [("rest", LEAD_ID, "BUY"), ("rest", LAGG_ID, "BUY")]
+    made = request(plan, tmp_path / "card.txt", target_bp=target_bp, **options)  # type: ignore[arg-type]
+    one_day = replace(made, window=(MONDAY, MONDAY))
+    names = {LEAD: series(LEAD, lead), LAGG: series(LAGG, lagg)}
+    held = catalog(
+        tmp_path / "catalog", [*names[LEAD], *names[LAGG]], [instrument(LEAD), instrument(LAGG)]
+    )
+    staged = replace(one_day, overrides={"record": str(tmp_path / "stage.txt")})
+
+    (realised,) = node.run(_stage(_placed(staged, tmp_path), held, MONDAY)).realised
+
+    last = Seen(*ast.literal_eval((tmp_path / "stage.txt").read_text().splitlines()[-1]))
+    assert last.stopped == (target_bp == 50.0)
+    lead_fills = [(f.side, f.qty) for f in realised.run.fills if f.instrument_id == LEAD_ID]
+    assert lead_fills == [("BUY", 1000.0), ("SELL", 1000.0)]

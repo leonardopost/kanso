@@ -864,8 +864,9 @@ def _flatten(strategies: Sequence[Any]) -> None:
     sent — so each finds its own position first, whatever order the strategies come in.
 
     The flatten is the stage's, not the sleeves': each is held to no `orders_per_minute` from
-    here on and sends the cancels its bucket deferred first (`KansoStrategy._lift_rate`), so
-    the flatten goes out whole however busy a sleeve was.
+    here on and sends the cancels its bucket deferred first (`KansoStrategy._lift_rate`), and
+    each close is sent past a week its `period_target` stopped (`KansoStrategy._target_close`),
+    so the flatten goes out whole however busy a sleeve was and however its week stood.
     """
     owners = {strategy.id: strategy for strategy in strategies}
     names: set[Any] = set()
@@ -880,7 +881,7 @@ def _flatten(strategies: Sequence[Any]) -> None:
         for position in strategies[0].cache.positions_open(instrument_id=instrument_id):
             owner = owners.get(position.strategy_id)
             if owner is not None and instrument_id in owner.universe:
-                owner.close_position(position)
+                owner._target_close(position)
 
 
 def _books(
