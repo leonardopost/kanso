@@ -284,21 +284,32 @@ def test_a_week_is_the_span_from_the_last_opening_to_the_next(
 
 @given(instants, st.integers(0, 6), st.integers(0, 1439))
 @example(utc(date(2024, 3, 10), 7), SUNDAY, 150)
+@example(utc(date(2024, 3, 10), 7), SUNDAY, 120)
+@example(utc(date(2024, 3, 10), 7), SUNDAY, 180)
 @example(utc(date(2024, 11, 3), 6), SUNDAY, 90)
 def test_a_week_closes_where_the_rule_it_opened_under_closes_it(
     ts_ns: int, weekday: int, minute: int
 ) -> None:
     """A week's close is read off its opening alone, and is the next opening of the rule the
     week opened under, whatever rule is read now: for every opening that reads the rule's
-    minute, a reading a November change repeats among them. One a March change skips opens at
-    the change, reads 03:00, and closes at the next 03:00, which `hyp validate` refuses as an
-    `opens` (`PeriodTarget.moved_on`)."""
+    minute, a reading a November change repeats among them. One a March change skips — a Sunday
+    reading at or past 02:00 and before 03:00, and no other — opens at the change, reads 03:00,
+    and closes at the next 03:00, which `hyp validate` refuses as an `opens`
+    (`PeriodTarget.moved_on`)."""
     opens, next_opens = week_opening(ts_ns, weekday, minute=minute)
 
     if minute_of(opens) == minute:
         assert week_closing(opens) == next_opens
     else:
+        assert weekday == SUNDAY and 2 * 60 <= minute < 3 * 60
         assert wall(opens)[1] == 3 * HOUR and wall(week_closing(opens))[1] == 3 * HOUR
+
+
+def test_week_closing_states_the_openings_its_close_departs_from_the_rule_at() -> None:
+    """The docstring once left a Sunday 02:00 out of the readings a March change skips, which
+    opens at the change and closes an hour past the rule's next opening, as 02:30 does."""
+    stated = " ".join((week_closing.__doc__ or "").split())
+    assert "a Sunday opening a March change skips, at or past 02:00 and before 03:00" in stated
 
 
 @given(st.integers(2007, 2027), st.integers(0, 6), st.integers(0, 1439))

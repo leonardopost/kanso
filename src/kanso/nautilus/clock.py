@@ -195,8 +195,8 @@ def week_closing(opening_ns: int) -> int:
     `period_target.opens` closes where that rule closed it however the rule has moved since
     (`kanso.nautilus.backtest.RunRequest.resumed`). It is the next opening `week_opening` gives
     for the rule the week opened under, for every opening that reads the rule's minute — every
-    one but a Sunday opening a March change skips, past 02:00 and before 03:00, which opens at
-    the change and reads 03:00, and which `kanso hyp validate` refuses as an `opens`.
+    one but a Sunday opening a March change skips, at or past 02:00 and before 03:00, which
+    opens at the change and reads 03:00, and which `kanso hyp validate` refuses as an `opens`.
     """
     _, day = segment_of(opening_ns)
     return first_reading(day + _WEEK, minute_of(opening_ns), NEW_YORK)
