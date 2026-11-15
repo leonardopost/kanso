@@ -477,6 +477,14 @@ class RunRequest:
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
 
+    `target_seed` is where a `period_target` stood when the last window of the same version on
+    the same stage closed: that window's record narrowed to the week open at its last point and
+    the week's stop when it had one, stated at this window's capital
+    (`kanso.portfolio.records.target_seed`). `None` for a card, a certificate, a replay and a
+    first deploy. The harness resumes it when this window's first point falls in that week
+    (`kanso.nautilus.strategy.KansoStrategy`): a stopped week stays stopped until the next
+    opens, and one that had made part of its target is held to what is left of it.
+
     `version_source` is the file a composed version's implementation holds the sleeve's bytes
     in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a
     version's expectation (`kanso.strategy.composition`), so that a `Config` giving
@@ -505,6 +513,7 @@ class RunRequest:
     cushion: float = 0.0
     settled_ns: int | None = None
     resumes_ns: int | None = None
+    target_seed: PeriodStops | None = None
     version_source: str | None = None
     version_hyp: str | None = None
 
@@ -1655,7 +1664,8 @@ def _refuse_unbooked(
 def targeted(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:
     """Hand a sleeve the period target its hypothesis declares, when it declares one, with the
     venue's record of the instant each fill's price was struck at (`struck`,
-    `kanso.nautilus.struck`), which the run's venue keeps wherever a target is declared.
+    `kanso.nautilus.struck`), which the run's venue keeps wherever a target is declared, and
+    the week a stage restart resumes (`RunRequest.target_seed`), where it has one.
 
     Every path that runs a sleeve calls this beside `booked`, with the request its run is
     extracted from, so a card, a certificate, a replay and a stage hold one sleeve to one
@@ -1667,7 +1677,7 @@ def targeted(strategy: object, request: RunRequest, struck: Struck | None = None
     from kanso.nautilus.cross_section import target
 
     if request.hyp.period_target is not None:
-        target(strategy, request.hyp.period_target, struck)
+        target(strategy, request.hyp.period_target, struck, request.target_seed)
 
 
 def booked(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:

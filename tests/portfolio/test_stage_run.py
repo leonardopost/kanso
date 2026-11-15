@@ -825,3 +825,204 @@ def test_a_node_restart_charges_its_first_carry_from_the_instant_it_resumed(
     assert second.carry[0] == pytest.approx(
         borrowed * 0.05 * (end - MARCH_15_CLOSE_NS - 1) / NS_PER_YEAR
     )
+
+
+# --- the period target ------------------------------------------------------------
+
+WEEKLY = document(
+    id="weekly",
+    risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},
+    period_target={
+        "period": "week",
+        "opens": "Mon 04:00",
+        "tz": "America/New_York",
+        "target_bp": 1000,
+        "of": "capital",
+    },
+)
+"""A sleeve held to a tenth of its capital a New York week, each week opening on Monday at
+04:00 there: 08:00 UTC from March 11, 2024, the day after the clocks change."""
+
+RETRYING = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Buys 36,000 of its name at every bar it holds none of it, and holds."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        if self.held(bar.bar_type.instrument_id) == 0:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=36_000.0)
+'''
+
+NS = 1_000_000_000
+WEEK_NS = int(datetime(2024, 3, 11, 8, tzinfo=UTC).timestamp()) * NS
+"""Monday March 11, 04:00 New York: the week the version's last window ended inside."""
+NEXT_WEEK_NS = int(datetime(2024, 3, 18, 8, tzinfo=UTC).timestamp()) * NS
+WEEK_BEFORE_NS = int(datetime(2024, 3, 4, 9, tzinfo=UTC).timestamp()) * NS
+"""Monday March 4, 04:00 New York, still five hours behind UTC."""
+TUESDAY_CLOSE_NS = int(datetime(2024, 3, 12, 16, 0, 1, tzinfo=UTC).timestamp()) * NS
+"""The availability instant of the March 12 bar, a Tuesday: the clock the stage stopped at."""
+
+
+def ended_tuesday(
+    store: StateStore,
+    first: records.StageResult,
+    *,
+    pnl: float,
+    stopped: bool = False,
+    opening_ns: int = WEEK_NS,
+    capital: float | None = None,
+) -> None:
+    """Record a window of the version that ended at Tuesday March 12's close, in the week
+    opening at `opening_ns`, having made `pnl` there, stopped at that close or not, at
+    `capital` — the first window's own unless stated — and stand the stage's clock there."""
+    from dataclasses import replace
+
+    from kanso.nautilus.node import Realised
+    from kanso.schemas import PeriodStops
+
+    capital = first.capital if capital is None else capital
+    threshold = 0.1 * capital
+    hit = {
+        "opening_ns": opening_ns,
+        "anchor": capital,
+        "threshold": threshold,
+        "hit_ns": TUESDAY_CLOSE_NS,
+        "segment": "rth",
+        "equity": capital + threshold,
+    }
+    kept = PeriodStops.model_validate(
+        {
+            "openings": [opening_ns],
+            "stops": [hit] if stopped else [],
+            "last": {
+                "opening_ns": opening_ns,
+                "anchor": capital,
+                "threshold": threshold,
+                "pnl": pnl,
+                "stopped": stopped,
+            },
+        }
+    )
+    tuesday = replace(
+        first.run.between(int(WEEK_NS), TUESDAY_CLOSE_NS + 1),
+        window=(date(2024, 3, 11), date(2024, 3, 12)),
+        capital=capital,
+        period_stops=kept,
+    )
+    records.record_stage_run(
+        store, "paper", "a-window-to-tuesday", [Realised("weekly", 1, capital, tuesday, ())]
+    )
+    store.connection.execute("UPDATE sessions SET clock_ts = ?", (str(TUESDAY_CLOSE_NS),))
+
+
+def bought_on(run: Any) -> list[date]:
+    """The New York days of a window's buys, in order."""
+    from kanso.criteria.run import day_of
+
+    return [day_of(fill.ts_ns) for fill in run.fills if fill.side == "BUY"]
+
+
+@pytest.mark.parametrize(
+    ("opening_ns", "first_buy"),
+    [(WEEK_NS, date(2024, 3, 18)), (WEEK_BEFORE_NS, date(2024, 3, 13))],
+    ids=["that-week", "a-week-before"],
+)
+def test_a_week_stopped_on_tuesday_and_restarted_on_wednesday_enters_nothing_until_monday(
+    opening_ns: int, first_buy: date, ws: Workspace, store: StateStore
+) -> None:
+    """Every window restarts flat at the version's capital; the week its target had stopped
+    carries across. The version's newest window ended at Tuesday March 12's close with its week
+    stopped there: restarted after that close, the sleeve's entry is dropped at every bar from
+    Wednesday through Sunday and goes at Monday March 18's, the next week's first, and the
+    window lists the stop it resumed under as the window before struck it, with the five
+    entries it dropped. A stopped week the restart is already past is let go: it buys at
+    Wednesday's bar."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True, opening_ns=opening_ns)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == first_buy
+    record = run.period_stops
+    assert record is not None and record.openings[0] == WEEK_NS
+    if opening_ns == WEEK_NS:
+        (resumed, *_) = record.stops
+        assert (resumed.opening_ns, resumed.hit_ns, resumed.anchor) == (
+            WEEK_NS,
+            TUESDAY_CLOSE_NS,
+            first.capital,
+        )
+        assert (resumed.dropped, resumed.fills) == (5, [])
+        assert all(stop.opening_ns >= NEXT_WEEK_NS for stop in record.stops[1:])
+    else:
+        assert all(stop.opening_ns != WEEK_NS for stop in record.stops)
+
+
+@pytest.mark.parametrize(("made_bp", "stops"), [(600.0, True), (0.0, False)])
+def test_a_week_that_had_made_600_bp_stops_at_400_more(
+    made_bp: float, stops: bool, ws: Workspace, store: StateStore
+) -> None:
+    """Restarted after Tuesday's close in a week that had made 600 bp of a 1,000 bp target,
+    the window is read against the capital less those 600: it buys 3,600 at Wednesday's 10.00
+    and stops at Thursday's 10.50 close, 450 bp up, with 400 left. Having made nothing, the
+    window's 450 on Thursday and 900 on Friday stop nothing that week."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    capital = first.capital
+    ended_tuesday(store, first, pnl=made_bp / 10_000 * capital)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 13)
+    record = run.period_stops
+    assert record is not None
+    week = [stop for stop in record.stops if stop.opening_ns == WEEK_NS]
+    if not stops:
+        assert week == []
+        return
+    (stop,) = week
+    thursday = int(datetime(2024, 3, 14, 16, 0, 1, tzinfo=UTC).timestamp()) * NS
+    assert stop.hit_ns == thursday
+    assert stop.anchor == pytest.approx(capital - 0.06 * capital)
+    assert stop.threshold == pytest.approx(0.1 * capital)
+    assert 0.04 * capital <= stop.equity - capital < 0.1 * capital, "400 bp more, not 1,000"
+
+
+def test_a_version_deployed_by_its_certificate_resumes_a_stopped_week(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A passing certificate composes its version and deploys the paper stage with no one
+    asked, and the same bytes certified again return that version and deploy the stage again,
+    restarting it. A version on paper whose newest window stopped its week at Tuesday's close
+    resumes that week stopped: it enters nothing until Monday."""
+    from kanso.certify import certificate
+    from kanso.portfolio.lifecycle import on_certified
+    from tests.portfolio.test_lifecycle import a_certificate
+
+    file = deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    made = a_certificate(ws, sha=file.versions[0].sleeve.strategy_sha).model_copy(
+        update={"hyp_id": "weekly"}
+    )
+    certificate.write(ws, store, made, RETRYING)
+    adopted = on_certified(ws, store, made)
+    assert adopted.deployment is not None and adopted.state == "paper"
+    first = adopted.deployment.results[0]
+    ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True)
+
+    again = on_certified(ws, store, made)
+
+    assert again.version is not None and again.version.version == 1
+    assert again.deployment is not None
+    (window,) = again.deployment.results
+    assert bought_on(window.run)[0] == date(2024, 3, 18)
+    assert window.run.period_stops is not None
+    assert window.run.period_stops.stops[0].dropped == 5

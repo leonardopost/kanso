@@ -108,26 +108,32 @@ def test_the_funding_of_every_window_is_joined_in_time_order() -> None:
     assert joined.funding == (paid(START), paid(SECOND_DAY))
 
 
+WEEK = midnight_ns(START) + 9 * 3_600 * 1_000_000_000
+STOP: dict[str, object] = {
+    "opening_ns": WEEK,
+    "anchor": CAPITAL,
+    "threshold": 10.0,
+    "hit_ns": WEEK + 1,
+    "segment": "rth",
+    "equity": CAPITAL + 10.0,
+}
+"""A week stopped at its first instant past its opening, 10 up on the capital."""
+
+
+def window(day: date, record: dict[str, object] | None) -> StageResult:
+    """One closed window that kept `record` of its period target, or none."""
+    made = result((10.0,), start=day)
+    held = None if record is None else PeriodStops.model_validate(record)
+    return replace(made, run=replace(made.run, period_stops=held))
+
+
 def test_the_period_stops_of_every_window_join_by_their_weeks() -> None:
     """Two windows restarted inside one New York week both traded in it: the joined record
     holds that week once, each window's stops in turn, and the open week of the newest window
     handed a point — an empty window after it records none and moves nothing. A version none of
     whose windows kept a record has none."""
-    week = midnight_ns(START) + 9 * 3_600 * 1_000_000_000
-    stop = {
-        "opening_ns": week,
-        "anchor": CAPITAL,
-        "threshold": 10.0,
-        "hit_ns": week + 1,
-        "segment": "rth",
-        "equity": CAPITAL + 10.0,
-    }
+    week, stop = WEEK, STOP
     last = {"opening_ns": week, "anchor": CAPITAL, "threshold": 10.0, "pnl": 3.0}
-
-    def window(day: date, record: dict[str, object] | None) -> StageResult:
-        made = result((10.0,), start=day)
-        held = None if record is None else PeriodStops.model_validate(record)
-        return replace(made, run=replace(made.run, period_stops=held))
 
     windows = [
         window(START, {"openings": [week], "stops": [stop], "last": {**last, "stopped": True}}),
@@ -144,6 +150,41 @@ def test_the_period_stops_of_every_window_join_by_their_weeks() -> None:
     assert joined.period_stops.last is not None and not joined.period_stops.last.stopped
     plain = combined([result((10.0,))])
     assert plain is not None and plain.period_stops is None
+
+
+def test_a_stop_a_restart_resumed_under_joins_the_one_it_resumed() -> None:
+    """A window restarted inside a stopped week lists the week's stop again, as the window
+    before struck it, with what it dropped under it itself: joined, the two are one stop, with
+    the first window's flatten and both windows' drops, and the week reads stopped. A stop of
+    the same week struck at another instant is another stop."""
+    sold = {
+        "ts_ns": WEEK + 2,
+        "instrument_id": "DEMO.XNAS",
+        "side": "SELL",
+        "qty": 10.0,
+        "price": 11.0,
+        "price_ts_ns": WEEK + 2,
+        "segment": "rth",
+    }
+    struck = {**STOP, "dropped": 1, "fills": [sold], "flat_equity": CAPITAL + 9.0}
+    last = {"opening_ns": WEEK, "anchor": CAPITAL, "threshold": 10.0, "pnl": 9.0, "stopped": True}
+    windows = [
+        window(START, {"openings": [WEEK], "stops": [struck], "last": last}),
+        window(SECOND_DAY, {"openings": [WEEK], "stops": [{**STOP, "dropped": 3}], "last": last}),
+    ]
+
+    joined = combined(windows)
+
+    assert joined is not None and joined.period_stops is not None
+    (one,) = joined.period_stops.stops
+    assert (one.hit_ns, one.dropped, one.flat_equity) == (WEEK + 1, 4, CAPITAL + 9.0)
+    assert [fill.ts_ns for fill in one.fills] == [WEEK + 2]
+    assert joined.period_stops.last is not None and joined.period_stops.last.stopped
+    again = {**STOP, "hit_ns": WEEK + 5, "equity": CAPITAL + 12.0}
+    later = window(date(2024, 3, 3), {"openings": [WEEK], "stops": [again], "last": last})
+    both = combined([*windows, later])
+    assert both is not None and both.period_stops is not None
+    assert [stop.hit_ns for stop in both.period_stops.stops] == [WEEK + 1, WEEK + 5]
 
 
 def test_a_tenure_reads_its_clock_from_the_stage_when_there_is_one() -> None:

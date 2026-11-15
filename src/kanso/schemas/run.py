@@ -233,7 +233,9 @@ class PeriodStop(KansoModel):
     the run ended. `fills` are the fills of every order the sleeve sent while stopped
     (`FlattenFill`), `flat_equity` the `balance` after the last of them, and `carried` whether
     that fill landed at or after the next week's opening, so in a week whose anchor was struck
-    before it.
+    before it. A stage window restarted inside a stopped week lists the week's stop again, as
+    the window before struck it, with what it dropped and filled under it itself: it restarts
+    flat, so nothing.
     """
 
     opening_ns: Instant
@@ -271,8 +273,10 @@ class PeriodStop(KansoModel):
 class OpenPeriod(KansoModel):
     """The week of a `period_target` open at a run's last point: its opening, its anchor and
     threshold, the P&L it had made there — `balance` less the anchor, read after a stage
-    node's own flatten — and whether the week itself was stopped. What a restart inside the
-    week resumes from."""
+    node's own flatten — and whether the week itself was stopped. What a stage restart inside
+    the week resumes from (`kanso.portfolio.records.target_seed`); on a window that resumed it,
+    the anchor is the window's capital less what the week had made before it, so the P&L is
+    the week's across both."""
 
     opening_ns: Instant
     anchor: Finite

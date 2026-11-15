@@ -614,17 +614,22 @@ def _opens(placements: tuple[Placement, ...], clock: int | None) -> date:
 
 
 def _seeded(store: StateStore, stage: str, placed: Placement) -> Placement:
-    """The placement with its book policy where its last window on this stage left it.
+    """The placement with its book policy and its period target where its last window on this
+    stage left them.
 
     Per version and per stage: a new version's book, and a version's book on a stage it has
-    not run on, start with nothing set aside."""
+    not run on, start with nothing set aside, and its target with no week begun. The target is
+    read whether or not the version has a book, at the share it is placed at."""
+    if placed.hyp.book is None and placed.hyp.period_target is None:
+        return placed
+    results = records.stage_results(
+        store, strategy_id=placed.strategy_id, version=placed.version, stage=stage
+    )
+    if placed.hyp.period_target is not None:
+        placed = replace(placed, target_seed=records.target_seed(results, placed.capital))
     if placed.hyp.book is None:
         return placed
-    cushion, settled_ns = records.book_seed(
-        records.stage_results(
-            store, strategy_id=placed.strategy_id, version=placed.version, stage=stage
-        )
-    )
+    cushion, settled_ns = records.book_seed(results)
     return replace(placed, cushion=cushion, settled_ns=settled_ns)
 
 

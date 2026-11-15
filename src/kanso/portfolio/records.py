@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from kanso.criteria.codec import decode_run, encode_run
 from kanso.criteria.run import CardRun
+from kanso.schemas import PeriodStops
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.nautilus.node import Realised
@@ -53,6 +54,7 @@ __all__ = [
     "stage_results",
     "staged",
     "subject_of",
+    "target_seed",
 ]
 
 STAGE_RUN: Final = "stage_run"
@@ -306,6 +308,39 @@ def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
         if run.period_ends_ns:
             return (run.cushion[-1] if run.cushion else 0.0), run.period_ends_ns[-1]
     return 0.0, None
+
+
+def target_seed(results: Sequence[StageResult], capital: float) -> PeriodStops | None:
+    """Where a version's `period_target` stood when its newest window that opened a week closed.
+
+    That window's record narrowed to the week open at its last point (`PeriodStops.last`) —
+    read there after the node's own flatten, so its P&L carries that close's cost — and the
+    week's stop when it had stopped, which the next window lists again; `None` when no window
+    has opened a week. A window handed no point after its warmup opened none and moved
+    nothing, so the one before it still holds the answer. The week's anchor, threshold and
+    P&L are stated at `capital`, the share the next window runs at, scaled from the one that
+    window ran at, so the basis points made and left carry across a share that moved; the
+    stop is kept as it was struck. The next window resumes the week when its first point falls
+    in it (`kanso.nautilus.strategy.KansoStrategy`): every window restarts flat at the
+    capital, and what carries across is the week.
+    """
+    for result in reversed(results):
+        stops = result.run.period_stops
+        if stops is not None and stops.last is not None:
+            last = stops.last
+            scale = capital / result.capital
+            return PeriodStops(
+                openings=[last.opening_ns],
+                stops=[stop for stop in stops.stops if stop.opening_ns == last.opening_ns],
+                last=last.model_copy(
+                    update={
+                        "anchor": last.anchor * scale,
+                        "threshold": last.threshold * scale,
+                        "pnl": last.pnl * scale,
+                    }
+                ),
+            )
+    return None
 
 
 def _result(detail: Mapping[str, Any]) -> StageResult:

@@ -145,7 +145,10 @@ nothing else of it. What the rule did is the run's record, read by the runner on
 has ended (`_target_record`, `kanso.criteria.run.CardRun.period_stops`): every week the run
 traded in, each stop — the week's opening, anchor and threshold, the hit's instant and
 `balance`, what was dropped unsent, and every fill of an order sent while stopped, whenever it
-landed, with the `balance` after the last — and the week open at the run's last point.
+landed, with the `balance` after the last — and the week open at the run's last point. A run's
+first week is anchored at the capital, except on a stage restart inside the week the
+version's last window on the stage ended in, which resumes it as that window left it: stopped,
+or with what it had made struck into the anchor (`_target_resume`).
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -1126,6 +1129,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._target_staged = False
         """Whether the order being sent is a stage node's flatten (`_target_close`), which is
         the stage's and no stop's."""
+        self._target_seed: PeriodStops | None = None
+        """The week a stage restart resumes, handed with the target
+        (`kanso.portfolio.records.target_seed`), until the run's first week opens
+        (`_target_resume`); `None` everywhere but a stage restart."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1579,7 +1586,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`_book_at`), read after the policy's period close above has booked its carry, so it is
         the card's period-end equity, carry included, and the gap to the new week's first
         point counts in the new week; a run's first week is anchored at the capital, since
-        no week turns over a warmup prefix. The weeks are New York's, absolute, and read off
+        no week turns over a warmup prefix, unless a stage restart resumes it
+        (`_target_resume`). The weeks are New York's, absolute, and read off
         the clock at the instant (`kanso.nautilus.clock.week_opening`), imported here so the
         module a strategy may import binds no week of its own.
         """
@@ -1594,7 +1602,44 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._target_anchor = anchor
             base = self.capital if target.of == "capital" else anchor
             self._target_threshold = target.target_bp / BASIS_POINT * base
+            if self._target_seed is not None:
+                self._target_resume(self._target_seed)
         self._target_last_ns = ts_ns
+
+    def _target_resume(self, seed: PeriodStops) -> None:
+        """Resume the week a stage window restarted inside, as the version's last window on the
+        stage left it (`kanso.portfolio.records.target_seed`), at the run's first week, once.
+
+        Every stage window restarts flat at the capital, so what the week had made — the P&L
+        that window recorded at its last point, after the node's own flatten, stated at this
+        window's capital — is struck into the anchor: the capital less it. `balance` less the
+        anchor is then the week's P&L across both windows, read against the week's own
+        threshold, so a week that had made part of its target stops at what is left of it. A
+        week that had stopped stays stopped until the next opens: its stop is listed again, as
+        the window before recorded it, and what this window drops under it is counted there. A
+        seed of a week the first point is past is let go, and that week opens as a run's first.
+        """
+        self._target_seed = None
+        last = seed.last
+        if last is None or last.opening_ns != self._target_open:
+            return
+        self._target_anchor = self.capital - last.pnl
+        self._target_threshold = last.threshold
+        if not last.stopped:
+            return
+        stop = seed.stops[-1]
+        self._target_until = self._target_next
+        self._target_stops.append(
+            _Stopped(
+                opening_ns=stop.opening_ns,
+                closes_ns=self._target_next,
+                anchor=stop.anchor,
+                threshold=stop.threshold,
+                hit_ns=stop.hit_ns,
+                segment=stop.segment,
+                equity=stop.equity,
+            )
+        )
 
     def _target_step(self) -> None:
         """Read the period target at a point being dispatched, before the author's handler.

@@ -919,7 +919,8 @@ orders and modifies the stopped week dropped unsent, and every fill of an order 
 while stopped, whenever it landed, with the instant the venue struck its price at, that
 minute's part of the session and the volume of the name's bar there, then the `balance` after
 the last of them and whether it landed in the next week — and the week open at the run's last
-point, with its P&L there and whether it stopped. The instant a fill's price was struck at is
+point, with its P&L there and whether it stopped, which a stage restart inside that week resumes
+(Stages). The instant a fill's price was struck at is
 read off the venue's record (`kanso.nautilus.struck`), which every run of a target loads,
 dated spread or none, and never off what the sleeve has been handed: the venue fills a resting
 order while it applies a bar, before the sleeve is handed that bar. That record is in no
@@ -2794,11 +2795,16 @@ indicators and orders are what a run of it alone would produce. A version under 
 policy is seeded on a restart with the cushion and the last settled end of its newest
 measured window on that stage, and its first carry runs from the instant it resumes. A version
 under a `period_target` is held to it on the stage by the same harness as on its card, and is
-seeded with nothing: each window anchors its first week at the capital, so a window restarted
-inside a week the target had stopped trades again before the next week opens (`docs/backlog.md`
-row 270). Each window records what the target did in it (Card), and `monitor run` joins a
-version's windows' records into one, each week once though two windows traded in it, so a
-paper or live version says how many of its weeks it stopped. A window that ends inside a
+seeded on a restart with the week its newest window on that stage left open, which the window
+resumes when its first point falls in it: a week the target had stopped stays stopped, every
+entry dropped until the next week opens, and a week that had made part of its target is read
+against the capital less what it made, so it stops at what is left, carried in basis points
+across a share the limits moved. Since a passing certificate deploys the paper stage by itself, and
+every deploy restarts it, this is what keeps a stopped week stopped with no one asked. Each
+window records what the target did in it (Card) — a window that resumed a stopped week lists
+its stop again, with what it dropped under it — and `monitor run` joins a version's windows'
+records into one, each week and each stop once though two windows traded in it, so a paper or
+live version says how many of its weeks it stopped. A window that ends inside a
 stopped week still ends flat: the node's flatten after
 the window's last point is the stage's, not the version's, and is held neither to its order
 rate nor to its stopped week, so a sale still resting with its cancel in flight, or an exit the
