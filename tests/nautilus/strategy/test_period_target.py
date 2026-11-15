@@ -1,22 +1,28 @@
 """The harness under a period target: a week that reaches its target is flattened and stopped.
 
-Two names are fed one-minute bars at New York wall times in January 2024, when New York is five
-hours behind UTC; the weeks open on Monday at 04:00. A sleeve buys and sells on a plan keyed by
-each bar's instant and name, and writes down what it saw on every bar after the harness read
-the target: whether the week is stopped, what it holds, its balance, the week's anchor and
-threshold, and how many entries were dropped. Every price is a bar's own close, so the bar a
-fill was struck at is read off its price, and costs are zero unless a test states them, so every
-P&L is a difference of closes by hand.
+Two names are fed one-minute bars at New York wall times, mostly in January 2024, when New York
+is five hours behind UTC, and in March, February and November 2024 where a test crosses a change
+of clocks or a closed Monday, so each stamp is built from its own date's offset (`ny`); the
+weeks open on Monday at 04:00. A sleeve buys and sells on a plan keyed by each bar's instant and
+name, and writes down what it saw on every bar after the harness read the target: whether the
+week is stopped, what it holds, its balance, the week's anchor and threshold, and how many
+orders were dropped. Every price is a bar's own close, so the bar a fill was struck at is read
+off its price, and costs are zero unless a test states them, so every P&L is a difference of
+closes by hand. The overlay's clips and hedge legs are fed the strategy fixtures' bars instead,
+stamped a minute apart from the epoch, under weeks that open on Wednesdays at 19:30 (`_clipped`).
 
 What it pins: the first close at or above the target stops the week, under both bases; the
 flatten fills at the held name's next print, never at the price that made it due, hours later
 or in the next week; under a latency each leg of a pair fills at the close its order lands on,
 under both same-instant point orders; an entry in flight at the hit fills and is flattened;
 entries of every kind are dropped until the next week has opened and every name is flat — an
-order built by hand behind an exit, one by one or in a list read order by order, and an
-overlay's clip, which then holds nothing; the weeks open at New York's Monday 04:00 across both
-changes of clocks and on a closed Monday; and the anchor is the equity the card struck at the
-week before's last point, carry included.
+order built by hand behind an exit, one by one or in a list read order by order, an overlay's
+clip, which then holds nothing, and a hedge leg that opens, while a held clip's `FLAT` goes;
+a new week's entry waits for the old week's legs to be flat; nothing sent while stopped takes
+the position past flat — one order bigger than it, an exit beside a working one, a modify that
+grows a resting exit — while exits that add up to it go; the weeks open at New York's Monday
+04:00 across both changes of clocks and on a closed Monday; and the anchor is the equity the
+card struck at the week before's last point, carry included.
 """
 
 from __future__ import annotations
@@ -55,12 +61,12 @@ from kanso.criteria.run import CardRun
 from kanso.data.types import CorporateAction
 from kanso.nautilus import cross_section
 from kanso.nautilus.backtest import RunRequest, RunResult, execute
-from kanso.nautilus.hooks import Clip
+from kanso.nautilus.hooks import Clip, Hedge
 from kanso.nautilus.strategy import Decision, HookContext
 from kanso.schemas import CostsOverride, Hypothesis, PeriodTarget, resolve_venue_model
 from tests.nautilus.backtest.conftest import CAPITAL, SNAPSHOT, VENUE, hypothesis, instrument
 from tests.nautilus.strategy.conftest import DEMO, HEDGE, MINUTE_NS, bar
-from tests.nautilus.strategy.test_clips import Clipper, clipper
+from tests.nautilus.strategy.test_clips import CLIP_BUDGET, HEDGE_CLIP, Clipper, clipper
 from tests.nautilus.strategy.test_sizing import Enters, sized
 
 LEAD, LAGG = "LEAD", "LAGG"
@@ -125,6 +131,18 @@ class Strategy(KansoStrategy):
                         Price.from_str("1.00"),
                     )
                 )
+            elif act == "limit":
+                way, qty, price = self._sized(side)
+                self.resting = self.order_factory.limit(
+                    InstrumentId.from_str(name), OrderSide[way], Quantity.from_int(qty),
+                    Price.from_str(price),
+                )
+                self.submit_order(self.resting)
+            elif act == "grow":
+                self.modify_order(
+                    self.resting, quantity=Quantity.from_int(int(side)),
+                    price=Price.from_str("10.00"),
+                )
         with Path(self.kanso_config.record).open("a") as out:
             out.write(repr((
                 ts, key, self.period_stopped, self.held("{lead}"), self.held("{lagg}"),
@@ -133,9 +151,15 @@ class Strategy(KansoStrategy):
             )) + "\\n")
 
     def _market(self, name, side):
+        way, qty, _ = self._sized(side)
         return self.order_factory.market(
-            InstrumentId.from_str(name), OrderSide[side], Quantity.from_int(QTY)
+            InstrumentId.from_str(name), OrderSide[way], Quantity.from_int(qty)
         )
+
+    def _sized(self, side):
+        way, _, rest = side.partition(":")
+        qty, _, price = rest.partition("@")
+        return way, int(qty or QTY), price or "10.00"
 """
 
 
@@ -376,6 +400,40 @@ def test_entries_of_every_kind_are_dropped_until_the_next_week_and_then_go(
     assert week_three[-1].sent == [True]
 
 
+def test_a_new_week_s_entry_waits_until_every_old_leg_is_flat(tmp_path: Path) -> None:
+    """LEAD is bought on Friday at the 04:01 close of 10.00 and the 19:59 close of 10.50 stops
+    the week; LEAD does not print again until Monday at 04:05. LAGG prints at 04:01 that Monday,
+    after the next week has opened, and its entry is dropped: LEAD is still held, not yet sent
+    its flatten, and a new week's entry would meet the old week's leg. At 04:05 LEAD is
+    flattened at its own close, the stop lifts, and LAGG's entry there goes."""
+    lead = [
+        (ny(FRIDAY, "04:01"), 10.00),
+        (ny(FRIDAY, "19:59"), 10.50),
+        (ny(NEXT_MONDAY, "04:05"), 10.10),
+    ]
+    lagg = [
+        (ny(FRIDAY, "04:01"), 11.00),
+        (ny(FRIDAY, "19:59"), 11.00),
+        (ny(NEXT_MONDAY, "04:01"), 11.00),
+        (ny(NEXT_MONDAY, "04:05"), 11.00),
+    ]
+    plan = {
+        (ny(FRIDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(NEXT_MONDAY, "04:01"), LAGG_ID): [("entry", LAGG_ID, "BUY")],
+        (ny(NEXT_MONDAY, "04:05"), LAGG_ID): [("entry", LAGG_ID, "BUY")],
+    }
+
+    result, seen = card(plan, lead, lagg, tmp_path)
+
+    early = [row for row in seen if row.ts == ny(NEXT_MONDAY, "04:01")]
+    assert [(row.name, row.stopped, row.sent) for row in early] == [(LAGG_ID, True, [False])]
+    assert fills(result.run) == [
+        ("BUY", 10.00, ny(FRIDAY, "04:01")),
+        ("SELL", 10.10, ny(NEXT_MONDAY, "04:05")),
+    ]
+    assert fills(result.run, LAGG_ID) == [("BUY", 11.00, ny(NEXT_MONDAY, "04:05"))]
+
+
 @pytest.mark.parametrize(
     ("act", "names", "sides", "sent"),
     [
@@ -394,8 +452,9 @@ def test_no_order_built_by_hand_opens_while_stopped_whatever_exit_it_is_sent_beh
     order behind it. A list is read order by order, each against what the orders before it
     leave: a flip written as a list, a re-entry and another name's entry each drop the whole
     list unsent, and LEAD is flattened at its next print. Sent one by one, the exit goes and the
-    sale behind it — an exit to `classify` until the first fills — is dropped as the entry it
-    is. A list of the exit alone goes. Nothing is bought, or sold short, while stopped."""
+    sale behind it — an exit to `classify` until the first fills — is dropped, since the exit on
+    its way already closes what it would. A list of the exit alone goes. Nothing is bought, or
+    sold short, while stopped."""
     stamps = ("04:01", "04:02", "04:03", "04:04")
     lead = list(zip((ny(MONDAY, s) for s in stamps), (10.00, 10.60, 10.70, 10.80), strict=True))
     lagg = [(ts, 11.00) for ts, _ in lead]
@@ -415,20 +474,82 @@ def test_no_order_built_by_hand_opens_while_stopped_whatever_exit_it_is_sent_beh
     assert after and all((row.lead, row.lagg) == (0.0, 0.0) for row in after)
 
 
-def _clipped(backtest: Any, asks: Mapping[int, Clip]) -> Any:
+PAST_FLAT = [
+    # one order past flat into a smaller short, alone, as a list, or at a limit
+    ([("singles", LEAD_ID, "SELL:1500")], 1, 0),
+    ([("singles", LEAD_ID, "SELL:1999")], 1, 0),
+    ([("orders", LEAD_ID, "SELL:1500")], 1, 0),
+    ([("orders", f"{LEAD_ID},{LEAD_ID}", "SELL:500,SELL:900")], 2, 0),
+    ([("limit", LEAD_ID, "SELL:1500")], 1, 0),
+    # an exit beside one already working that closes what it would, at market or resting
+    ([("limit", LEAD_ID, "SELL"), ("hand", LEAD_ID, "SELL")], 1, 1000),
+    ([("hand", LEAD_ID, "SELL"), ("limit", LEAD_ID, "SELL")], 1, 1000),
+    ([("limit", LEAD_ID, "SELL"), ("limit", LEAD_ID, "SELL")], 1, 1000),
+    # a modify that grows a resting exit past what is left, and one that grows it to it
+    ([("limit", LEAD_ID, "SELL:500@99.00"), ("grow", LEAD_ID, "2000")], 1, 0),
+    ([("limit", LEAD_ID, "SELL:500@99.00"), ("grow", LEAD_ID, "1000")], 0, 1000),
+    # exits that close no more than the position, together or alone
+    ([("hand", LEAD_ID, "SELL:500"), ("limit", LEAD_ID, "SELL:500")], 0, 1000),
+    ([("orders", f"{LEAD_ID},{LEAD_ID}", "SELL:400,SELL:600")], 0, 1000),
+    ([("singles", LEAD_ID, "SELL:999")], 0, 999),
+]
+
+
+@pytest.mark.parametrize(("sends", "dropped", "sold"), PAST_FLAT)
+def test_nothing_sent_while_stopped_takes_the_position_past_flat(
+    sends: list[tuple[str, str, str]], dropped: int, sold: int, tmp_path: Path
+) -> None:
+    """LEAD is bought 1,000 at the 04:01 close of 10.00 and the 04:02 close of 10.60 stops the
+    week. In that bar's handler the sleeve sends, by hand, sales at market, marketable limits
+    at 10.00, and a limit resting at 99.00 that it then modifies to 10.00 and a larger quantity.
+    Each goes only when it closes no more than is left once every
+    order of the sleeve still working on the closing side has filled — a limit resting read as
+    if it filled, a list's orders before it too — so a sale bigger than the position, by any
+    amount, a sale beside a working exit of the whole, and a modify that grows a limit past what
+    is left are dropped, each counted, while exits that add up to the position go. What they
+    leave is flattened at LEAD's next close: nothing is ever bought back, and LEAD is never
+    short."""
+    stamps = ("04:01", "04:02", "04:03", "04:04")
+    lead = list(zip((ny(MONDAY, s) for s in stamps), (10.00, 10.60, 10.70, 10.80), strict=True))
+    lagg = [(ts, 11.00) for ts, _ in lead]
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, "04:02"), LEAD_ID): sends,
+    }
+
+    result, seen = card(plan, lead, lagg, tmp_path)
+
+    hit = next(row for row in seen if row.ts == ny(MONDAY, "04:02") and row.name == LEAD_ID)
+    assert hit.stopped and hit.dropped == dropped
+    made = [(f.side, f.qty, f.px, f.ts_ns) for f in result.run.fills]
+    assert sum(qty for side, qty, _, ts in made if ts == ny(MONDAY, "04:02")) == sold
+    assert all((side, px) == ("SELL", 10.60) for side, _, px, ts in made if ts == hit.ts)
+    later = [fill for fill in made if fill[3] > ny(MONDAY, "04:02")]
+    assert later == ([("SELL", 1000 - sold, 10.70, ny(MONDAY, "04:03"))] if sold < 1000 else [])
+    rows = [row for row in seen if row.ts >= ny(MONDAY, "04:02") and row.name == LAGG_ID]
+    assert rows and all(row.lead >= 0.0 for row in rows)
+    assert all(row.lead == 0.0 for row in rows if row.ts >= ny(MONDAY, "04:03"))
+
+
+def _clipped(backtest: Any, asks: Mapping[int, Clip | Hedge], budget: float = CLIP_BUDGET) -> Any:
     """A sized sleeve that enters DEMO on its third bar, under a target of ten basis points of
     the 100,000 capital whose weeks open on Wednesdays at 19:30 New York: 00:30 UTC on the
     Thursday the engine's clock starts, so the bar at index 29 opens the second week. An
-    overlay asks for the clip `asks` keys by the index of the bar it is consulted at, once.
-    DEMO's rise of ten cents at index 5 makes 299.70 on its 2,997 shares: the week stops there,
-    DEMO is flattened at its next print, and the second week opens with the sleeve flat."""
+    overlay of `budget` asks for the clip or the hedge leg `asks` keys by the index of the bar
+    it is consulted at, once. DEMO's rise of ten cents at index 5 makes 299.70 on its 2,997
+    shares: the week stops there, DEMO is flattened at its next print, and the second week
+    opens with the sleeve flat."""
 
     class Asks(Clipper):
         pending = dict(asks)
 
         def on_data(self, ctx: HookContext) -> Decision:
-            clip = self.pending.pop(ctx.ts_event // MINUTE_NS - 1, None)
-            return Decision.neutral(self.construct) if clip is None else Decision(clips=(clip,))
+            ask = self.pending.pop(ctx.ts_event // MINUTE_NS - 1, None)
+            if ask is None:
+                return Decision.neutral(self.construct)
+            if isinstance(ask, Hedge):
+                return Decision(hedges=(ask,))
+            return Decision(clips=(ask,))
 
     strategy = Enters(sized())
     cross_section.target(
@@ -445,7 +566,8 @@ def _clipped(backtest: Any, asks: Mapping[int, Clip]) -> Any:
             bar(HEDGE, index, 20.0, volume=10**6),
         )
     ]
-    return backtest(strategy, [clipper(Asks)], data=data, instruments=(DEMO, HEDGE)).strategy
+    overlays = [clipper(Asks, budget=budget)]
+    return backtest(strategy, overlays, data=data, instruments=(DEMO, HEDGE)).strategy
 
 
 @pytest.mark.parametrize(
@@ -466,6 +588,32 @@ def test_a_clip_dropped_while_stopped_holds_nothing_after(backtest: Any, asked: 
         intent.instrument_id == asked.instrument and intent.ts_event >= 30 * MINUTE_NS
         for intent in stopped.intents
     )
+
+
+def test_a_held_clip_is_taken_off_while_stopped_and_a_hedge_leg_that_opens_is_not_sent(
+    backtest: Any,
+) -> None:
+    """A clip the overlay bought before the hit is its own, and its `FLAT` asked while the week
+    is stopped closes no more than the clip holds, so it goes. A hedge leg an overlay with no
+    budget asks while stopped opens, read against the sleeve's own position without its clips,
+    so it is dropped and counted; the same leg the next week goes."""
+    clipped = _clipped(backtest, {3: Clip("HEDGE.XNAS", "BUY"), 8: Clip("HEDGE.XNAS", "FLAT")})
+    hedged = _clipped(
+        backtest, {8: Hedge("HEDGE.XNAS", 10.0), 34: Hedge("HEDGE.XNAS", 10.0)}, budget=0.0
+    )
+
+    assert clipped._target_dropped == 0
+    assert [
+        (intent.side, intent.qty, intent.ts_event // MINUTE_NS - 1)
+        for intent in clipped.intents
+        if intent.instrument_id == "HEDGE.XNAS"
+    ] == [("BUY", HEDGE_CLIP, 3), ("SELL", HEDGE_CLIP, 8)]
+    assert hedged._target_dropped == 1
+    assert [
+        (intent.side, intent.qty, intent.ts_event // MINUTE_NS - 1)
+        for intent in hedged.intents
+        if intent.instrument_id == "HEDGE.XNAS"
+    ] == [("BUY", 10.0, 34)]
 
 
 @pytest.mark.parametrize(

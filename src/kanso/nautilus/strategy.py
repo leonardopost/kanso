@@ -119,16 +119,18 @@ is not marked, and before it when it is (`kanso.nautilus.cross_section`), and na
 filling it at its own name's last price: so under a latency the flatten fills at the close of
 the print it was sent at or of the print after, and sent at the hit's own point it could fill
 at the hit's price. Until the next week has opened and every name is flat or wholly on its way
-out at market (`_own_intended`), every entry is dropped before it is sized, funded or asked of
-the rate: `submit_entry` returns `None`, and `submit_order` drops an order that opens as the
-rate reads one — an entry `submit_entry` sized, one `classify` reads as an entry, or one that
-opens the position the sleeve's orders on their way leave (`_opens`) — and an overlay's clip
-so dropped is taken off the clip ledger, as the rate's drop takes one, while an exit
-`submit_exit` sized goes. `submit_order_list` reads every order of a list so, each against
-the position the list's orders before it leave, and drops the whole list when any of them
-opens (`_list_opens`). An exit built by hand at a limit or a stop rests, and is read as no
-more than the rate reads one: one that fills alongside another exit can carry the position
-past flat, which the next print or quote flattens (`docs/backlog.md` row 276). The strategy
+out at market (`_own_intended`), `submit_entry` returns `None`, dropped before it is sized,
+funded or asked of the rate, and an order `submit_exit` did not size — built by hand, or an
+overlay's leg or clip — is held to the rule `submit_exit` sizes by: it goes only when it closes
+no more of its name than is left to close once every order of the sleeve still working on the
+closing side has filled, a limit or a stop resting read as if it filled (`_target_room`). A
+list is read order by order, each with the list's orders before it applied, and is dropped
+whole when any of them would not go; a modify that grows an order by more than is left is
+dropped too, the order staying as it was (`_target_sends`). Anything else — an order that
+opens, one that would carry the position past flat, one beside a working exit that already
+closes what it would — is dropped before it is asked of the rate, and an overlay's clip so
+dropped is taken off the clip ledger, as the rate's drop takes one. So nothing the sleeve sends
+while stopped can take it past flat, alone or beside what is already working. The strategy
 reads `period_stopped`, and nothing else of it.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
@@ -1040,7 +1042,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """While stopped, each name to flatten, and whether it has printed since the hit or
         since its last fill, whichever is later (`_target_flatten`)."""
         self._target_dropped = 0
-        """The entries dropped while stopped, each order of a list counted."""
+        """The orders dropped while stopped, each order of a list counted, and each modify."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1204,7 +1206,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         which its week reached the target until the next week has opened and every name it
         holds is flat or wholly on its way out at market. While it reads true the harness
         flattens what the sleeve holds and drops every entry it sends, `submit_entry` returning
-        `None` as a refused filter does; exits pass. Read the position from `held`, never from
+        `None` as a refused filter does; an exit passes when it closes no more than is left to
+        close, never past flat (`_target_sends`). Read the position from `held`, never from
         a flag of the sleeve's own, since the harness may have flattened it. Always false
         without a target. It has no setter: `strategy_integrity` refuses a `strategy.py` that
         binds it."""
@@ -2362,7 +2365,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if (
             self._target_until is not None
             and closing is None
-            and (opening or kind == ENTRY or self._opens(order))
+            and (opening or not self._target_sends((order,)))
         ):
             self._forget_clip(order)
             self._target_dropped += 1
@@ -2403,17 +2406,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         list is not.
 
         While a period target has stopped the sleeve, the list is read order by order, not by
-        its first: it is dropped whole, each order counted, when any of its orders opens as
-        `submit_order` would read it sent alone after the ones before it (`_list_opens`). So
-        an exit with an entry behind it — the flip of a name written as a list, or another
-        name's entry — sends nothing, as the same orders sent one by one would send no entry."""
+        its first: it is dropped whole, each order counted, when any of its orders would not go
+        as `submit_order` reads it sent alone after the ones before it (`_target_sends`). So an
+        exit with an entry behind it — the flip of a name written as a list, or another name's
+        entry — sends nothing, and neither does a list whose exits add up past flat."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_booked(orders[0], "submit_order_list")
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
-        if self._target_until is not None and self._list_opens(orders):
+        if self._target_until is not None and not self._target_sends(orders):
             self._target_dropped += len(orders)
             return
         exiting = self._command_bucket is not None and kind != ENTRY and not self._opens(orders[0])
@@ -2643,16 +2646,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         another type — which the rate reads nothing of, so the engine raises its own error for
         it, as it did before the keys existed: in nautilus_trader 1.231.0
         `Strategy.modify_order` takes an `Order` and refuses `None` with `Condition.not_none`
-        (`trading/strategy.pyx`), a `TypeError` either way."""
+        (`trading/strategy.pyx`), a `TypeError` either way.
+
+        While a period target has stopped the sleeve, a modify the engine would send that grows
+        the order by more than is left to close on its side (`_target_room`) — any growth of an
+        order on the side that opens — is dropped before the rate is asked, and counted with the
+        stopped week's drops: the order stays as it was, so it can close no more than it could
+        when it went."""
         self._check_booked(order, "modify_order")
         if (
             isinstance(order, Order)
             and _modify_sends(order, quantity, price, trigger_price)
             and not self._never_sent(order)
-            and not self._command_spend(MODIFY)
         ):
-            self._drop_rate(MODIFY)
-            return
+            if (
+                self._target_until is not None
+                and quantity is not None
+                and (grown := quantity.as_decimal() - order.quantity.as_decimal()) > 0
+                and grown > self._target_room(order)
+            ):
+                self._target_dropped += 1
+                return
+            if not self._command_spend(MODIFY):
+                self._drop_rate(MODIFY)
+                return
         super().modify_order(order, quantity, price, trigger_price, client_id, params)
 
     def _hedge_order(self, leg: Hedge) -> object | None:
@@ -3145,7 +3162,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         self._refuse_rate(key, order_side_to_str(order.side), "an exit the strategy built itself")
 
-    def _opens(self, order: Any, ahead: float = 0.0) -> bool:
+    def _opens(self, order: Any) -> bool:
         """Whether an order the strategy built opens or grows the position this sleeve's
         orders already on their way leave: what `classify` decides on the position filled,
         decided once its market orders in flight have filled and an exit the rate owes at
@@ -3167,9 +3184,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         it in: an unsized sleeve's whole, its overlays' clips in it; under a sizing rule a
         clip's own, owing nothing of the host's, or the sleeve's own without its clips. A clip
         is kept as one before it is sent (`_clip_order`), so its own quantity is taken back
-        out of what the clips intend. `ahead` is what the orders of a list before this one put
-        in flight in its name (`_list_opens`), applied as `_track` would have applied them
-        sent one by one."""
+        out of what the clips intend."""
         key = order.instrument_id.value
         side = order.side
         clip = self._is_clip(order)
@@ -3177,29 +3192,62 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self.sized and clip:
             held = self._clips_intended(key) - mine
         else:
-            held = self._own_intended(key) + ahead
+            held = self._own_intended(key)
             if not self.sized:
                 held += self._clips_intended(key) - mine
             held = self._left(key, held)
         signed = -float(order.quantity) if side == OrderSide.SELL else float(order.quantity)
         return abs(held + signed) >= abs(held)
 
-    def _list_opens(self, orders: Sequence[Any]) -> bool:
-        """Whether any order of a list opens, each read as `submit_order` reads one sent alone
-        after the orders before it: an entry by `classify`, on the position filled, or one that
-        opens or grows the position the sleeve's orders on their way leave (`_opens`) with the
-        list's earlier market orders in its name applied — a market order being what `_track`
-        keeps in flight, and a limit or a stop resting no more applied here than there. The
-        stopped week's drop reads a list so (`submit_order_list`), so a list and the same
-        orders sent one by one open alike."""
-        ahead: dict[str, float] = {}
+    def _target_room(self, order: Any) -> Decimal:
+        """What is left to close on an order's side of its name while a period target has
+        stopped the sleeve: the rule `submit_exit` sizes an exit by, never past flat, counting
+        the exits still working, read for an order it did not size.
+
+        The position is read filled, in the scope `classify` reads it in — an unsized sleeve's
+        whole, its overlays' clips in it; under a sizing rule a clip's own, or the sleeve's own
+        without its clips. From it come an exit the rate owes at market (`_left`), which stands
+        for a market order the rate held back, and every order of the same scope still working
+        on the closing side (`_working`): resting at a limit or a stop, read as if it filled, in
+        flight to the venue, or waiting on a cancel that has not landed. On the side that opens,
+        or with nothing held, nothing is left. An order already sent is among those working, so
+        a modify of it is read by what it would add (`modify_order`)."""
+        key = order.instrument_id.value
+        clip = self.sized and self._is_clip(order)
+        if clip:
+            net = Decimal(repr(self._clips_filled(key)))
+        elif self.sized:
+            net = Decimal(repr(self._own_filled(key)))
+        else:
+            net = self._own_position(order.instrument_id)
+        side = OrderSide.SELL if net > 0 else OrderSide.BUY
+        if not net or order.side != side:
+            return Decimal(0)
+        clipped = {each.client_order_id for each in self._clip_orders.get(key, ())}  # type: ignore[attr-defined]
+        working = [
+            each
+            for each in self._working(key, side, clips=not self.sized or clip)
+            if not clip or each.client_order_id in clipped
+        ]
+        gone = 0.0 if clip else abs(float(net)) - abs(self._left(key, float(net)))
+        return abs(net) - Decimal(repr(gone)) - _leaves(working)
+
+    def _target_sends(self, orders: Sequence[Any]) -> bool:
+        """Whether a stopped week sends orders `submit_exit` did not size — one order, or each
+        of a list: only when each closes no more of its name than is left to close
+        (`_target_room`) once the list's orders before it in that name have filled, every one
+        of them read as if it filled, as a resting order is. So an order that opens, one that
+        would carry the position past flat into the other side — larger or smaller — and one
+        beside a working exit that already closes what it would are not sent, alone or in a
+        list (`submit_order`, `submit_order_list`)."""
+        ahead: dict[str, Decimal] = {}
         for order in orders:
             key = order.instrument_id.value
-            if self.classify(order) == ENTRY or self._opens(order, ahead.get(key, 0.0)):
-                return True
-            if order.order_type == OrderType.MARKET:
-                ahead[key] = ahead.get(key, 0.0) + _signed(order, filled=False)
-        return False
+            asked = order.quantity.as_decimal()
+            if asked > self._target_room(order) - ahead.get(key, Decimal(0)):
+                return False
+            ahead[key] = ahead.get(key, Decimal(0)) + asked
+        return True
 
     def _left(self, key: str, held: float) -> float:
         """`held`, this sleeve's intended position in a name, once the exit the rate owes on it

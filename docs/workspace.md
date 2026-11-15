@@ -912,22 +912,29 @@ At the first point the P&L reaches the threshold the week is **stopped**: every 
 of the sleeve is cancelled, and every name it holds — at the hit, or filled afterwards by an
 entry already on its way — is flattened with `submit_exit`, the whole position at market, at
 the first point handed after that name has printed or been quoted again since the hit or its
-last fill, so never at the price that made it due. With no latency it fills at that print's
-close; under one, at that close or at the close of the name's next bar, whichever the order
-lands after, so the two legs of a pair can fill at the closes of two instants. Every entry —
-`submit_entry`, which returns `None`, an order or a list built by hand, an overlay's leg or
-clip that opens — is dropped, never sent, until the next week has opened and every name is flat
-or wholly on its way out at market. A list is read order by order, each against the position
-the orders before it leave, and is dropped whole when any of them opens, so an exit with an
-entry behind it sends neither; a clip so dropped holds nothing, and the overlay's next clip is
-placed as if it had never been asked; exits go, and the handlers run, so indicators keep
-warming. A flatten still due when the next week opens goes at the name's first print or quote
-there, and fills in the new week, whose anchor is struck before it. The strategy reads whether
-its week is stopped from `self.period_stopped`, and its position from `self.held`, never from a
-flag of its own, since the harness may have flattened it; what the harness keeps of the rule is
-denied to it (`strategy_integrity`). The rule adds no charge: a flatten is a fill like any
-other, charged once by the runner. It is the same code on a card, a certificate, a replay and a
-stage node.
+last fill, so never at the price that made it due. With no latency it fills at that bar's
+close, or at the quote's touch on a feed of quotes; under one, on bars, at that close or at the
+close of the name's next bar, whichever the order lands after, so the two legs of a pair can
+fill at the closes of two instants. Until the next week has opened and every name is flat or
+wholly on its way out at market, `submit_entry` returns `None`, and an order `submit_exit` did
+not size — built by hand, or an overlay's leg or clip — is held to the rule `submit_exit` sizes
+by: it is sent only when it closes no more of its name than is left to close once every order of
+the sleeve still working on the closing side has filled, a limit or a stop resting read as if it
+filled, and an exit the order rate owes at market as if it went. Anything else is dropped, never
+sent: an order that opens, one that would carry the position past flat — into a short smaller
+than the long or larger — and one beside a working exit that already closes what it would. A
+list is read order by order, each with the orders before it applied, and is dropped whole when
+any of them is, so an exit with an entry behind it sends neither; a modify that grows an order
+by more than is left is dropped, and the order stays as it was; a clip so dropped holds nothing,
+and the overlay's next clip is placed as if it had never been asked. So nothing the sleeve sends
+in a stopped week takes it past flat. Exits within what is left go, and the handlers run, so
+indicators keep warming. A flatten still due when the next week opens goes at the name's first
+print or quote there, and fills in the new week, whose anchor is struck before it. The strategy
+reads whether its week is stopped from `self.period_stopped`, and its position from
+`self.held`, never from a flag of its own, since the harness may have flattened it; what the
+harness keeps of the rule is denied to it (`strategy_integrity`). The rule adds no charge: a
+flatten is a fill like any other, charged once by the runner. It is the same code on a card, a
+certificate, a replay and a stage node.
 
 What the rule does not do, said here so a card is read as it ran:
 
@@ -945,10 +952,6 @@ What the rule does not do, said here so a card is read as it ran:
   IWM, 1,744 of 4,791 prints lay outside the quote in force; one NVDA print of a single share
   took a card's balance from −0.9 to −54 bp of its book. On bars it reads each bar's close.
 - A clip an overlay holds is its own, and is not flattened (`docs/backlog.md` row 268).
-- An exit built by hand at a limit or a stop rests, and is read as an exit whatever else is
-  on its way: a resting exit beside another exit, or one grown by `modify_order`, can fill
-  past flat in the stopped week, and the position it opens is flattened at the name's next
-  print or quote. A `sizing` rule denies both to a researched strategy (row 276).
 - `cost_stress` and `cost_scenario` re-price the recorded fills and keep the path, so the
   weeks a card stopped stand as recorded, though a cheaper scenario would have stopped more of
   them and a dearer one fewer (row 269).
