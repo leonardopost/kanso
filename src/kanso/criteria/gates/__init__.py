@@ -1511,8 +1511,11 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
     transfers stand as struck and the cushion as recorded, so the extra cost stays in the book
     across months where a real reset would have absorbed it at the next turn: a stressed run's
     returns are exact, and its equity and drawdown are the more conservative for it. The path is
-    kept, so the weeks a `period_target` stopped stand as recorded too, though a cheaper model
-    would have stopped more of them and a dearer one fewer: the run records no stop to say which
+    kept, so the weeks a `period_target` stopped stand as recorded too, and so does the run's
+    record of them (`period_stops`), though a cheaper model would have stopped more of them and
+    a dearer one fewer. That record keeps each stop and its equity at the hit, so a stop's
+    margin there can be read, but no week's peak P&L, and this gate counts neither the stops a
+    dearer model would have undone nor the weeks a cheaper one would have stopped
     (`docs/backlog.md` row 269).
     """
     ends = run.period_ends_ns
