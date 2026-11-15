@@ -955,6 +955,53 @@ def test_a_measurement_under_a_period_target_says_how_many_of_its_weeks_it_stopp
     assert "period_stops" not in unstopped.data["measurement"]["run"]
 
 
+def test_show_measured_prints_and_carries_the_stops_its_run_recorded(
+    runner: CliRunner, registered: Path
+) -> None:
+    """Through the command: a newer card of the kept bytes whose measured run kept a period
+    target's record — the demo's own measurement with the record of two weeks, one stopped,
+    as a run under a target keeps it — prints its `stops` line after `periods` under
+    `research show --measured`, and `--json` carries the record in the run."""
+    begin(runner, registered)
+    edit(registered, REVERTING)
+    card(runner, registered, "fade the rolling mean")
+    stop = {
+        "opening_ns": 100,
+        "anchor": 100_000.0,
+        "threshold": 500.0,
+        "hit_ns": 150,
+        "segment": "rth",
+        "equity": 100_600.0,
+    }
+    weeks = PeriodStops.model_validate({"openings": [100, 200], "stops": [stop]})
+    with StateStore(registered / "state.db") as store:
+        run = records.require_active(store, HYP_ID)
+        newest = records.cards_of(store, HYP_ID)[-1]
+        measured = records.measurement_of(store, newest)
+        assert measured is not None
+        stopped = replace(measured, run=replace(measured.run, period_stops=weeks))
+        records.record_card(
+            store,
+            run,
+            newest.model_copy(
+                update={
+                    "desc": "under a target",
+                    "measured_sha": records.record_measurement(store, stopped),
+                }
+            ),
+        )
+
+    shown = at(runner, registered, "research", "show", HYP_ID, "--measured")
+    document = payload(at(runner, registered, "research", "show", HYP_ID, "--measured", "--json"))
+
+    assert shown.exit_code == Exit.OK, shown.stdout
+    lines = shown.stdout.splitlines()
+    assert lines[0].endswith("· under a target")
+    assert lines[3].startswith("periods ")
+    assert lines[4] == "stops      1 of 2 target periods"
+    assert document["measurement"]["run"]["period_stops"] == weeks.model_dump(mode="json")
+
+
 def test_show_measured_refuses_a_card_that_kept_no_measurement(
     runner: CliRunner, registered: Path
 ) -> None:
