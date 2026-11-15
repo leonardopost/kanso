@@ -283,12 +283,19 @@ def stage_results(
 ) -> list[StageResult]:
     """Every realised window recorded, oldest first, narrowed to one strategy, version or stage.
 
-    Each event is narrowed before its run is decoded, so a strategy's windows are read without
-    decoding any other strategy's."""
-    subject = None if strategy_id is None or version is None else subject_of(strategy_id, version)
+    The store narrows to a strategy's events before any is read — to the version's subject, or
+    to every subject its versions are named by (`subject_of`) — so a strategy's windows are read
+    without reading or decoding any other strategy's, and each is narrowed to the stage before
+    its run is decoded."""
+    if strategy_id is None:
+        read = store.events(kind=STAGE_RUN)
+    elif version is None:
+        read = store.events(kind=STAGE_RUN, prefix=f"{strategy_id}@")
+    else:
+        read = store.events(kind=STAGE_RUN, subject=subject_of(strategy_id, version))
     return [
         _result(event.detail)
-        for event in store.events(kind=STAGE_RUN, subject=subject)
+        for event in read
         if (stage is None or event.detail.get("stage") == stage)
         and (strategy_id is None or event.detail.get("strategy") == strategy_id)
     ]

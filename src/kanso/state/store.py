@@ -488,9 +488,12 @@ class StateStore:
         *,
         kind: str | None = None,
         subject: str | None = None,
+        prefix: str | None = None,
         limit: int | None = None,
     ) -> list[Event]:
-        """Events in the order they were appended, optionally filtered."""
+        """Events in the order they were appended, optionally filtered: by kind, by subject, by
+        what their subject begins with (`prefix`, matched as written, never as a pattern), and
+        to the first `limit`. The query filters, so an event left out is never read or parsed."""
         sql = "SELECT event_id, ts, kind, subject, detail FROM events"
         where: list[str] = []
         params: list[object] = []
@@ -500,6 +503,9 @@ class StateStore:
         if subject is not None:
             where.append("subject = ?")
             params.append(subject)
+        if prefix is not None:
+            where.append("substr(subject, 1, ?) = ?")
+            params.extend((len(prefix), prefix))
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY event_id"

@@ -402,7 +402,10 @@ def test_a_strategy_s_windows_are_read_without_decoding_another_s(
 ) -> None:
     """A restart reads one strategy's windows on one stage, whichever of its versions ran them,
     and every deploy does it for each version under a target: the events are narrowed before
-    any run is decoded, so the read costs that strategy's windows and not the stage's."""
+    any run is decoded, so the read costs that strategy's windows and not the stage's. The store
+    narrows them by subject before it parses any, so another strategy's events — `alphabet`'s,
+    whose id begins with this one's, among them — are never parsed at all."""
+    import kanso.state.store as state_store
     from kanso.nautilus.node import Realised
 
     def realised(strategy_id: str, version: int) -> Realised:
@@ -412,14 +415,18 @@ def test_a_strategy_s_windows_are_read_without_decoding_another_s(
 
     records.record_stage_run(store, "paper", "s1", (realised("alpha", 1), realised("beta", 1)))
     records.record_stage_run(store, "paper", "s2", (realised("alpha", 2), realised("beta", 1)))
-    records.record_stage_run(store, "live", "s3", (realised("alpha", 1),))
+    records.record_stage_run(store, "live", "s3", (realised("alpha", 1), realised("alphabet", 1)))
     decoded: list[object] = []
     monkeypatch.setattr(records, "decode_run", lambda payload: decoded.append(payload) or a_run())
+    parsed: list[str] = []
+    loads = state_store._loads
+    monkeypatch.setattr(state_store, "_loads", lambda text: parsed.append(text) or loads(text))
 
     read = records.stage_results(store, strategy_id="alpha", stage="paper")
 
     assert [(one.strategy_id, one.version) for one in read] == [("alpha", 1), ("alpha", 2)]
     assert len(decoded) == 2
+    assert len(parsed) == 3, "alpha's two windows on paper and its one on live, and no other's"
 
 
 def test_clearing_a_stage_reports_what_held_it(store: StateStore) -> None:
