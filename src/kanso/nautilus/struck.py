@@ -61,10 +61,13 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   handler before it returns. On a node kanso's venue hands its events to the execution
   engine's synchronous implementation (`kanso.nautilus.sandbox`), so a fill is heard there
   before the venue applies another point, as it is in a backtest.
-* `kanso.nautilus.actions` announces a split on `TOPIC` while the venue applies it, after it
-  has adjusted every position and before the point that carried the market past it is
-  matched, so no fill is made between the two; and a researched strategy, which cannot reach
-  the bus (`strategy_integrity`), cannot send one from a handler of the announcement.
+* `MessageBus.publish` calls every handler before it returns, and `kanso.nautilus.actions`
+  publishes a split on `TOPIC` from the venue's `pre_process`, after it has adjusted every
+  position and before the matching engine is handed the point that carried the market past
+  it — on a node through the venue's own bus, which republishes it on the node's in the same
+  call (`kanso.nautilus.sandbox`) — so the announcement is heard between the fills the venue
+  matched before the split and those it matched after; a researched strategy cannot reach
+  the bus (`strategy_integrity`) to send an order from a handler of the announcement.
 * `ExecutionEngine._flip_position` splits a fill that flips a position into one that closes
   it, under the fill's event id, and one that opens the other side, under a new `UUID4`; both
   copy the fill's `instrument_id` and `trade_id`, and the matching engine gives each fill of an
