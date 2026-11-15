@@ -147,13 +147,13 @@ has ended (`_target_record`, `kanso.criteria.run.CardRun.period_stops`): every w
 traded in, each stop — the week's opening, anchor and threshold, the hit's instant and
 `balance`, what was dropped unsent, and every fill of an order sent while stopped, whenever it
 landed, with the `balance` after the last — and the week open at the run's last point. A stage
-restart that resumes trading inside the week its strategy's last window on the stage ended in
-opens that week before the author's `on_start`, as that window left it: stopped, or with what it
-had made struck into the anchor (`_target_resume`). So the week is in force from the run's first
-instant, and whatever the sleeve sends before its first point is held to it as anything sent in
-the week is: a restart holds nothing and nothing is working, so a stopped week has nothing to
-cancel or flatten, and an entry sent from `on_start` is dropped rather than resting at the venue
-to fill in the week.
+restart opens, before the author's `on_start`, the week the newest window of its strategy on the
+stage that had one open left open, when it resumes trading inside that week, and as that window
+left it: stopped, or with what it had made struck into the anchor (`_target_resume`). So the
+week is in force from the run's first instant, and whatever the sleeve sends before its first
+point is held to it as anything sent in the week is: a restart holds nothing and nothing is
+working, so a stopped week has nothing to cancel or flatten, and an entry sent from `on_start`
+is dropped rather than resting at the venue to fill in the week.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -1614,7 +1614,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     def _target_resume(self) -> None:
         """Open the week a stage restart resumes in, before the author's `on_start`, as the
-        strategy's last window on the stage left it (`kanso.portfolio.records.target_seed`).
+        strategy's newest window on the stage that had a week open left it
+        (`kanso.portfolio.records.target_seed`).
 
         The runner hands the week only when the restart resumes trading inside it — the instant
         after the stage's clock falls in it (`kanso.nautilus.backtest.RunRequest.resumed`) — so
@@ -1794,12 +1795,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         Read once the run has ended — on a stage node after its own flatten, whose cost is then
         in the open week's P&L, a flatten that is the stage's and stops no week; on a node a halt
         ended, which flattens nothing, where the halt left the sleeve: `balance` with what it
-        holds never closed, marked at the last price it was handed — a fill it was handed no
-        price after at the fill's own. The open week reads as stopped only when its own stop is
-        in force, not while a stop of the week before waits for the sleeve to be flat. A week a
-        stage restart resumed is open from the run's first instant (`_target_resume`), so a run
-        handed no point after its warmup records it all the same, and records an empty
-        `PeriodStops` only when it resumed none.
+        holds never closed, each name marked at the last price the sleeve was handed of it — a
+        fill struck after that price at that price, never its own — and a name it was handed no
+        price of at all at its own split-aware cost. The open week reads as stopped only when
+        its own stop is in force, not while a stop of the week before waits for the sleeve to be
+        flat. A week a stage restart resumed is open from the run's first instant
+        (`_target_resume`), so a run handed no point after its warmup records it all the same,
+        and records an empty `PeriodStops` only when it resumed none.
         """
         if self._period_target is None:
             return None

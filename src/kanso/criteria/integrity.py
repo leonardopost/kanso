@@ -458,8 +458,8 @@ sends and what is already working beside it, and the close a stage's flatten sen
 and the record the run keeps of it — the week's opening, every week traded in, every stop, the
 orders sent under each and their fills, the venue's record of the instant each fill's price was
 struck at that they are read at, and the five methods that keep and read it out; and the
-week a stage restart resumes in, as its strategy's last window on the stage left it, and the
-method that opens it when the run starts.
+week a stage restart resumes in, as its strategy's newest window on the stage that had one
+open left it, and the method that opens it when the run starts.
 The week's opening is a clock of where each week starts and the anchor a number the strategy
 would otherwise have to strike itself; a strategy reads whether it is stopped through
 `period_stopped`, and its position through `held`, since the harness may flatten it."""

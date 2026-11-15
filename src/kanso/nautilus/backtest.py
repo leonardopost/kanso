@@ -477,12 +477,14 @@ class RunRequest:
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
 
-    `target_seed` is where a `period_target` stood when the last window of the same strategy on
-    the same stage closed, whichever of its versions ran it: that window's record narrowed to
-    the week open at its last point and the week's stop when it had one, stated at this
-    window's capital (`kanso.portfolio.records.target_seed`). `None` for a card, a certificate,
-    a replay and a strategy's first window on the stage. The harness resumes it only when this
-    window resumes trading inside that week (`resumed`).
+    `target_seed` is where a `period_target` stood when the newest window of the same strategy
+    on the same stage that had a week open closed, whichever of its versions ran it: that
+    window's record narrowed to the week open at its last point and the week's stop when it had
+    one, stated at this window's capital (`kanso.portfolio.records.target_seed`). A newer window
+    that had no week open — an idle stage's, or a version's with no target — is passed over, so
+    the seed is the week that window left. `None` for a card, a certificate, a replay and a
+    strategy with no window on the stage that had a week open. The harness resumes it only
+    when this window resumes trading inside that week (`resumed`).
 
     `version_source` is the file a composed version's implementation holds the sleeve's bytes
     in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a

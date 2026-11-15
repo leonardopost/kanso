@@ -2798,9 +2798,9 @@ indicators and orders are what a run of it alone would produce. A version under 
 policy is seeded on a restart with the cushion and the last settled end of its newest
 measured window on that stage, and its first carry runs from the instant it resumes. A version
 under a `period_target` is held to it on the stage by the same harness as on its card, and is
-seeded on a restart with the week its strategy's newest window on that stage left open,
-whichever version ran it, which the window resumes when it resumes trading inside it — from
-its first instant, so an order sent from `on_start` is held to it too: a week the target had
+seeded on a restart with the week its strategy's newest window on that stage that had one open
+left open, whichever version ran it, which the window resumes when it resumes trading inside it
+— from its first instant, so an order sent from `on_start` is held to it too: a week the target had
 stopped stays stopped, every entry dropped until the next week opens, and a week that had made
 part of its target is read against the capital less what it made and held to the threshold it
 was struck with, so it stops at what is left, carried in basis points across a share the

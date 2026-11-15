@@ -1180,16 +1180,19 @@ halts at Thursday's before `weekly` is handed it."""
 
 
 def test_a_window_a_halt_ended_leaves_its_week_where_the_halt_left_the_sleeve(
-    ws: Workspace, store: StateStore
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A halted node flattens nothing. Restarted after Tuesday's close in a week that had made
-    600 bp, the sleeve buys 3,600 at Wednesday's bar, and the stage-mate raises at Thursday's,
-    before the sleeve is handed it: the window ends holding the 3,600, and the week open there
-    is read where the halt left the sleeve, at Wednesday's 10.00, about 595 bp made after the
-    entry's costs. The window's own marks reach Thursday's 11.00, which takes the week past its
-    1,000 bp; the seed never reads it, and the next restart, after Thursday's bar, resumes the
-    week at what the sleeve read and buys at Friday's (`docs/backlog.md` row 283)."""
+    600 bp, the sleeve buys 3,600 at Wednesday's bar, 2,500 at 10.00 and 1,100 at 10.01, and the
+    stage-mate raises at Thursday's, before the sleeve is handed it: the window ends holding the
+    3,600, and the week open there is read where the halt left the sleeve, every share marked at
+    Wednesday's 10.00, the last price it was handed — the 1,100 too, struck after it — about
+    595 bp made after the entry's costs. The window's own marks reach Thursday's 10.50, which
+    takes the week past its 1,000 bp; the seed never reads it, and the next restart, after
+    Thursday's bar, is handed the week at what the sleeve read, resumes it and buys at Friday's
+    (`docs/backlog.md` row 283)."""
     from kanso.criteria.run import day_of
+    from kanso.nautilus import cross_section
 
     deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
     first = deploy(ws, store, "paper").results[0]
@@ -1207,6 +1210,9 @@ def test_a_window_a_halt_ended_leaves_its_week_where_the_halt_left_the_sleeve(
     assert record is not None and record.last is not None
     assert (record.last.opening_ns, record.last.stopped) == (WEEK_NS, False)
     assert record.last.pnl / capital * 10_000 == pytest.approx(595, abs=1)
+    costs = sum(fill.cost for fill in halted.run.fills)
+    marked = 0.06 * capital - costs + sum(f.qty * (10.0 - f.px) for f in halted.run.fills)
+    assert record.last.pnl == pytest.approx(marked, abs=1e-6), "the 10.01 fill marked at 10.00"
     ends = [day_of(end) for end in halted.run.period_ends_ns]
     thursday = halted.run.equity[ends.index(date(2024, 3, 14))] - record.last.anchor
     assert thursday / capital * 10_000 == pytest.approx(1_045, abs=1), "past the target"
@@ -1214,9 +1220,20 @@ def test_a_window_a_halt_ended_leaves_its_week_where_the_halt_left_the_sleeve(
         records.stage_results(store, strategy_id="weekly", stage="paper"), capital
     )
     assert seed is not None and seed.last == record.last
+    handed: list[object] = []
+    harness = cross_section.target
+
+    def handing(
+        strategy: object, target: object, struck: object = None, week: object = None
+    ) -> None:
+        handed.append(week)
+        harness(strategy, target, struck, week)
+
+    monkeypatch.setattr(cross_section, "target", handing)
 
     (resumed,) = [one for one in deploy(ws, store, "paper").results if one.strategy_id == "weekly"]
 
+    assert handed == [seed], "the week resumed at what the sleeve read, not let go"
     assert bought_on(resumed.run)[0] == date(2024, 3, 15)
 
 

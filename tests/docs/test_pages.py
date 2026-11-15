@@ -644,6 +644,42 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert "**closed** by seeding a restart with the week" in row
 
 
+def test_the_restart_seed_is_said_as_it_is_read() -> None:
+    """The seed is the week the newest window that had one open left (`records.target_seed`),
+    a newer idle window passed over (`tests/portfolio/test_records.py`), where several
+    docstrings once said the strategy's last window; and a week a halt ended marks each name at
+    the last price the sleeve was handed of it, a fill struck after that price included
+    (`tests/portfolio/test_stage_run.py`), where `_target_record` and row 283 once said a fill
+    handed no price after was marked at its own."""
+    from kanso.criteria import integrity
+    from kanso.nautilus import backtest, cross_section, node, strategy
+
+    sources = {
+        "RunRequest": prose(backtest.RunRequest.__doc__ or ""),
+        "Placement.target_seed": prose(
+            inspect.getsource(node.Placement).split("target_seed:")[1].split("@property")[0]
+        ),
+        "cross_section.target": prose(cross_section.target.__doc__ or ""),
+        "DENIED_TARGET": prose(inspect.getsource(integrity)),
+        "strategy": prose(strategy.__doc__ or ""),
+        "_target_resume": prose(strategy.KansoStrategy._target_resume.__doc__ or ""),
+    }
+    for name, text in sources.items():
+        assert "last window on the stage" not in text, name
+        assert "the last window of the same strategy" not in text, name
+        assert "newest window" in text, name
+    halted = {
+        "_target_record": prose(strategy.KansoStrategy._target_record.__doc__ or ""),
+        "row 283": next(
+            line for line in page("backlog.md").splitlines() if line.startswith("| 283 |")
+        ),
+    }
+    for name, text in halted.items():
+        assert "at the fill's own" not in text, name
+        assert "a fill struck after that price at that price" in text, name
+        assert "at all at its own split-aware cost" in text, name
+
+
 SCANS = frozenset({"check", "clashes", "scan"})
 """What `kanso.criteria.integrity` scans a strategy's bytes with."""
 

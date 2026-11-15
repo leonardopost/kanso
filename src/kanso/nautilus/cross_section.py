@@ -202,9 +202,9 @@ def target(
     """Have the harness hold the sleeve to its hypothesis's period target, and record each
     fill of a stopped week at the instant the venue's record says its price was struck at
     (`struck`, `kanso.nautilus.struck`); a sleeve handed none reads a fill at its own instant.
-    `seed` is the week a stage restart resumes trading in, as the strategy's last window on the
-    stage left it (`kanso.nautilus.backtest.RunRequest.resumed`), which the harness opens when
-    the run starts, and `None` everywhere else.
+    `seed` is the week a stage restart resumes trading in, as the strategy's newest window on
+    the stage that had a week open left it (`kanso.nautilus.backtest.RunRequest.resumed`),
+    which the harness opens when the run starts, and `None` everywhere else.
 
     Set by the runner exactly as `book` is — private attributes the harness reads, denied to
     a `strategy.py` by `strategy_integrity`, and never a configuration field an author could

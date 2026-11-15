@@ -130,7 +130,8 @@ def window(day: date, record: dict[str, object] | None) -> StageResult:
 def test_the_period_stops_of_every_window_join_by_their_weeks() -> None:
     """Two windows restarted inside one New York week both traded in it: the joined record
     holds that week once, each window's stops in turn, and the open week of the newest window
-    handed a point — an empty window after it records none and moves nothing. A version none of
+    that had one open — handed a point, or a restart's that resumed the week with no point of
+    its own — while an empty window after it records none and moves nothing. A version none of
     whose windows kept a record has none."""
     week, stop = WEEK, STOP
     last = {"opening_ns": week, "anchor": CAPITAL, "threshold": 10.0, "pnl": 3.0}
