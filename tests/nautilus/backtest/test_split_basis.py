@@ -152,6 +152,45 @@ def test_a_name_without_a_split_is_read_as_folded(request_for) -> None:
     assert plain.periods()[0].lows == declared.periods()[0].lows == {INSTRUMENT: 10.19}
 
 
+FORTNIGHT = (date(2024, 1, 1), date(2024, 1, 14))
+"""Two Monday-to-Sunday weeks."""
+
+MONDAY_EX = date(2024, 1, 8)
+"""An ex-date on the second week's Monday: no point of that week is printed before the split."""
+
+
+@pytest.mark.parametrize("ratio", [0.2, 4.0], ids=["reverse split", "forward split"])
+def test_a_week_opening_on_its_ex_date_reads_its_own_prices_as_printed(
+    request_for, ratio: float
+) -> None:
+    """1,000 DEMO bought at 10 in the first week and held through a split dated the second
+    week's Monday: the first week ends in the old shares at its own low, and every point of the
+    second is printed in the new ones, so its low is read as printed, in the shares the book
+    holds at its end, and the book is worth what it paid at both ends."""
+    made = request_for(FORTNIGHT, hypothesis_=booked({"maintenance_pct": 30.0}), period="1w")
+    post = 10.0 / ratio
+    stream = [
+        (at(date(2024, 1, 2)), INSTRUMENT, 10.0, 9.5, 10.5),
+        (at(date(2024, 1, 5)), INSTRUMENT, 10.0, 9.8, 10.2),
+        (at(MONDAY_EX, 14), INSTRUMENT, post, post * 0.97, post * 1.01),
+        (at(date(2024, 1, 10)), INSTRUMENT, post, post * 0.99, post * 1.02),
+    ]
+    split = instrument(info={"splits": [{"ex_date": MONDAY_EX.isoformat(), "ratio": ratio}]})
+    bought = Fill(at(date(2024, 1, 2)), INSTRUMENT, "BUY", 1_000.0, 10.0, 0.0)
+    held = 1_000.0 * ratio
+    adjusted = Adjustment(at(MONDAY_EX, 14), INSTRUMENT, qty=held - 1_000.0, paid=0.0, ratio=ratio)
+
+    curve = _equity(made, folded(made, stream, [split]), [bought], {}, (adjusted,))
+
+    cash = CAPITAL - 10_000.0
+    low = post * 0.97
+    assert curve.worst_ratio == (
+        pytest.approx((cash + 1_000.0 * 9.5) / (1_000.0 * 9.5)),
+        pytest.approx((cash + held * low) / (held * low)),
+    )
+    assert curve.equity == (pytest.approx(CAPITAL), pytest.approx(CAPITAL))
+
+
 # --- the mark and the venue's clock --------------------------------------------------
 
 
@@ -327,6 +366,25 @@ def test_a_week_with_a_split_folds_to_the_same_periods_in_any_order(drawn: list,
 
     assert repr(state(one)) == repr(state(other))
     assert repr(state(one)) == repr(state(one)), "read twice, the periods read the same"
+
+
+def test_of_two_marks_at_one_instant_and_one_price_the_later_era_s_is_kept(request_for) -> None:
+    """Two prints of DEMO published at one instant on Wednesday at one price, one printed on
+    Tuesday in the old shares and one past the split in the new: the venue applied the split
+    there, so the day ends in the new shares, and its mark is the new era's 10 whichever was
+    folded first. Kept by instant and price alone, the first folded was kept, and the old
+    print first read the mark at 100, its 10 restated."""
+    made = request(request_for, period="1d")
+    model = VenueModel.model_validate(dict(made.venue_model))
+    tuesday, wednesday = at(date(2024, 1, 2)), at(EX)
+    read = []
+    for order in ((tuesday, wednesday), (wednesday, tuesday)):
+        marks = Marks(made, model, [scheduled(0.1)])
+        for printed in order:
+            marks.fold(wednesday, INSTRUMENT, 10.0, 10.0, 10.0, printed)
+        read.append(marks.periods()[-1].marks[INSTRUMENT])
+
+    assert read == [(wednesday, 10.0), (wednesday, 10.0)]
 
 
 SUCCESSIVE = {
@@ -1110,6 +1168,53 @@ def test_a_fill_an_earlier_point_of_the_instant_matched_is_replayed_before_its_s
     paid = sum(fill.cost for fill in card.fills if fill.ts_ns <= PUBLISHED)
     fell = (1_005.0 if holds else 0.0) + paid
     assert fill_path_drawdown_pct(card) == (pytest.approx(fell / CAPITAL * 100.0), PUBLISHED)
+
+
+def _straddled() -> list[Equity]:
+    return [_listed(INSTRUMENT, info=REVERSE), _listed("OTHR.XNAS")]
+
+
+def test_a_stage_orders_a_split_among_the_fills_of_its_instant_as_the_card_does(tmp_path) -> None:
+    """The straddling instant on a paper stage of one version: the stage's venue fills the
+    resting buy at the eve's bar and then applies the split at OTHR's, its record hears that
+    order on the node's bus, and the version's split follows the fill and its fill path reads
+    the card's. Without a record kept for the split on the stage, the split was replayed before
+    the fill, and the path read 9.92% where the card read 1.01%."""
+    source = RESTS.replace(b"HOLDS", b"True")
+    made = _latent((INSTRUMENT, "OTHR.XNAS"), source, 0.0)
+    points = [bar for group in _straddling() for bar in group]
+    stage = StageNode(
+        stage="paper",
+        capital=CAPITAL,
+        limits=Limits(
+            max_gross_pct=100, max_net_pct=100, per_strategy_max_pct=100, daily_loss_pct=50
+        ),
+        placements=(_placed("alpha", made, tmp_path),),
+        window=RESEARCH,
+        catalog=catalog(tmp_path / "catalog", points, _straddled()),
+    )
+
+    staged = node.run(stage).realised[0].run
+    card = execute(made, _straddled(), _straddling()).run
+
+    assert [item.fills_before for item in staged.adjustments] == [1]
+    pct, instant = fill_path_drawdown_pct(card)
+    assert fill_path_drawdown_pct(staged) == (pytest.approx(pct), instant)
+
+
+def test_a_book_member_orders_a_split_among_the_fills_of_its_instant_as_alone() -> None:
+    """The straddling instant in a book of one member: the book's venue keeps the record, hears
+    the order on its bus, and hands it to the member's marks, so the member's split follows the
+    fill and its fill path reads what the member alone reads. Without the member's record, or
+    with the record heard on no bus, the path read 9.92% where alone it read 1.01%."""
+    alone = book_request(hyp((INSTRUMENT, "OTHR.XNAS")), RESTS.replace(b"HOLDS", b"True"))
+
+    booked_run = execute_book(block(), [member("m", alone, 2.0)], _straddled(), [_straddling()])
+    run, solo = booked_run.runs[0], execute(alone, _straddled(), _straddling()).run
+
+    assert [item.fills_before for item in run.adjustments] == [1]
+    pct, instant = fill_path_drawdown_pct(solo)
+    assert fill_path_drawdown_pct(run) == (pytest.approx(pct), instant)
 
 
 def test_a_record_kept_for_a_split_alone_hears_the_bus_and_keeps_no_point(request_for) -> None:
