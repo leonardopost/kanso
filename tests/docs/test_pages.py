@@ -1406,6 +1406,58 @@ def test_the_workspace_page_s_dated_block_resolves_as_shown_and_charges_what_it_
     assert "They are stated in the hypothesis's own `costs` and nowhere else" in text
 
 
+def test_the_pages_say_a_daily_close_under_charges_a_row_whose_rth_is_wider_than_both_ends() -> (
+    None
+):
+    """A daily bar is stamped at the next New York midnight, so a fill at its close pays the
+    overnight width, the larger of its row's `pre` and `post`, and the reserve beside it reads
+    that width. A row's parts are held to no order, so a row whose `rth` is wider than both is
+    admitted and charged less at a daily close than at the regular close, fill and reserve
+    alike; backlog row 266 and the workspace page say so, and claim no over-charge the code
+    does not keep."""
+    from kanso.nautilus.costs import dated_half_spread, dated_part, dated_reserve_bps
+    from kanso.schemas import CostsOverride, resolve_venue_model
+
+    block = {
+        "spread": "dated",
+        "dated": [
+            {
+                "instrument": "DEMO.SIM",
+                "from": "2024-01-01",
+                "pre": 5.0,
+                "open": 12.0,
+                "rth": 9.0,
+                "post": 4.0,
+                "n_sessions": 5,
+                "n_open": 25,
+            }
+        ],
+    }
+    rows = resolve_venue_model(
+        "SIM", hypothesis_costs=CostsOverride.model_validate(block)
+    ).costs.dated
+    assert rows is not None
+    daily = int(datetime(2024, 3, 2, tzinfo=NEW_YORK).timestamp()) * 1_000_000_000
+    close = int(datetime(2024, 3, 1, 16, tzinfo=NEW_YORK).timestamp()) * 1_000_000_000
+
+    assert dated_part(daily) == ("overnight", date(2024, 3, 1))
+    assert dated_part(close) == ("rth", date(2024, 3, 1))
+    assert dated_half_spread(rows, "DEMO.SIM", daily) == pytest.approx(5 / 2 / 10_000)
+    assert dated_half_spread(rows, "DEMO.SIM", close) == pytest.approx(9 / 2 / 10_000)
+    assert dated_reserve_bps(rows, "DEMO.SIM", daily) == 5.0
+    assert dated_reserve_bps(rows, "DEMO.SIM", close) == 9.0
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 266 |"))
+    done = row.split("|")[4]
+    assert "never an under-charge" not in done
+    assert "`DatedSpread` holds a row's parts to no order and `hyp validate` reads none" in done
+    assert "is under-charged at a daily close, fill and reserve alike" in done
+    hypotheses = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
+    assert (
+        "pays the larger of `pre` and `post`, which is less than `rth` where a row states its "
+        "`rth` wider than both; no rule holds a row's parts to an order (row 266)"
+    ) in hypotheses
+
+
 def test_the_pages_say_what_print_through_fills_and_what_it_approximates() -> None:
     costs = prose(section(page("workspace.md"), "`hypotheses/<id>/`"))
     assert (
