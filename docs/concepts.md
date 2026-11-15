@@ -909,9 +909,22 @@ runner struck at the week before's last point, carry included — reaches `targe
 capital or of that opening equity, the sleeve's working orders are cancelled, every name it
 holds is flattened at that name's next print or quote, and no entry goes until the next week
 has opened and the sleeve is flat or wholly on its way out at market. The flatten is an
-ordinary fill, charged once by the runner, and the card is the run that held to the rule;
-nothing records which weeks stopped beyond the fills and intents they changed
-(`docs/backlog.md` row 275). `balance` marks each name at its last print or quote, so on a feed
+ordinary fill, charged once by the runner, and the card is the run that held to the rule. The
+run records what the rule did, as the harness did it (`period_stops`): every New York week it
+traded in, each week it stopped — the week's opening, its anchor and threshold, the instant of
+the point the target was reached at, the part of the session that point covers and `balance`
+there, how many orders and modifies the stopped week dropped unsent, and every fill of an order
+the sleeve sent while stopped, whenever it landed, with the instant its price was struck at,
+that minute's part of the session and the volume of the name's bar there, then the `balance`
+after the last of them and whether it landed in the next week — and the week open at the run's
+last point, with its P&L there and whether it stopped. That record is in no return: the stops
+are already in the fills and the equity. A stage window's own flatten after its last point is
+the stage's and no stop's fill, and the week open there is read after it, so its P&L carries
+that close's cost. `research show --measured`, `cert run`, `cert show`, `monitor run` and
+`kanso replay` print it on a `stops` line — the weeks stopped of the target's weeks traded in,
+never the return periods — and carry it under `--json`, and `kanso replay parity` compares the
+two paths' records element by element (`docs/cli.md`). A week belongs to the fold its opening
+falls in, with its stop. `balance` marks each name at its last print or quote, so on a feed
 that asks for `trade` one print well outside the quote can reach the target or keep it from
 being reached: measured on 2026-10-30 over the first second of nine opens of SPY, QQQ and IWM,
 1,744 of 4,791 prints lay outside the quote in force, and one NVDA print of a single share took
@@ -2777,7 +2790,10 @@ measured window on that stage, and its first carry runs from the instant it resu
 under a `period_target` is held to it on the stage by the same harness as on its card, and is
 seeded with nothing: each window anchors its first week at the capital, so a window restarted
 inside a week the target had stopped trades again before the next week opens (`docs/backlog.md`
-row 270). A window that ends inside a stopped week still ends flat: the node's flatten after
+row 270). Each window records what the target did in it (Card), and `monitor run` joins a
+version's windows' records into one, each week once though two windows traded in it, so a
+paper or live version says how many of its weeks it stopped. A window that ends inside a
+stopped week still ends flat: the node's flatten after
 the window's last point is the stage's, not the version's, and is held neither to its order
 rate nor to its stopped week, so a sale still resting with its cancel in flight, or an exit the
 rate still owes, does not keep the close from going.

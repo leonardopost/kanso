@@ -252,7 +252,7 @@ def run_node_chunked(
         del first
         loop.run_until_complete(_drive(node, client, strategy, halt, chunked))
         feed.close()
-        card = backtest._extract(request, kernel, marks)
+        card = backtest._extract(request, kernel, marks, strategy._target_record())
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents

@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from kanso.cli.context import global_json, open_workspace, store
-from kanso.cli.render import Report, emit, field, indent, verdict
+from kanso.cli.render import Report, emit, field, indent, stopped, verdict
 from kanso.monitor import run_once
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -97,4 +97,6 @@ def _outcome_lines(one: Outcome) -> list[str]:
         )
     ]
     lines += [indent(verdict(result, MARK, GATE)) for result in one.gates]
+    if one.period_stops is not None:
+        lines.append(indent(f"stops {stopped(one.period_stops)}"))
     return lines

@@ -32,3 +32,23 @@ def test_the_stage_record_encodes_with_the_same_codec() -> None:
     """One codec: the stage record's names are the codec's own functions, not a copy."""
     assert portfolio_records.encode_run is encode_run
     assert portfolio_records.decode_run is decode_run
+
+
+def test_a_run_with_no_period_target_is_stored_as_it_was_and_one_with_one_keeps_it() -> None:
+    """A run of a hypothesis with no period target writes no `period_stops` key, so its stored
+    run, and a measurement blob of it, are what they were before runs kept the record; one
+    stored without the key reads back with none, and a record written reads back whole."""
+    from dataclasses import replace
+
+    from kanso.schemas import PeriodStops
+    from tests.criteria.builders import build_run
+
+    run = build_run((1.0, -1.0))
+    stored = encode_run(run)
+    record = PeriodStops.model_validate({"openings": [5], "stops": []})
+
+    assert "period_stops" not in stored
+    assert decode_run(stored).period_stops is None
+    kept = encode_run(replace(run, period_stops=record))
+    assert kept["period_stops"] == {"openings": [5], "stops": [], "last": None}
+    assert decode_run(kept).period_stops == record

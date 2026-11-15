@@ -22,6 +22,11 @@ recorded that hold beside it, and the windows' holds are one run by the same ari
 the two runs a gate differences share their period ends. A version with any window that
 recorded no hold has no benchmark, rather than one that skips a window.
 
+**A period target's record is joined by its weeks.** Each window records what the version's
+`period_target` did there, and two windows restarted inside one New York week both traded in
+it, so the joined record holds each week once, every window's stops in turn, and the week
+open at the last point of the newest window that was handed one.
+
 **The book is the last window's, not every window's.** Positions are recorded before the
 flatten, so each window's book is what that window ended holding; only the most recent one is
 still standing, and that is what a stage exposure limit is about.
@@ -35,6 +40,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from kanso.criteria.run import NS_PER_DAY, CardRun, day_of, midnight_ns
+from kanso.schemas import PeriodStops
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.portfolio.records import StageResult
@@ -157,6 +163,20 @@ def joined(runs: Sequence[CardRun]) -> CardRun | None:
                 key=lambda payment: (payment.ts_ns, payment.instrument_id),
             )
         ),
+        period_stops=_stops(runs),
+    )
+
+
+def _stops(runs: Sequence[CardRun]) -> PeriodStops | None:
+    """The windows' period-target records as one: every week any of them traded in, once,
+    each window's stops in turn, and the newest open week; `None` when no window kept one."""
+    records = [run.period_stops for run in runs if run.period_stops is not None]
+    if not records:
+        return None
+    return PeriodStops(
+        openings=sorted({at for record in records for at in record.openings}),
+        stops=[stop for record in records for stop in record.stops],
+        last=next((record.last for record in reversed(records) if record.last is not None), None),
     )
 
 

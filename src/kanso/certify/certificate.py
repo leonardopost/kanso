@@ -82,6 +82,7 @@ _COLUMNS: Final = (
     "created_at",
     "power",
     "net_per_trade",
+    "period_stops",
 )
 
 _INSERT: Final = (
@@ -268,6 +269,9 @@ def write(ws: Workspace, store: StateStore, certificate: Certificate, source: by
             None
             if certificate.net_per_trade is None
             else _dump(certificate.net_per_trade.model_dump(mode="json")),
+            None
+            if certificate.period_stops is None
+            else _dump(certificate.period_stops.model_dump(mode="json")),
         ),
     )
     return path
@@ -314,5 +318,8 @@ def _certificate(row: Any) -> Certificate:
             "net_per_trade": None
             if row["net_per_trade"] is None
             else json.loads(str(row["net_per_trade"])),
+            "period_stops": None
+            if row["period_stops"] is None
+            else json.loads(str(row["period_stops"])),
         }
     )

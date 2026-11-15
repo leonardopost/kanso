@@ -22,7 +22,7 @@ from kanso.criteria.run import CardRun, Fill, midnight_ns
 from kanso.data.catalog import day_start_ns, open_catalog, resolved_instruments_checksum
 from kanso.errors import Exit
 from kanso.research import records
-from kanso.schemas import Card, ObjectiveParams, ObjectiveRef, resolve_venue_model
+from kanso.schemas import Card, ObjectiveParams, ObjectiveRef, PeriodStops, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
 from tests.own_bar_size import card_remedy
@@ -880,6 +880,79 @@ def test_an_intraday_measurement_prints_each_end_s_time_and_what_it_was_differen
         "marginal_wf_sharpe over 2 fold(s) · against the host and the benchmark run · "
         f"criteria 0.1.0+000000000000, not this kanso's {criteria_version()}"
     )
+
+
+def test_a_measurement_under_a_period_target_says_how_many_of_its_weeks_it_stopped(
+    tmp_path: Path,
+) -> None:
+    """A card of a hypothesis that declares `period_target` was measured from a run that keeps
+    what the target did: the `stops` line after `periods` counts the weeks it stopped of the
+    target's own weeks the run traded in, never the return periods, and `--json` carries the
+    record in the run. A run of a hypothesis with no target prints no such line."""
+    opened = midnight_ns(date(2024, 1, 8))
+    stop = {
+        "opening_ns": opened + 9 * 3_600 * 10**9,
+        "anchor": 100_000.0,
+        "threshold": 1_000.0,
+        "hit_ns": opened + 15 * 3_600 * 10**9,
+        "segment": "rth",
+        "equity": 101_000.0,
+    }
+    weeks = PeriodStops.model_validate(
+        {"openings": [stop["opening_ns"], stop["opening_ns"] + 7 * 86_400 * 10**9], "stops": [stop]}
+    )
+    run = CardRun(
+        window=(date(2024, 1, 8), date(2024, 1, 19)),
+        period="1d",
+        period_ends_ns=(opened + 86_400 * 10**9 - 1,),
+        returns=(1_000.0,),
+        equity=(101_000.0,),
+        trades=(),
+        fills=(),
+        capital=100_000.0,
+        currency="USD",
+        venue_model={"venue": "XNAS"},
+        period_stops=weeks,
+    )
+    measured = records.Measurement(
+        ObjectiveRef(id="wf_sharpe_net", params=ObjectiveParams(min_delta=0.0, k_se=0.5)),
+        2,
+        run,
+        criteria_version=criteria_version(),
+    )
+    with StateStore(tmp_path / "state.db") as store:
+        store.migrate()
+        made = Card(
+            run_id="r1",
+            lane="op",
+            strategy_sha=store.put_blob(b"class Strategy: ..."),
+            metric=0.0,
+            metric_se=0.0,
+            n_trials=1,
+            n_trades=0,
+            wall_s=1.0,
+            peak_mem_gb=0.1,
+            status="keep",
+            desc="baseline",
+            venue_model=resolve_venue_model("XNAS", max_leverage=1.0),
+            created_at=datetime(2024, 1, 20, tzinfo=UTC),
+            measured_sha=records.record_measurement(store, measured),
+        )
+        shown = research_cli._measurement(store, HYP_ID, made.strategy_sha, [made])
+        plain = made.model_copy(
+            update={
+                "measured_sha": records.record_measurement(
+                    store, replace(measured, run=replace(run, period_stops=None))
+                )
+            }
+        )
+        unstopped = research_cli._measurement(store, HYP_ID, plain.strategy_sha, [plain])
+
+    assert shown.lines[3].startswith("periods ")
+    assert shown.lines[4] == "stops      1 of 2 target periods"
+    assert shown.data["measurement"]["run"]["period_stops"] == weeks.model_dump(mode="json")
+    assert not any(line.startswith("stops") for line in unstopped.lines)
+    assert "period_stops" not in unstopped.data["measurement"]["run"]
 
 
 def test_show_measured_refuses_a_card_that_kept_no_measurement(

@@ -517,3 +517,40 @@ def test_parity_holds_for_a_warmed_target(ws: Workspace, store: StateStore) -> N
 
     assert result.identical, result.divergence and result.divergence.render()
     assert result.compared > 0
+
+
+TARGET = {
+    "period": "week",
+    "opens": "Mon 04:00",
+    "tz": "America/New_York",
+    "target_bp": 1.0,
+    "of": "capital",
+}
+"""A weekly target a single profitable day of the saw-tooth reaches: a basis point."""
+
+
+def test_a_replay_records_what_its_period_target_did_and_parity_compares_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A target whose hypothesis declares `period_target` records it on each path's session —
+    every week it traded in and each week it stopped — and the two records are the same, so
+    parity holds and its payload counts them."""
+    targeted = carded(ws, store, doc=document(period_target=TARGET))
+
+    result = replay.parity(ws, store, hyp=targeted)
+
+    node, engine = replay.show(ws, result.node), replay.show(ws, result.engine)
+    assert node.period_stops is not None and node.period_stops.stops
+    assert node.period_stops == engine.period_stops
+    assert node.period_stops.periods == 5, "March 2024 opens five New York weeks"
+    assert result.identical, result.divergence and result.divergence.render()
+    assert result.payload()["node_period_stops"] == {
+        "periods": 5,
+        "stopped": node.period_stops.stopped,
+    }
+
+
+def test_a_replay_of_a_target_with_no_period_target_records_none(
+    ws: Workspace, store: StateStore, carded_hyp: str
+) -> None:
+    assert replay.run(ws, store, hyp=carded_hyp).period_stops is None

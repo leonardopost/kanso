@@ -184,6 +184,151 @@ class Commands(KansoModel):
         return self
 
 
+Segment = Literal["pre", "rth", "post", "overnight"]
+"""A part of the New York session, as `kanso.nautilus.clock` names it."""
+
+Instant = Annotated[int, Field(ge=0)]
+Finite = Annotated[float, Field(allow_inf_nan=False)]
+
+
+class FlattenFill(KansoModel):
+    """One fill of an order a sleeve sent while its week was stopped, whenever it landed.
+
+    Only an order that closes goes in a stopped week (`KansoStrategy.period_stopped`), so
+    these are the fills that took the sleeve flat after the hit: the harness's own flatten and
+    any exit the strategy sent beside it, never the node's flatten at a stage window's end.
+    `ts_ns` is the instant it filled and `price` the price it filled at. `price_ts_ns` is the
+    instant that price was struck at: the venue's record of it where the run charges a dated
+    spread (`kanso.nautilus.struck`), and otherwise the instant of the name's last bar or
+    print the sleeve had been handed when the fill came — in nautilus_trader 1.231.0 the
+    point the venue had last applied of the name, at which a market order in flight fills.
+    `segment` is the part of the New York session the minute that price covers falls in
+    (`kanso.nautilus.clock.session_of`), and `volume` the volume of the name's bar of the
+    sleeve's own resolution stamped at that instant, `None` where the sleeve was handed no such
+    bar: what the flatten's size is read against.
+    """
+
+    ts_ns: Instant
+    instrument_id: NonEmpty
+    side: Literal["BUY", "SELL"]
+    qty: float = Field(gt=0, allow_inf_nan=False)
+    price: Finite
+    price_ts_ns: Instant
+    segment: Segment
+    volume: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class PeriodStop(KansoModel):
+    """One week a `period_target` stopped, as the harness stopped it.
+
+    `opening_ns` is the week's opening, `anchor` the equity it was read against and
+    `threshold` the P&L it stopped at (`KansoStrategy._target_turn`); `hit_ns` is the instant
+    of the point it was reached at — its availability — `segment` the part of the New York
+    session the minute that point covers falls in, and `equity` the `balance` there, so
+    `equity - anchor` is at least `threshold`. `dropped` counts what the stopped week dropped
+    unsent — each entry, each order of a list, each modify — until it was lifted, or until
+    the run ended. `fills` are the fills of every order the sleeve sent while stopped
+    (`FlattenFill`), `flat_equity` the `balance` after the last of them, and `carried` whether
+    that fill landed at or after the next week's opening, so in a week whose anchor was struck
+    before it.
+    """
+
+    opening_ns: Instant
+    anchor: Finite
+    threshold: Finite
+    hit_ns: Instant
+    segment: Segment
+    equity: Finite
+    dropped: int = Field(default=0, ge=0)
+    fills: list[FlattenFill] = Field(default_factory=list)
+    flat_equity: float | None = Field(default=None, allow_inf_nan=False)
+    carried: bool = False
+
+    @model_validator(mode="after")
+    def _as_stopped(self) -> PeriodStop:
+        if self.hit_ns < self.opening_ns:
+            raise ValueError(
+                f"hit_ns: {self.hit_ns} is before the week's opening {self.opening_ns}"
+            )
+        if self.equity - self.anchor < self.threshold:
+            raise ValueError(
+                f"equity: {self.equity} less the anchor {self.anchor} is short of the "
+                f"threshold {self.threshold}, so the week was not stopped there"
+            )
+        instants = [fill.ts_ns for fill in self.fills]
+        if instants and (instants[0] < self.hit_ns or instants != sorted(instants)):
+            raise ValueError("fills: a flatten fill lands after the hit, in time order")
+        if (self.flat_equity is None) != (not self.fills):
+            raise ValueError("flat_equity: the equity after the last flatten fill, and only then")
+        if self.carried and not self.fills:
+            raise ValueError("carried: a stop with no flatten fill carried none into a week")
+        return self
+
+
+class OpenPeriod(KansoModel):
+    """The week of a `period_target` open at a run's last point: its opening, its anchor and
+    threshold, the P&L it had made there — `balance` less the anchor, read after a stage
+    node's own flatten — and whether the week itself was stopped. What a restart inside the
+    week resumes from."""
+
+    opening_ns: Instant
+    anchor: Finite
+    threshold: Finite
+    pnl: Finite
+    stopped: bool
+
+
+class PeriodStops(KansoModel):
+    """What a `period_target` did over one run: every week it traded in, every stop it made,
+    and the week open at its last point.
+
+    `openings` is the opening of each New York week the run was handed a point in after its
+    warmup, in order (`kanso.nautilus.clock.week_opening`), so `periods` counts the target's
+    weeks and never the return periods; `stops` is every week it stopped, in order, and
+    `stopped` how many weeks that is. `last` is `None` for a run handed no point. A run of a
+    hypothesis that declares no `period_target` records none of this at all.
+    """
+
+    openings: list[Instant] = Field(default_factory=list)
+    stops: list[PeriodStop] = Field(default_factory=list)
+    last: OpenPeriod | None = None
+
+    @property
+    def periods(self) -> int:
+        """How many of the target's weeks the run traded in."""
+        return len(self.openings)
+
+    @property
+    def stopped(self) -> int:
+        """How many of those weeks the target stopped."""
+        return len({stop.opening_ns for stop in self.stops})
+
+    def between(self, opens: int, closes: int, *, ends: bool) -> PeriodStops:
+        """The weeks that opened in the half-open span `[opens, closes)` and their stops, and
+        the week open at the run's last point when the span `ends` the run and holds it."""
+        last = self.last
+        return PeriodStops(
+            openings=[at for at in self.openings if opens <= at < closes],
+            stops=[stop for stop in self.stops if opens <= stop.opening_ns < closes],
+            last=last if ends and last is not None and opens <= last.opening_ns < closes else None,
+        )
+
+    @model_validator(mode="after")
+    def _of_its_weeks(self) -> PeriodStops:
+        if any(b <= a for a, b in zip(self.openings, self.openings[1:], strict=False)):
+            raise ValueError("openings: the weeks are not strictly increasing")
+        weeks = set(self.openings)
+        stopped = [stop.opening_ns for stop in self.stops]
+        if any(at not in weeks for at in stopped) or stopped != sorted(stopped):
+            raise ValueError("stops: each stop is of a week the run traded in, in order")
+        last = self.last
+        if last is not None and (not self.openings or last.opening_ns != self.openings[-1]):
+            raise ValueError("last: the week open at the last point is the last week traded in")
+        if last is not None and last.stopped and last.opening_ns not in stopped:
+            raise ValueError("last: a week read as stopped holds a stop")
+        return self
+
+
 class CardDigest(KansoModel):
     """What a card's trades did: how often it traded, how it filled, when in its return
     periods it filled, and what each trade and each session earned before and after costs.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -523,6 +524,27 @@ def test_an_outcome_renders_as_one_json_object(ws: Workspace, store: StateStore)
     assert judged["strategy"] == STRATEGY_ID
     assert judged["actions"] == ["promotable"]
     assert judged["gates"][0]["id"] == "paper_forward"
+
+
+def test_a_version_s_period_stops_are_carried_and_printed_only_where_it_has_them(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The demo declares no period target, so its judgement carries no `period_stops` and
+    prints no `stops` line, as before kanso kept them. A version under one carries the record
+    of its whole life on the stage, and its judgement says how many of the target's weeks it
+    stopped beneath its gates."""
+    from kanso.cli.monitor import _outcome_lines
+    from kanso.schemas import PeriodStops
+
+    deploy(ws, store)
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+    weeks = PeriodStops.model_validate({"openings": [100, 200]})
+    stopped = replace(judged, period_stops=weeks)
+
+    assert judged.period_stops is None and "period_stops" not in judged.payload()
+    assert not any("target periods" in line for line in _outcome_lines(judged))
+    assert stopped.payload()["period_stops"] == weeks.model_dump(mode="json")
+    assert _outcome_lines(stopped)[-1].endswith("stops 0 of 2 target periods")
 
 
 def test_a_stage_outcomes_subject_is_the_stage(ws: Workspace, store: StateStore) -> None:

@@ -384,6 +384,7 @@ def test_a_certificate_is_immutable_and_reads_back_as_it_was_written(
     assert load_yaml(Certificate, certificate.certificate_file(ws, made)) == made
     assert show(ws, store, HYP_ID) == made
     assert made.power is not None, "the row reads back the power the file states"
+    assert made.period_stops is None, "the demo declares no period target"
 
 
 def test_a_certificate_states_its_power_from_the_research_window_it_ran_again(
@@ -434,6 +435,36 @@ def test_a_certificate_records_its_window_s_net_per_trade_from_the_run_it_judged
     assert made.net_per_trade.net_se_session == se
     assert load_yaml(Certificate, certificate.certificate_file(ws, made)).net_per_trade == (
         made.net_per_trade
+    )
+
+
+def test_a_certificate_records_what_its_period_target_did_over_the_run_it_judged(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A hypothesis that declares `period_target` is certified on a run its harness held to the
+    target, and the certificate keeps that run's record of it — every week the certification
+    window traded in, each week it stopped — struck from the run the gates judged, never from a
+    second run of the window, in its file and in the row `cert show` reads back."""
+    target = {
+        "period": "week",
+        "opens": "Mon 04:00",
+        "tz": "America/New_York",
+        "target_bp": 1.0,
+        "of": "capital",
+    }
+    targeted = {**DOCUMENT, "period_target": target}
+    classify(ws, store, targeted, REVERTING)
+    a_card(ws, store, REVERTING, document=targeted)
+    write_plan(ws)
+
+    made = certify(ws, store, HYP_ID)
+
+    measured = run._measure(run._subject(ws, store, HYP_ID, None))
+    assert made.period_stops is not None and made.period_stops.stops
+    assert made.period_stops == measured.certification.period_stops
+    assert show(ws, store, HYP_ID) == made
+    assert load_yaml(Certificate, certificate.certificate_file(ws, made)).period_stops == (
+        made.period_stops
     )
 
 

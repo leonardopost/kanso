@@ -169,7 +169,14 @@ from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import venue_configs
-from kanso.schemas import Commands, Hypothesis, VenueModel, is_duration, parse_duration
+from kanso.schemas import (
+    Commands,
+    Hypothesis,
+    PeriodStops,
+    VenueModel,
+    is_duration,
+    parse_duration,
+)
 from kanso.schemas.venue import first_new_york_day
 
 __all__ = [
@@ -1516,7 +1523,7 @@ def execute_chunked(
             engine.clear_data()
         if ran:
             engine.end()
-        card = _extract(request, engine, marks)
+        card = _extract(request, engine, marks, strategy._target_record())
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
@@ -2259,9 +2266,12 @@ def increments_of(instruments: Iterable[Any]) -> dict[str, float]:
     return {str(instrument.id): float(instrument.price_increment) for instrument in instruments}
 
 
-def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
+def _extract(
+    request: RunRequest, engine: Any, marks: Marks, period_stops: PeriodStops | None = None
+) -> CardRun:
     """The one measured object: returns, equity, trades and fills with costs applied, and
-    the book policy applied once at each period end."""
+    the book policy applied once at each period end; with what the sleeve's period target did
+    over the run, as its harness recorded it (`period_stops`), carried as it was handed."""
     model = VenueModel.model_validate(dict(request.venue_model))
     cache = engine.cache
     multipliers = multipliers_of(cache.instruments())
@@ -2306,6 +2316,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
         carry=curve.carry,
         worst_ratio=curve.worst_ratio,
         funding=curve.funding,
+        period_stops=period_stops,
     )
 
 

@@ -248,6 +248,50 @@ def test_a_session_prints_the_commands_it_counted_only_where_it_recorded_them(
     assert payload(result)["commands"]["cancels"] == 1
 
 
+def test_a_session_prints_its_period_stops_only_where_it_recorded_them(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The demo declares no period target, so its sessions record no stops and `--json`
+    prints each with no `period_stops` field, as before kanso kept them, and no `stops` line.
+    A session of a hypothesis that declares one recorded them: `--json` carries the record,
+    and the human view counts the weeks stopped of the target's weeks it traded in."""
+    made = payload(at(runner, deployed, "replay", "run", "--strategy", HYP_ID, "--json"))
+    plain = at(runner, deployed, "replay", "show", made["session_id"])
+
+    assert "period_stops" not in made
+    assert "stops" not in [line.split()[0] for line in plain.stdout.splitlines() if line]
+
+    from tests.replay.test_record import LEGACY
+
+    stopped = deployed / "sessions" / "20261001T025018Z-node-9994868"
+    stopped.mkdir(parents=True)
+    recorded = (
+        "period_stops:\n  openings: [100, 200]\n  stops:\n  - opening_ns: 100\n"
+        "    anchor: 100000.0\n    threshold: 500.0\n    hit_ns: 150\n    segment: rth\n"
+        "    equity: 100520.0\n"
+    )
+    (stopped / "session.yaml").write_text(LEGACY + recorded)
+    shown = at(runner, deployed, "replay", "show", stopped.name, "--json")
+    read = at(runner, deployed, "replay", "show", stopped.name)
+
+    assert shown.exit_code == Exit.OK, shown.stdout
+    assert payload(shown)["period_stops"]["openings"] == [100, 200]
+    assert payload(shown)["period_stops"]["stops"][0]["hit_ns"] == 150
+    assert "stops      1 of 2 target periods" in read.stdout
+
+
+def test_parity_prints_each_path_s_stops_where_either_recorded_them() -> None:
+    """A `stops` line beside the verdict, each path's count or `none`, and no line where
+    neither session recorded any."""
+    from kanso.cli.replay import _stops_lines
+    from kanso.schemas import PeriodStops
+
+    weeks = PeriodStops.model_validate({"openings": [100, 200]})
+
+    assert _stops_lines(None, None) == ()
+    assert _stops_lines(weeks, None) == ("stops      node 0 of 2 target periods · engine none",)
+
+
 def test_a_session_this_workspace_never_ran_is_refused(runner: CliRunner, deployed: Path) -> None:
     result = at(runner, deployed, "replay", "show", "nothing-like-this", "--json")
 

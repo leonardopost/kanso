@@ -133,6 +133,7 @@ from kanso.schemas import (
     Hypothesis,
     NetPerTrade,
     ObjectiveResult,
+    PeriodStops,
     PlannedGate,
     Power,
     RunRecord,
@@ -332,7 +333,7 @@ def certify(
     )
     if registration.status != CANDIDATE:
         set_status(store, hyp_id, CANDIDATE)
-    evaluated, objective, stated, struck = _judge(ws, store, plan, subject)
+    evaluated, objective, stated, struck, stops = _judge(ws, store, plan, subject)
     made = Certificate(
         hyp_id=hyp_id,
         strategy_sha=subject.strategy_sha,
@@ -350,6 +351,7 @@ def certify(
         created_at=datetime.now(tz=UTC),
         power=stated,
         net_per_trade=struck,
+        period_stops=stops,
     )
     certificate.write(ws, store, made, subject.source)
     _apply(ws, store, made)
@@ -960,12 +962,14 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-) -> tuple[list[EvaluatedGate], ObjectiveResult, Power | None, NetPerTrade | None]:
+) -> tuple[
+    list[EvaluatedGate], ObjectiveResult, Power | None, NetPerTrade | None, PeriodStops | None
+]:
     """Evaluate the plan's certification gates, measure the objective they judged, state
     what the certification window could resolve from the research window's own dispersion —
     the same statement `cert plan` makes from the card, here from the research window run
     again — and strike the certification window's net per trade from the run the gates
-    judged (`net_per_trade`)."""
+    judged (`net_per_trade`), beside what its period target did over that run."""
     planned = plan.stage_gates(CERT_STAGE)
     if not planned:  # pragma: no cover - the planner refuses a plan that reaches no stage
         raise PreconditionError(
@@ -979,6 +983,7 @@ def _judge(
         return (
             [_blocked(gate, snapshot, blocked) for gate in planned],
             ObjectiveResult(id=objective.id, value=0.0, se=0.0),
+            None,
             None,
             None,
         )
@@ -1052,6 +1057,7 @@ def _judge(
         ObjectiveResult(id=objective.id, value=value, se=se),
         stated,
         net_per_trade(measured.certification),
+        measured.certification.period_stops,
     )
 
 

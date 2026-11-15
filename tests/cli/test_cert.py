@@ -484,6 +484,29 @@ def test_the_per_trade_line_says_what_error_the_net_was_struck_with(
     assert line.endswith(f"net 3 bp {error} · 6 trade(s) on {net.sessions_with_trades} session(s)")
 
 
+def test_a_certificate_prints_its_period_stops_only_where_it_recorded_them(
+    runner: CliRunner, researched: Path
+) -> None:
+    """The demo declares no period target, so its certificate records no stops: `--json`
+    carries `period_stops` as `null` and no `stops` line is printed. One that recorded them
+    prints how many of its target's weeks the certification run stopped."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from kanso.cli.cert import _stops_line
+    from kanso.schemas import Certificate, PeriodStops
+
+    made = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))
+    shown = at(runner, researched, "cert", "show", HYP_ID).stdout
+    weeks = PeriodStops.model_validate({"openings": [100, 200, 300]})
+
+    assert made["period_stops"] is None
+    assert "stops" not in [line.split()[0] for line in shown.splitlines() if line]
+    assert _stops_line(cast("Certificate", SimpleNamespace(period_stops=weeks))) == [
+        "stops      0 of 3 target periods"
+    ]
+
+
 def test_the_certificate_states_the_power_the_plan_stated(
     runner: CliRunner, researched: Path
 ) -> None:

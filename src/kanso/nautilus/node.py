@@ -123,7 +123,7 @@ from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, sign
 from kanso.nautilus.strategy import BAR, BOOK, QUOTE, KansoConfig, _bar_resolution_of
 from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import PRINT_SIZE, venue_config, venues_of
-from kanso.schemas import Hypothesis, Limits, VenueModel
+from kanso.schemas import Hypothesis, Limits, PeriodStops, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -574,9 +574,18 @@ def run(
             backtest.targeted(strategy, request)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points, venues))
         realised = tuple(
-            _realised(placed, request, kernel, groups, books, window.instruments, struck)
-            for placed, request, groups in zip(
-                node.placements, requests, window.per_version, strict=True
+            _realised(
+                placed,
+                request,
+                kernel,
+                groups,
+                books,
+                window.instruments,
+                struck,
+                strategy._target_record(),
+            )
+            for placed, request, groups, strategy in zip(
+                node.placements, requests, window.per_version, strategies, strict=True
             )
         )
         intents = tuple(
@@ -923,6 +932,7 @@ def _realised(
     books: Mapping[tuple[str, str], Book],
     instruments: Sequence[Any],
     struck: Struck | None = None,
+    period_stops: PeriodStops | None = None,
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
@@ -939,13 +949,17 @@ def _realised(
     harness read — and never at one read off the version's own view: that view orders its
     series as no venue was handed them, holds none of the series the version's stage-mates
     trade on its venue, and on a restart holds no prefix the venue was handed again.
+
+    What the version's period target did over the window is its harness's record, read once
+    the node has flattened and stopped (`period_stops`, `KansoStrategy._target_record`), and is
+    carried on the window's run, an empty one included.
     """
     if not any(groups):
         return Realised(
             strategy_id=placed.strategy_id,
             version=placed.version,
             capital=placed.capital,
-            run=backtest._empty(request),
+            run=replace(backtest._empty(request), period_stops=period_stops),
             positions=(),
         )
     marks = backtest.checked(request, instruments, groups)
@@ -956,7 +970,7 @@ def _realised(
         strategy_id=placed.strategy_id,
         version=placed.version,
         capital=placed.capital,
-        run=backtest._extract(request, _Engine(view), marks),
+        run=backtest._extract(request, _Engine(view), marks, period_stops),
         positions=tuple(
             book for (holder, _), book in sorted(books.items()) if holder == placed.identity
         ),

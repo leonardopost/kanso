@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from pydantic import Field
 
 from kanso.errors import PreconditionError
-from kanso.schemas import Commands, Versioned, load_yaml, write_yaml
+from kanso.schemas import Commands, PeriodStops, Versioned, load_yaml, write_yaml
 from kanso.schemas.base import NonEmpty, Sha256
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -189,6 +189,11 @@ class Session(Versioned):
     record a card's digest carries, kept on both code paths under a stated
     `costs.orders_per_minute` so parity compares the two; `None` for a session under no stated
     rate, one that did not run to a result, or one an earlier kanso wrote."""
+    period_stops: PeriodStops | None = None
+    """What the target's `period_target` did on this path (`kanso.criteria.run.CardRun`):
+    every week it traded in, each stop and the week open at its last point, kept so parity
+    compares the two paths' stops; `None` for a target whose hypothesis declares no period
+    target, one that did not run to a result, or one an earlier kanso wrote."""
     clock_ns: int | None = None
     started_at: datetime
     ended_at: datetime | None = None

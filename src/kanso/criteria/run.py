@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
 from kanso.errors import ValidationError
-from kanso.schemas import parse_duration
+from kanso.schemas import PeriodStops, parse_duration
 
 NS_PER_SECOND = 1_000_000_000
 NS_PER_DAY = 86_400 * NS_PER_SECOND
@@ -210,6 +210,13 @@ class CardRun:
     `funding` is every perpetual funding settlement the run booked on a held position, in
     time order — already in the returns and the equity at the end of the period each falls
     in, kept apart because it is a payment on what was held and not a fill cost.
+
+    `period_stops` is what the hypothesis's `period_target` did over the run, as the harness
+    that applied it recorded it (`PeriodStops`): every New York week it traded in, each week
+    it stopped — the hit, the entries dropped, the flatten's fills — and the week open at its
+    last point. `None` for a hypothesis that declares no target, and for a run recorded before
+    runs kept it. It is a record of the path and is in no return: the stops are already in the
+    fills and the equity, and nothing an objective or a gate reads changes with it.
     """
 
     window: tuple[date, date]
@@ -227,6 +234,7 @@ class CardRun:
     carry: tuple[float, ...] = ()
     worst_ratio: tuple[float | None, ...] = ()
     funding: tuple[FundingPayment, ...] = ()
+    period_stops: PeriodStops | None = None
 
     def __post_init__(self) -> None:
         start, end = self.window
@@ -286,7 +294,9 @@ class CardRun:
         Every series is filtered, `held` and `funding` included: `replace` would carry the
         whole run's holdings into each fold, so a gate reading them fold-wise would judge
         periods the fold does not contain. A funding payment belongs to the span holding its
-        settlement instant.
+        settlement instant. A week of the period target belongs to the span holding its
+        opening, with its stop, and the week open at the run's last point stays only in a span
+        that runs to the window's end (`PeriodStops.between`).
         """
         kept = [i for i, ts in enumerate(self.period_ends_ns) if opens <= ts < closes]
         return replace(
@@ -302,4 +312,7 @@ class CardRun:
             cushion=tuple(self.cushion[i] for i in kept) if self.cushion else (),
             carry=tuple(self.carry[i] for i in kept) if self.carry else (),
             worst_ratio=tuple(self.worst_ratio[i] for i in kept) if self.worst_ratio else (),
+            period_stops=None
+            if self.period_stops is None
+            else self.period_stops.between(opens, closes, ends=closes >= self.bounds[1]),
         )
