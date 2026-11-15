@@ -574,17 +574,20 @@ def test_a_period_target_carries_its_week_its_return_and_its_base() -> None:
 
 
 def test_the_classifying_model_reads_a_period_target_and_its_docstring_says_so() -> None:
-    """kanso never writes `period_target`, and the document a classification sends the model
-    carries it whole, as it carries `sizing`; the key's docstring says that, not that
-    classification never reads it (`docs/backlog.md` row 278 records the older keys that
-    still do)."""
+    """kanso never writes `period_target` into the operator's file, and the document a
+    classification sends the model carries it whole, as it carries `sizing`; the key's
+    docstring says that, not that classification never reads it (`docs/backlog.md` row 278
+    records the older keys that still do), nor that no file kanso writes holds it: a draft
+    `kanso hyp explore` writes is the model's whole file (row 277)."""
     from kanso.classify.classify import _document
 
     shown = _document(build(period_target=WEEKLY))
     said = " ".join((PeriodTarget.__doc__ or "").split())
 
     assert shown["period_target"] == {**WEEKLY, "target_bp": 1000.0}
-    assert "kanso never writes it, and the classifying model reads it" in said
+    assert "kanso never writes it into the operator's file, and the classifying model" in said
+    assert "`kanso hyp explore` drafts is a file the model writes whole" in said
+    assert "row 277" in said
     assert "neither reads nor writes" not in said
 
 
