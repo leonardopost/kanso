@@ -55,7 +55,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   contract never had. What makes an instrument a perpetual is its resolved definition — the
   same one the settlement check reads — never its id;
 * under a `[research] return_period` of whole weeks, a `period_target` week opens on the
-  weekday every window does, so the objective's weeks are the target's;
+  weekday every window does, so the objective's weeks are cut on the target's weekday — the
+  same weeks only where no point falls between a window's first UTC midnight and the
+  target's opening, which on US equities is an opening on a Sunday, or on a Monday no later
+  than 04:00;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
@@ -358,10 +361,16 @@ def _check_period_target(ws: Workspace, hyp: Hypothesis) -> None:
     """Under a return period of whole weeks, every window opens on the target's weekday.
 
     The runner cuts return periods one after another from the UTC midnight that opens the
-    window, and the target cuts New York weeks at its own opening, so the two meet only when
-    the window opens on that weekday: the objective's weeks are then the target's, with no
-    point between the two cuts on US equities. A window opening on another day would score
-    each week across two target weeks. The rest of the key's rules are the file's own
+    window, and the target cuts New York weeks at its own opening, so the two can meet only
+    when the window opens on that weekday; a window opening on another day would score each
+    week across two target weeks. On that weekday they are the same weeks only where no point
+    falls between the two cuts, and the check reads no point: on US equities, which trade
+    from 04:00 to 20:00 New York on weekdays, that holds of an opening on a Sunday, or on a
+    Monday no later than 04:00 — the UTC midnight is a weekend evening — and of none later
+    that Monday, whose morning's points come between, nor of one on Tuesday to Saturday,
+    whose evening before holds the post-market minutes from 19:00 under standard time, and the
+    bar stamped 20:00 under daylight saving, after the UTC midnight. The remedy names the
+    windows, not another opening. The rest of the key's rules are the file's own
     (`kanso.schemas.Hypothesis`).
     """
     target = hyp.period_target
@@ -381,8 +390,7 @@ def _check_period_target(ws: Workspace, hyp: Hypothesis) -> None:
                 f"windows.{name}.start: {opens} is a {WEEKDAYS[opens.weekday()]}, and under "
                 f"[research] return_period {ws.config.research.return_period} the return "
                 f"periods are cut from it while period_target opens each week on a {weekday}",
-                remedy=f"start windows.{name} on a {weekday}, or open period_target on a "
-                f"{WEEKDAYS[opens.weekday()]}",
+                remedy=f"start windows.{name} on a {weekday}",
             )
 
 

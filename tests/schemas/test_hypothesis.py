@@ -592,6 +592,7 @@ def test_every_key_of_a_period_target_is_the_operator_s_and_none_has_a_default(
         ("opens", "Monday 04:00", "is not a weekday and a 24-hour wall time", '"Mon 04:00"'),
         ("opens", "Mon 24:00", "is not a weekday and a 24-hour wall time", '"Mon 04:00"'),
         ("opens", "mon 04:00", "is not a weekday and a 24-hour wall time", '"Mon 04:00"'),
+        ("opens", "Mon 04:00\n", "opens: 'Mon 04:00\\n' is not a weekday", '"Mon 04:00"'),
         ("target_bp", 0, "period_target: target_bp: 0 is not a return above zero", "1000"),
         ("target_bp", -50, "target_bp: -50 is not a return above zero", "+10%"),
         ("target_bp", float("nan"), "target_bp: nan is not a return above zero", "+10%"),

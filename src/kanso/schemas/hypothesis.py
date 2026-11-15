@@ -260,7 +260,9 @@ NEW_YORK_ZONE: Final = "America/New_York"
 WEEKDAYS: Final = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 """The weekdays a period target's `opens` may name, Monday first, as `date.weekday` counts."""
 
-_OPENS: Final = re.compile(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01][0-9]|2[0-3]):([0-5][0-9])$")
+_OPENS: Final = re.compile(r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01][0-9]|2[0-3]):([0-5][0-9])")
+"""An `opens` reading, matched whole (`re.fullmatch`): a `$` would also admit one with a
+newline after it, which would be read as the same opening and pin as another scope."""
 
 _FORWARD_CHECKED: Final = timedelta(days=371)
 """How far into the open forward window an `opens` reading is held to existing once: a year
@@ -311,10 +313,11 @@ class PeriodTarget(KansoModel):
             raise RemedyError(
                 f"tz: {self.tz!r} is not {NEW_YORK_ZONE}; a run's return periods "
                 "are cut from a UTC midnight, which meets a week's opening only where no point "
-                "falls between them, as on US equities in New York",
+                "falls between them, as on US equities in New York for a week opening on a "
+                "Sunday, or on a Monday no later than 04:00",
                 remedy=f"set period_target.tz to {NEW_YORK_ZONE}",
             )
-        if _OPENS.match(self.opens) is None:
+        if _OPENS.fullmatch(self.opens) is None:
             raise RemedyError(
                 f"opens: {self.opens!r} is not a weekday and a 24-hour wall time",
                 remedy='write it as the weekday\'s three letters and HH:MM, "Mon 04:00"',

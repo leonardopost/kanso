@@ -2457,8 +2457,10 @@ def test_under_weekly_return_periods_a_window_opens_on_the_target_s_weekday(
     ws: Workspace, period: str
 ) -> None:
     """The runner cuts return periods from each window's first UTC midnight and the target cuts
-    New York weeks at its own opening: the two are the same weeks only when the window opens on
-    the target's weekday. Research here opens on Tuesday 2 January."""
+    New York weeks at its own opening: the two can be the same weeks only when the window opens
+    on the target's weekday. Research here opens on Tuesday 2 January, and the remedy names the
+    window alone: a Tuesday opening would leave Monday evening's post-market points between the
+    two cuts."""
     failure = refused(configured(ws, return_period=period), document(period_target=WEEKLY))
 
     assert failure.message.startswith(
@@ -2466,7 +2468,7 @@ def test_under_weekly_return_periods_a_window_opens_on_the_target_s_weekday(
         f"{period} the return periods are cut from it while period_target opens each week on "
         "a Mon"
     )
-    assert failure.remedy == "start windows.research on a Mon, or open period_target on a Tue"
+    assert failure.remedy == "start windows.research on a Mon"
 
 
 def test_every_window_opening_on_the_target_s_weekday_is_admissible(ws: Workspace) -> None:

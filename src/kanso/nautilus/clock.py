@@ -49,8 +49,12 @@ the periods a run's returns are cut into are not these weeks. The runner cuts th
 (`RunRequest.bounds` in `kanso.nautilus.backtest`), so a `1w` period of a window that opens
 on a Monday starts at 00:00 UTC, which is the Sunday evening in New York: eight hours before
 that Monday's 04:00 under daylight saving and nine without it. The two are the same weeks only
-where no point falls between the two cuts, as on US equities, which is why `hyp validate`
-holds the windows to the target's weekday under a return period of whole weeks.
+where no point falls between the two cuts: on US equities, for that opening and any other on a
+Monday no later than 04:00 or on a Sunday, but not for one later that Monday, whose morning's
+points come between, nor for one on Tuesday to Saturday, whose evening before holds
+post-market points past the UTC midnight. `hyp validate` holds the windows to the target's
+weekday under a return period of whole weeks, which is as far as a check that reads no point
+can go.
 
 **The zone stays in the package.** A researched `strategy.py` may not import `zoneinfo`
 (`kanso.criteria.integrity`), and `kanso.nautilus.strategy`, which it may import, binds
