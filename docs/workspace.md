@@ -1024,13 +1024,15 @@ parent's rows. What a sleeve reserves when it sizes is the largest width any row
 states for the part of the session the point it is handling is in — every year's, so it reads
 the same on any day — and `cost_rate`, which names no instrument, the largest of every row and
 part; under a latency a fill priced in a later part than it was sized in can pay more than that
-(row 261). What a fill was charged still reaches the strategy once it fills, through
-`balance`, as every charge does (row 262). A `cost_scenario` on such a hypothesis states a
-`fixed_bps` above zero, which re-prices every fill at that flat width: a scenario's parameters
-are numbers and cannot carry a table, and one without the width, or at zero, would re-price
-every fill at no spread, so `cert plan` and `cert run` refuse it. A screen whose model is
-dated, from its own `costs` or a bound hypothesis's, is refused (exit 3; row 259), and a shared
-book refuses a member charged one (exit 2; row 260).
+(row 261). A `full_book` entry places its budget over one plus twice the rate it reserves, so
+one sized in a part an earlier year was wide in places well short of its budget, however narrow
+its own year's row (row 265). What a fill was charged still reaches the strategy once it fills,
+through `balance`, as every charge does (row 262). A `cost_scenario` on such a hypothesis
+states a `fixed_bps` above zero, which re-prices every fill at that flat width: a scenario's
+parameters are numbers and cannot carry a table, and one without the width, or at zero, would
+re-price every fill at no spread, so `cert plan` and `cert run` refuse it. A screen whose model
+is dated, from its own `costs` or a bound hypothesis's, is refused (exit 3; row 259), and a
+shared book refuses a member charged one (exit 2; row 260).
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
