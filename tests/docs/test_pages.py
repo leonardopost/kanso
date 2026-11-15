@@ -702,6 +702,8 @@ def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
     key = next(line for line in rows if line.startswith("| 285 |"))
     assert "`corporate_actions` in `instruments.yaml` is read by nothing at run time" in key
     found = {line.split("|")[1].strip(): line for line in rows if line.startswith("| 28")}
+    assert "against the last quote of its name the stream holds" in found["286"]
+    assert "count a position from its fills alone" in found["287"]
     assert "matches an adjustment to the latest split of its name" in found["288"]
 
 

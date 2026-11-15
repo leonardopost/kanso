@@ -744,6 +744,28 @@ def test_a_split_whose_ratio_is_unknown_moves_the_shares_and_keeps_the_price() -
     )
 
 
+def test_a_name_the_runner_did_not_hold_at_an_end_leaves_the_path_there() -> None:
+    """A run stored without its adjustments holds the 905 shares a split took away until the
+    next end, where the runner held no DEMO: they leave the path there, so a later purchase
+    of DEMO at 50 marks only the ten it bought, and the fall is the one that end read. Kept
+    past the end, the 905 were marked down from 100 to 50 at the purchase, a fall of 45,250
+    the book never took."""
+    run = build_run(
+        (0.0, 0.0, 0.0),
+        fills=(
+            *_through_a_split().fills,
+            Fill(at(DAYS[2], 12), "DEMO", "BUY", 10.0, 50.0, 0.0),
+        ),
+        holdings=(
+            *_through_a_split().held,
+            Held(ts_ns=_end(2), instrument_id="DEMO", qty=10.0, notional=500.0),
+            Held(ts_ns=_end(2), instrument_id="OTHER", qty=1.0, notional=1.0),
+        ),
+    )
+
+    assert fill_path_drawdown_pct(run) == (pytest.approx(90.45), _end(1))
+
+
 @pytest.mark.parametrize(
     ("below_zero", "fall"), [(True, 1_200.0), (False, 1_600.0)], ids=["kept", "recorded before"]
 )

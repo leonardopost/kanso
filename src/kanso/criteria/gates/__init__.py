@@ -612,9 +612,12 @@ class _IntradayDrawdown:
     ends, so a position opened and closed inside one period is never seen falling: a book
     that trades many times a day and is flat at the close reads as flat at every sample, and
     a card that fell six percent at noon and recovered by the close passes a five percent
-    limit. This gate reads the same limit on the path through every fill — cash after each
-    fill, plus every open position at the price it last traded at, re-anchored at each
-    period end to the equity the runner struck there (`fill_path_drawdown_pct`) — so the fall
+    limit. This gate reads the same limit on the path through every fill
+    (`fill_path_drawdown_pct`): cash after each fill, plus every open position at the price
+    it last traded at, or at the runner's mark at the last period end when it has not traded
+    since, with each split the venue applied replayed where the runner booked it, re-anchored
+    at each period end to the equity the runner struck there and set there to what the
+    runner held, so a move to an end's mark is not counted again at the next fill. The fall
     it reports is never shallower than `max_drawdown`'s, and is the one a book that is flat
     at its period ends actually took. Carries no parameter: the limit is the hypothesis's, as
     it is for `max_drawdown`, and which of the two a lane is held to is the classifier's or
