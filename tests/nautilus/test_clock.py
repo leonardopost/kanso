@@ -22,7 +22,14 @@ from kanso.data.closures import US_EQUITY_CLOSURES, closed_days
 from kanso.errors import ValidationError
 from kanso.nautilus import clock, strategy
 from kanso.nautilus.backtest import RunRequest
-from kanso.nautilus.clock import Session, minute_of, segment_of, session_of, week_opening
+from kanso.nautilus.clock import (
+    Session,
+    minute_of,
+    segment_of,
+    session_of,
+    week_closing,
+    week_opening,
+)
 from tests.nautilus.backtest.conftest import hypothesis as a_hypothesis
 
 NS = 1_000_000_000
@@ -273,6 +280,25 @@ def test_a_week_is_the_span_from_the_last_opening_to_the_next(
         assert wall(found - NS) < (day, minute * 60)
     assert week_opening(opens, weekday, minute=minute) == (opens, next_opens)
     assert week_opening(next_opens - 1, weekday, minute=minute) == (opens, next_opens)
+
+
+@given(instants, st.integers(0, 6), st.integers(0, 1439))
+@example(utc(date(2024, 3, 10), 7), SUNDAY, 150)
+@example(utc(date(2024, 11, 3), 6), SUNDAY, 90)
+def test_a_week_closes_where_the_rule_it_opened_under_closes_it(
+    ts_ns: int, weekday: int, minute: int
+) -> None:
+    """A week's close is read off its opening alone, and is the next opening of the rule the
+    week opened under, whatever rule is read now: for every opening that reads the rule's
+    minute, a reading a November change repeats among them. One a March change skips opens at
+    the change, reads 03:00, and closes at the next 03:00, which `hyp validate` refuses as an
+    `opens` (`PeriodTarget.moved_on`)."""
+    opens, next_opens = week_opening(ts_ns, weekday, minute=minute)
+
+    if minute_of(opens) == minute:
+        assert week_closing(opens) == next_opens
+    else:
+        assert wall(opens)[1] == 3 * HOUR and wall(week_closing(opens))[1] == 3 * HOUR
 
 
 @given(st.integers(2007, 2027), st.integers(0, 6), st.integers(0, 1439))

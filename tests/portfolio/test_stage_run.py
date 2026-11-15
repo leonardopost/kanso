@@ -1274,6 +1274,75 @@ def test_a_resumed_week_is_held_to_the_threshold_it_opened_with(
     assert (stop.anchor, stop.threshold) == pytest.approx((0.94 * capital, 0.12 * capital))
 
 
+def repinned(ws: Workspace, store: StateStore, opens: str) -> None:
+    """Re-pin `weekly` with its target's week opening at `opens`, as `kanso hyp add` does."""
+    from kanso.hyp import add as register
+    from tests.replay.conftest import write_hypothesis
+
+    moved = {**WEEKLY, "period_target": {**WEEKLY["period_target"], "opens": opens}}
+    register(ws, store, write_hypothesis(ws, moved, RETRYING))
+
+
+@pytest.mark.parametrize(
+    ("opens", "next_opens"),
+    [
+        ("Mon 09:30", datetime(2024, 3, 18, 13, 30, tzinfo=UTC)),
+        ("Sun 18:00", datetime(2024, 3, 17, 22, tzinfo=UTC)),
+    ],
+    ids=["later", "earlier"],
+)
+def test_a_week_struck_before_a_re_pin_that_moves_opens_is_resumed_by_its_own_bounds(
+    opens: str, next_opens: datetime, ws: Workspace, store: StateStore
+) -> None:
+    """A week is resumed as it was struck: its threshold, and its bounds. The week opening at
+    Monday 04:00 stopped at Tuesday's close; the hypothesis is re-pinned since with the week
+    opening at Monday 09:30, or at Sunday 18:00, and the stage restarts after that close. It is
+    inside the stopped week, so the week is resumed though the new reading names a week opened
+    at another instant, and every entry is dropped until it closes at Monday March 18's 04:00:
+    the sleeve buys at that Monday's bar, in the new reading's week, which the window lists
+    after the one it resumed."""
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True)
+    repinned(ws, store, opens)
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 18)
+    record = run.period_stops
+    assert record is not None
+    assert record.openings[:2] == [WEEK_NS, int(next_opens.timestamp()) * NS]
+    (resumed, *_) = record.stops
+    assert (resumed.opening_ns, resumed.hit_ns, resumed.dropped) == (WEEK_NS, TUESDAY_CLOSE_NS, 5)
+
+
+def test_a_window_a_halt_ends_after_a_re_pin_joins_the_week_it_resumed(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Re-pinned with the week opening at Sunday 18:00, a restart after Tuesday's close resumes
+    the week its window before left open at Monday 04:00, and a halt on Thursday ends the
+    window inside it: the two windows' records join as one week, the one both traded in, where
+    reading the week from the new rule would have opened the newer window's before the older's
+    and left the joined record no last week that is its newest."""
+    from kanso.monitor import combined
+
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(store, first, pnl=0.06 * first.capital)
+    repinned(ws, store, "Sun 18:00")
+    deployable(ws, store, "aboomer", sleeve=RAISES_THURSDAY, doc=document(id="aboomer"))
+
+    assert deploy(ws, store, "paper").halted is not None
+
+    *_, before, halted = records.stage_results(store, strategy_id="weekly", stage="paper")
+    record = halted.run.period_stops
+    assert record is not None and record.openings == [WEEK_NS]
+    joined = combined([before, halted])
+    assert joined is not None and joined.period_stops is not None
+    assert joined.period_stops.openings == [WEEK_NS]
+    assert joined.period_stops.last == record.last
+
+
 NEXT_BEST = RETRYING + b"\n# the next best snapshot the loop kept\n"
 """The same sleeve with other bytes: what a research stall certifies, which composes the next
 version."""

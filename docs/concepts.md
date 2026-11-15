@@ -2804,7 +2804,9 @@ left open, whichever version ran it, which the window resumes when it resumes tr
 stopped stays stopped, every entry dropped until the next week opens, and a week that had made
 part of its target is read against the capital less what it made and held to the threshold it
 was struck with, so it stops at what is left, carried in basis points across a share the
-limits moved. Since a passing certificate deploys the paper stage by itself, every deploy
+limits moved; it keeps the bounds it was struck with too, so a re-pin that moves `opens`
+between windows takes effect once that week has closed. Since a passing certificate deploys
+the paper stage by itself, every deploy
 restarts it, and a certificate of new bytes composes a new version that replaces the one on
 paper and resumes its week, this is what keeps a stopped week stopped with no one asked; a
 week stopped on paper does not carry to live at a promotion, nor one stopped on live to paper

@@ -40,7 +40,8 @@ week that holds the change for every opening — Monday 04:00, `week_opening(ts,
 among them — but a Sunday one past 02:00 and no later than 03:00, which the March change
 skips or meets. Such an opening is the change itself, and the week before it is a minute
 short for each minute the opening is past 02:00: at 03:00 the whole hour, and the week from
-the change is a full seven days.
+the change is a full seven days. `week_closing` reads a week's close off its opening alone, so
+a week closes where the rule it opened under closes it, though that rule has moved since.
 
 One rule of the harness reads a week here, a hypothesis's `period_target`, whose weeks
 open at the reading it states (`KansoStrategy.period_stopped` in `kanso.nautilus.strategy`);
@@ -91,6 +92,7 @@ __all__ = [
     "minute_of",
     "segment_of",
     "session_of",
+    "week_closing",
     "week_opening",
 ]
 
@@ -183,3 +185,18 @@ def week_opening(ts_ns: int, weekday: int, *, minute: int) -> tuple[int, int]:
         day -= _WEEK
         opens = first_reading(day, minute, NEW_YORK)
     return opens, first_reading(day + _WEEK, minute, NEW_YORK)
+
+
+def week_closing(opening_ns: int) -> int:
+    """The instant the week that opened at `opening_ns` closes: the first instant the New York
+    clock reads that opening's weekday and minute seven days on.
+
+    A week is read from its own opening, never from a rule, so one struck under a
+    `period_target.opens` closes where that rule closed it however the rule has moved since
+    (`kanso.nautilus.backtest.RunRequest.resumed`). It is the next opening `week_opening` gives
+    for the rule the week opened under, for every opening that reads the rule's minute — every
+    one but a Sunday opening a March change skips, past 02:00 and before 03:00, which opens at
+    the change and reads 03:00, and which `kanso hyp validate` refuses as an `opens`.
+    """
+    _, day = segment_of(opening_ns)
+    return first_reading(day + _WEEK, minute_of(opening_ns), NEW_YORK)

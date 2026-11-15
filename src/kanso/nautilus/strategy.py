@@ -1631,23 +1631,26 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         A week that had stopped is stopped from the start: its stop is listed again, as the
         window before recorded it, what this window drops under it is counted there, and it is
         lifted as any stop is, at a point of a later week with the sleeve flat — a restart
-        holds nothing and nothing is working, so there is nothing to cancel or flatten. A first
-        point past the week turns it as any week turns, the next anchored at the capital. Over
-        a warmup prefix the week is open and read for nothing: no hit is read there
-        (`_target_step`), and an entry goes the way of every order sent while warming, dropped
-        unsent and uncounted (`submit_entry`).
+        holds nothing and nothing is working, so there is nothing to cancel or flatten. The week
+        runs from its own opening to its own close (`kanso.nautilus.clock.week_closing`), as it
+        was struck, and not to the close of the week `opens` names now: a re-pin that moved the
+        reading between windows takes effect at the first point past that close, which turns
+        the week as any week turns, into the week of the rule as it stands that holds the point
+        — one the moved reading can have opened before that close, as a window that opens
+        mid-week trades first in a week opened before its first point. Over a warmup prefix
+        the week is open and read for nothing: no hit is read there (`_target_step`), and an
+        entry goes the way of every order sent while warming, dropped unsent and uncounted
+        (`submit_entry`).
         """
         seed = self._target_seed
         if seed is None or seed.last is None:
             return
-        from kanso.nautilus.clock import week_opening
+        from kanso.nautilus.clock import week_closing
 
-        last, target = seed.last, self._period_target
-        opens, self._target_next = week_opening(
-            last.opening_ns, target.weekday, minute=target.minute
-        )
-        self._target_open = opens
-        self._target_openings.append(opens)
+        last = seed.last
+        self._target_open = last.opening_ns
+        self._target_next = week_closing(last.opening_ns)
+        self._target_openings.append(last.opening_ns)
         self._target_anchor = self.capital - last.pnl
         self._target_threshold = last.threshold
         if not last.stopped:

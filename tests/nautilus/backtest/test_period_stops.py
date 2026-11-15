@@ -553,6 +553,33 @@ def resumed_seed(opening_ns: int, *, stopped: bool) -> PeriodStops:
     )
 
 
+@pytest.mark.parametrize("opens", ["Mon 04:00", "Mon 09:30", "Mon 03:00", "Sun 18:00"])
+def test_a_restart_resumes_a_week_by_the_bounds_it_was_struck_with(
+    opens: str, tmp_path: Path
+) -> None:
+    """A week is resumed from its own opening to its own close, never re-read from the rule as
+    it stands. Struck at Monday 04:00 and re-pinned since with another `opens`, the week is
+    resumed by a restart anywhere inside it — though the new reading names a week that opened
+    at another instant, and one that holds the stop all the same — and by none at or past its
+    close at the next Monday's 04:00."""
+    made = request({}, tmp_path / "seen.txt")
+    target = made.hyp.period_target
+    assert target is not None
+    moved = made.hyp.model_copy(
+        update={"period_target": target.model_copy(update={"opens": opens})}
+    )
+    opening_ns, closes_ns = ny(MONDAY, "04:00"), ny(NEXT_MONDAY, "04:00")
+    seed = resumed_seed(opening_ns, stopped=True)
+
+    def resumed(resumes_ns: int) -> PeriodStops | None:
+        return replace(made, hyp=moved, target_seed=seed, resumes_ns=resumes_ns).resumed
+
+    tuesday = ny(date(2024, 1, 9), "16:00")
+    assert [resumed(at) for at in (opening_ns, tuesday, closes_ns - 1)] == [seed] * 3
+    assert resumed(closes_ns) is None
+    assert replace(made, target_seed=seed, resumes_ns=closes_ns - 1).resumed == seed
+
+
 @pytest.mark.parametrize("stopped", [False, True], ids=["open", "stopped"])
 def test_a_resumed_window_handed_no_point_of_its_own_records_the_week_it_resumed(
     stopped: bool, tmp_path: Path

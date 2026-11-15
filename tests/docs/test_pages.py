@@ -634,6 +634,9 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert "resumes when its first point falls in it" not in stages
     assert "does not carry to the other at a promotion or a demotion" in workspace
     assert any(line.startswith("| 282 |") for line in page("backlog.md").splitlines())
+    assert "The week keeps its bounds as it keeps its threshold" in workspace
+    assert "with another `opens` leaves a week struck under the old reading in force" in workspace
+    assert any(line.startswith("| 284 |") for line in page("backlog.md").splitlines())
     assert "a week the target had stopped stays stopped" in stages
     for text in (workspace, stages):
         assert "opens flat at the capital with no stopped week" not in text

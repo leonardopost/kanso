@@ -561,20 +561,25 @@ class RunRequest:
         stage restart trades from (`resumes_ns`, the one after the stage's clock) falls in the
         week it leaves open, and `None` when the restart is past that week or there is no seed.
 
-        The harness opens that week before the author's `on_start`
-        (`kanso.nautilus.strategy.KansoStrategy._target_resume`), so the week is in force from
-        the run's first instant and not from its first point: an order the sleeve sends before
-        that point is held to it, and a stopped week stays stopped until the next opens, though
-        the window's first point falls after the week has closed. One that had made part of its
-        target is held to what is left of it.
+        The week is the one the seed's window struck, from its own opening to its own close
+        (`kanso.nautilus.clock.week_closing`), and never re-read from the rule as it stands: a
+        re-pin of the hypothesis between windows that moves `period_target.opens` leaves a week
+        struck under the old reading to close where that reading closes it, as one that moves
+        `target_bp` or `of` leaves it its threshold, so a stopped week stays stopped until it
+        closes whatever the rule now names a week. The harness opens that week before the
+        author's `on_start` (`kanso.nautilus.strategy.KansoStrategy._target_resume`), so the
+        week is in force from the run's first instant and not from its first point: an order the
+        sleeve sends before that point is held to it, and a stopped week stays stopped until the
+        next opens, though the window's first point falls after the week has closed. One that
+        had made part of its target is held to what is left of it.
         """
         seed, target = self.target_seed, self.hyp.period_target
         if seed is None or seed.last is None or target is None or self.resumes_ns is None:
             return None
-        from kanso.nautilus.clock import week_opening
+        from kanso.nautilus.clock import week_closing
 
-        opens, _ = week_opening(self.resumes_ns, target.weekday, minute=target.minute)
-        return seed if opens == seed.last.opening_ns else None
+        opens = seed.last.opening_ns
+        return seed if opens <= self.resumes_ns < week_closing(opens) else None
 
     @property
     def carried_from_ns(self) -> int:

@@ -976,7 +976,14 @@ that had made part of its target is read against the capital less what it made, 
 the threshold it was struck with, so it stops at what is left: one that had made 600 of a
 1,000 bp target stops at 400 more, and under `of: period_open` a week that opened at 1.2 times
 the capital stays held to 1,200 bp of it. What was made and the threshold are stated at the
-share the window runs at, so the basis points carry across a share the limits moved. A week the
+share the window runs at, so the basis points carry across a share the limits moved. The week
+keeps its bounds as it keeps its threshold, from its own opening to the same New York reading a
+week on: a hypothesis re-pinned between windows with another `opens` leaves a week struck under
+the old reading in force, stopped or not, until that reading closes it, and the new reading's
+weeks begin at the first point after. Where the new reading falls later in the week than the
+old, a point between the two closes falls in a week of the new reading that opened before the
+old one closed, and can hold the old one's stop, and the window trades in it, as a window that
+opens mid-week trades first in a week opened before it (`docs/backlog.md` row 284). A week the
 restart resumes past is let go, and the window's first week opens at the capital as any run's
 does; so does the week after a resumed one that the window was handed no point of. The week is
 the strategy's, not the version's: a new version that replaces one on the stage — which a
