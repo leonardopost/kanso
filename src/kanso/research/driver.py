@@ -113,6 +113,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import yaml
@@ -957,7 +958,8 @@ def _objective(hyp: Hypothesis) -> dict[str, object]:
 WITHHELD: Final = (
     "{rows} rows, withheld: each is a year's median width, in force from that year's first "
     "day, so a strategy written from them would know a width before the market showed it; a "
-    "hypothesis.yaml written from this one that keeps this line keeps the rows"
+    "hypothesis.yaml written from this one that keeps this line keeps the rows in force from "
+    "on or before its own research window's last day"
 )
 """What a model writing a `strategy.py` is shown in place of a dated spread's rows."""
 
@@ -979,9 +981,14 @@ def shown(text: str) -> str:
 
 def restored(written: str, pinned: str) -> str:
     """A `hypothesis.yaml` a model wrote from one it was `shown`, with the rows put back where
-    it kept the line that stood for them: the rows of `pinned`, the file it was shown, and the
-    file re-rendered with them. A file that states rows of its own, or none, or that is not a
-    mapping of YAML, is returned byte for byte, for the judge to read as written."""
+    it kept the line that stood for them: the rows of `pinned`, the file it was shown, in force
+    from on or before the written file's own research window's last day, and the file
+    re-rendered with them. A row from after it is refused in any hypothesis (`Hypothesis`), and
+    one written to research less than its parent could not drop a row it was never shown, so it
+    is dropped here — the last row on or before that day stays in force through certification,
+    as in any file. A file whose research window's last day, or a row's first, is not a date
+    keeps every row, for the judge to read. A file that states rows of its own, or none, or that
+    is not a mapping of YAML, is returned byte for byte, for the judge to read as written."""
     try:
         document = yaml.safe_load(written)
         source = yaml.safe_load(pinned)
@@ -996,8 +1003,18 @@ def restored(written: str, pinned: str) -> str:
         or costs.get("dated") != WITHHELD.format(rows=len(rows))
     ):
         return written
-    costs["dated"] = rows
+    costs["dated"] = _researched(rows, document)
     return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+
+
+def _researched(rows: list[Any], document: Mapping[str, Any]) -> list[Any]:
+    """The rows in force from on or before `document`'s research window's last day; every row
+    where that day, or a row's first, does not read as a date."""
+    try:
+        end = date.fromisoformat(str(document["windows"]["research"]["end"]))
+        return [row for row in rows if date.fromisoformat(str(row["from"])) <= end]
+    except (KeyError, TypeError, ValueError):
+        return rows
 
 
 def _pinned(store: StateStore, active: RunRecord) -> Hypothesis:

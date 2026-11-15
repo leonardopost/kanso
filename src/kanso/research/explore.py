@@ -17,7 +17,9 @@ to something whose output is researched next, is a route from the embargoed wind
 research. A dated spread's rows are withheld from the `hypothesis.yaml` it is shown, as they
 are from a proposer (`kanso.research.driver.shown`): each is a year's median width, in force
 from the year's first day, and the model writes a `strategy.py`. A candidate that keeps the line
-standing for them is written with the parent's rows put back (`driver.restored`).
+standing for them is written with the parent's rows put back (`driver.restored`), those in force
+from on or before its own research window's last day: one that researches less than its parent
+could not drop a later row it was never shown, and a row from after its research is refused.
 
 **The answer is judged on the ladder, like a proposal.** An id that is not one, or that is
 registered or already has a directory; a `hypothesis.yaml` that does not parse as a

@@ -1682,3 +1682,31 @@ def test_a_file_written_from_one_shown_keeps_the_rows_where_it_kept_their_line()
     assert driver.restored(own, pinned) == own
     assert driver.restored("costs: [", pinned) == "costs: ["
     assert driver.restored(kept, "[]") == kept
+
+
+def test_a_file_that_researches_less_than_its_parent_keeps_the_rows_its_window_admits() -> None:
+    """A row in force from after a file's research window is refused, and a file written from
+    one shown could not drop a row it never saw: one that ends its research before the parent's
+    keeps the rows on or before its own last day, and is admitted; one whose window is no date
+    keeps every row, for the judge to read."""
+    import yaml as pyyaml
+
+    from kanso.schemas import Hypothesis, parse_yaml
+
+    row = {"pre": 872.9, "open": 37.2, "rth": 9.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
+    instrument = DOCUMENT["universe"][0]
+    rows = [
+        {"instrument": instrument, "from": "2023-01-01", **row},
+        {"instrument": instrument, "from": "2024-01-01", **row},
+    ]
+    pinned = pyyaml.safe_dump({**DOCUMENT, "costs": {"spread": "dated", "dated": rows}})
+    shown = pyyaml.safe_load(driver.shown(pinned))
+    windows = {**shown["windows"], "research": {"start": "2023-11-01", "end": "2023-12-29"}}
+    shorter = pyyaml.safe_dump({**shown, "id": "child", "windows": windows})
+    undated = pyyaml.safe_dump({**shown, "windows": {"research": {"end": "the year's end"}}})
+
+    child = parse_yaml(Hypothesis, driver.restored(shorter, pinned), "hypothesis.yaml")
+
+    assert [str(kept.from_) for kept in child.costs.dated or ()] == ["2023-01-01"]
+    assert parse_yaml(Hypothesis, driver.restored(driver.shown(pinned), pinned), "x").costs.dated
+    assert pyyaml.safe_load(driver.restored(undated, pinned))["costs"]["dated"] == rows
