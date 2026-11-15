@@ -22,8 +22,10 @@ read order by order, an overlay's clip, which then holds nothing, and a hedge le
 while a held clip's `FLAT` goes; a new week's entry waits for the old week's legs to be flat;
 nothing sent while stopped takes the position past flat — one order bigger than it, an exit
 beside a working one, one sized in dollars, a modify that grows a resting exit by any amount,
-and an exit built by hand beside a flatten the order rate owes — while exits that add up to it
-go, and an order the venue has yet to answer at the hit is read at the most it could close; the
+a regrowth behind a shrink the venue has yet to apply, and an exit built by hand beside a
+flatten the order rate owes — while exits that add up to it go, and an order the venue has yet
+to answer, a shrink and a regrowth sent before the hit among them, is read at the most it could
+close; a modify to a count that is not a `Quantity` raises the engine's own error; the
 weeks open at New York's Monday 04:00 across both changes of clocks and on a closed Monday; and
 the anchor is the equity the card struck at the week before's last point, carry included.
 """
@@ -150,6 +152,12 @@ class Strategy(KansoStrategy):
                 )
             elif act == "count":
                 self.modify_order(self.resting, quantity=int(side))
+            elif act == "resize":
+                qty, _, price = side.partition("@")
+                self.modify_order(
+                    self.resting, quantity=Quantity.from_int(int(qty)),
+                    price=Price.from_str(price) if price else None,
+                )
             elif act == "notional":
                 way, qty, price = self._sized(side)
                 made = (InstrumentId.from_str(name), OrderSide[way], Quantity.from_int(qty))
@@ -704,6 +712,111 @@ def test_a_replay_reads_an_order_the_venue_has_yet_to_answer_as_the_card_does(
     assert replayed.intents == researched.intents
     assert replayed.run.fills == researched.run.fills
     assert replayed.run.equity == researched.run.equity
+
+
+def _held(run: CardRun) -> list[tuple[str, float, float, int, float]]:
+    """LEAD's fills in the order they were struck, each as `(side, quantity, price, instant,
+    position after it)`."""
+    position, walked = 0.0, []
+    for fill in run.fills:
+        if fill.instrument_id == LEAD_ID:
+            position += fill.qty if fill.side == "BUY" else -fill.qty
+            walked.append((fill.side, fill.qty, fill.px, fill.ts_ns, position))
+    return walked
+
+
+def _both_paths(
+    plan: Mapping[tuple[int, str], Sequence[tuple[str, str, str]]],
+    lead: Sequence[Point],
+    lagg: Sequence[Point],
+    tmp_path: Path,
+    latency_ms: float,
+) -> tuple[RunResult, list[Seen]]:
+    """The plan's card, asserted to send, fill and end on what its replay on the live code
+    path does, element by element."""
+    result, seen = card(plan, lead, lagg, tmp_path, latency_ms=latency_ms)
+    made = request(plan, tmp_path / "replayed.txt", latency_ms=latency_ms)
+    replayed = session.run_node(
+        made, [instrument(LEAD), instrument(LAGG)], [series(LEAD, lead), series(LAGG, lagg)]
+    ).result
+    assert replayed.intents == result.intents
+    assert replayed.run.fills == result.run.fills
+    assert replayed.run.equity == result.run.equity
+    return result, seen
+
+
+@pytest.mark.parametrize("regrown", ["04:12", "04:14"])
+def test_a_regrowth_behind_a_shrink_the_venue_has_yet_to_apply_is_dropped_while_stopped(
+    regrown: str, tmp_path: Path
+) -> None:
+    """Under a latency of 150 seconds on one-minute bars, LEAD is bought 1,000 at 04:01 and
+    its 04:07 close of 10.60 stops the week; LEAD does not print again until 04:40. From
+    LAGG's handlers the sleeve rests a sale of the whole at 99.00 at 04:07 and shrinks it to
+    400 at 04:11, then asks 900 of it at 10.00 — at 04:12, while the shrink is still on its
+    way and the order reads 1,000, or at 04:14, once it has landed — and sells 600 at market
+    at 04:14, before a regrowth sent at 04:12 has landed. A stopped week drops a modify
+    asking more than the least the order holds or has been asked to hold, so the regrowth is
+    dropped either way, and the sale of 600 is read beside the order at 400: 1,000 is sold
+    and LEAD is never short. Read against the 1,000 the order still held when it was sent,
+    the regrowth at 04:12 went, the sale was read beside the 400 the order then held, and
+    1,500 was sold. The replay sends and fills what the card does."""
+    minutes = [f"04:{minute:02d}" for minute in range(1, 60)]
+    lead: list[Point] = [(ny(MONDAY, s), 10.00) for s in minutes[:6]]
+    lead += [(ny(MONDAY, "04:07"), 10.60), (ny(MONDAY, "04:40"), 10.70)]
+    lagg: list[Point] = [(ny(MONDAY, s), 11.00) for s in minutes]
+    plan: dict[tuple[int, str], list[tuple[str, str, str]]] = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, "04:07"), LAGG_ID): [("limit", LEAD_ID, "SELL:1000@99.00")],
+        (ny(MONDAY, "04:11"), LAGG_ID): [("resize", LEAD_ID, "400")],
+        (ny(MONDAY, "04:14"), LAGG_ID): [],
+    }
+    plan.setdefault((ny(MONDAY, regrown), LAGG_ID), []).append(("resize", LEAD_ID, "900@10.00"))
+    plan[(ny(MONDAY, "04:14"), LAGG_ID)].append(("hand", LEAD_ID, "SELL:600"))
+
+    result, seen = _both_paths(plan, lead, lagg, tmp_path, 150_000.0)
+
+    sold = next(row for row in seen if row.ts == ny(MONDAY, "04:14") and row.name == LAGG_ID)
+    assert sold.stopped and sold.dropped == 1
+    walked = _held(result.run)
+    assert ("SELL", 600.0) in [(side, qty) for side, qty, *_ in walked]
+    assert all(position >= 0.0 for *_, position in walked), walked
+    assert sum(qty for side, qty, *_ in walked if side == "SELL") == QTY
+    assert walked[-1][-1] == 0.0
+
+
+@pytest.mark.parametrize(("latency_ms", "hit"), [(150_000.0, "04:07"), (210_000.0, "04:08")])
+def test_the_flatten_reads_a_shrink_and_a_regrowth_sent_before_the_hit_at_the_most_asked(
+    latency_ms: float, hit: str, tmp_path: Path
+) -> None:
+    """Under a latency longer than a minute, LEAD is bought 1,000 at 04:01, a sale of the
+    whole rests at 99.00 from 04:02, is shrunk to 400 at 04:05 and asked 900 at 10.00 at
+    04:06, and LEAD's close of 10.60 stops the week at `hit`. Each modify was sent before the
+    hit; the flatten, at LEAD's next close, finds the shrink landed and the regrowth still on
+    its way, and reads the order at the 900 it was asked, not the 400 it holds: it sells 100,
+    the regrowth's 900 fills, and LEAD is never short. Read at 400, the flatten sold 600
+    beside the 900, and the stopped week bought 500 back. The replay sends and fills what the
+    card does."""
+    minutes = [f"04:{minute:02d}" for minute in range(1, 21)]
+    rising = minutes.index(hit)
+    lead: list[Point] = [
+        (ny(MONDAY, s), 10.00 if i < rising else round(10.60 + 0.01 * (i - rising), 2))
+        for i, s in enumerate(minutes)
+    ]
+    lagg: list[Point] = [(point[0], 11.00) for point in lead]
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, "04:02"), LEAD_ID): [("limit", LEAD_ID, "SELL:1000@99.00")],
+        (ny(MONDAY, "04:05"), LEAD_ID): [("resize", LEAD_ID, "400")],
+        (ny(MONDAY, "04:06"), LEAD_ID): [("resize", LEAD_ID, "900@10.00")],
+    }
+
+    result, seen = _both_paths(plan, lead, lagg, tmp_path, latency_ms)
+
+    assert min(row.ts for row in seen if row.stopped) == ny(MONDAY, hit)
+    walked = _held(result.run)
+    assert all(position >= 0.0 for *_, position in walked), walked
+    assert [side for side, *_ in walked].count("BUY") == 1
+    assert walked[-1][-1] == 0.0
 
 
 @pytest.mark.parametrize(("limit", "stops"), [("10.55", True), ("10.65", False)])
