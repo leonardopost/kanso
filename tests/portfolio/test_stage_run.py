@@ -1158,6 +1158,68 @@ def test_a_week_that_had_made_600_bp_stops_at_400_more(
     assert 0.04 * capital <= stop.equity - capital < 0.1 * capital, "400 bp more, not 1,000"
 
 
+RAISES_THURSDAY = b'''
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    """Trades nothing, and raises at the bar of Thursday March 14, 2024."""
+
+    config_cls = Config
+
+    def on_bar(self, bar) -> None:
+        if 1710374400000000000 <= bar.ts_event < 1710460800000000000:
+            raise RuntimeError("the stage-mate asked the impossible")
+'''
+"""A stage-mate whose id sorts ahead of `weekly`, so it is handed each bar first and the node
+halts at Thursday's before `weekly` is handed it."""
+
+
+def test_a_window_a_halt_ended_leaves_its_week_where_the_halt_left_the_sleeve(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A halted node flattens nothing. Restarted after Tuesday's close in a week that had made
+    600 bp, the sleeve buys 3,600 at Wednesday's bar, and the stage-mate raises at Thursday's,
+    before the sleeve is handed it: the window ends holding the 3,600, and the week open there
+    is read where the halt left the sleeve, at Wednesday's 10.00, about 595 bp made after the
+    entry's costs. The window's own marks reach Thursday's 11.00, which takes the week past its
+    1,000 bp; the seed never reads it, and the next restart, after Thursday's bar, resumes the
+    week at what the sleeve read and buys at Friday's (`docs/backlog.md` row 283)."""
+    from kanso.criteria.run import day_of
+
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=WEEKLY)
+    first = deploy(ws, store, "paper").results[0]
+    capital = first.capital
+    ended_tuesday(store, first, pnl=0.06 * capital)
+    deployable(ws, store, "aboomer", sleeve=RAISES_THURSDAY, doc=document(id="aboomer"))
+
+    made = deploy(ws, store, "paper")
+
+    assert made.halted is not None
+    (halted,) = [one for one in made.results if one.strategy_id == "weekly"]
+    assert {(fill.side, fill.px) for fill in halted.run.fills} == {("BUY", 10.0), ("BUY", 10.01)}
+    assert halted.positions == (("DEMO.XNAS", 3_600.0, 11.0, 1.0),), "nothing was flattened"
+    record = halted.run.period_stops
+    assert record is not None and record.last is not None
+    assert (record.last.opening_ns, record.last.stopped) == (WEEK_NS, False)
+    assert record.last.pnl / capital * 10_000 == pytest.approx(595, abs=1)
+    ends = [day_of(end) for end in halted.run.period_ends_ns]
+    thursday = halted.run.equity[ends.index(date(2024, 3, 14))] - record.last.anchor
+    assert thursday / capital * 10_000 == pytest.approx(1_045, abs=1), "past the target"
+    seed = records.target_seed(
+        records.stage_results(store, strategy_id="weekly", stage="paper"), capital
+    )
+    assert seed is not None and seed.last == record.last
+
+    (resumed,) = [one for one in deploy(ws, store, "paper").results if one.strategy_id == "weekly"]
+
+    assert bought_on(resumed.run)[0] == date(2024, 3, 15)
+
+
 WEEKLY_OPEN = document(
     id="weekly",
     risk_limits={"max_position_pct": 100, "max_drawdown_pct": 40, "max_leverage": 1},

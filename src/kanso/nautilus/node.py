@@ -668,9 +668,13 @@ def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
     A restart with nothing new to replay is not a failure and not a crash: the stage is
     current. It produces an empty window for every version, leaves the clock where it was,
     and builds no node at all — starting one to feed it nothing would only close and reopen
-    every position for no reason. A version under a `period_target` records what a window
-    handed no point records, an empty `PeriodStops` — no week traded in and none open — so an
-    idle window never reads as one of a version with no target.
+    every position for no reason. A version under a `period_target` records an empty
+    `PeriodStops` — no week traded in and none open — so an idle window never reads as one of a
+    version with no target. That holds for a week its restart would resume too: no harness
+    runs to resume it, and the clock stands where it was, so the next restart resumes the week
+    from the window before. A window handed no point of its own in a node that does run, a
+    stage-mate's names printing, lists the week its restart resumed
+    (`KansoStrategy._target_resume`).
     """
     return StageRun(
         stage=node.stage,
@@ -971,8 +975,9 @@ def _realised(
     that one, so the marks hold no record of their own that no venue was loaded with.
 
     What the version's period target did over the window is its harness's record, read once
-    the node has flattened and stopped (`period_stops`, `KansoStrategy._target_record`), and is
-    carried on the window's run, an empty one included.
+    the node has stopped — after its own flatten, or where a halt, which flattens nothing,
+    left the sleeve (`period_stops`, `KansoStrategy._target_record`) — and is carried on the
+    window's run, an empty one included.
     """
     if not any(groups):
         return Realised(

@@ -957,13 +957,17 @@ its flatten's fills, and the week open at the last point (`docs/concepts.md`, Ca
 
 On a paper or live stage the node restarts flat at the version's capital every window, and the
 week carries across the restart. The next window reads the week open at the last point of the
-strategy's newest window on that stage that opened one, whichever of its versions ran it —
-read after the node's own flatten, so what it made there carries that close's cost — and
-resumes it when it resumes trading inside that week: when the instant after the stage's clock
-falls in it. The week is then the window's first, open from its first instant and listed among
-the weeks it traded in though its first point falls in a later one, so whatever the sleeve
-sends before that point, from `on_start` with no warmup to drop it, is held to the week as
-anything sent in it is. A week that had stopped stays stopped: every entry is dropped until the
+strategy's newest window on that stage that had one open, whichever of its versions ran it —
+read after the node's own flatten, so what it made there carries that close's cost, or, on a
+window a halt ended, where the halt left the sleeve (below) — and resumes it when it resumes
+trading inside that week: when the instant after the stage's clock falls in it. The week is
+then the window's first, open from its first instant and listed among the weeks it traded in
+though its first point falls in a later one, or never comes, so whatever the sleeve sends
+before that point, from `on_start` with no warmup to drop it, is held to the week as anything
+sent in it is. A window whose names print nothing after the clock while a stage-mate's do
+records the week it resumed and nothing else, so the next restart reads the same week from it;
+a stage with nothing at all to replay builds no node, records no week and leaves its clock where
+it stood, so the next restart resumes the week from the window before. A week that had stopped stays stopped: every entry is dropped until the
 next week opens — an entry sent from `on_start` among them, rather than resting at the venue to
 fill inside the week — and the window lists that stop again, as the window before struck it,
 with what it dropped under it; it restarts holding nothing with nothing working, so there is
@@ -1001,6 +1005,12 @@ What the rule does not do, said here so a card is read as it ran:
 - `cost_stress` and `cost_scenario` re-price the recorded fills and keep the path, so the
   weeks a card stopped stand as recorded, though a cheaper scenario would have stopped more of
   them and a dearer one fewer (row 269).
+- A stage window a halt ends — a version on the stage raised and the node stopped itself — is
+  not flattened, and the week it leaves open is read where the halt left the sleeve: what it
+  holds never closed and marked at the last price it was handed. The window's own marks run on
+  past that point, the one the halt came at among them, so a week they take past its target is
+  resumed short of it, and the next window, which restarts flat after that point, enters in it
+  (row 283).
 
 `kanso hyp validate` refuses (exit 3) a missing key, a zone other than `America/New_York` — a
 run's return periods are cut from a UTC midnight, which meets a week's opening only where no

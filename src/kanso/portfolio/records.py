@@ -312,19 +312,27 @@ def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
 
 
 def target_seed(results: Sequence[StageResult], capital: float) -> PeriodStops | None:
-    """Where a strategy's `period_target` stood when its newest window that opened a week
+    """Where a strategy's `period_target` stood when its newest window that had a week open
     closed, whichever of its versions ran it (`results`, one strategy's windows on one stage).
 
-    That window's record narrowed to the week open at its last point (`PeriodStops.last`) —
-    read there after the node's own flatten, so its P&L carries that close's cost — and the
-    week's stop when it had stopped, which the next window lists again; `None` when no window
-    has opened a week. A window handed no point after its warmup opened none and moved
-    nothing, so the one before it still holds the answer. The week's anchor, threshold and
-    P&L are stated at `capital`, the share the next window runs at, scaled from the one that
-    window ran at, so the basis points made and left carry across a share that moved; the
-    stop is kept as it was struck. The next window resumes the week when it resumes trading
-    inside it (`kanso.nautilus.backtest.RunRequest.resumed`): every window restarts flat at the
-    capital, and what carries across is the week.
+    That window's record narrowed to the week open at its last point (`PeriodStops.last`) and
+    the week's stop when it had stopped, which the next window lists again; `None` when no
+    window has had a week open. The week's P&L is read where the window left the sleeve: after
+    the node's own flatten, so it carries that close's cost; on a window a halt ended, which
+    the node flattens nothing of, with what the sleeve holds never closed and marked at the
+    last price it was handed, so a move the stage's marks reach after that — at the point the
+    halt came at, among others — is in no seed, and the next window, restarting flat after
+    that point, never reads it (`docs/backlog.md` row 283). A window that had no week open —
+    an idle stage's, which runs no harness, or one handed no point after its warmup that
+    resumed none — moved nothing, so the one before it still holds the answer; one handed no
+    point of its own that resumed a week records the week as it resumed it — what it had
+    made, its threshold and its stop the window before's, at its own share — so reading it
+    reads the same week. The week's anchor, threshold and P&L are stated at `capital`, the
+    share the next window runs at, scaled from the one that window ran at, so the basis points
+    made and left carry across a share that moved; the stop is kept as it was struck. The next
+    window resumes the week when it resumes trading inside it
+    (`kanso.nautilus.backtest.RunRequest.resumed`): every window restarts flat at the capital,
+    and what carries across is the week.
     """
     for result in reversed(results):
         stops = result.run.period_stops

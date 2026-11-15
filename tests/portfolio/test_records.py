@@ -499,8 +499,9 @@ def weeks(*opened: int, stopped: tuple[int, ...] = (), pnl: float = 6.0) -> Peri
 
 
 def test_a_target_is_seeded_from_the_week_its_newest_window_left_open() -> None:
-    """The newest window that opened a week holds the answer, narrowed to its last week and that
-    week's stop; a window handed no point opened none, and one with no target says nothing."""
+    """The newest window that had a week open holds the answer, narrowed to its last week and
+    that week's stop; a window that had none open — an idle stage's, or one handed no point that
+    resumed no week — says nothing, and nor does one with no target."""
     older = a_run(period_stops=weeks(10, 20, stopped=(10, 20)))
     newest = a_run(period_stops=weeks(30, 40, stopped=(30, 40), pnl=12.0))
     idle = a_run(period_stops=PeriodStops())

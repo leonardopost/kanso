@@ -25,9 +25,11 @@ recorded no hold has no benchmark, rather than one that skips a window.
 **A period target's record is joined by its weeks.** Each window records what the version's
 `period_target` did there, and two windows restarted inside one New York week both traded in
 it, so the joined record holds each week once, every window's stops in turn, and the week
-open at the last point of the newest window that was handed one. A window restarted inside a
-stopped week lists the stop it resumed under again, as the window before recorded it, so the
-two are one stop: joined once, with what both windows dropped under it and the first's fills.
+open at the last point of the newest window that had one open — one handed a point after its
+warmup, or one a stage restart resumed a week in, handed a point of its own or not. A window
+restarted inside a stopped week lists the stop it resumed under again, as the window before
+recorded it, so the two are one stop: joined once, with what both windows dropped under it and
+the first's fills.
 
 **The book is the last window's, not every window's.** Positions are recorded before the
 flatten, so each window's book is what that window ended holding; only the most recent one is

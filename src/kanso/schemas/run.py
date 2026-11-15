@@ -273,10 +273,12 @@ class PeriodStop(KansoModel):
 class OpenPeriod(KansoModel):
     """The week of a `period_target` open at a run's last point: its opening, its anchor and
     threshold, the P&L it had made there — `balance` less the anchor, read after a stage
-    node's own flatten — and whether the week itself was stopped. What a stage restart inside
-    the week resumes from (`kanso.portfolio.records.target_seed`); on a window that resumed it,
-    the anchor is the window's capital less what the week had made before it, so the P&L is
-    the week's across both."""
+    node's own flatten, or on a window a halt ended, which nothing flattens, where the halt left
+    the sleeve, what it holds never closed and marked at the last price it was handed — and
+    whether the week itself was stopped. What a stage restart inside the week resumes from
+    (`kanso.portfolio.records.target_seed`); on a window that resumed it, the anchor is the
+    window's capital less what the week had made before it, so the P&L is the week's across
+    both."""
 
     opening_ns: Instant
     anchor: Finite
@@ -294,8 +296,11 @@ class PeriodStops(KansoModel):
     first instant whether or not a point of it follows, in order
     (`kanso.nautilus.clock.week_opening`), so `periods` counts the target's weeks and never the
     return periods; `stops` is every week it stopped, in order, and
-    `stopped` how many weeks that is. `last` is `None` for a run handed no point. A run of a
-    hypothesis that declares no `period_target` records none of this at all.
+    `stopped` how many weeks that is. `last` is `None` for a run handed no point after its
+    warmup that resumed no week. A stage window that resumed a week and was handed no point of
+    its own — its names quiet while a stage-mate's printed — records that week all the same: in
+    `openings`, as `last`, and with the stop it resumed under. A run of a hypothesis that
+    declares no `period_target` records none of this at all.
     """
 
     openings: list[Instant] = Field(default_factory=list)

@@ -927,7 +927,9 @@ dated spread or none, and never off what the sleeve has been handed: the venue f
 order while it applies a bar, before the sleeve is handed that bar. That record is in no
 return: the stops are already in the fills and the equity. A stage window's own flatten after its last point is
 the stage's and no stop's fill, and the week open there is read after it, so its P&L carries
-that close's cost. `research show --measured`, `cert run`, `cert show`, `monitor run` and
+that close's cost; a window a halt ends is not flattened, and its open week is read where the
+halt left the sleeve, what it holds never closed and marked at the last price it was handed
+(`docs/backlog.md` row 283). `research show --measured`, `cert run`, `cert show`, `monitor run` and
 `kanso replay` print it on a `stops` line — the weeks stopped of the target's weeks traded in,
 never the return periods — and carry it under `--json`, and `kanso replay parity` compares the
 two paths' records element by element (`docs/cli.md`). A week belongs to the fold its opening

@@ -1622,7 +1622,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         sleeve sends from `on_start` or before its first point is held to it as anything sent
         in the week is, and nothing reaches the venue that the week would drop. Every stage
         window restarts flat at the capital, so what the week had made — the P&L that window
-        recorded at its last point, after the node's own flatten, stated at this window's
+        recorded at its last point, after the node's own flatten or, where a halt ended it,
+        unflattened where the halt left the sleeve (`_target_record`), stated at this window's
         capital — is struck into the anchor: the capital less it. `balance` less the anchor is
         then the week's P&L across both windows, read against the threshold the week was
         struck with, so a week that had made part of its target stops at what is left of it.
@@ -1791,9 +1792,14 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`kanso.criteria.run.CardRun.period_stops`); `None` without a target.
 
         Read once the run has ended — on a stage node after its own flatten, whose cost is then
-        in the open week's P&L, a flatten that is the stage's and stops no week. The open week
-        reads as stopped only when its own stop is in force, not while a stop of the week
-        before waits for the sleeve to be flat.
+        in the open week's P&L, a flatten that is the stage's and stops no week; on a node a halt
+        ended, which flattens nothing, where the halt left the sleeve: `balance` with what it
+        holds never closed, marked at the last price it was handed — a fill it was handed no
+        price after at the fill's own. The open week reads as stopped only when its own stop is
+        in force, not while a stop of the week before waits for the sleeve to be flat. A week a
+        stage restart resumed is open from the run's first instant (`_target_resume`), so a run
+        handed no point after its warmup records it all the same, and records an empty
+        `PeriodStops` only when it resumed none.
         """
         if self._period_target is None:
             return None

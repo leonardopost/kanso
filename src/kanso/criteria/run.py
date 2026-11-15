@@ -214,12 +214,15 @@ class CardRun:
     `period_stops` is what the hypothesis's `period_target` did over the run, as the harness
     that applied it recorded it (`PeriodStops`): every New York week it traded in, each week
     it stopped — the hit, what the stopped week dropped unsent, the flatten's fills — and the
-    week open at its last point; an empty one for a run handed no point, a stage window with
-    nothing to replay included. `None` for a hypothesis that declares no target, for a run that
-    crashed and for a card its sizing refused, whose harness's record nothing read, and for a
-    run recorded before runs kept it. It is a record of the path and is in no return: the
-    stops are already in the fills and the equity, and nothing an objective or a gate reads
-    changes with it.
+    week open at its last point. A run handed no point after its warmup records an empty one,
+    unless a stage restart resumed a week in it: a window handed no point of its own while a
+    stage-mate's names printed records that week, open at its last point, with the stop it
+    resumed under. A stage window with nothing to replay records an empty one, a week its
+    restart would resume included, since it runs no harness. `None` for a hypothesis that
+    declares no target, for a run that crashed and for a card its sizing refused, whose
+    harness's record nothing read, and for a run recorded before runs kept it. It is a record
+    of the path and is in no return: the stops are already in the fills and the equity, and
+    nothing an objective or a gate reads changes with it.
     """
 
     window: tuple[date, date]
