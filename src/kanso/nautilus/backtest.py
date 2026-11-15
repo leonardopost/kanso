@@ -1872,7 +1872,9 @@ class Marks:
     same instant by construction. The clock is the feed's, not a view's: a card and a replay
     fold the whole feed their venue was handed, and a stage version and a book member, whose
     marks fold their own points only, are handed the feed the shared venue was handed
-    (`clocked`), where a stage-mate's print may be the one that applied the split. A
+    (`clocked`), where a stage-mate's print may be the one that applied the split, and which
+    replaces whatever the view's own points read — a halted stage's view holds points the
+    venue was never handed. A
     one-for-five held through its ex-date, with its week's low printed the day before at
     10.19 and the shares held at the week's end bought at 53.51, was valued at 10.19 a share;
     read in the new shares the low is 50.95. Without a split, nothing is restated and a
@@ -2131,8 +2133,9 @@ class Marks:
             applied[index] = ts
 
     def clocked(self, points: Iterable[object]) -> None:
-        """Read the venue's clock off `points`, the whole feed the venue was handed, where
-        these marks fold one view of it — a stage version's own points, or a book member's.
+        """Read the venue's clock off `points`, the feed the venue was handed, where these
+        marks fold one view of it — a stage version's own points, or a book member's — and
+        once that view is folded.
 
         The shared venue applies a split at whichever point of its own venue first carries
         the market past it, a stage-mate's or another member's among them, and books it into
@@ -2141,11 +2144,19 @@ class Marks:
         measured on a book, a member holding 100 restated shares at the pre-split 10 struck
         90,994.98 where the book and the member run alone struck 99,994.98. Each point the
         venue applies moves the clock as `fold` moves it, and nothing else is folded: the
-        view's own periods, marks and ranges are its own. A view's points are in the feed,
-        and the clock takes the earliest instant, so reading the feed once, before or after
-        the view, gives the same clock."""
+        view's own periods, marks and ranges are its own.
+
+        The clock is the feed's alone: what folding the view moved it to is set aside first.
+        A view can hold points the venue was never handed — a stage version is marked over
+        its whole view after a halt, and the node releases nothing past it — and such a point
+        applied nothing; kept, a stage-mate's bar past a split, unreleased, put the split in
+        force at every later end while the venue held the old count, and the old shares were
+        marked at the restated price. A book's feed holds every member's points, so there the
+        clock is the one the view and the feed read together."""
         if not self.applied:
             return
+        for _, applied in self.applied.values():
+            applied[:] = [_NEVER] * len(applied)
         for point in points:
             kind = type(point)
             if kind is QuoteTick or kind is TradeTick:

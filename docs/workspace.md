@@ -2397,7 +2397,8 @@ has not printed in. The count in force at the end is the venue's: it applies a s
 venue printed past the split's instant reaches it, whichever name printed it — on a stage or
 in a book, a stage-mate's or another member's — at the instant that point was published, which
 is when the runner books the new count, and an eve's daily bar published after the midnight
-it is stamped at is still the old count's. Measured on
+it is stamped at is still the old count's; a point a halt left unreleased was never handed to
+the venue and applies none, though the halted stage still marks the version over it. Measured on
 SOXS's one-for-five of 2011-02-24: a week whose low was a pre-split print of 10.19, holding
 638 shares bought after the split at 53.51, valued them at 10.19 and read a ratio of -55.39%;
 in one count the low is 50.95 and the ratio 68.92%. `corporate_actions` plays no part in it,

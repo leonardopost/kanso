@@ -397,6 +397,25 @@ def test_a_view_is_read_in_the_era_the_feed_s_venue_applied(request_for, point, 
     assert view.periods()[1].marks.get(INSTRUMENT) == mark
 
 
+def test_a_view_s_point_the_feed_does_not_hold_moves_no_clock(request_for) -> None:
+    """A stage version's view holds every point of its own series over the window, and a halt
+    can leave some of them unreleased: HEDGE's Wednesday print, past the split, is in the view
+    and never reached the venue, which applied nothing. Folded, it moved the view's clock; read
+    off the released feed (`clocked`), which holds Tuesday's bar alone, no split is in force
+    and DEMO's Tuesday 10 is carried as printed. Kept, the view marked the 1,000 old shares the
+    venue still held at 100."""
+    made = request(request_for, period="1d")
+    view = Marks(made, VenueModel.model_validate(dict(made.venue_model)), [scheduled(0.1)])
+    tuesday, wednesday = at(date(2024, 1, 2)), at(EX)
+    view.fold(tuesday, INSTRUMENT, 10.0, 9.0, 10.5, tuesday)
+    view.fold(wednesday, SAME_VENUE, 5.0, 5.0, 5.0, wednesday)
+    assert view.periods()[1].marks[INSTRUMENT] == (tuesday, pytest.approx(100.0))
+
+    view.clocked([_bar(date(2024, 1, 2), 10.0, 9.0)])
+
+    assert view.periods()[1].marks.get(INSTRUMENT) is None
+
+
 def test_a_price_printed_in_shares_the_venue_has_not_split_into_is_read_in_the_old(
     request_for,
 ) -> None:
@@ -689,6 +708,75 @@ def test_a_stage_version_whose_split_a_stage_mate_applied_is_read_in_one_count(t
     cash = CAPITAL - 10_050.0 - alpha.fills[0].cost + 50.0 - sum(alpha.carry[:2])
     assert alpha.equity[1] == pytest.approx(alpha.equity[0])
     assert alpha.worst_ratio[1] == pytest.approx((cash + 10_000.0) / 10_000.0)
+
+
+HALTS = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+        self.done = False
+
+    def on_bar(self, bar):
+        self.seen += 1
+        if not self.done and str(bar.bar_type.instrument_id) == "DEMO.XNAS":
+            self.done = True
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+        if self.seen == 10:
+            raise RuntimeError("the stage halts here")
+"""
+"""Buys 1,005 DEMO at 10 on its first bar, and raises on its tenth, which halts the stage."""
+
+
+def test_a_halted_stage_s_unreleased_points_apply_no_split(tmp_path) -> None:
+    """A paper stage from the 2nd to the 20th: alpha holds 1,005 DEMO and trades OTHR on its
+    venue, and raises on its tenth bar, the 6th's, so the node halts there and the venue never
+    reaches DEMO's one-for-ten of the 16th. alpha is still marked over its whole view, which
+    holds OTHR's bar of the 16th and DEMO's bars in the new shares after it; the venue applied
+    nothing, so alpha holds 1,005 old shares at every end, worth 10 each — DEMO's 100s read back
+    into the shares it still holds — and its equity is what it paid. Read off the view's own
+    points, OTHR's unreleased bar applied the split from the 16th: the old shares were marked at
+    100, a 90,450 gain, and the ratio counted 100,500 of stock."""
+
+    def demo(day: date) -> float | None:
+        return None if day == REVERSE_EX else 10.0 if day < REVERSE_EX else 100.0
+
+    points = [*_sessions(INSTRUMENT, demo), *_sessions("OTHR.XNAS", lambda _: 20.0)]
+    instruments = [_listed(INSTRUMENT, info=REVERSE), _listed("OTHR.XNAS")]
+    stage = StageNode(
+        stage="paper",
+        capital=CAPITAL,
+        limits=Limits(
+            max_gross_pct=100, max_net_pct=100, per_strategy_max_pct=100, daily_loss_pct=50
+        ),
+        placements=(_placed("alpha", _staged((INSTRUMENT, "OTHR.XNAS"), HALTS), tmp_path),),
+        window=(date(2024, 1, 2), date(2024, 1, 20)),
+        catalog=catalog(tmp_path / "catalog", points, instruments),
+    )
+
+    ran = node.run(stage)
+    alpha = ran.realised[0].run
+
+    assert ran.halted is not None
+    assert alpha.adjustments == ()
+    ends = [end for end in alpha.period_ends_ns if end >= midnight_ns(REVERSE_EX)]
+    assert len(ends) == 5
+    held = {item.ts_ns: (item.qty, item.notional) for item in alpha.held}
+    assert [held[end] for end in ends] == [(1_005.0, pytest.approx(10_050.0))] * len(ends)
+    cash = CAPITAL - 10_050.0 - alpha.fills[0].cost
+    for end in ends:
+        index = alpha.period_ends_ns.index(end)
+        assert alpha.worst_ratio[index] == pytest.approx(
+            (cash - sum(alpha.carry[: index + 1]) + 10_050.0) / 10_050.0
+        )
 
 
 # --- two splits at one point ---------------------------------------------------------

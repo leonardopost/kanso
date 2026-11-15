@@ -686,11 +686,13 @@ def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
     assert "printed past the split's instant reaches it" in actions
     assert "at the instant that point was published, and the runner books the split" in actions
     assert "read off the stage's or the book's feed, not their own" in actions
+    assert "a point the node never released was never handed to the venue" in actions
     assert "The runner reads a period in the shares held at its end." in workspace
     assert "a stage-mate's or another member's — at the instant that point was published" in (
         workspace
     )
     assert "an eve's daily bar published after the midnight it is stamped at" in workspace
+    assert "a point a halt left unreleased was never handed to the venue" in workspace
     assert "read in the shares held at the end, so a price printed before a split" in workspace
     assert "`corporate_actions` plays no part in it" in workspace
     rows = page("backlog.md").splitlines()

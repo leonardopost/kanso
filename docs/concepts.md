@@ -2395,8 +2395,10 @@ holds at that same instant, so the prices and the count at an end are read off o
 is the clock of the whole feed the venue was handed: a stage version's and a book member's
 marks are struck from their own points, and a stage-mate's or another member's print can be
 the one that applied a split to their position, so their era is read off the stage's or the
-book's feed, not their own. A price of the split name printed in shares the venue has not
-yet split into is read back into the shares it still holds. The run keeps each split it
+book's feed, not their own — and off nothing else: a stage a halt ended still marks a version
+over its whole view, but a point the node never released was never handed to the venue and
+applies no split. A price of the split name printed in shares the venue has not yet split
+into is read back into the shares it still holds. The run keeps each split it
 applied to a held position (`adjustments`), and the path `intraday_drawdown` reads replays
 them where the runner booked them.
 
