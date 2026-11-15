@@ -6,23 +6,26 @@ of clocks or a closed Monday, so each stamp is built from its own date's offset 
 weeks open on Monday at 04:00. A sleeve buys and sells on a plan keyed by each bar's instant and
 name, and writes down what it saw on every bar after the harness read the target: whether the
 week is stopped, what it holds, its balance, the week's anchor and threshold, and how many
-orders were dropped. Every price is a bar's own close, so the bar a fill was struck at is read
-off its price, and costs are zero unless a test states them, so every P&L is a difference of
-closes by hand. The overlay's clips and hedge legs are fed the strategy fixtures' bars instead,
-stamped a minute apart from the epoch, under weeks that open on Wednesdays at 19:30 (`_clipped`).
+orders were dropped. Every bar but one opens, trades and closes at one price, so the bar a fill
+was struck at is read off its price, and costs are zero unless a test states them, so every P&L
+is a difference of prices by hand; the one bar that ranges fills a resting exit inside it. The
+overlay's clips and hedge legs are fed the strategy fixtures' bars instead, stamped a minute
+apart from the epoch, under weeks that open on Wednesdays at 19:30 (`_clipped`).
 
-What it pins: the first close at or above the target stops the week, under both bases; the
-flatten fills at the held name's next print, never at the price that made it due, hours later
-or in the next week; under a latency each leg of a pair fills at the close its order lands on,
-under both same-instant point orders; an entry in flight at the hit fills and is flattened;
-entries of every kind are dropped until the next week has opened and every name is flat — an
-order built by hand behind an exit, one by one or in a list read order by order, an overlay's
-clip, which then holds nothing, and a hedge leg that opens, while a held clip's `FLAT` goes;
-a new week's entry waits for the old week's legs to be flat; nothing sent while stopped takes
-the position past flat — one order bigger than it, an exit beside a working one, a modify that
-grows a resting exit — while exits that add up to it go; the weeks open at New York's Monday
-04:00 across both changes of clocks and on a closed Monday; and the anchor is the equity the
-card struck at the week before's last point, carry included.
+What it pins: the first close at or above the target stops the week, under both bases, and so
+does an exit's fill above the close; the flatten fills at the held name's next print, never at
+the price that made it due, hours later or in the next week; under a latency each leg of a pair
+fills at the close its order lands on, under both same-instant point orders; an entry in flight
+at the hit fills and is flattened; entries of every kind are dropped until the next week has
+opened and every name is flat — an order built by hand behind an exit, one by one or in a list
+read order by order, an overlay's clip, which then holds nothing, and a hedge leg that opens,
+while a held clip's `FLAT` goes; a new week's entry waits for the old week's legs to be flat;
+nothing sent while stopped takes the position past flat — one order bigger than it, an exit
+beside a working one, one sized in dollars, a modify that grows a resting exit by any amount,
+and an exit built by hand beside a flatten the order rate owes — while exits that add up to it
+go, and an order the venue has yet to answer at the hit is read at the most it could close; the
+weeks open at New York's Monday 04:00 across both changes of clocks and on a closed Monday; and
+the anchor is the equity the card struck at the week before's last point, carry included.
 """
 
 from __future__ import annotations
@@ -32,7 +35,9 @@ from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -59,10 +64,10 @@ from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.run import CardRun
 from kanso.data.types import CorporateAction
-from kanso.nautilus import cross_section
+from kanso.nautilus import cross_section, session
 from kanso.nautilus.backtest import RunRequest, RunResult, execute
 from kanso.nautilus.hooks import Clip, Hedge
-from kanso.nautilus.strategy import Decision, HookContext
+from kanso.nautilus.strategy import Decision, HookContext, KansoStrategy
 from kanso.schemas import CostsOverride, Hypothesis, PeriodTarget, resolve_venue_model
 from tests.nautilus.backtest.conftest import CAPITAL, SNAPSHOT, VENUE, hypothesis, instrument
 from tests.nautilus.strategy.conftest import DEMO, HEDGE, MINUTE_NS, bar
@@ -143,6 +148,16 @@ class Strategy(KansoStrategy):
                     self.resting, quantity=Quantity.from_int(int(side)),
                     price=Price.from_str("10.00"),
                 )
+            elif act == "notional":
+                way, qty, price = self._sized(side)
+                made = (InstrumentId.from_str(name), OrderSide[way], Quantity.from_int(qty))
+                if "@" in side:
+                    order = self.order_factory.limit(
+                        *made, Price.from_str(price), quote_quantity=True
+                    )
+                else:
+                    order = self.order_factory.market(*made, quote_quantity=True)
+                self.submit_order(order)
         with Path(self.kanso_config.record).open("a") as out:
             out.write(repr((
                 ts, key, self.period_stopped, self.held("{lead}"), self.held("{lagg}"),
@@ -186,17 +201,22 @@ def ny(day: date, hhmm: str) -> int:
     return int(datetime.combine(day, time(hours, minutes), tzinfo=NEW_YORK).timestamp()) * 10**9
 
 
-def series(symbol: str, points: Sequence[tuple[int, float]]) -> tuple[Bar, ...]:
-    """One name's one-minute bars, each stamped and published at its close, at that close."""
+Point = tuple[int, float] | tuple[int, float, float, float, float]
+"""A bar as its instant and close, open, high and low all at the close, or as its instant,
+open, high, low and close."""
+
+
+def series(symbol: str, points: Sequence[Point]) -> tuple[Bar, ...]:
+    """One name's one-minute bars, each stamped and published at its close."""
     kind = BarType(
         InstrumentId(Symbol(symbol), Venue(VENUE)),
         BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
         AggregationSource.EXTERNAL,
     )
     made = []
-    for ts, close in points:
-        price = Price(close, 2)
-        made.append(Bar(kind, price, price, price, price, Quantity.from_int(10**7), ts, ts))
+    for ts, *prices in points:
+        ohlc = [Price(price, 2) for price in (prices * 4 if len(prices) == 1 else prices)]
+        made.append(Bar(kind, *ohlc, Quantity.from_int(10**7), ts, ts))
     return tuple(made)
 
 
@@ -280,8 +300,8 @@ def request(
 
 def card(
     plan: Mapping[tuple[int, str], Sequence[tuple[str, str, str]]],
-    lead: Sequence[tuple[int, float]],
-    lagg: Sequence[tuple[int, float]],
+    lead: Sequence[Point],
+    lagg: Sequence[Point],
     tmp_path: Path,
     *,
     order: tuple[str, str] = (LEAD, LAGG),
@@ -485,9 +505,47 @@ PAST_FLAT = [
     ([("limit", LEAD_ID, "SELL"), ("hand", LEAD_ID, "SELL")], 1, 1000),
     ([("hand", LEAD_ID, "SELL"), ("limit", LEAD_ID, "SELL")], 1, 1000),
     ([("limit", LEAD_ID, "SELL"), ("limit", LEAD_ID, "SELL")], 1, 1000),
-    # a modify that grows a resting exit past what is left, and one that grows it to it
+    # a modify that grows a resting exit, past what is left or to it, alone or with an order,
+    # an exit of the sleeve's own or a second grow behind it, read as if the first had not grown
     ([("limit", LEAD_ID, "SELL:500@99.00"), ("grow", LEAD_ID, "2000")], 1, 0),
-    ([("limit", LEAD_ID, "SELL:500@99.00"), ("grow", LEAD_ID, "1000")], 0, 1000),
+    ([("limit", LEAD_ID, "SELL:500@99.00"), ("grow", LEAD_ID, "1000")], 1, 0),
+    (
+        [
+            ("limit", LEAD_ID, "SELL:500@99.00"),
+            ("grow", LEAD_ID, "1000"),
+            ("hand", LEAD_ID, "SELL:500"),
+        ],
+        1,
+        500,
+    ),
+    (
+        [
+            ("limit", LEAD_ID, "SELL:500@99.00"),
+            ("grow", LEAD_ID, "1000"),
+            ("limit", LEAD_ID, "SELL:10@1.00"),
+        ],
+        1,
+        10,
+    ),
+    (
+        [("limit", LEAD_ID, "SELL:500@99.00"), ("grow", LEAD_ID, "1000"), ("exit", LEAD_ID, "")],
+        1,
+        1000,
+    ),
+    (
+        [
+            ("limit", LEAD_ID, "SELL:400@99.00"),
+            ("grow", LEAD_ID, "600"),
+            ("limit", LEAD_ID, "SELL:400@99.00"),
+            ("grow", LEAD_ID, "600"),
+        ],
+        2,
+        0,
+    ),
+    # an exit sized in the quote's currency, whose shares are known only at its price: within
+    # the long at market, and two thousand shares at a limit of 0.50
+    ([("notional", LEAD_ID, "SELL:500")], 1, 0),
+    ([("notional", LEAD_ID, "SELL:1000@0.50")], 1, 0),
     # exits that close no more than the position, together or alone
     ([("hand", LEAD_ID, "SELL:500"), ("limit", LEAD_ID, "SELL:500")], 0, 1000),
     ([("orders", f"{LEAD_ID},{LEAD_ID}", "SELL:400,SELL:600")], 0, 1000),
@@ -501,14 +559,16 @@ def test_nothing_sent_while_stopped_takes_the_position_past_flat(
 ) -> None:
     """LEAD is bought 1,000 at the 04:01 close of 10.00 and the 04:02 close of 10.60 stops the
     week. In that bar's handler the sleeve sends, by hand, sales at market, marketable limits
-    at 10.00, and a limit resting at 99.00 that it then modifies to 10.00 and a larger quantity.
-    Each goes only when it closes no more than is left once every
-    order of the sleeve still working on the closing side has filled — a limit resting read as
-    if it filled, a list's orders before it too — so a sale bigger than the position, by any
-    amount, a sale beside a working exit of the whole, and a modify that grows a limit past what
-    is left are dropped, each counted, while exits that add up to the position go. What they
-    leave is flattened at LEAD's next close: nothing is ever bought back, and LEAD is never
-    short."""
+    at 10.00, sales sized in dollars, and a limit resting at 99.00 that it then modifies to
+    10.00 and a larger quantity. Each order goes only when it is sized in shares and closes no
+    more than is left once every order of the sleeve still working on the closing side has
+    filled — a limit resting read as if it filled, a list's orders before it too — so a sale
+    bigger than the position, by any amount, a sale beside a working exit of the whole, and a
+    sale in dollars are dropped, each counted, while exits that add up to the position go.
+    Every modify that grows a limit is dropped, by any amount, so the order behind it — a sale
+    at market, a marketable limit, `submit_exit` or a second grow — is read against the limit
+    as it was, and goes where that leaves room. What they leave is flattened at LEAD's next
+    close: nothing is ever bought back, and LEAD is never short."""
     stamps = ("04:01", "04:02", "04:03", "04:04")
     lead = list(zip((ny(MONDAY, s) for s in stamps), (10.00, 10.60, 10.70, 10.80), strict=True))
     lagg = [(ts, 11.00) for ts, _ in lead]
@@ -529,6 +589,172 @@ def test_nothing_sent_while_stopped_takes_the_position_past_flat(
     rows = [row for row in seen if row.ts >= ny(MONDAY, "04:02") and row.name == LAGG_ID]
     assert rows and all(row.lead >= 0.0 for row in rows)
     assert all(row.lead == 0.0 for row in rows if row.ts >= ny(MONDAY, "04:03"))
+
+
+TEN = tuple(f"04:{minute:02d}" for minute in range(1, 11))
+IN_FLIGHT = {
+    "grow": (
+        (10.00, 10.00, 10.00, 10.00, 10.60, 10.70, 10.80, 10.90, 11.00, 11.10),
+        QTY,
+        [("BUY", 1000.0, 10.00, "04:04"), ("SELL", 1000.0, 10.80, "04:07")],
+    ),
+    "notional": (
+        (0.50, 0.50, 0.50, 0.50, 0.60, 0.61, 0.62, 0.63, 0.64, 0.65),
+        10 * QTY,
+        [
+            ("BUY", 10000.0, 0.50, "04:04"),
+            ("SELL", 6452.0, 0.62, "04:07"),
+            ("SELL", 3548.0, 0.65, "04:10"),
+        ],
+    ),
+}
+"""Two orders the venue has yet to answer at a hit: LEAD's closes over 04:01 to 04:10, the
+long held, and the fills the stopped week ends on."""
+
+
+def _in_flight(kind: str) -> tuple[dict[Any, Any], list[Point], list[Point]]:
+    """LEAD bought at 04:01, an order the venue will not have answered by the hit at the 04:05
+    close sent before it at 04:04, and a sale of 500 built by hand at the hit."""
+    closes, _, _ = IN_FLIGHT[kind]
+    before = (
+        [("grow", LEAD_ID, str(QTY))] if kind == "grow" else [("notional", LEAD_ID, "SELL:4000")]
+    )
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")]
+        + ([("limit", LEAD_ID, "SELL:500@99.00")] if kind == "grow" else []),
+        (ny(MONDAY, "04:04"), LEAD_ID): before,
+        (ny(MONDAY, "04:05"), LEAD_ID): [("hand", LEAD_ID, "SELL:500")],
+    }
+    lead: list[Point] = list(zip((ny(MONDAY, s) for s in TEN), closes, strict=True))
+    return plan, lead, [(point[0], 11.00) for point in lead]
+
+
+@pytest.mark.parametrize("kind", sorted(IN_FLIGHT))
+def test_an_order_the_venue_has_yet_to_answer_is_read_at_the_most_it_could_close(
+    kind: str, tmp_path: Path
+) -> None:
+    """Under a latency of 150 seconds on one-minute bars, longer than the wait for LEAD's next
+    bar, the sleeve buys LEAD at 04:01 and, before the hit, sends an order the venue has yet
+    to answer when the week stops at the 04:05 close: a modify at 04:04 growing a sale resting
+    at 99.00 to the whole long at 10.00, or a sale at market sized in dollars, which the venue
+    turns into shares only as it takes it — 4,000 dollars of a name at 0.62, 6,452 shares of
+    the 10,000 held. A sale of 500 the sleeve builds at the hit is dropped, and the flatten,
+    due at LEAD's next close, is owed until the venue has answered: it sells what the order
+    leaves once that order has filled, never the long less the order's old size. Read at the
+    limit's 500 or the 4,000 dollars, the two would have sold 1,500 and 12,452 shares and
+    bought the rest back in the stopped week."""
+    _, qty, expected = IN_FLIGHT[kind]
+    plan, lead, lagg = _in_flight(kind)
+
+    result, seen = card(plan, lead, lagg, tmp_path, latency_ms=150_000.0, qty=qty)
+
+    hit = next(row for row in seen if row.ts == ny(MONDAY, "04:05") and row.name == LEAD_ID)
+    assert hit.stopped and hit.dropped == 1
+    made = [(f.side, f.qty, f.px, f.ts_ns) for f in result.run.fills if f.instrument_id == LEAD_ID]
+    assert made == [(side, q, px, ny(MONDAY, hhmm)) for side, q, px, hhmm in expected]
+    assert sum(fill[1] for fill in made if fill[0] == "SELL") == qty
+    rows = [row for row in seen if row.name == LAGG_ID and row.ts >= ny(MONDAY, "04:05")]
+    assert rows and all(row.lead >= 0.0 for row in rows)
+
+
+@pytest.mark.parametrize("latency_ms", [10.0, 150_000.0])
+@pytest.mark.parametrize("kind", sorted(IN_FLIGHT))
+def test_a_replay_reads_an_order_the_venue_has_yet_to_answer_as_the_card_does(
+    kind: str, latency_ms: float, tmp_path: Path
+) -> None:
+    """The live code path runs the same two plans, at a latency the venue answers within before
+    the hit and at one it does not: the same intents, fills and equity, element by element."""
+    _, qty, _ = IN_FLIGHT[kind]
+    plan, lead, lagg = _in_flight(kind)
+    made = request(plan, tmp_path / "seen.txt", latency_ms=latency_ms, qty=qty)
+    instruments = [instrument(LEAD), instrument(LAGG)]
+    groups = [series(LEAD, lead), series(LAGG, lagg)]
+
+    researched = execute(made, instruments, groups)
+    replayed = session.run_node(made, instruments, groups).result
+
+    assert sum(fill.qty for fill in researched.run.fills if fill.side == "SELL") == qty
+    assert replayed.intents == researched.intents
+    assert replayed.run.fills == researched.run.fills
+    assert replayed.run.equity == researched.run.equity
+
+
+@pytest.mark.parametrize(("limit", "stops"), [("10.55", True), ("10.65", False)])
+def test_an_exit_fill_that_reaches_the_target_stops_the_week(
+    limit: str, stops: bool, tmp_path: Path
+) -> None:
+    """LEAD is bought 1,000 at the 04:01 close of 10.00 and a sale of the whole rests at
+    `limit` from 04:02. LEAD's 04:03 bar trades from 10.40 up to 10.60 and closes at 10.40: a
+    limit at 10.55 fills inside it, and the week's P&L is the 550 that fill realised, over the
+    target of 500, where the close alone marks 400. The week stops at the next point handed
+    over, LAGG's bar of the same instant, so the entry LAGG's handler asks there is dropped and
+    nothing of LAGG is bought. A limit at 10.65 is out of the bar's reach: nothing stops, and
+    the entry goes."""
+    lead: list[Point] = [
+        (ny(MONDAY, "04:01"), 10.00),
+        (ny(MONDAY, "04:02"), 10.00),
+        (ny(MONDAY, "04:03"), 10.40, 10.60, 10.40, 10.40),
+        (ny(MONDAY, "04:04"), 10.40),
+    ]
+    lagg: list[Point] = [(point[0], 11.00) for point in lead]
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, "04:02"), LEAD_ID): [("limit", LEAD_ID, f"SELL:1000@{limit}")],
+        (ny(MONDAY, "04:03"), LAGG_ID): [("entry", LAGG_ID, "BUY")],
+    }
+
+    result, seen = card(plan, lead, lagg, tmp_path)
+
+    asked = next(row for row in seen if row.ts == ny(MONDAY, "04:03") and row.name == LAGG_ID)
+    assert (asked.stopped, asked.sent) == (stops, [not stops])
+    sold = [("SELL", 10.55, ny(MONDAY, "04:03"))] if stops else []
+    assert fills(result.run) == [("BUY", 10.00, ny(MONDAY, "04:01")), *sold]
+    assert len(fills(result.run, LAGG_ID)) == (0 if stops else 1)
+    if stops:
+        assert asked.balance - asked.anchor == pytest.approx(550.0)
+
+
+def test_an_exit_built_by_hand_beside_a_flatten_the_rate_owes_is_dropped(tmp_path: Path) -> None:
+    """Under a rate of two requests a minute, a cancel costing two, LEAD is bought at 04:01
+    and a buy of ten of each name rests far below the market from 04:02. LEAD's 09:31 close
+    of 10.50 stops the week, whose cancels of the two resting buys spend the minute's
+    requests, so the flatten due at LEAD's 09:32 close is owed for want of one. A sale of the
+    whole long the sleeve builds by hand in that bar's handler is read against the long less
+    the exit the rate owes, which closes it all, so it is dropped and counted rather than
+    asked of the rate, which would refuse the card for an exit the strategy built itself; the
+    owed flatten sells the long once the rate allows."""
+    stamps = [f"09:{minute:02d}" for minute in range(31, 45)]
+    lead = [(ny(MONDAY, "04:01"), 10.00), (ny(MONDAY, "04:02"), 10.00)] + [
+        (ny(MONDAY, stamp), round(10.50 + 0.01 * index, 2)) for index, stamp in enumerate(stamps)
+    ]
+    lagg = [(ts, 11.00) for ts, _ in lead]
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, "04:02"), LAGG_ID): [("rest", LEAD_ID, "BUY"), ("rest", LAGG_ID, "BUY")],
+        (ny(MONDAY, "09:32"), LEAD_ID): [("hand", LEAD_ID, "SELL")],
+    }
+
+    result, seen = card(
+        plan, lead, lagg, tmp_path, stated={"orders_per_minute": 2, "requests_per_cancel": 2}
+    )
+
+    row = next(row for row in seen if row.ts == ny(MONDAY, "09:32") and row.name == LEAD_ID)
+    assert row.stopped and row.dropped == 1
+    assert [side for side, _, _ in fills(result.run)] == ["BUY", "SELL"]
+    assert result.run.fills[-1].qty == QTY
+
+
+def test_a_quantity_summed_in_floats_is_read_at_its_name_s_size_precision() -> None:
+    """`0.3 - 0.1` is an ulp short of 0.2 in floats. A stopped week reads a sized sleeve's
+    holding, a sum of fills less its clips, and what the rate owes of it at the name's size
+    precision, so the room left for an exit of a fractional holding is not an ulp short of
+    what is held (`_target_room`)."""
+    sizes = SimpleNamespace(size_precision=1)
+    reads = SimpleNamespace(cache=SimpleNamespace(instrument=lambda _: sizes))
+
+    assert Decimal(repr(0.3 - 0.1)) < Decimal("0.2")
+    read = KansoStrategy._target_exact(reads, InstrumentId.from_str(LEAD_ID), 0.3 - 0.1)  # type: ignore[arg-type]
+    assert read == Decimal("0.2")
 
 
 def _clipped(backtest: Any, asks: Mapping[int, Clip | Hedge], budget: float = CLIP_BUDGET) -> Any:

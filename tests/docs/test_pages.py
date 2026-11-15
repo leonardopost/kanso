@@ -567,11 +567,13 @@ def test_the_routes_to_the_zone_the_clock_does_not_close_are_backlog_rows() -> N
 
 def test_the_pages_say_nothing_sent_in_a_stopped_week_takes_the_sleeve_past_flat() -> None:
     """A stopped week holds every order `submit_exit` did not size to what is left to close,
-    counting every exit still working, resting ones included, and drops a modify that grows an
-    order past it (`tests/nautilus/strategy/test_period_target.py`). The workspace page, the
-    strategy base, the release note and the program template say so, none of them says a
-    resting exit is read as an exit whatever else is on its way, and the backlog row that
-    recorded the routes past flat is struck through."""
+    counting every exit still working, resting ones included, drops one sized in the quote's
+    currency and every modify that grows an order, and reads an order the venue has yet to
+    answer at the most it could close (`tests/nautilus/strategy/test_period_target.py`). The
+    workspace page, the strategy base, the release note and the program template say so, none
+    of them says a resting exit is read as an exit whatever else is on its way or that a modify
+    is dropped only past what is left, the backlog row that recorded the routes past flat is
+    struck through, and the route `submit_exit` keeps outside a stopped week has its own row."""
     from kanso.nautilus import strategy
 
     workspace = prose(page("workspace.md"))
@@ -586,9 +588,23 @@ def test_the_pages_say_nothing_sent_in_a_stopped_week_takes_the_sleeve_past_flat
     assert "so nothing sent in a stopped week takes the sleeve past flat" in changelog
     assert "an order built by hand that opens never sent" not in changelog
     assert "is sent only where it closes no more than you hold" in template
-    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 276 |"))
+    assert "never when it is sized in the quote's currency" in template
+    assert "a modify that grows an order is dropped, by any amount" in template
+    for text in (workspace, prose(strategy.__doc__ or ""), changelog):
+        assert "grows an order is dropped whatever it grows it by" in text
+        assert "by more than is left is dropped" not in text
+    assert "at the most it could close" in workspace
+    assert "sized in the quote's currency (`quote_quantity`)" in workspace
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if line.startswith("| ")
+    }
+    row = rows["276"]
     assert row.split("|")[3].strip().startswith("~~A stopped week reads an exit built by hand")
     assert "**closed** in review of the period target" in row
+    assert "A stopped week now drops every modify that grows an order" in row
+    assert rows["279"].split("|")[3].strip().startswith("`submit_exit` sizes an exit against")
 
 
 SCANS = frozenset({"check", "clashes", "scan"})

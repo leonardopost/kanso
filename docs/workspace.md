@@ -918,16 +918,23 @@ close of the name's next bar, whichever the order lands after, so the two legs o
 fill at the closes of two instants. Until the next week has opened and every name is flat or
 wholly on its way out at market, `submit_entry` returns `None`, and an order `submit_exit` did
 not size — built by hand, or an overlay's leg or clip — is held to the rule `submit_exit` sizes
-by: it is sent only when it closes no more of its name than is left to close once every order of
-the sleeve still working on the closing side has filled, a limit or a stop resting read as if it
-filled, and an exit the order rate owes at market as if it went. Anything else is dropped, never
-sent: an order that opens, one that would carry the position past flat — into a short smaller
-than the long or larger — and one beside a working exit that already closes what it would. A
-list is read order by order, each with the orders before it applied, and is dropped whole when
-any of them is, so an exit with an entry behind it sends neither; a modify that grows an order
-by more than is left is dropped, and the order stays as it was; a clip so dropped holds nothing,
-and the overlay's next clip is placed as if it had never been asked. So nothing the sleeve sends
-in a stopped week takes it past flat. Exits within what is left go, and the handlers run, so
+by: it is sent only when it is sized in shares and closes no more of its name than is left to
+close once every order of the sleeve still working on the closing side has filled, a limit or a
+stop resting read as if it filled, and an exit the order rate owes at market as if it went.
+Anything else is dropped, never sent: an order that opens, one that would carry the position
+past flat — into a short smaller than the long or larger — one beside a working exit that
+already closes what it would, and one sized in the quote's currency (`quote_quantity`), whose
+shares are known only at the price it fills at. A list is read order by order, each with the
+orders before it applied, and is dropped whole when any of them is, so an exit with an entry
+behind it sends neither; a modify that grows an order is dropped whatever it grows it by, and
+the order stays as it was; a clip so dropped holds nothing, and the overlay's next clip is
+placed as if it had never been asked. An order still working when the week stops is read, by
+`submit_exit` and the flatten too, at the most it could close: one a modify sent before the hit
+grows, at that modify's quantity until the venue has applied it — which under a latency longer
+than the wait for the name's next print it may not have — and one sized in the quote's currency
+that the venue has not yet turned into shares, as closing the whole position, so a flatten
+beside either is owed until the venue has answered it. So nothing the sleeve sends in a stopped
+week takes it past flat. Exits within what is left go, and the handlers run, so
 indicators keep warming. A flatten still due when the next week opens goes at the name's first
 print or quote there, and fills in the new week, whose anchor is struck before it. The strategy
 reads whether its week is stopped from `self.period_stopped`, and its position from

@@ -121,17 +121,22 @@ the print it was sent at or of the print after, and sent at the hit's own point 
 at the hit's price. Until the next week has opened and every name is flat or wholly on its way
 out at market (`_own_intended`), `submit_entry` returns `None`, dropped before it is sized,
 funded or asked of the rate, and an order `submit_exit` did not size — built by hand, or an
-overlay's leg or clip — is held to the rule `submit_exit` sizes by: it goes only when it closes
-no more of its name than is left to close once every order of the sleeve still working on the
-closing side has filled, a limit or a stop resting read as if it filled (`_target_room`). A
-list is read order by order, each with the list's orders before it applied, and is dropped
-whole when any of them would not go; a modify that grows an order by more than is left is
-dropped too, the order staying as it was (`_target_sends`). Anything else — an order that
-opens, one that would carry the position past flat, one beside a working exit that already
-closes what it would — is dropped before it is asked of the rate, and an overlay's clip so
-dropped is taken off the clip ledger, as the rate's drop takes one. So nothing the sleeve sends
-while stopped can take it past flat, alone or beside what is already working. The strategy
-reads `period_stopped`, and nothing else of it.
+overlay's leg or clip — is held to the rule `submit_exit` sizes by: it goes only when it is
+sized in shares and closes no more of its name than is left to close once every order of the
+sleeve still working on the closing side has filled, a limit or a stop resting read as if it
+filled (`_target_room`). A list is read order by order, each with the list's orders before it
+applied, and is dropped whole when any of them would not go (`_target_sends`). Anything else —
+an order that opens, one that would carry the position past flat, one beside a working exit
+that already closes what it would, one sized in the quote's currency — is dropped before it is
+asked of the rate, and an overlay's clip so dropped is taken off the clip ledger, as the rate's
+drop takes one. A modify that grows an order is dropped whatever it grows it by, the order
+staying as it was (`modify_order`), since the harness flattens what is held and a stopped week
+never needs an order larger. What is already working is read, by `submit_exit` and the flatten
+too, at the most it could still close (`_target_leaves`): an order a modify sent before the hit
+grows, at that modify's quantity until the venue has applied it, and an order sized in the
+quote's currency that the venue has not yet turned into shares, as closing all that is held.
+So nothing the sleeve sends while stopped can take it past flat, alone or beside what is
+already working. The strategy reads `period_stopped`, and nothing else of it.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -1043,6 +1048,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         since its last fill, whichever is later (`_target_flatten`)."""
         self._target_dropped = 0
         """The orders dropped while stopped, each order of a list counted, and each modify."""
+        self._target_grown: dict[object, Decimal] = {}
+        """Under a period target, each order a modify kanso handed the engine grows, by its
+        client order id, and the largest quantity those modifies ask, kept until the venue has
+        applied it or closed the order: what a stopped week reads the order at while the venue
+        has not answered (`_target_leaves`)."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1207,7 +1217,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         holds is flat or wholly on its way out at market. While it reads true the harness
         flattens what the sleeve holds and drops every entry it sends, `submit_entry` returning
         `None` as a refused filter does; an exit passes when it closes no more than is left to
-        close, never past flat (`_target_sends`). Read the position from `held`, never from
+        close, never past flat (`_target_sends`), and a modify that grows an order is dropped
+        (`modify_order`). Read the position from `held`, never from
         a flag of the sleeve's own, since the harness may have flattened it. Always false
         without a target. It has no setter: `strategy_integrity` refuses a `strategy.py` that
         binds it."""
@@ -2649,27 +2660,30 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`trading/strategy.pyx`), a `TypeError` either way.
 
         While a period target has stopped the sleeve, a modify the engine would send that grows
-        the order by more than is left to close on its side (`_target_room`) — any growth of an
-        order on the side that opens — is dropped before the rate is asked, and counted with the
-        stopped week's drops: the order stays as it was, so it can close no more than it could
-        when it went."""
+        the order, on either side and by any amount, is dropped before the rate is asked, and
+        counted with the stopped week's drops: the order stays as it was, so it can close no
+        more than it could when it went, and nothing the venue has yet to answer makes it
+        larger. The harness flattens what the sleeve holds, so a stopped week never needs an
+        order larger. In any week of a hypothesis that declares a target, a modify that grows
+        an order is noted with the quantity it asks (`_target_grown`) as it is handed to the
+        engine, since one sent before the hit can still be on its way when the week stops."""
         self._check_booked(order, "modify_order")
         if (
             isinstance(order, Order)
             and _modify_sends(order, quantity, price, trigger_price)
             and not self._never_sent(order)
         ):
-            if (
-                self._target_until is not None
-                and quantity is not None
-                and (grown := quantity.as_decimal() - order.quantity.as_decimal()) > 0
-                and grown > self._target_room(order)
-            ):
+            grows = quantity is not None and quantity.as_decimal() > order.quantity.as_decimal()
+            if grows and self._target_until is not None:
                 self._target_dropped += 1
                 return
             if not self._command_spend(MODIFY):
                 self._drop_rate(MODIFY)
                 return
+            if grows and self._period_target is not None:
+                key = order.client_order_id
+                asked = quantity.as_decimal()  # type: ignore[union-attr]
+                self._target_grown[key] = max(asked, self._target_grown.get(key, asked))
         super().modify_order(order, quantity, price, trigger_price, client_id, params)
 
     def _hedge_order(self, leg: Hedge) -> object | None:
@@ -3206,18 +3220,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
         The position is read filled, in the scope `classify` reads it in — an unsized sleeve's
         whole, its overlays' clips in it; under a sizing rule a clip's own, or the sleeve's own
-        without its clips. From it come an exit the rate owes at market (`_left`), which stands
-        for a market order the rate held back, and every order of the same scope still working
-        on the closing side (`_working`): resting at a limit or a stop, read as if it filled, in
-        flight to the venue, or waiting on a cancel that has not landed. On the side that opens,
-        or with nothing held, nothing is left. An order already sent is among those working, so
-        a modify of it is read by what it would add (`modify_order`)."""
+        without its clips, each a sum of floats read at the name's size precision (`_target_exact`).
+        From it come an exit the rate owes at market (`_left`), which stands for a market order
+        the rate held back, and every order of the same scope still working on the closing side
+        (`_working`): resting at a limit or a stop, read as if it filled, in flight to the
+        venue, or waiting on a cancel that has not landed, each at the most it could still
+        close (`_target_leaves`). On the side that opens, or with nothing held, nothing is
+        left."""
         key = order.instrument_id.value
         clip = self.sized and self._is_clip(order)
-        if clip:
-            net = Decimal(repr(self._clips_filled(key)))
-        elif self.sized:
-            net = Decimal(repr(self._own_filled(key)))
+        if self.sized:
+            filled = self._clips_filled(key) if clip else self._own_filled(key)
+            net = self._target_exact(order.instrument_id, filled)
         else:
             net = self._own_position(order.instrument_id)
         side = OrderSide.SELL if net > 0 else OrderSide.BUY
@@ -3230,21 +3244,64 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if not clip or each.client_order_id in clipped
         ]
         gone = 0.0 if clip else abs(float(net)) - abs(self._left(key, float(net)))
-        return abs(net) - Decimal(repr(gone)) - _leaves(working)
+        held = abs(net)
+        return (
+            held
+            - self._target_exact(order.instrument_id, gone)
+            - self._target_leaves(working, held)
+        )
+
+    def _target_exact(self, instrument_id: InstrumentId, quantity: float) -> Decimal:
+        """A quantity summed or taken apart in floats, read at its name's size precision, so
+        that a sum an ulp short of a quantity held — `0.3 - 0.1` — reads as that quantity."""
+        precision = self.cache.instrument(instrument_id).size_precision
+        return Decimal(repr(round(quantity, precision)))
+
+    def _target_leaves(self, orders: Sequence[Any], held: Decimal) -> Decimal:
+        """What this sleeve's orders still working on the closing side of a position of `held`
+        can close between them, as an exit is sized beside them (`_close`, `_target_room`):
+        outside a stopped week, each order's unfilled quantity (`_leaves`).
+
+        While a period target has stopped the sleeve each is read at the most it could still
+        close. An order a modify kanso handed the engine grows (`_target_grown`) is read at
+        what that modify would leave unfilled until the venue has applied it, since the order
+        reads its old quantity until then: a modify sent before the hit can still be on its way
+        when the week stops, under a latency longer than the wait for the name's next print.
+        An order sized in the quote's currency that the venue has not yet turned into shares is
+        read as closing all of `held`, since the shares it fills are known only at a price: in
+        nautilus_trader 1.231.0 the venue converts a priced or a market order as it takes it,
+        at the order's own price or the best one opposite, and a stop or a trailing order only
+        as it fills (`_convert_quote_to_base_quantity` in `backtest/engine.pyx`). So an order
+        built by hand beside either is not sent, and an exit at market beside either is owed
+        until the venue has answered it."""
+        if self._target_until is None:
+            return _leaves(orders)
+        read = Decimal(0)
+        for order in orders:
+            if order.is_quote_quantity:
+                return held
+            leaves = order.leaves_qty.as_decimal()
+            grown = self._target_grown.get(order.client_order_id)
+            if grown is not None:
+                leaves = max(leaves, grown - order.filled_qty.as_decimal())
+            read += leaves
+        return read
 
     def _target_sends(self, orders: Sequence[Any]) -> bool:
         """Whether a stopped week sends orders `submit_exit` did not size — one order, or each
-        of a list: only when each closes no more of its name than is left to close
-        (`_target_room`) once the list's orders before it in that name have filled, every one
-        of them read as if it filled, as a resting order is. So an order that opens, one that
-        would carry the position past flat into the other side — larger or smaller — and one
-        beside a working exit that already closes what it would are not sent, alone or in a
-        list (`submit_order`, `submit_order_list`)."""
+        of a list: only when each is sized in shares and closes no more of its name than is
+        left to close (`_target_room`) once the list's orders before it in that name have
+        filled, every one of them read as if it filled, as a resting order is. So an order
+        that opens, one that would carry the position past flat into the other side — larger
+        or smaller — one beside a working exit that already closes what it would, and one sized
+        in the quote's currency, whose shares are known only at the price it fills at, are not
+        sent, alone or in a list (`submit_order`, `submit_order_list`)."""
         ahead: dict[str, Decimal] = {}
         for order in orders:
             key = order.instrument_id.value
             asked = order.quantity.as_decimal()
-            if asked > self._target_room(order) - ahead.get(key, Decimal(0)):
+            room = self._target_room(order) - ahead.get(key, Decimal(0))
+            if order.is_quote_quantity or asked > room:
                 return False
             ahead[key] = ahead.get(key, Decimal(0)) + asked
         return True
@@ -3508,7 +3565,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         The child of an exit sent one-triggers-other counts in full from the start: its parent
         is on the same side of the same name, and its fill releases the child to close more.
         A child whose parent is in another name counts once that parent has filled any of it
-        (`_not_yet_live`).
+        (`_not_yet_live`). While a period target has stopped the sleeve each counts at the most
+        it could still close (`_target_leaves`): one a modify the venue has not yet applied
+        grows, at that modify's quantity, and one sized in the quote's currency the venue has
+        not yet turned into shares, as closing the whole position.
 
         An exit at market cancels this sleeve's own limit or stop orders resting at the
         venue on the closing side when they would leave it less than asked. With no latency
@@ -3718,7 +3778,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         clips: bool,
     ) -> object | None:
         """Close up to `qty` of a signed position of `net`, less what this sleeve's orders
-        still working on the closing side will close (`submit_exit` states the rule)."""
+        still working on the closing side will close (`submit_exit` states the rule), read as a
+        stopped week reads them while a period target has stopped the sleeve
+        (`_target_leaves`)."""
         key = instrument_id.value
         self._forget(key, OrderSide.NO_ORDER_SIDE, ruled=self._exiting)
         if net == 0:
@@ -3726,7 +3788,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         side = OrderSide.SELL if net > 0 else OrderSide.BUY
         asked = float(abs(net)) if qty is None else min(abs(qty), float(abs(net)))
         working = self._working(key, side, clips=clips)
-        if price is None and float(abs(net) - _leaves(working)) < asked:
+        if price is None and float(abs(net) - self._target_leaves(working, abs(net))) < asked:
             for order in working:
                 if order.order_type == OrderType.MARKET:
                     continue
@@ -3735,7 +3797,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 elif _held_open(order) or order.is_emulated:
                     self.cancel_order(order)
             working = self._working(key, side, clips=clips)
-        quantity = self._quantise(instrument, min(asked, float(abs(net) - _leaves(working))))
+        left = float(abs(net) - self._target_leaves(working, abs(net)))
+        quantity = self._quantise(instrument, min(asked, left))
         sent = 0.0 if quantity is None else float(quantity)
         whole = self._quantise(instrument, asked)
         short = 0.0 if whole is None else float(whole) - sent
@@ -4080,6 +4143,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     super().cancel_order(current, client_id, params)
             if client_order_id in self._awaiting:
                 self._answered(client_order_id)
+            if client_order_id in self._target_grown:
+                self._target_applied(client_order_id)
         finally:
             if ledger is not None:
                 ledger.running.pop()
@@ -4126,6 +4191,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._awaiting.discard(client_order_id)
         elif _held_open(order) and client_order_id not in self._cancels:
             self.cancel_order(order)
+
+    def _target_applied(self, client_order_id: object) -> None:
+        """Forget a growing modify's quantity (`_target_grown`) once the venue has applied it —
+        the order is at least that large — or has closed the order. One the venue refused is
+        kept until the order closes, so the order is read larger than it is meanwhile, which
+        sizes an exit beside it smaller and never past flat."""
+        order = self.cache.order(client_order_id)
+        if order.is_closed or order.quantity.as_decimal() >= self._target_grown[client_order_id]:
+            del self._target_grown[client_order_id]
 
     def _instant(self) -> bool:
         """Whether no latency is stated, so the venue answers a command before it matches
