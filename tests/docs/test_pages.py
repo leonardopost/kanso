@@ -665,6 +665,11 @@ def test_the_pages_say_the_fill_path_replays_the_runner_s_splits_and_holdings() 
     assert "its path holds a split's lost shares until the next end" in gates
     assert "A run whose venue applied a split to a position it held keeps each as" in concepts
     assert "the ratio of the split the venue's event names" in concepts
+    assert "how many (`fills_before`), which come first among them in `fills`" in concepts
+    assert "after the fills of its name the venue matched before it there" in gates
+    assert "and `fills_before` where the venue matched some of that instant's fills" in (
+        prose(page("cli.md"))
+    )
     assert "says so (`below_zero`), since its notional is an absolute" in concepts
     cli = prose(page("cli.md"))
     assert "`adjustments` — `ts_ns`, `instrument_id`, `qty`, `paid` and `ratio` each" in cli
@@ -707,6 +712,7 @@ def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
     assert "against the last quote of its name the stream holds" in found["286"]
     assert "count a position from its fills alone" in found["287"]
     assert "matches an adjustment to the latest split of its name" in found["288"]
+    assert "land an order due at an instant at different points of it" in found["289"]
 
 
 def test_the_restart_seed_is_said_as_it_is_read() -> None:

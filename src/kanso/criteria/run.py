@@ -172,6 +172,13 @@ class Adjustment:
     (`kanso.nautilus.splits.applied_by`) — so two splits the venue applies at one point each
     carry their own — and `None` only for an event that names no split of the schedule the
     extraction read, which a split the venue applied from that schedule always names.
+    `fills_before` is where it falls among the run's fills of its instrument at `ts_ns`: how
+    many of them the venue had matched before it applied the split, which come first among
+    them in `CardRun.fills`. An order in flight lands at an instant behind its first point,
+    another venue's, say, and a point published at the instant it applied the split can come
+    after another of the name's venue printed before it, so a fill at that instant can be
+    struck in the old shares; one the venue did not order — an adjustment of no split it
+    announced — reads as before them all.
     The runner books the change into what it holds and the payment into cash at `ts_ns`
     (`kanso.nautilus.backtest._equity`); a run recorded before runs kept the adjustments
     carries none, and a reading of it that needs them does without (`fill_path_drawdown_pct`).
@@ -182,6 +189,7 @@ class Adjustment:
     qty: float
     paid: float
     ratio: float | None = None
+    fills_before: int = 0
 
 
 @dataclass(frozen=True)

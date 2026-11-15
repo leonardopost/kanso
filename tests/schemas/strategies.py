@@ -611,6 +611,7 @@ def card_runs(draw: st.DrawFn) -> CardRun:
                         qty=FINITE,
                         paid=FINITE,
                         ratio=st.none() | POSITIVE,
+                        fills_before=st.integers(min_value=0, max_value=3),
                     ),
                     max_size=3,
                 )

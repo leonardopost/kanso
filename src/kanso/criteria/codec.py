@@ -21,7 +21,9 @@ The splits the venue applied to what the run held (`adjustments`) are written th
 only where there are some: a run that held nothing through a split is stored as it was, and
 a run stored before runs kept them decodes with none, even one that held a position through
 a split, whose fill path cannot replay what was never kept
-(`kanso.criteria.quantities.fill_path_drawdown_pct` says what it reads instead). A holding
+(`kanso.criteria.quantities.fill_path_drawdown_pct` says what it reads instead); an
+adjustment writes where it fell among the fills of its instant (`fills_before`) only where
+some came before it, and one written without it reads as before them all. A holding
 says its mark was under zero (`Held.below_zero`) only where it was, so every other holding is
 stored as it was, and one stored before holdings said so reads as at or above zero, which
 the same fill path reads it as.
@@ -104,12 +106,14 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
 
 
 def _encode_adjustment(item: Adjustment) -> dict[str, Any]:
+    ordered = {"fills_before": item.fills_before} if item.fills_before else {}
     return {
         "ts_ns": item.ts_ns,
         "instrument_id": item.instrument_id,
         "qty": item.qty,
         "paid": item.paid,
         "ratio": item.ratio,
+        **ordered,
     }
 
 
@@ -120,6 +124,7 @@ def _decode_adjustment(payload: Mapping[str, Any]) -> Adjustment:
         qty=float(payload["qty"]),
         paid=float(payload["paid"]),
         ratio=None if payload.get("ratio") is None else float(payload["ratio"]),
+        fills_before=int(payload.get("fills_before", 0)),
     )
 
 

@@ -363,8 +363,8 @@ def parts(venue: str, struck: Struck | None = None) -> list[SimulationModule]:
     nothing to restate, and no quote to value the fraction at. Then `Tape`, which under
     `limit_fill: print_through` lands what is due by a print and tells the fill model the
     point in hand, after a split has restated the book and before the point is applied, and
-    under any other rule does nothing. Last, under a dated spread or a period target, the
-    venue half of `struck` (`kanso.nautilus.struck`), which keeps each name's last point as the
+    under any other rule does nothing. Last, under a dated spread, a period target or a split,
+    the venue half of `struck` (`kanso.nautilus.struck`), which keeps each name's last point as the
     matching engine is about to apply it — after `Tape`, so an order landed before a print is
     struck at the market before that print. A venue loads them as one module (`modules`)."""
     loaded: list[SimulationModule] = [

@@ -58,7 +58,9 @@ def test_a_run_that_held_nothing_through_a_split_is_stored_as_it_was() -> None:
     """A run with no split applied to what it held writes no `adjustments` key, so it is stored
     as runs were before they kept them; one stored that way — every run recorded before —
     decodes with none, and a run that has some reads them back whole, the ratio included, and
-    one recorded without a ratio as none."""
+    one recorded without a ratio as none; where it fell among the fills of its instant is
+    written only where some came before it, and one recorded without it reads as before them
+    all."""
     from dataclasses import replace
 
     from kanso.criteria.run import Adjustment
@@ -80,6 +82,10 @@ def test_a_run_that_held_nothing_through_a_split_is_stored_as_it_was() -> None:
     without_ratio = {**kept, "adjustments": [{**kept["adjustments"][1]}]}
     del without_ratio["adjustments"][0]["ratio"]
     assert decode_run(without_ratio).adjustments == (unknown,)
+    after = replace(split, fills_before=2)
+    ordered = encode_run(replace(run, adjustments=(after,)))
+    assert ordered["adjustments"][0]["fills_before"] == 2
+    assert decode_run(ordered).adjustments == (after,)
 
 
 def test_a_holding_says_its_mark_was_under_zero_only_where_it_was() -> None:

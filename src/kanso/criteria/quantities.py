@@ -317,14 +317,19 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
 
     **What the path holds is what the runner holds.** A split the venue applied
     (`run.adjustments`) changes a quantity no fill changed, so it is replayed at the instant
-    the runner booked it, the instant the venue applied it — before a fill at that instant,
-    as the venue applies a split before it matches the point that carried the market past
-    it: the quantity changes by what the split changed it, the last price is divided by the
-    ratio of the split the adjustment names into the new shares, and what it paid in lieu
-    goes into cash. Replaying the fills alone kept the shares a reverse split took away and
-    re-marked them at every later fill of the name: four-fifths of what was bought through a
-    one-for-five, valued at every later restatement's price, measured on a card at a fall
-    of 1,560.67% of its capital where its period ends fell 116.64%. And at each period end,
+    the runner booked it, the instant the venue applied it, where the venue applied it among
+    the fills of its name at that instant: after the ones it had matched before it
+    (`Adjustment.fills_before`), which are struck in the old shares — an order in flight
+    lands behind the instant's first point, another venue's, and a point published then can
+    come before the one that applies the split — and before the rest. The quantity changes by
+    what the split changed it, the last price is divided by the ratio of the split the
+    adjustment names into the new shares, and what it paid in lieu goes into cash; replayed
+    before a fill the venue matched ahead of it, the path took the split's shares from what it
+    held and then marked the new count at the old fill's price, 9.91% of the capital lost on
+    a book that lost its costs. Replaying the fills alone kept the shares a reverse split took
+    away and re-marked them at every later fill of the name: four-fifths of what was bought
+    through a one-for-five, valued at every later restatement's price, measured on a card at a
+    fall of 1,560.67% of its capital where its period ends fell 116.64%. And at each period end,
     before the re-anchor, every position is replaced by what the runner held there
     (`run.held`) — its quantity, valued at its notional over that quantity, the runner's
     mark times the multiplier, under zero where the runner's mark was (`Held.below_zero`) —
@@ -351,23 +356,35 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
     trough_at: int | None = None
     ends = list(zip(run.period_ends_ns, run.equity, strict=True))
     fills = sorted(run.fills, key=lambda f: f.ts_ns)
-    adjustments = sorted(run.adjustments, key=lambda a: a.ts_ns)
+    waiting = sorted(run.adjustments, key=lambda a: a.ts_ns)
     held_at: dict[int, list[Held]] | None = None
     if run.held:
         held_at = {}
         for item in run.held:
             held_at.setdefault(item.ts_ns, []).append(item)
     index = 0
-    applied = 0
+    booked: dict[str, int] = {}
+    """Each name's fills booked at the instant of the last fill (`booked_at`)."""
+    booked_at: int | None = None
 
     def equity_now() -> float:
         return cash + fsum(qty * px * mult for qty, px, mult in marks.values()) + offset
 
-    def adjust(until: int) -> None:
-        nonlocal cash, applied
-        while applied < len(adjustments) and adjustments[applied].ts_ns <= until:
-            made = adjustments[applied]
-            applied += 1
+    def adjust(until: int, *, whole: bool) -> None:
+        """Replay every split applied before `until`, and those applied at it — all of them,
+        `whole`, or only those whose name has booked the fills the venue matched before it."""
+        nonlocal cash
+        at = 0
+        while at < len(waiting) and waiting[at].ts_ns <= until:
+            made = waiting[at]
+            if (
+                not whole
+                and made.ts_ns == until
+                and booked.get(made.instrument_id, 0) < made.fills_before
+            ):
+                at += 1
+                continue
+            del waiting[at]
             mark = marks.get(made.instrument_id)
             if mark is None:  # a position this path never saw opened: a fold's, say
                 continue
@@ -378,7 +395,7 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
 
     def close(end_ns: int, struck: float) -> None:
         nonlocal marks, offset, peak, worst, trough_at
-        adjust(end_ns)
+        adjust(end_ns, whole=True)
         if held_at is not None:
             marks = {
                 item.instrument_id: (
@@ -397,7 +414,11 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
         while index < len(ends) and ends[index][0] < fill.ts_ns:
             close(*ends[index])
             index += 1
-        adjust(fill.ts_ns)
+        if fill.ts_ns != booked_at:
+            booked.clear()
+            booked_at = fill.ts_ns
+        adjust(fill.ts_ns, whole=False)
+        booked[fill.instrument_id] = booked.get(fill.instrument_id, 0) + 1
         signed = fill.qty if fill.side == "BUY" else -fill.qty
         cash -= signed * fill.px * fill.multiplier + fill.cost
         qty, _, _ = marks.get(fill.instrument_id, (0.0, fill.px, fill.multiplier))

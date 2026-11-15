@@ -1428,8 +1428,8 @@ def _unrecorded(*_: object, **__: object) -> None:
 
 def add_venue(engine: Any, venue: Any, struck: Struck | None = None) -> None:
     """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
-    with the simulation modules every kanso venue loads — and, under a dated spread or a
-    period target, the venue half of `struck` (`kanso.nautilus.struck`)."""
+    with the simulation modules every kanso venue loads — and, under a dated spread, a period
+    target or a split, the venue half of `struck` (`kanso.nautilus.struck`)."""
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
@@ -1906,15 +1906,6 @@ class Marks:
         self._instants: dict[str, list[int]] = {}
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
         self.dated = model.costs.dated or ()
-        self.record: Struck | None = (
-            Struck() if self.dated or request.hyp.period_target is not None else None
-        )
-        """The venue's record of the instant each fill's price was struck at, which the run
-        loads into its venue wherever a dated spread is charged or a period target declared:
-        the harness reads a stopped week's fills off it (`targeted`)."""
-        self.pricing: Struck | None = self.record if self.dated else None
-        """The same record under a dated spread, which the table is read at: the run's own,
-        or one a stage hands over."""
         self._effective: dict[str, list[int]] = {}
         """Each name that declares a split: the instant each of its splits takes effect, in
         order, which a point's era is counted against."""
@@ -1937,6 +1928,19 @@ class Marks:
         splits that take effect then — or `_NEVER` while no such point has reached it. That
         never falls as the instants rise, since a point printed past a later instant is
         printed past every earlier one, so the instants applied by an end are a prefix."""
+        self.record: Struck | None = (
+            Struck()
+            if self.dated or request.hyp.period_target is not None or self._effective
+            else None
+        )
+        """The venue's record of the instant each fill's price was struck at and of the order
+        it made its fills and applied its splits in, which the run loads into its venue
+        wherever a dated spread is charged, a period target declared or a split declared: the
+        harness reads a stopped week's fills off it (`targeted`), and the extraction orders a
+        split among the fills of its instant by it (`_adjusted`)."""
+        self.pricing: Struck | None = self.record if self.dated else None
+        """The same record under a dated spread, which the table is read at: the run's own,
+        or one a stage hands over."""
 
     def take(self, points: Iterable[object]) -> None:
         """Fold a chunk of points, its funding settlements first (see the class).
@@ -2585,7 +2589,7 @@ def _extract(
     multipliers = multipliers_of(cache.instruments())
     increments = increments_of(cache.instruments())
     positions = _positions(cache)
-    events, owners = _fill_events(positions)
+    events, owners = _fill_events(positions, marks.record)
     marks.price(events)
     fills = tuple(
         _fill(
@@ -2604,7 +2608,7 @@ def _extract(
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
     schedules = schedules_of(cache.instruments())
-    adjustments = _adjusted(positions, schedules)
+    adjustments = _adjusted(positions, schedules, marks.record, events)
     curve = _equity(request, marks, fills, multipliers, adjustments)
     trades = _trades(positions, by_position, multipliers, schedules, curve.funding)
     return CardRun(
@@ -2660,13 +2664,23 @@ def _positions(cache: Any) -> tuple[Any, ...]:
     return tuple(found)
 
 
-def _fill_events(positions: Sequence[Any]) -> tuple[tuple[Any, ...], tuple[int, ...]]:
+def _fill_events(
+    positions: Sequence[Any], heard: Struck | None = None
+) -> tuple[tuple[Any, ...], tuple[int, ...]]:
     """Every fill the run produced, once each, and which position each one belongs to.
 
     Fills are read off the positions they made rather than off the order book, because a
     position is what a trade is; a fill that flipped a net position is split by the engine
     into two events on two positions, so identity is checked rather than assumed.
+
+    They are ordered by instant and name, and then by order and trade id — except that at an
+    instant the venue applied a split of the name at, the fills it matched before the split
+    come before those it matched after, as the venue's record (`heard`) orders them, which is
+    where `Adjustment.fills_before` counts them from (`_adjusted`). A run with no record, or
+    no split at a fill's instant, is ordered as it always was.
     """
+    record = Struck() if heard is None else heard
+    applied = {} if heard is None else _applied_at(positions, heard)
     seen: set[str] = set()
     owned: list[tuple[Any, int]] = []
     for index, position in enumerate(positions):
@@ -2676,15 +2690,49 @@ def _fill_events(positions: Sequence[Any]) -> tuple[tuple[Any, ...], tuple[int, 
                 continue
             seen.add(key)
             owned.append((event, index))
-    owned.sort(
-        key=lambda pair: (
-            pair[0].ts_event,
-            str(pair[0].instrument_id),
-            str(pair[0].client_order_id),
-            str(pair[0].trade_id),
+
+    def ordered(pair: tuple[Any, int]) -> tuple[int, str, int, str, str]:
+        event = pair[0]
+        name = str(event.instrument_id)
+        held = applied.get((name, int(event.ts_event)))
+        return (
+            int(event.ts_event),
+            name,
+            0 if held is None else bisect.bisect_left(held, record.heard(event)),
+            str(event.client_order_id),
+            str(event.trade_id),
         )
-    )
+
+    owned.sort(key=ordered)
     return tuple(event for event, _ in owned), tuple(index for _, index in owned)
+
+
+def _split_events(positions: Sequence[Any]) -> list[Any]:
+    """Every split adjustment of these positions, once each: a netting position that closed
+    and reopened lives in the cache twice, and an event with no quantity change is none."""
+    seen: set[str] = set()
+    found: list[Any] = []
+    for position in positions:
+        for event in position.adjustments:
+            key = str(event.id)
+            if key in seen or event.quantity_change is None:
+                continue
+            seen.add(key)
+            found.append(event)
+    return found
+
+
+def _applied_at(positions: Sequence[Any], record: Struck) -> dict[tuple[str, int], list[int]]:
+    """Each name and instant the venue applied a split of these positions at, with how many
+    fills had been heard when it applied each, in order (`Struck.split`)."""
+    found: dict[tuple[str, int], list[int]] = {}
+    for event in _split_events(positions):
+        found.setdefault((str(event.instrument_id), int(event.ts_init)), []).append(
+            record.split(event)
+        )
+    for held in found.values():
+        held.sort()
+    return found
 
 
 def _fills_since(cache: Any, read: dict[object, tuple[list[bytes], int]]) -> list[Any]:
@@ -2867,11 +2915,16 @@ def _trades(
 
 
 def _adjusted(
-    positions: Sequence[Any], schedules: Mapping[str, Sequence[splits.Split]]
+    positions: Sequence[Any],
+    schedules: Mapping[str, Sequence[splits.Split]],
+    heard: Struck | None = None,
+    events: Sequence[Any] = (),
 ) -> tuple[Adjustment, ...]:
     """Every split adjustment the run applied, once each, in time order (`Adjustment`): the
     instant the venue applied it, the quantity change, the cash the split paid in lieu of the
-    fraction it left, and the ratio of the split the event names (`splits.applied_by`).
+    fraction it left, the ratio of the split the event names (`splits.applied_by`), and how
+    many of the run's fills of its name at that instant (`events`) the venue had matched
+    before it, read off the venue's record (`heard`, `Struck.split`) — none without one.
 
     The instant is the event's `ts_init`, the `ts_init` of the point that applied the split,
     and not its `ts_event`, that point's print instant: a fill is stamped when the venue
@@ -2883,31 +2936,52 @@ def _adjusted(
     one's ratio — measured, a one-for-ten then a two-for-one restated a price of 10 to 2.5
     where the book held it at 50, and the fill path read a 9.51% fall the book never took.
 
+    The fills are counted because the instant cannot order them: the venue matches an order
+    in flight behind an instant's first point, another venue's, and a point published at the
+    instant can come before the one that applies the split, printed before it, so a fill at
+    the split's instant can be struck in the old shares — measured, an add-on of 100 DEMO
+    landing behind another venue's bar was matched at the eve's 10, and replayed after the
+    split the fill path marked the 110 new shares at 10, a 9.91% fall on a book that fell by
+    its costs.
+
     Read off the positions the same way the fills are, and deduplicated by event id for
     the same reason: a netting position that closed and reopened lives in the cache twice,
     once as the snapshot taken before the reset and once as the live object.
     """
-    seen: set[str] = set()
+    record = Struck() if heard is None else heard
+    fills_at: dict[tuple[str, int], list[int]] = {}
+    for fill in events if heard is not None else ():
+        fills_at.setdefault((str(fill.instrument_id), int(fill.ts_event)), []).append(
+            record.heard(fill)
+        )
+    for held in fills_at.values():
+        held.sort()
     found: list[Adjustment] = []
-    for position in positions:
-        for event in position.adjustments:
-            key = str(event.id)
-            if key in seen or event.quantity_change is None:
-                continue
-            seen.add(key)
-            name = str(event.instrument_id)
-            split = splits.applied_by(event, schedules.get(name, ()))
-            found.append(
-                Adjustment(
-                    ts_ns=int(event.ts_init),
-                    instrument_id=name,
-                    qty=float(event.quantity_change),
-                    paid=0.0 if event.pnl_change is None else event.pnl_change.as_double(),
-                    ratio=None if split is None else split.ratio,
-                )
+    for event in _split_events(positions):
+        name = str(event.instrument_id)
+        split = splits.applied_by(event, schedules.get(name, ()))
+        ts = int(event.ts_init)
+        found.append(
+            Adjustment(
+                ts_ns=ts,
+                instrument_id=name,
+                qty=float(event.quantity_change),
+                paid=0.0 if event.pnl_change is None else event.pnl_change.as_double(),
+                ratio=None if split is None else split.ratio,
+                fills_before=bisect.bisect_right(fills_at.get((name, ts), ()), record.split(event)),
             )
+        )
     return tuple(
-        sorted(found, key=lambda made: (made.ts_ns, made.instrument_id, made.qty, made.paid))
+        sorted(
+            found,
+            key=lambda made: (
+                made.ts_ns,
+                made.instrument_id,
+                made.fills_before,
+                made.qty,
+                made.paid,
+            ),
+        )
     )
 
 

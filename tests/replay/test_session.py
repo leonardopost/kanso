@@ -1203,6 +1203,32 @@ def test_the_two_paths_mark_a_held_name_unprinted_since_its_split_restated() -> 
     assert node.run.held == engine.run.held
 
 
+def test_the_two_paths_order_a_split_among_the_fills_of_its_instant_alike() -> None:
+    """DEMO's eve bar and OTHR's first bar of the ex-date are both published at 00:30, the
+    eve's first: it fills a resting buy of DEMO at 9 in the old shares, and OTHR's bar then
+    applies the split. Both paths record that one fill of the instant came before the split,
+    and their fill paths read one fall."""
+    from kanso.criteria.quantities import fill_path_drawdown_pct
+    from tests.nautilus.backtest.test_split_basis import (
+        RESTS,
+        _latent,
+        _listed,
+        _straddling,
+    )
+    from tests.nautilus.backtest.test_splits import REVERSE
+
+    node, engine = both(
+        _latent((INSTRUMENT, OTHER_ID), RESTS.replace(b"HOLDS", b"True"), 0.0),
+        [_listed(INSTRUMENT, info=REVERSE), _listed(OTHER_ID)],
+        _straddling(),
+    )
+
+    assert [item.fills_before for item in engine.run.adjustments] == [1]
+    assert node.run.adjustments == engine.run.adjustments
+    assert node.run.fills == engine.run.fills
+    assert fill_path_drawdown_pct(node.run) == fill_path_drawdown_pct(engine.run)
+
+
 def test_the_two_paths_cancel_across_a_corporate_action_identically() -> None:
     """The order the venue has to reach before the exchange does, on both paths.
 

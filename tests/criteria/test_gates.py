@@ -722,6 +722,40 @@ def test_a_split_is_replayed_where_the_runner_booked_it() -> None:
     assert result.evidence["trough_ns"] is None
 
 
+@pytest.mark.parametrize("before", [0, 1, 2], ids=["none before", "one before", "both before"])
+def test_a_split_is_replayed_among_the_fills_of_its_instant_where_the_venue_applied_it(
+    before: int,
+) -> None:
+    """1,000 DEMO held at 10, and two more fills of DEMO, of 100 and of 10, at the instant the
+    venue applied the one-for-ten: the ones it matched before the split are struck at 10 in
+    the old shares, the rest at 100 in the new, and the split takes nine shares in ten of what
+    was held when it fell. The book is worth 100,000 at every instant, and the path, replaying
+    the split after the fills the venue matched before it (`fills_before`), never falls.
+    Replayed before them all, the path took 990 shares from the 1,000 and marked the 110 left
+    at the add-on's old 10: 9.9% of the book."""
+    added = (100.0, 10.0)
+    held = 1_000.0 + sum(added[:before])
+    split = Adjustment(SPLIT_NS, "DEMO", qty=-0.9 * held, paid=0.0, ratio=0.1, fills_before=before)
+    run = build_run(
+        (0.0, 0.0),
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 1_000.0, 10.0, 0.0),
+            *(
+                Fill(SPLIT_NS, "DEMO", "BUY", qty, 10.0 if index < before else 100.0, 0.0)
+                for index, qty in enumerate(added)
+            ),
+        ),
+        holdings=(Held(ts_ns=_end(0), instrument_id="DEMO", qty=1_000.0, notional=10_000.0),),
+    )
+
+    replayed = replace(run, adjustments=(split,))
+
+    assert fill_path_drawdown_pct(replayed)[0] == pytest.approx(0.0, abs=1e-9)
+    if before:
+        first = replace(run, adjustments=(replace(split, fills_before=0),))
+        assert fill_path_drawdown_pct(first)[0] > 9.0
+
+
 def test_a_run_recorded_without_its_adjustments_keeps_the_lost_shares_to_the_next_end() -> None:
     """A run stored before runs kept the splits applied to what they held carries none: its
     path still holds the 905 shares a split took away from the sale to the next period end,

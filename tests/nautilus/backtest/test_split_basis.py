@@ -842,3 +842,211 @@ def test_two_splits_applied_at_one_point_each_restate_by_their_own_ratio() -> No
     costs = sum(fill.cost for fill in card.fills) / CAPITAL * 100.0
     assert fill_path_drawdown_pct(card)[0] == pytest.approx(costs)
     assert drawdown_pct(card) == pytest.approx(costs)
+
+
+# --- a fill at the instant a split was applied ----------------------------------------
+
+ADDS = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        if str(bar.bar_type.instrument_id) != "DEMO.XNAS":
+            return
+        self.seen += 1
+        if self.seen == 1:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+        if self.seen == 15:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=1_000.0)
+"""
+"""Buys 1,005 DEMO at 10 on its first bar, and 100 more on its bar of the 15th, the eve."""
+
+
+def _latent(universe: tuple[str, ...], source: bytes, latency_ms: float) -> RunRequest:
+    """A daily request over `universe` under a latency."""
+    document = hypothesis(universe=universe).model_dump(mode="json")
+    document["costs"] = {**document["costs"], "latency_ms": latency_ms}
+    subject = Hypothesis.model_validate(document)
+    return RunRequest(
+        hyp=subject,
+        strategy_source=source,
+        window=RESEARCH,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(subject),
+        capital=CAPITAL,
+        period="1d",
+    )
+
+
+def test_an_order_landing_at_the_split_s_instant_before_it_is_replayed_before_it() -> None:
+    """DEMO's eve order is in flight under a 10 ms latency and lands at the next instant, the
+    ex-date's 16:00:01, behind ABC's bar of another venue: the venue matches it there at the
+    eve's 10, then DEMO's own bar applies the one-for-ten to all 1,105 shares, which become
+    110. The book never falls but by its costs. Replayed with the split first, the path took
+    995 shares from the 1,005 it held, then marked the 110 left at the add-on's 10 — 9.91% of
+    the capital lost on a book that lost 0.0055%."""
+    made = _latent((INSTRUMENT, "ABC.ARCX"), ADDS, 10.0)
+    groups = [
+        tuple(_sessions("ABC.ARCX", lambda _: 30.0)),
+        tuple(_sessions(INSTRUMENT, lambda day: 10.0 if day < REVERSE_EX else 100.0)),
+    ]
+
+    card = execute(made, [_listed(INSTRUMENT, info=REVERSE), _listed("ABC.ARCX")], groups).run
+
+    (split,) = card.adjustments
+    added = card.fills[-1]
+    assert (added.ts_ns, added.qty, added.px) == (split.ts_ns, 100.0, 10.0)
+    assert (split.qty, split.fills_before) == (-995.0, 1)
+    costs = sum(fill.cost for fill in card.fills) / CAPITAL * 100.0
+    assert drawdown_pct(card) == pytest.approx(costs)
+    assert fill_path_drawdown_pct(card)[0] == pytest.approx(costs)
+
+
+RESTS = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        if str(bar.bar_type.instrument_id) != "DEMO.XNAS":
+            return
+        self.seen += 1
+        if self.seen == 1 and HOLDS:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", notional=10_050.0)
+        if self.seen == 14:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=100.0, price=9.0)
+        if self.seen == 16 and not HOLDS:
+            self.submit_entry(bar.bar_type.instrument_id, "SELL", qty=5.0)
+"""
+"""Rests a limit buy of 100 DEMO at 9 from its bar of the 14th, the eve's bar filling it;
+holding 1,005 bought at 10 on its first bar, or, holding nothing, selling 5 on the bar of the
+16th."""
+
+PUBLISHED = midnight_ns(REVERSE_EX) + 1_800 * SECOND_NS
+"""00:30 UTC on the ex-date, when DEMO's eve bar and OTHR's first bar of the ex-date are
+both published."""
+
+
+def _straddling() -> list[tuple[Bar, ...]]:
+    """DEMO's sessions, the eve's printed at 16:00 on the 15th, published at 00:30 on the 16th
+    and dipping to 8.90, and 100 in the new shares from the 16th; OTHR's, with a bar of the
+    ex-date printed at 00:20 and published with the eve's, which applies the split."""
+    demo = _sessions(INSTRUMENT, lambda day: 10.0 if day < REVERSE_EX else 100.0)
+    eve = next(index for index, bar in enumerate(demo) if bar.ts_event > EVE_NS) - 1
+    printed = demo[eve]
+    demo[eve] = Bar(
+        printed.bar_type,
+        printed.open,
+        printed.high,
+        Price(8.90, 2),
+        printed.close,
+        printed.volume,
+        ts_event=printed.ts_event,
+        ts_init=PUBLISHED,
+    )
+    other = _sessions("OTHR.XNAS", lambda _: 20.0)
+    early = midnight_ns(REVERSE_EX) + 1_200 * SECOND_NS
+    applies = _delayed("OTHR", early, PUBLISHED, 20.0)
+    other.insert(next(i for i, bar in enumerate(other) if bar.ts_init > PUBLISHED), applies)
+    return [tuple(demo), tuple(other)]
+
+
+@pytest.mark.parametrize("holds", [True, False], ids=["held through", "opened at the instant"])
+def test_a_fill_an_earlier_point_of_the_instant_matched_is_replayed_before_its_split(
+    holds: bool,
+) -> None:
+    """DEMO's eve bar and OTHR's 00:20 bar are both published at 00:30 on the ex-date, the eve's
+    first: it fills the resting buy of 100 at 9 in the old shares, and OTHR's bar, printed past
+    the split, then applies it. Held through, the path marks the 1,105 old shares at the 9 the
+    fill struck, 1,005 and the costs under the capital, and the split makes them 110 new ones
+    at 90 and 50 in lieu; opened there, the 100 bought at 9 are 10 at 90, and the path falls by
+    the fill's cost alone. Replayed with the split first, the path marked the 110 at the old 9
+    — 9.92% lost — or applied the split to nothing and kept 100 old shares, which the sale at
+    100 on the 16th marked at 100 each, 9% lost on a book that never fell."""
+    source = RESTS.replace(b"HOLDS", b"True" if holds else b"False")
+    made = _latent((INSTRUMENT, "OTHR.XNAS"), source, 0.0)
+
+    card = execute(
+        made, [_listed(INSTRUMENT, info=REVERSE), _listed("OTHR.XNAS")], _straddling()
+    ).run
+
+    (split,) = card.adjustments
+    rested = next(fill for fill in card.fills if fill.ts_ns == PUBLISHED)
+    assert (split.ts_ns, rested.qty, rested.px) == (PUBLISHED, 100.0, 9.0)
+    assert (split.qty, split.fills_before) == ((-995.0, 1) if holds else (-90.0, 1))
+    paid = sum(fill.cost for fill in card.fills if fill.ts_ns <= PUBLISHED)
+    fell = (1_005.0 if holds else 0.0) + paid
+    assert fill_path_drawdown_pct(card) == (pytest.approx(fell / CAPITAL * 100.0), PUBLISHED)
+
+
+class _Filled:
+    """A fill event as the extraction reads one off a position."""
+
+    def __init__(self, order: str, ts: int) -> None:
+        self.id = f"F-{order}"
+        self.ts_event = ts
+        self.instrument_id = InstrumentId.from_str(INSTRUMENT)
+        self.client_order_id = order
+        self.trade_id = TradeId(f"T-{order}")
+
+
+class _Split:
+    """A split's adjustment event as the venue raised it."""
+
+    def __init__(self, ts: int) -> None:
+        self.id = "A-1"
+        self.ts_init = ts
+        self.instrument_id = InstrumentId.from_str(INSTRUMENT)
+        self.quantity_change = -905.0
+        self.pnl_change = None
+        self.reason = "split 2024-01-16"
+
+
+class _Held:
+    def __init__(self, events: list[_Filled], adjustments: list[_Split]) -> None:
+        self.events = events
+        self.adjustments = adjustments
+
+
+def test_the_fills_the_venue_matched_before_a_split_at_its_instant_come_first() -> None:
+    """Two orders of DEMO fill at the instant its split is applied, O-9 before it and O-10
+    after, as the bus carried them; ordered by their ids, O-10 came first and was counted
+    among the fills before the split. The record puts O-9 first and counts it alone, and
+    without a record both are ordered as they always were and the split before them."""
+    from kanso.nautilus.backtest import _adjusted, _fill_events
+    from kanso.nautilus.struck import Struck
+
+    instant = at(REVERSE_EX)
+    before, after, split = _Filled("O-9", instant), _Filled("O-10", instant), _Split(instant)
+    held = [_Held([before, after], [split])]
+    heard = Struck()
+    heard.filled(before)
+    heard.restated(type("Restated", (), {"adjustments": (split,)})())
+    heard.filled(after)
+
+    ordered, _ = _fill_events(held, heard)
+    unheard, _ = _fill_events(held)
+
+    assert [event.client_order_id for event in ordered] == ["O-9", "O-10"]
+    assert [event.client_order_id for event in unheard] == ["O-10", "O-9"]
+    assert [item.fills_before for item in _adjusted(held, {}, heard, ordered)] == [1]
+    assert [item.fills_before for item in _adjusted(held, {}, None, unheard)] == [0]

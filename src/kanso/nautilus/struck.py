@@ -18,15 +18,26 @@ period target's record of a stopped week reads each of its fills off it too
 (`KansoStrategy._target_filled`), dated spread or none: a resting order the venue fills while
 it applies a point is struck at that point, which the sleeve has yet to be handed.
 
+**It also says where each split fell among the fills.** The venue applies a split at the
+first point of its venue printed past it, at the instant that point was published, and a fill
+it matched at that instant before it is struck in the old shares: an order in flight lands
+behind the instant's first point, another venue's, say, and a point published then can come
+before the one that applies the split, printed before it. Which fills came first is the
+venue's order again, and no instant can say it, so the record numbers each fill the bus
+carries and keeps, for each split the venue announces (`kanso.nautilus.actions.TOPIC`), how
+many had been heard when it did — what the runner's extraction orders a split among the fills
+of its instant by (`kanso.nautilus.backtest._adjusted`, `kanso.criteria.Adjustment`).
+
 `Struck` is the record. Its venue half is a part of the one module a kanso venue loads
-(`kanso.nautilus.actions.parts`), loaded only where a dated spread is charged or a period
-target declared, and placed last, so it is handed each point after the parts that may land
-commands before the point is applied (`kanso.nautilus.tape`) and before the matching engine
-applies it: it keeps each name's last point the engine applies, at that point's `ts_event` — a
-bar's close, a print's or a quote's own stamp, never the instant it was published at. Its other
-half hears each fill on the bus as
-the execution engine applies it, before the sleeve is handed it, and keeps the name's instant
-for it, by the fill's instrument and trade id. Those are what every event of one fill shares:
+(`kanso.nautilus.actions.parts`), loaded only where a dated spread is charged, a period
+target declared or a split declared, and placed last, so it is handed each point after the
+parts that may land commands before the point is applied (`kanso.nautilus.tape`) and before
+the matching engine applies it: it keeps each name's last point the engine applies, at that
+point's `ts_event` — a bar's close, a print's or a quote's own stamp, never the instant it
+was published at. Its other half hears each fill on the bus as the execution engine applies
+it, before the sleeve is handed it, and keeps the name's instant for it, by the fill's
+instrument and trade id, and each split the venue announces. Those are what every event of
+one fill shares:
 a fill that flips a net position reaches the positions the extraction reads as two events, the
 second under an event id the bus never carried, and both keep the fill's instrument and trade
 id, which the harness is handed whole. A fill of a name the venue had applied nothing of is not
@@ -50,6 +61,10 @@ Engine facts this module relies on (nautilus_trader 1.231.0):
   handler before it returns. On a node kanso's venue hands its events to the execution
   engine's synchronous implementation (`kanso.nautilus.sandbox`), so a fill is heard there
   before the venue applies another point, as it is in a backtest.
+* `kanso.nautilus.actions` announces a split on `TOPIC` while the venue applies it, after it
+  has adjusted every position and before the point that carried the market past it is
+  matched, so no fill is made between the two; and a researched strategy, which cannot reach
+  the bus (`strategy_integrity`), cannot send one from a handler of the announcement.
 * `ExecutionEngine._flip_position` splits a fill that flips a position into one that closes
   it, under the fill's event id, and one that opens the other side, under a new `UUID4`; both
   copy the fill's `instrument_id` and `trade_id`, and the matching engine gives each fill of an
@@ -87,7 +102,8 @@ FILLS: Final = "events.fills.*"
 
 class Struck:
     """Each name's last point the venue applied, and the instant each fill's price was struck
-    at: the `ts_event` of its name's last point the venue had applied when it filled."""
+    at: the `ts_event` of its name's last point the venue had applied when it filled; and the
+    order the bus carried the fills and the venue's splits in."""
 
     def __init__(self) -> None:
         self._last: dict[Any, int] = {}
@@ -96,6 +112,12 @@ class Struck:
         """Each instrument's execution bar type and its step, as the matching engine holds it."""
         self._at: dict[tuple[str, str], int] = {}
         """The instant each fill's price was struck at, by its instrument and trade id."""
+        self._heard: dict[tuple[str, str], int] = {}
+        """Each fill heard, by its instrument and trade id, numbered from one in the order the
+        bus carried it."""
+        self._split: dict[str, int] = {}
+        """Each split adjustment the venue announced, by its event id: how many fills had been
+        heard when it was."""
 
     def bar(self, bar: Bar) -> None:
         """A bar the venue is about to be handed: kept where the matching engine applies it."""
@@ -116,10 +138,31 @@ class Struck:
         self._last[instrument_id] = int(data.ts_event)
 
     def filled(self, event: Any) -> None:
-        """A fill the execution engine has applied: keep its name's last applied instant."""
+        """A fill the execution engine has applied: number it, and keep its name's last
+        applied instant."""
+        key = _fill_key(event)
+        self._heard.setdefault(key, len(self._heard) + 1)
         at = self._last.get(event.instrument_id)
         if at is not None:
-            self._at[_fill_key(event)] = at
+            self._at[key] = at
+
+    def restated(self, restated: Any) -> None:
+        """A split the venue has just applied, as `kanso.nautilus.actions` announces it: keep,
+        for each position it adjusted, how many fills had been heard."""
+        for event in restated.adjustments:
+            self._split[str(event.id)] = len(self._heard)
+
+    def heard(self, event: Any) -> int:
+        """Where a fill falls among those the bus carried — the number `filled` gave it, or
+        none, `0`, for a fill not heard — so it follows a split the venue had announced
+        when fewer fills had been heard (`split`)."""
+        return self._heard.get(_fill_key(event), 0)
+
+    def split(self, event: Any) -> int:
+        """How many fills had been heard when the venue announced the split a position's
+        adjustment event applied, or `-1` for one it did not announce, which every fill of
+        its instant then follows."""
+        return self._split.get(str(event.id), -1)
 
     def at(self, event: Any) -> int | None:
         """The instant a fill's price was struck at, or `None` for a fill not heard: the fill
@@ -127,8 +170,12 @@ class Struck:
         return self._at.get(_fill_key(event))
 
     def listen(self, msgbus: Any) -> None:
-        """Hear every fill the execution engine on `msgbus` applies."""
+        """Hear every fill the execution engine on `msgbus` applies, and every split its venues
+        announce."""
+        from kanso.nautilus.actions import TOPIC
+
         msgbus.subscribe(topic=FILLS, handler=self.filled)
+        msgbus.subscribe(topic=TOPIC, handler=self.restated)
 
 
 def _fill_key(event: Any) -> tuple[str, str]:

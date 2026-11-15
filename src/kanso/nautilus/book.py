@@ -768,8 +768,9 @@ def _refuse_members(book: SharedBook, members: Sequence[BookMember]) -> None:
     hypothesis does not declare.
 
     A dated spread is read at the instant the venue priced each fill at, and a book's runner
-    neither keeps that record nor hands its members the table (`kanso.nautilus.struck`), so a
-    member charged one is refused rather than charged nothing (`docs/backlog.md` row 260). A
+    keeps that record only where a split is declared, for its extraction, and hands neither it
+    nor the table to a member's sleeve (`kanso.nautilus.struck`), so a member charged one is
+    refused rather than charged nothing (`docs/backlog.md` row 260). A
     member's entries are the ledger's to place, under the book's own hours and leverage, and a
     period target's stop and flatten would be a second halt beside them that no run composes, so
     a member that declares one is refused rather than run unstopped (row 267)."""
@@ -845,7 +846,10 @@ def execute_book(
     extracted from its own positions and its own points' marks, as a stage node extracts a
     version — with a split name's prices read in the era the shared venue had applied at
     each end, off the whole feed (`Marks.clocked`), since another member's print can be the
-    point that applied a split to this member's position.
+    point that applied a split to this member's position, and each split ordered among the
+    fills of its instant by the book venue's record (`kanso.nautilus.struck`), which the book's
+    venues keep wherever a split is declared and which no member charged a dated spread or
+    held to a period target reads otherwise.
 
     The venues are the members', agreed as a stage's are (`kanso.nautilus.node.agree`), each
     opened at the book's capital and at the largest leverage the block declares, so the
@@ -897,6 +901,7 @@ def execute_book(
     union.check()
     for member in order:
         marks[member.id].clocked(points)
+        marks[member.id].record = union.record
     backtest._seed_globals(_seed_of(members))
     engine = backtest.engine_for()
     try:
@@ -904,7 +909,10 @@ def execute_book(
             backtest.add_venue(
                 engine,
                 venue_config(venue, model, book.capital, book.leverage.largest, book=held_book),
+                union.record,
             )
+        if union.record is not None:
+            union.record.listen(engine.kernel.msgbus)
         for instrument in instruments:
             engine.add_instrument(instrument)
         strategies = []

@@ -423,8 +423,8 @@ def _venues(
     request: RunRequest, kernel: Any, points: Sequence[Any], struck: Struck | None = None
 ) -> tuple[Any, ...]:
     """One simulated venue per venue the universe trades, wired to this session's bars, and
-    under a dated spread or a period target keeping `struck`, the record of the instant each
-    fill's price was struck at.
+    under a dated spread, a period target or a split keeping `struck`, the record of the
+    instant each fill's price was struck at and of where each split fell among the fills.
 
     The same call a stage node makes, so the exchange a replay is compared against and the
     exchange a deployed stage executes against are one piece of code rather than two that

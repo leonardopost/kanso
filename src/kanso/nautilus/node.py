@@ -575,6 +575,7 @@ def run(
                 dated_rows(request.venue_model) or request.hyp.period_target is not None
                 for request in requests
             )
+            or any(splits.schedule_of(instrument) for instrument in window.instruments)
             else None
         )
         venues = sandbox.attach(kernel, node.venues(), points, struck)
@@ -974,8 +975,10 @@ def _realised(
     harness read — and never at one read off the version's own view: that view orders its
     series as no venue was handed them, holds none of the series the version's stage-mates
     trade on its venue, and on a restart holds no prefix the venue was handed again. Wherever
-    the window's marks keep a record at all, under a dated spread or a period target, it is
-    that one, so the marks hold no record of their own that no venue was loaded with. For
+    the window's marks keep a record at all, under a dated spread, a period target or a split,
+    it is that one, so the marks hold no record of their own that no venue was loaded with —
+    and where a split was applied among the fills of its instant is the stage venue's order
+    too (`backtest._adjusted`). For
     the same reason the era a split name's prices are read in at each period end is the
     stage venue's, read off the feed the node released to it (`feed`, `Marks.clocked`): a
     stage-mate's print can be the point that applied a split to the version's position, and
