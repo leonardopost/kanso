@@ -668,6 +668,32 @@ def test_the_pages_say_the_fill_path_replays_the_runner_s_splits_and_holdings() 
     )
 
 
+def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
+    """The runner restates a split name's prices into the era in force at each period end
+    (`tests/nautilus/backtest/test_split_basis.py`): the gate row and the workspace page say
+    so, row 79 is half closed — the card's mark, and not yet the stage's end-of-window book —
+    and the key that plays no part in it is a backlog row of its own."""
+    gates = prose(section(page("concepts.md"), "What a card must satisfy"))
+    concepts = prose(page("concepts.md"))
+    workspace = prose(page("workspace.md"))
+    assert "read in the shares held at the end, so a low printed before a split" in gates
+    assert "the runner marks it the same way at a period end" in concepts
+    actions = prose(section(page("concepts.md"), "Corporate actions"))
+    assert "**A period is read in the shares held at its end.**" in actions
+    assert "printed past the split's instant reaches it" in actions
+    assert "The runner reads a period in the shares held at its end." in workspace
+    assert "an eve's daily bar published after the midnight it is stamped at" in workspace
+    assert "read in the shares held at the end, so a price printed before a split" in workspace
+    assert "`corporate_actions` plays no part in it" in workspace
+    rows = page("backlog.md").splitlines()
+    half = next(line for line in rows if line.startswith("| 79 |")).split("|")
+    assert half[3].strip().startswith("**Half closed:** ~~At a period end where a held name")
+    assert "The stage's end-of-window book still does" in half[3]
+    assert half[4].strip().startswith("The runner reads every period in the shares held")
+    key = next(line for line in rows if line.startswith("| 285 |"))
+    assert "`corporate_actions` in `instruments.yaml` is read by nothing at run time" in key
+
+
 def test_the_restart_seed_is_said_as_it_is_read() -> None:
     """The seed is the week the newest window that had one open left (`records.target_seed`),
     a newer idle window passed over (`tests/portfolio/test_records.py`), where several

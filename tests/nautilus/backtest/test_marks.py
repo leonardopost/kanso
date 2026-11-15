@@ -40,7 +40,7 @@ from kanso.nautilus.costs import quote_half_spread
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
 from kanso.schemas import PeriodTarget, VenueModel
 
-from .conftest import INSTRUMENT, SNAPSHOT, hypothesis, venue_model
+from .conftest import INSTRUMENT, SNAPSHOT, hypothesis, instrument, venue_model
 
 OTHER = "HEDGE.XNAS"
 WINDOW = (date(2024, 1, 1), date(2024, 1, 3))
@@ -117,14 +117,22 @@ points = st.lists(
 )
 
 
+SPLIT = {"splits": [{"ex_date": WINDOW[0].isoformat(), "ratio": 0.1}]}
+"""A one-for-ten of DEMO on the window's first day, so drawn points fall on both sides of it."""
+
+
 @settings(max_examples=60, deadline=None)
-@given(drawn=points, quoted=st.booleans())
-def test_every_point_folds_to_the_prices_it_carries(drawn: list, quoted: bool) -> None:
+@given(drawn=points, quoted=st.booleans(), split=st.booleans())
+def test_every_point_folds_to_the_prices_it_carries(drawn: list, quoted: bool, split: bool) -> None:
+    """Under a split as without one: a point printed at the instant it was published at reads
+    as the plain stream of it reads, restated alike."""
     request = _request(quoted=quoted)
     stream = [_point(*each) for each in drawn]
-    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    instruments = [instrument(info=SPLIT)] if split else []
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)), instruments)
     marks.take(stream)
-    expected = folded(request, [plain for p in stream if (plain := _plain(p)) is not None])
+    plain = [plain for p in stream if (plain := _plain(p)) is not None]
+    expected = folded(request, plain, instruments)
 
     assert _state(marks) == _state(expected)
     # every quote is kept, under either spread: a fill's touch is read against it
@@ -157,7 +165,7 @@ def test_a_fill_is_read_against_the_last_quote_before_it_however_its_quotes_were
     applied it last: 10.01/10.03 here, so a buy at 10.03 is at the touch and one at 10.02, the
     earlier quote's ask, is inside it."""
     request = _request(quoted=True)
-    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)), ())
     at = midnight_ns(WINDOW[0]) + 10 * 3_600 * 1_000_000_000
     marks.take(
         [
@@ -180,7 +188,7 @@ def test_a_fill_is_read_against_the_last_quote_before_it_however_its_quotes_were
 @pytest.mark.parametrize("kind", ["quote", "trade", "bar"])
 def test_a_market_point_outside_the_span_is_refused(kind: str) -> None:
     request = _request(quoted=False)
-    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)), ())
 
     with pytest.raises(PreconditionError, match="lies outside the requested window"):
         marks.take([_point(kind, INSTRUMENT, CLOSES, 1_000, 2)])
@@ -254,7 +262,7 @@ def test_a_fold_keeps_what_the_0_20_fold_kept(drawn: list) -> None:
     are what 0.20.0's fold made, and in the same order."""
     request = _request(quoted=False)
     model = VenueModel.model_validate(dict(request.venue_model))
-    marks, reference = Marks(request, model), _Folded020(request, model)
+    marks, reference = Marks(request, model, ()), _Folded020(request, model, ())
     for step in drawn:
         for held in (marks, reference):
             if step[0] == "fold":
@@ -273,7 +281,7 @@ def test_a_fold_keeps_what_the_0_20_fold_kept(drawn: list) -> None:
 
 def test_a_model_without_a_dated_spread_keeps_no_record_and_notes_no_instant() -> None:
     marks = Marks(
-        _request(quoted=False), VenueModel.model_validate(_request(quoted=False).venue_model)
+        _request(quoted=False), VenueModel.model_validate(_request(quoted=False).venue_model), ()
     )
     filled = _Filled("1", INSTRUMENT, midnight_ns(WINDOW[0]), 1.0, OrderSide.BUY)
     marks.price([filled])
@@ -291,13 +299,13 @@ def test_a_period_target_keeps_the_record_and_prices_nothing_by_it() -> None:
         period="week", opens="Mon 04:00", tz="America/New_York", target_bp=50.0, of="capital"
     )
     targeted = replace(made, hyp=made.hyp.model_copy(update={"period_target": target}))
-    marks = Marks(targeted, VenueModel.model_validate(targeted.venue_model))
+    marks = Marks(targeted, VenueModel.model_validate(targeted.venue_model), ())
     filled = _Filled("1", INSTRUMENT, midnight_ns(WINDOW[0]), 1.0, OrderSide.BUY)
     marks.price([filled])
 
     assert marks.record is not None
     assert marks.pricing is None
     assert marks.priced(filled) is None
-    assert marks.half(filled) == Marks(made, VenueModel.model_validate(made.venue_model)).half(
+    assert marks.half(filled) == Marks(made, VenueModel.model_validate(made.venue_model), ()).half(
         filled
     )

@@ -209,7 +209,7 @@ def run_node_chunked(
     feed order and markers included, once the chunk has run: what a replay records.
     """
     model = VenueModel.model_validate(dict(request.venue_model))
-    marks = backtest.Marks(request, model)
+    marks = backtest.Marks(request, model, instruments)
     stream = backtest.checked_chunks(request, instruments, chunks, marks)
     first = next(stream, ())
     opens, _ = request.bounds

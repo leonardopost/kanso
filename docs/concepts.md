@@ -1240,7 +1240,7 @@ already over. There are eleven.
 | `min_trades` | a metric earned on too few trades, or on one fold alone |
 | `max_drawdown` | a run that fell further than the hypothesis permits, read at the period ends |
 | `intraday_drawdown` | a run that fell further than the hypothesis permits between the period ends: the same limit read on the path through every fill — cash after each fill, every open position at the price it last traded at, or at the runner's mark at the last period end when it has not traded since — re-anchored at each period end to the equity the runner struck there, so a book flat at its ends is judged on the fall it took inside them. The path holds what the runner holds: each split the venue applied to a held position is replayed where the runner booked it — the quantity it changed, the last price divided by its ratio, the cash it paid in lieu — and at each end every position is set to what the runner held there, so a split's lost shares are never marked and a move to an end's mark is not counted again at the next fill. A run stored before runs kept their splits (`adjustments`) has none to replay, and its path holds a split's lost shares until the next end. Carries no parameter; its evidence carries the period-end reading beside it and the instant of the trough |
-| `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
+| `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high, read in the shares held at the end, so a low printed before a split inside the period is divided by its ratio — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
@@ -1404,7 +1404,7 @@ then on (`docs/backlog.md` row 123). A `sizing` rule denies `modify_order` to a 
 strategy, so the gap is an unsized sleeve's. On a pair's
 ex-date the venue restates the held leg at the day's first point, which may be the other leg's;
 until the held leg prints again its last price is restated by the split's ratio, for the balance
-and for the room. `position_size` still judges a position against the capital
+and for the room, and the runner marks it the same way at a period end. `position_size` still judges a position against the capital
 (`docs/backlog.md`), and under a `sizing` rule the budget is funded by definition (row 76).
 `self.balance` reads the number, and a read costs what the sleeve's orders gained since the
 last one rather than what they hold: each event of each order — a fill, and the two a modify
@@ -2377,6 +2377,16 @@ the ex-date: the venue writes the amount on the split's own adjustment, the extr
 books it into cash at the split and into the trade the position closes as, and the harness
 books the same amount into `balance` when the venue announces the split, so the three read one
 number. A position under one new lot is paid out whole and closes at the split.
+
+**A period is read in the shares held at its end.** The catalog keeps every price as it was
+published, in the share count of the instant it was printed at, so a period holding an
+ex-date holds prices in two. The extraction divides each price of the split name printed
+before a split by the split's ratio wherever the period's end holds the new count — the
+period's low and high, which `maintenance_margin` values a holding at, and its last price,
+which the equity curve marks it at — and the count in force at an end is the venue's: it
+applies a split when a point of the name's own venue printed past the split's instant reaches
+it. The run keeps each split it applied to a held position (`adjustments`), and the path
+`intraday_drawdown` reads replays them where the runner booked them.
 
 **A window holding a split you have not declared is refused.** When the run's data carries a
 `corporate_action` point of kind `split` whose ex-date falls inside the window, and the

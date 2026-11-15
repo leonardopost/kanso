@@ -890,7 +890,7 @@ def execute_book(
     measured = replace(
         deepest.request, capital=book.capital, cushion=0.0, settled_ns=None, resumes_ns=None
     )
-    union = backtest.Marks(measured, models[deepest.id])
+    union = backtest.Marks(measured, models[deepest.id], instruments)
     union.take(points)
     union.check()
     backtest._seed_globals(_seed_of(members))

@@ -162,7 +162,7 @@ def test_the_bars_reach_the_sleeve_among_the_ticks_at_their_close(
     it, and ahead of a quote of that very instant."""
     request = request_for(hypothesis_=tick_bars())
     instruments, chunks = window_chunks(request, held(tmp_path))
-    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)), ())
 
     stream = [
         point

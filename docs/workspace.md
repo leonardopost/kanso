@@ -865,7 +865,8 @@ worth — once per return period, by the runner, in the extraction, as its own `
 series; `cost_stress` multiplies fill costs and leaves it alone. `maintenance_pct` is the
 floor the `maintenance_margin` gate holds: each period's end-of-period holdings valued at
 the period's adverse extreme — longs at the lowest low, shorts at the highest high since the
-previous end — over their gross. A card is refused below it when its constraints include
+previous end, read in the shares held at the end, so a price printed before a split inside the
+period is divided by the split's ratio — over their gross. A card is refused below it when its constraints include
 `maintenance_margin` (list it in `required_constraints` to hold every card to it), a paper
 window when the sleeve's do, and a composed version whenever the floor is declared: `strat
 compose` refuses (exit 2) a version whose own run over the certification window falls
@@ -2386,6 +2387,19 @@ carries only the day it takes effect, so kanso cannot say when it became knowabl
 corporate-actions dataset that has only effective dates declares `publication: unknown` and
 no snapshot will rely on it. A definition is a *dated assertion you make*, which is a different kind of
 claim, and the store already keeps one per date.
+
+The runner reads a period in the shares held at its end. The catalog keeps each price as it
+was published, in the share count of the instant it was printed at, so a period holding an
+ex-date holds prices in two counts: the extraction divides every price of the split name
+printed before the split by its ratio — the period's low and high, which `maintenance_margin`
+values a position at, and its last price, in that period or carried into a later one the name
+has not printed in. The count in force at the end is the venue's: it applies a split when a point of its own
+venue printed past the split's instant reaches it, whichever name printed it, and an eve's
+daily bar published after the midnight it is stamped at is still the old count's. Measured on
+SOXS's one-for-five of 2011-02-24: a week whose low was a pre-split print of 10.19, holding
+638 shares bought after the split at 53.51, valued them at 10.19 and read a ratio of -55.39%;
+in one count the low is 50.95 and the ratio 68.92%. `corporate_actions` plays no part in it,
+and in nothing else at run time (`docs/backlog.md` row 285).
 
 The schedule is applied by the simulated venue rather than by a strategy, and no researched
 `strategy.py` can read it: it names every split of the instrument's life, including ones
