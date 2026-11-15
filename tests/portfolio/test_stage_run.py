@@ -695,6 +695,28 @@ def test_a_restart_seeds_the_book_from_where_the_last_window_left_it(
     assert restored == pytest.approx(second.equity[1], rel=1e-12), "the seed, restored"
 
 
+def test_a_book_with_no_target_reads_only_its_own_version_s_windows(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A book is per version, so a restart of a version with a book and no period target reads
+    its own windows on the stage from the store and no other version's or strategy's, which a
+    stage's events would otherwise all be loaded for; only a target reads the strategy's."""
+    deployable(ws, store, "booked", sleeve=BUYER, doc=BOOKED)
+    deploy(ws, store, "paper")
+    asked: list[dict[str, object]] = []
+    stage_results = records.stage_results
+
+    def reading(store: StateStore, **narrowed: Any) -> list[records.StageResult]:
+        asked.append(narrowed)
+        return stage_results(store, **narrowed)
+
+    monkeypatch.setattr(records, "stage_results", reading)
+
+    deploy(ws, store, "paper")
+
+    assert asked == [{"strategy_id": "booked", "version": 1, "stage": "paper"}]
+
+
 def recording_buyer(record: Path, notional: str = "5_000.0") -> bytes:
     """A sleeve that buys once on its first bar and writes down every balance it reads."""
     return f'''

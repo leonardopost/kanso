@@ -622,16 +622,18 @@ def _seeded(store: StateStore, stage: str, placed: Placement) -> Placement:
     stage, read whether or not the version has a book, at the share it is placed at: a week
     is the strategy's, so a new version that replaces one on the stage — a passing
     certificate composes it and deploys paper with no one asked — resumes the week the
-    version before it left, and a strategy on a stage it has not run on begins no week."""
-    if placed.hyp.book is None and placed.hyp.period_target is None:
-        return placed
-    results = records.stage_results(store, strategy_id=placed.strategy_id, stage=stage)
+    version before it left, and a strategy on a stage it has not run on begins no week. Each
+    is read from the store narrowed to what it needs: the target every window of the strategy
+    on the stage, and the book only the version's own, never another version's events."""
     if placed.hyp.period_target is not None:
+        results = records.stage_results(store, strategy_id=placed.strategy_id, stage=stage)
         placed = replace(placed, target_seed=records.target_seed(results, placed.capital))
     if placed.hyp.book is None:
         return placed
     cushion, settled_ns = records.book_seed(
-        [result for result in results if result.version == placed.version]
+        records.stage_results(
+            store, strategy_id=placed.strategy_id, version=placed.version, stage=stage
+        )
     )
     return replace(placed, cushion=cushion, settled_ns=settled_ns)
 
