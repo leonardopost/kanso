@@ -234,8 +234,8 @@ class PeriodStop(KansoModel):
     (`FlattenFill`), `flat_equity` the `balance` after the last of them, and `carried` whether
     that fill landed at or after the next week's opening, so in a week whose anchor was struck
     before it. A stage window restarted inside a stopped week lists the week's stop again, as
-    the window before struck it, with what it dropped and filled under it itself: it restarts
-    flat, so nothing.
+    the window before struck it, with what it dropped under it itself; it restarts flat with
+    nothing working, stopped from its first instant, so it fills nothing under it.
     """
 
     opening_ns: Instant
@@ -290,8 +290,10 @@ class PeriodStops(KansoModel):
     and the week open at its last point.
 
     `openings` is the opening of each New York week the run was handed a point in after its
-    warmup, in order (`kanso.nautilus.clock.week_opening`), so `periods` counts the target's
-    weeks and never the return periods; `stops` is every week it stopped, in order, and
+    warmup, and on a stage restart of the week it resumes trading in, which is open from its
+    first instant whether or not a point of it follows, in order
+    (`kanso.nautilus.clock.week_opening`), so `periods` counts the target's weeks and never the
+    return periods; `stops` is every week it stopped, in order, and
     `stopped` how many weeks that is. `last` is `None` for a run handed no point. A run of a
     hypothesis that declares no `period_target` records none of this at all.
     """

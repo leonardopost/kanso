@@ -627,6 +627,13 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert "A week that had stopped stays stopped" in workspace
     assert "seeded on a restart with the week its strategy's newest window on that stage" in stages
     assert "a new version that replaces one on the stage" in workspace
+    assert "resumes it when it resumes trading inside that week" in workspace
+    assert "an entry sent from `on_start` among them" in workspace
+    assert "an order sent from `on_start` is held to it too" in stages
+    assert "resumes it when its own first point falls in" not in workspace
+    assert "resumes when its first point falls in it" not in stages
+    assert "does not carry to the other at a promotion or a demotion" in workspace
+    assert any(line.startswith("| 282 |") for line in page("backlog.md").splitlines())
     assert "a week the target had stopped stays stopped" in stages
     for text in (workspace, stages):
         assert "opens flat at the capital with no stopped week" not in text

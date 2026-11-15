@@ -185,7 +185,7 @@ class Placement:
     """Where this strategy's `period_target` stood when its last window on the stage closed,
     whichever of its versions ran it: the week open at that window's last point, with its stop
     when it had stopped, stated at `capital` (`kanso.portfolio.records.target_seed`), which the
-    next window resumes when its first point falls in that week."""
+    next window resumes when it resumes trading inside that week (`RunRequest.resumed`)."""
 
     @property
     def tag(self) -> str:

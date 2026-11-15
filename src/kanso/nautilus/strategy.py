@@ -106,10 +106,11 @@ the key names (`kanso.nautilus.clock.week_opening`), and each is read against it
 equity the runner strikes at the last point of the week before, struck when the first point of
 the new one is delivered, after a book policy's period close has booked its carry, so it is the
 card's period-end equity (`_target_turn`); a run's first week, which no warmup turns into, is
-anchored at the capital. At the head of every point dispatched — after what the rate held back
-is sent and before the author's handler — and at a finer bar an attached overlay reads, before
-the overlay is consulted on it, the week's P&L, `balance` less the anchor, reaching `target_bp`
-of the capital or of the anchor stops the week: every working order of every name is
+anchored at the capital, unless it is the week a stage restart resumes in (below). At the head
+of every point dispatched — after what the rate held back is sent and before the author's
+handler — and at a finer bar an attached overlay reads, before the overlay is consulted on it,
+the week's P&L, `balance` less the anchor, reaching `target_bp` of the capital or of the anchor
+stops the week: every working order of every name is
 cancelled, and every name the sleeve holds is due (`_target_step`). A name is due again at every
 fill it takes while stopped, so an entry the venue matches after the hit is flattened too, and a
 due name is sent its whole position at market (`submit_exit`) at the first point dispatched after
@@ -145,10 +146,14 @@ nothing else of it. What the rule did is the run's record, read by the runner on
 has ended (`_target_record`, `kanso.criteria.run.CardRun.period_stops`): every week the run
 traded in, each stop — the week's opening, anchor and threshold, the hit's instant and
 `balance`, what was dropped unsent, and every fill of an order sent while stopped, whenever it
-landed, with the `balance` after the last — and the week open at the run's last point. A run's
-first week is anchored at the capital, except on a stage restart inside the week the
-version's last window on the stage ended in, which resumes it as that window left it: stopped,
-or with what it had made struck into the anchor (`_target_resume`).
+landed, with the `balance` after the last — and the week open at the run's last point. A stage
+restart that resumes trading inside the week its strategy's last window on the stage ended in
+opens that week before the author's `on_start`, as that window left it: stopped, or with what it
+had made struck into the anchor (`_target_resume`). So the week is in force from the run's first
+instant, and whatever the sleeve sends before its first point is held to it as anything sent in
+the week is: a restart holds nothing and nothing is working, so a stopped week has nothing to
+cancel or flatten, and an entry sent from `on_start` is dropped rather than resting at the venue
+to fill in the week.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -1130,9 +1135,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Whether the order being sent is a stage node's flatten (`_target_close`), which is
         the stage's and no stop's."""
         self._target_seed: PeriodStops | None = None
-        """The week a stage restart resumes, handed with the target
-        (`kanso.portfolio.records.target_seed`), until the run's first week opens
-        (`_target_resume`); `None` everywhere but a stage restart."""
+        """The week a stage restart resumes in, handed with the target only when the restart
+        resumes trading inside it (`kanso.nautilus.backtest.RunRequest.resumed`), and opened
+        when the run starts (`_target_resume`); `None` everywhere else."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1585,44 +1590,62 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         The anchor is the equity the runner strikes at the last point of the week before
         (`_book_at`), read after the policy's period close above has booked its carry, so it is
         the card's period-end equity, carry included, and the gap to the new week's first
-        point counts in the new week; a run's first week is anchored at the capital, since
-        no week turns over a warmup prefix, unless a stage restart resumes it
-        (`_target_resume`). The weeks are New York's, absolute, and read off
-        the clock at the instant (`kanso.nautilus.clock.week_opening`), imported here so the
-        module a strategy may import binds no week of its own.
+        point counts in the new week. A week turned to with no point of the week before handed
+        is anchored at the capital: a run's first, since no week turns over a warmup prefix,
+        and the one after a week a stage restart resumed in before its first point
+        (`_target_resume`), which the window restarted flat at the capital and held nothing in.
+        The weeks are New York's, absolute, and read off the clock at the instant
+        (`kanso.nautilus.clock.week_opening`), imported here so the module a strategy may
+        import binds no week of its own.
         """
         if ts_ns >= self._target_next:
             from kanso.nautilus.clock import week_opening
 
             target = self._period_target
-            anchor = self._book_at(self._target_last_ns)[0] if self._target_next else self.capital
+            last_ns = self._target_last_ns
+            anchor = self._book_at(last_ns)[0] if last_ns else self.capital
             opens, self._target_next = week_opening(ts_ns, target.weekday, minute=target.minute)
             self._target_open = opens
             self._target_openings.append(opens)
             self._target_anchor = anchor
             base = self.capital if target.of == "capital" else anchor
             self._target_threshold = target.target_bp / BASIS_POINT * base
-            if self._target_seed is not None:
-                self._target_resume(self._target_seed)
         self._target_last_ns = ts_ns
 
-    def _target_resume(self, seed: PeriodStops) -> None:
-        """Resume the week a stage window restarted inside, as the version's last window on the
-        stage left it (`kanso.portfolio.records.target_seed`), at the run's first week, once.
+    def _target_resume(self) -> None:
+        """Open the week a stage restart resumes in, before the author's `on_start`, as the
+        strategy's last window on the stage left it (`kanso.portfolio.records.target_seed`).
 
-        Every stage window restarts flat at the capital, so what the week had made — the P&L
-        that window recorded at its last point, after the node's own flatten, stated at this
-        window's capital — is struck into the anchor: the capital less it. `balance` less the
-        anchor is then the week's P&L across both windows, read against the week's own
-        threshold, so a week that had made part of its target stops at what is left of it. A
-        week that had stopped stays stopped until the next opens: its stop is listed again, as
-        the window before recorded it, and what this window drops under it is counted there. A
-        seed of a week the first point is past is let go, and that week opens as a run's first.
+        The runner hands the week only when the restart resumes trading inside it — the instant
+        after the stage's clock falls in it (`kanso.nautilus.backtest.RunRequest.resumed`) — so
+        it is the run's first week from its first instant, before any point: whatever the
+        sleeve sends from `on_start` or before its first point is held to it as anything sent
+        in the week is, and nothing reaches the venue that the week would drop. Every stage
+        window restarts flat at the capital, so what the week had made — the P&L that window
+        recorded at its last point, after the node's own flatten, stated at this window's
+        capital — is struck into the anchor: the capital less it. `balance` less the anchor is
+        then the week's P&L across both windows, read against the threshold the week was
+        struck with, so a week that had made part of its target stops at what is left of it.
+        A week that had stopped is stopped from the start: its stop is listed again, as the
+        window before recorded it, what this window drops under it is counted there, and it is
+        lifted as any stop is, at a point of a later week with the sleeve flat — a restart
+        holds nothing and nothing is working, so there is nothing to cancel or flatten. A first
+        point past the week turns it as any week turns, the next anchored at the capital. Over
+        a warmup prefix the week is open and read for nothing: no hit is read there
+        (`_target_step`), and an entry goes the way of every order sent while warming, dropped
+        unsent and uncounted (`submit_entry`).
         """
-        self._target_seed = None
-        last = seed.last
-        if last is None or last.opening_ns != self._target_open:
+        seed = self._target_seed
+        if seed is None or seed.last is None:
             return
+        from kanso.nautilus.clock import week_opening
+
+        last, target = seed.last, self._period_target
+        opens, self._target_next = week_opening(
+            last.opening_ns, target.weekday, minute=target.minute
+        )
+        self._target_open = opens
+        self._target_openings.append(opens)
         self._target_anchor = self.capital - last.pnl
         self._target_threshold = last.threshold
         if not last.stopped:
@@ -1654,7 +1677,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         and threshold, the point's availability instant, the part of the session the minute it
         covers falls in — read off its reference time, `data_time`, as `session` reads it, so a
         bar published after its close names the minute it describes — and the `balance` there
-        (`_target_record`).
+        (`_target_record`). Nothing is read at a point of a warmup prefix, which the window
+        does not trade in: the week a stage restart resumes in is open over its warmup
+        (`_target_resume`), and is read from its first point after it.
         """
         if self._target_until is not None:
             self._target_flatten()
@@ -1666,6 +1691,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._target_due.clear()
         if (
             not self._target_next
+            or self._warming()
             or (equity := self.balance) - self._target_anchor < self._target_threshold
         ):
             return
@@ -1919,6 +1945,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     # --- lifecycle -----------------------------------------------------------
 
     def _start(self) -> None:
+        self._target_resume()
         self.subscribe_universe()
         self._ledger.update(
             (order.client_order_id, _Tracked(order))
@@ -3789,7 +3816,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     {"notional": notional, "qty": qty, "price": price},
                 )
             return None
-        if self._target_until is not None:
+        if self._target_until is not None and not self._warming():
             self._target_drop()
             return None
         if self.sized:

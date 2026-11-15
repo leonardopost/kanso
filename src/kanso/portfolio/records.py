@@ -321,8 +321,8 @@ def target_seed(results: Sequence[StageResult], capital: float) -> PeriodStops |
     nothing, so the one before it still holds the answer. The week's anchor, threshold and
     P&L are stated at `capital`, the share the next window runs at, scaled from the one that
     window ran at, so the basis points made and left carry across a share that moved; the
-    stop is kept as it was struck. The next window resumes the week when its first point falls
-    in it (`kanso.nautilus.strategy.KansoStrategy`): every window restarts flat at the
+    stop is kept as it was struck. The next window resumes the week when it resumes trading
+    inside it (`kanso.nautilus.backtest.RunRequest.resumed`): every window restarts flat at the
     capital, and what carries across is the week.
     """
     for result in reversed(results):
