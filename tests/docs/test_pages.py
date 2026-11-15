@@ -715,6 +715,37 @@ def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
     assert "land an order due at an instant at different points of it" in found["289"]
 
 
+def test_the_pages_say_a_record_kept_for_a_split_alone_keeps_no_point() -> None:
+    """A record a run keeps for a split alone is heard on the bus and loads no venue half
+    (`Struck.points`; `tests/nautilus/backtest/test_split_basis.py`), so it keeps no point and
+    no fill's priced instant. `_refuse_members`, `execute_book`, `sandbox.attach` and row 260
+    once said a book's venues and a stage's kept each name's last point in it wherever a split
+    was declared; and row 260's fix names the record that keeps points, which the book's
+    runner would need to charge a member a dated spread."""
+    from kanso.nautilus import book, sandbox
+
+    refused = prose(book._refuse_members.__doc__ or "")
+    runner = prose(book.execute_book.__doc__ or "")
+    attach = prose(sandbox.attach.__doc__ or "")
+    assert "keeps that record only where a split is declared" not in refused
+    assert "then only the order its bus carried the fills and the splits in" in refused
+    assert "with no point and no fill's priced instant (`Struck.points`)" in refused
+    assert "venues keep wherever a split is declared" not in runner
+    assert "hears on its bus alone" in runner
+    assert "it keeps no point and no fill's priced instant (`Struck.points`)" in runner
+    assert "given `struck`, keeping each name's last point" not in attach
+    assert "where the record keeps points (`Struck.points`" in attach
+    assert "A record kept for a split alone keeps no point." in attach
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 260 |"))
+    cells = row.split("|")
+    assert "loads it only where a split is declared" not in cells[3]
+    assert "then its bus half alone (`Struck(points=False)`)" in cells[3]
+    assert "it keeps no point and no fill's priced instant" in cells[3]
+    fix = cells[5].strip()
+    assert fix.startswith("The book's runner keeping a record that keeps points")
+    assert "(`Struck(points=True)`) wherever a member is charged one" in fix
+
+
 def test_the_restart_seed_is_said_as_it_is_read() -> None:
     """The seed is the week the newest window that had one open left (`records.target_seed`),
     a newer idle window passed over (`tests/portfolio/test_records.py`), where several
