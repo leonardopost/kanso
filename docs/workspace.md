@@ -133,7 +133,7 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same, requiring the host's kind too over a host at `quote` or `trade` |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | send an exit kanso did not size — one the strategy built itself, at market or at a limit, in any time in force, a stop, an order of a list or a list that closes, the engine's `close_position`, or an overlay's leg or clip — when the venue model's `costs.orders_per_minute` leaves the bucket too few tokens for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is, saying, for an exit the strategy built itself, to close with `submit_exit`, and, for an overlay's leg or clip, to send fewer commands or state the account's own figure. An entry, an entry's list and a modify past the rate are not refused: each is dropped unsent and counted on the card's `commands`, and the card runs on; an exit `submit_exit` sized is owed and a cancel deferred (`costs.orders_per_minute`) |
-| state a `costs.orders_per_minute` below `costs.requests_per_cancel`, at any layer, the broker's declaration among them | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the venue, both keys and both figures: the bucket never holds what one cancel spends, so the sleeve's first cancel would wait for ever and every entry and modify behind it be dropped |
+| state a `costs.orders_per_minute` below `costs.requests_per_cancel`, at any layer, the broker's declaration among them | 3 · at `hyp validate`, `hyp add`, `research begin` and `screen validate`, naming the venue, both keys and both figures, with the remedy of the figure that admits a cancel, stated in the hypothesis's `costs` — a free screen's `costs.<MIC>` for a screen — or under `venues.<MIC>.costs`: the bucket never holds what one cancel spends, so the sleeve's first cancel would wait for ever and every entry and modify behind it be dropped |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
@@ -1505,12 +1505,12 @@ rolling minute can hold up to twice the figure. It is the same code on every pat
 `kanso replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
 parity` compares the orders that came of it and the commands counted. A rate below what one
 cancel spends — an `orders_per_minute` under `requests_per_cancel` — is refused wherever the
-venue model is resolved, at `hyp validate`, `hyp add` and `research begin` (exit 3), naming the
-venue, both keys and both figures: the bucket never holds more than the rate, so the sleeve's
-first cancel would wait for ever and every entry and modify behind it be dropped. A command
-finds **no token available** to it when the bucket holds fewer than it costs — a list one for
-each of its orders, all or none — or, for an entry or a modify, while a cancel waits for its
-tokens or an exit owed for want of a token waits for one (below). Then:
+venue model is resolved, at `hyp validate`, `hyp add`, `research begin` and `screen validate`
+(exit 3), naming the venue, both keys and both figures: the bucket never holds more than the
+rate, so the sleeve's first cancel would wait for ever and every entry and modify behind it be
+dropped. A command finds **no token available** to it when the bucket holds fewer than it costs
+— a list one for each of its orders, all or none — or, for an entry or a modify, while a cancel
+waits for its tokens or an exit owed for want of a token waits for one (below). Then:
 
 - **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
   quantity given or sized by the room, whatever it does to the position; and an order built by

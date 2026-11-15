@@ -140,6 +140,10 @@ REPLAY_DATA_CLIENT = "replay"
 UNWRITTEN_UNSTATED: Final = ("orders_per_minute", "requests_per_cancel", "dated")
 """The cost keys a resolved model leaves out of what it dumps when no layer states them."""
 
+HYPOTHESIS_COSTS: Final = "in the hypothesis costs"
+"""Where the last layer of a venue model is written, as a remedy names it, unless a caller
+resolving another file's costs says otherwise (`resolve_venue_model`'s `costs_at`)."""
+
 PARTS: Final = ("pre", "open", "rth", "post")
 """The parts of the New York session a dated row states a width for."""
 
@@ -410,6 +414,7 @@ def _merge_costs(
     venue: str,
     quotes_available: bool,
     limit_fill: LimitFill = DEFAULT_LIMIT_FILL,
+    costs_at: str = HYPOTHESIS_COSTS,
 ) -> tuple[Costs, Origin]:
     values: dict[str, float | str | None] = {
         "commission_bps": DEFAULT_COMMISSION_BPS,
@@ -442,7 +447,7 @@ def _merge_costs(
         raise ValidationError(
             short,
             remedy=f"state costs.orders_per_minute of at least {per_cancel} — the share of the "
-            f"account's rate this sleeve may spend — in the hypothesis costs or under "
+            f"account's rate this sleeve may spend — {costs_at} or under "
             f"venues.{venue}.costs in portfolio.yaml",
         )
     return Costs.model_validate(values), origin
@@ -497,6 +502,7 @@ def resolve_venue_model(
     max_leverage: float | None = None,
     quotes_available: bool = True,
     default_limit_fill: LimitFill = DEFAULT_LIMIT_FILL,
+    costs_at: str = HYPOTHESIS_COSTS,
 ) -> VenueModel:
     """Inherit a venue's model from the workspace configuration, the broker, the operator's
     override and the hypothesis, in that order of precedence.
@@ -508,6 +514,9 @@ def resolve_venue_model(
     `config` is what `[research]` states beyond the shipped defaults; it carries an account
     type and a currency and never a cost, so a broker's declared currency still wins over it
     and the operator's `venues.<MIC>` entry is the place to override the broker.
+
+    `costs_at` is where `hypothesis_costs` is written, which a remedy naming that layer says:
+    a hypothesis's `costs` unless a caller resolving another file's says otherwise.
     """
     account: Account = DEFAULT_ACCOUNT
     account_origin: Origin = "default"
@@ -535,6 +544,7 @@ def resolve_venue_model(
         venue=venue,
         quotes_available=quotes_available,
         limit_fill=default_limit_fill,
+        costs_at=costs_at,
     )
     return VenueModel(
         venue=venue,

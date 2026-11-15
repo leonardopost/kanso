@@ -533,6 +533,31 @@ def test_a_venue_entry_stating_a_dated_spread_keeps_its_own_remedy_in_a_screen(
     assert payload(result)["remedy"].startswith("drop spread: dated and dated from venues.SIM")
 
 
+def test_a_rate_below_a_cancel_in_a_screen_s_costs_names_the_screen_as_the_remedy(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The refusal's remedy names the layer a sleeve's own costs are written in, and a free
+    screen's are its `costs.<MIC>`, not a hypothesis's."""
+    short = {**FADE["costs"]["SIM"], "orders_per_minute": 1, "requests_per_cancel": 2}
+
+    result = at(
+        runner,
+        loaded,
+        "screen",
+        "validate",
+        write_screen(loaded, {**FADE, "costs": {"SIM": short}}),
+        "--json",
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "is below costs.requests_per_cancel: 2" in payload(result)["error"]
+    assert payload(result)["remedy"] == (
+        "state costs.orders_per_minute of at least 2 — the share of the account's rate this "
+        "sleeve may spend — under costs.SIM in the screen or under venues.SIM.costs in "
+        "portfolio.yaml"
+    )
+
+
 def test_a_bound_screen_is_charged_its_hypothesis_s_costs(
     runner: CliRunner, registered: Path
 ) -> None:

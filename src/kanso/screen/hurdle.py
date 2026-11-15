@@ -23,7 +23,9 @@ states no width, over a leg that has no quotes, is refused (exit 3): nothing cou
 A model charged a dated spread (`spread: dated`), from the screen's own `costs` or from a bound
 hypothesis's, is refused (exit 3) before it is resolved: its rows are read at the instant a
 fill's price was struck at, and a screen strikes no fill. A refusal the model's resolution raises
-with a remedy of its own — a dated spread a `venues.<MIC>` entry states, say — keeps it.
+with a remedy of its own — a dated spread a `venues.<MIC>` entry states, say — keeps it, and one
+that names the layer a sleeve's own costs are written in names the screen's `costs.<MIC>`, or
+the bound hypothesis's costs.
 
 A condition's position is charged one round trip, struck at its entry and its exit, however
 many sessions apart the two are: a state held for days close to close pays once, as a card
@@ -240,8 +242,8 @@ def hurdles(
     models: dict[str, VenueModel] = {}
     for venue in sorted(quoted):
         stated = hypothesis.costs if hypothesis else (screen.costs or {}).get(venue)
+        where = f"{hypothesis.id}'s costs" if hypothesis else f"costs.{venue} in the screen"
         if stated is not None and (stated.spread == "dated" or stated.dated is not None):
-            where = f"{hypothesis.id}'s costs" if hypothesis else f"costs.{venue} in the screen"
             raise ValidationError(
                 f"{venue}: {where} state spread: dated, and a screen's hurdle charges no dated "
                 "spread: it strikes no fill, so there is no instant to read a row at",
@@ -255,16 +257,14 @@ def hurdles(
                 broker=research.broker,
                 declaration=adapters.venue_declaration(research.broker, venue),
                 override=overrides.get(venue),
-                hypothesis_costs=hypothesis.costs
-                if hypothesis
-                else (screen.costs or {}).get(venue),
+                hypothesis_costs=stated,
                 quotes_available=quoted[venue],
                 default_limit_fill=default_limit_fill(hypothesis)
                 if hypothesis
                 else DEFAULT_LIMIT_FILL,
+                costs_at=f"in {where}" if hypothesis else f"under {where}",
             )
         except ValidationError as error:
-            where = f"{hypothesis.id}'s costs" if hypothesis else f"costs.{venue} in the screen"
             raise ValidationError(
                 f"{venue}: {error.message}",
                 remedy=error.remedy
