@@ -128,12 +128,13 @@ sleeve still working on the closing side has filled, a limit or a stop resting r
 filled (`_target_room`). A list is read order by order, each with the list's orders before it
 applied, and is dropped whole when any of them would not go (`_target_sends`). Anything else —
 an order that opens, one that would carry the position past flat, one beside a working exit
-that already closes what it would, one sized in the quote's currency — is dropped before it is
-asked of the rate, and an overlay's clip so dropped is taken off the clip ledger, as the rate's
-drop takes one. A modify that asks more than the least an order holds or has been asked to
-hold is dropped whatever it asks above it — a growth, or a regrowth behind a shrink the venue
-has yet to apply — the order staying as it was (`modify_order`), since the harness flattens
-what is held and a stopped week never needs an order larger. What is already working is read,
+that already closes what it would, one sized in the quote's currency, one contingent on another
+— is dropped before it is asked of the rate, and an overlay's clip so dropped is taken off the
+clip ledger, as the rate's drop takes one. A modify that asks more than the least an order
+holds or has been asked to hold is dropped whatever it asks above it — a growth, or a regrowth
+behind a shrink the venue has yet to apply — the order staying as it was (`modify_order`),
+since the harness flattens what is held and a stopped week never needs an order larger. What
+is already working is read,
 by `submit_exit` and the flatten too, at the most it could still close (`_target_leaves`): an
 order at no less than the most any modify kanso sent of it asked, whether or not the venue
 has applied it, until the venue closes the order, and an order sized in the quote's currency
@@ -270,6 +271,7 @@ from nautilus_trader.model.enums import (
     BarAggregation,
     BookAction,
     BookType,
+    ContingencyType,
     LiquiditySide,
     OrderSide,
     OrderStatus,
@@ -3332,15 +3334,25 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         left to close (`_target_room`) once the list's orders before it in that name have
         filled, every one of them read as if it filled, as a resting order is. So an order
         that opens, one that would carry the position past flat into the other side — larger
-        or smaller — one beside a working exit that already closes what it would, and one sized
-        in the quote's currency, whose shares are known only at the price it fills at, are not
-        sent, alone or in a list (`submit_order`, `submit_order_list`)."""
+        or smaller — one beside a working exit that already closes what it would, one sized
+        in the quote's currency, whose shares are known only at the price it fills at, and one
+        contingent on another — a parent or a child of one-triggers-other, one-cancels-other or
+        one-updates-other — are not sent, alone or in a list (`submit_order`,
+        `submit_order_list`). A child waits on its parent, and one whose parent is in another
+        name is left out of what is working until that parent fills (`_not_yet_live`), so an
+        exit beside it would be sized as if it were not there and both sell once the parent
+        fills; the harness flattens what is held, so a stopped week never needs one."""
         ahead: dict[str, Decimal] = {}
         for order in orders:
             key = order.instrument_id.value
             asked = order.quantity.as_decimal()
             room = self._target_room(order) - ahead.get(key, Decimal(0))
-            if order.is_quote_quantity or asked > room:
+            if (
+                order.is_quote_quantity
+                or order.contingency_type != ContingencyType.NO_CONTINGENCY
+                or order.parent_order_id is not None
+                or asked > room
+            ):
                 return False
             ahead[key] = ahead.get(key, Decimal(0)) + asked
         return True

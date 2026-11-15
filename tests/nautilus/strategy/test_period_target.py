@@ -22,7 +22,8 @@ read order by order, an overlay's clip, which then holds nothing — asked at a 
 overlay reads that took the week to its target among them — and a hedge leg that opens, while a
 held clip's `FLAT` goes; a new week's entry waits for the old week's legs to be flat;
 nothing sent while stopped takes the position past flat — one order bigger than it, an exit
-beside a working one, one sized in dollars, a modify that grows a resting exit by any amount,
+beside a working one, one sized in dollars, a list holding a child that waits on a parent in
+another name, a modify that grows a resting exit by any amount,
 a regrowth behind a shrink the venue has yet to apply, and an exit built by hand beside a
 flatten the order rate owes — while exits that add up to it go, and an order the venue has yet
 to answer, a shrink and a regrowth sent before the hit among them, is read at the most it could
@@ -732,11 +733,12 @@ def _both_paths(
     lagg: Sequence[Point],
     tmp_path: Path,
     latency_ms: float,
+    **options: Any,
 ) -> tuple[RunResult, list[Seen]]:
     """The plan's card, asserted to send, fill and end on what its replay on the live code
     path does, element by element."""
-    result, seen = card(plan, lead, lagg, tmp_path, latency_ms=latency_ms)
-    made = request(plan, tmp_path / "replayed.txt", latency_ms=latency_ms)
+    result, seen = card(plan, lead, lagg, tmp_path, latency_ms=latency_ms, **options)
+    made = request(plan, tmp_path / "replayed.txt", latency_ms=latency_ms, **options)
     replayed = session.run_node(
         made, [instrument(LEAD), instrument(LAGG)], [series(LEAD, lead), series(LAGG, lagg)]
     ).result
@@ -818,6 +820,97 @@ def test_the_flatten_reads_a_shrink_and_a_regrowth_sent_before_the_hit_at_the_mo
     assert all(position >= 0.0 for *_, position in walked), walked
     assert [side for side, *_ in walked].count("BUY") == 1
     assert walked[-1][-1] == 0.0
+
+
+CONTINGENT = """
+from pathlib import Path
+
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.enums import ContingencyType, OrderSide
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.orders import LimitOrder, OrderList
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    record: str = ""
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_bar(self, bar):
+        key = str(bar.bar_type.instrument_id)
+        lead, lagg = InstrumentId.from_str("{lead}"), InstrumentId.from_str("{lagg}")
+        if bar.ts_event == {bought} and key == "{lead}":
+            self.submit_entry(lead, "BUY", qty=1000)
+            self.submit_entry(lagg, "BUY", qty=500)
+        if bar.ts_event == {stopped} and key == "{lead}":
+            ids = [self.order_factory.generate_client_order_id() for _ in range(2)]
+            listed = self.order_factory.generate_order_list_id()
+            triggers = {{"contingency_type": ContingencyType.OTO, "linked_order_ids": [ids[1]]}}
+            legs = ((lagg, 500, triggers), (lead, 1000, {{"parent_order_id": ids[0]}}))
+            orders = [
+                LimitOrder(
+                    trader_id=self.trader_id, strategy_id=self.id, instrument_id=name,
+                    client_order_id=ids[index], order_side=OrderSide.SELL,
+                    quantity=Quantity.from_int(qty), price=Price.from_str("1.00"), init_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(), order_list_id=listed, **links,
+                )
+                for index, (name, qty, links) in enumerate(legs)
+            ]
+            self.submit_order_list(OrderList(listed, orders))
+            if {hand}:
+                self.submit_order(
+                    self.order_factory.market(lead, OrderSide.SELL, Quantity.from_int(1000))
+                )
+        with Path(self.kanso_config.record).open("a") as out:
+            out.write(repr((
+                bar.ts_event, key, self.period_stopped, self.held("{lead}"), self.held("{lagg}"),
+                self.balance, self._target_anchor, self._target_threshold,
+                self._target_dropped, [], len(self.intents),
+            )) + "\\n")
+"""
+
+
+@pytest.mark.parametrize(("hand", "latency_ms"), [(True, 0.0), (True, 10.0), (False, 10.0)])
+def test_a_contingent_order_is_not_sent_while_stopped(
+    hand: bool, latency_ms: float, tmp_path: Path
+) -> None:
+    """LEAD is bought 1,000 and LAGG 500, and LEAD's close of 10.60 stops the week. In that
+    handler the sleeve sends a list built by hand: a sale of LAGG's 500 at a marketable limit,
+    one-triggers-other with a sale of LEAD's 1,000 — a child that waits on a parent in another
+    name, which is not counted as working until that parent fills — and then, or not, a sale
+    of LEAD's 1,000 at market. A stopped week sends no order contingent on another, so the
+    list is dropped whole, each order counted; the sale at market goes, the harness flattens
+    LAGG, and neither name is ever short. Sent, the child sold LEAD's 1,000 again once LAGG's
+    sale filled. The replay sends and fills what the card does."""
+    stamps = ("04:01", "04:02", "04:03", "04:04", "04:05", "04:06")
+    closes = (10.00, 10.60, 10.70, 10.80, 10.90, 11.00)
+    if latency_ms:
+        closes = (10.00, 10.00, 10.60, 10.70, 10.80, 10.90)
+    stopped = ny(MONDAY, "04:02" if not latency_ms else "04:03")
+    lead: list[Point] = list(zip((ny(MONDAY, s) for s in stamps), closes, strict=True))
+    lagg: list[Point] = [(point[0], 11.00) for point in lead]
+    source = CONTINGENT.format(
+        lead=LEAD_ID, lagg=LAGG_ID, bought=ny(MONDAY, "04:01"), stopped=stopped, hand=hand
+    )
+
+    result, seen = _both_paths({}, lead, lagg, tmp_path, latency_ms, source=source)
+
+    hit = next(row for row in seen if row.ts == stopped and row.name == LEAD_ID)
+    assert hit.stopped and hit.dropped == 2
+    walked = _held(result.run)
+    assert all(position >= 0.0 for *_, position in walked), walked
+    assert sum(qty for side, qty, *_ in walked if side == "SELL") == QTY
+    sold = [
+        fill.qty
+        for fill in result.run.fills
+        if fill.instrument_id == LAGG_ID and fill.side == "SELL"
+    ]
+    assert sum(sold) == 500.0
 
 
 @pytest.mark.parametrize(("limit", "stops"), [("10.55", True), ("10.65", False)])

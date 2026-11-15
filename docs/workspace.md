@@ -925,10 +925,12 @@ close once every order of the sleeve still working on the closing side has fille
 stop resting read as if it filled, and an exit the order rate owes at market as if it went.
 Anything else is dropped, never sent: an order that opens, one that would carry the position
 past flat — into a short smaller than the long or larger — one beside a working exit that
-already closes what it would, and one sized in the quote's currency (`quote_quantity`), whose
-shares are known only at the price it fills at. A list is read order by order, each with the
-orders before it applied, and is dropped whole when any of them is, so an exit with an entry
-behind it sends neither; a modify that asks more than the least the order holds or has been
+already closes what it would, one sized in the quote's currency (`quote_quantity`), whose
+shares are known only at the price it fills at, and one contingent on another — a parent or a
+child of one-triggers-other, one-cancels-other or one-updates-other — since a child whose parent
+is in another name is not counted as working until that parent fills. A list is read order by
+order, each with the orders before it applied, and is dropped whole when any of them is, so an
+exit with an entry behind it sends neither; a modify that asks more than the least the order holds or has been
 asked to hold — a growth, or a regrowth behind a shrink the venue has yet to apply — is dropped
 whatever it asks above it, and the order stays as it was; a clip so dropped holds nothing, and
 the overlay's next clip is placed as if it had never been asked. An order still working is
