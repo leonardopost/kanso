@@ -9,9 +9,11 @@ is what makes it safe on a timer.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
+from kanso.criteria.run import CardRun
 from kanso.errors import Exit
 
 from .conftest import HYP_ID, at, payload
@@ -68,6 +70,77 @@ def test_the_pass_reads_as_the_stages_then_the_versions(runner: CliRunner, deplo
     assert "within limits" in result.stdout
     assert "paper_forward" in result.stdout
     assert "promotable" in result.stdout
+
+
+def test_a_version_whose_windows_kept_a_period_target_s_record_prints_and_carries_it(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The demo declares no period target, so its judgement carries no `period_stops` and
+    prints no `stops` line. A window recorded under one — the deployed version's paper stage
+    closing a window it replayed nothing in, as an idle stage window records it, with the
+    record of two weeks, one stopped — joins the version's windows, and the pass carries the
+    joined record on the version's outcome under `--json` and prints its `stops` line."""
+    from dataclasses import replace
+
+    from kanso.nautilus.node import Realised
+    from kanso.portfolio import records as stage_records
+    from kanso.schemas import PeriodStops
+    from kanso.state import StateStore
+
+    def version(result: Any) -> dict[str, Any]:
+        return next(
+            one
+            for one in payload(result)["outcomes"]
+            if one["strategy"] == HYP_ID and one["stage"] == "paper"
+        )
+
+    def idle(run: CardRun, **changes: Any) -> CardRun:
+        return replace(
+            run,
+            period_ends_ns=(),
+            returns=(),
+            equity=(),
+            trades=(),
+            fills=(),
+            held=(),
+            cushion=(),
+            carry=(),
+            worst_ratio=(),
+            funding=(),
+            **changes,
+        )
+
+    assert "period_stops" not in version(at(runner, deployed, "monitor", "run", "--json"))
+    assert "target periods" not in at(runner, deployed, "monitor", "run").stdout
+    stop = {
+        "opening_ns": 100,
+        "anchor": 100_000.0,
+        "threshold": 500.0,
+        "hit_ns": 150,
+        "segment": "rth",
+        "equity": 100_600.0,
+    }
+    weeks = PeriodStops.model_validate({"openings": [100, 200], "stops": [stop]})
+    with StateStore(deployed / "state.db") as store:
+        last = stage_records.stage_results(store, strategy_id=HYP_ID, version=1, stage="paper")[-1]
+        quiet = Realised(
+            strategy_id=HYP_ID,
+            version=1,
+            capital=last.capital,
+            run=idle(last.run, period_stops=weeks),
+            positions=(),
+            benchmark=None if last.benchmark is None else idle(last.benchmark),
+        )
+        stage_records.record_stage_run(store, "paper", "under-a-target", [quiet])
+
+    judged = version(at(runner, deployed, "monitor", "run", "--json"))
+    printed = at(runner, deployed, "monitor", "run")
+
+    assert judged["period_stops"] == weeks.model_dump(mode="json")
+    assert printed.exit_code == Exit.OK
+    assert any(
+        line.strip() == "stops 1 of 2 target periods" for line in printed.stdout.splitlines()
+    )
 
 
 def test_a_pass_over_a_workspace_with_nothing_deployed_is_still_a_pass(

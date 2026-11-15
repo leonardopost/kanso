@@ -13,6 +13,10 @@ A key added to the encoding is read with a default stating what a record written
 measured, so every record already in a store still decodes: a fill recorded before fills
 said whether they rested reads as a taker's, a run recorded before funding was booked as one
 that paid none.
+
+What a `period_target` did over the run (`period_stops`) is written only where the run has
+it, so every other run is stored as it was before runs kept it, and a stored measurement of
+the same run under the same pins is the same blob; a run stored without it decodes with none.
 """
 
 from __future__ import annotations
@@ -22,12 +26,19 @@ from datetime import date
 from typing import Any
 
 from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
+from kanso.schemas import PeriodStops
 
 __all__ = ["decode_run", "encode_run"]
 
 
 def encode_run(run: CardRun) -> dict[str, Any]:
-    """One measured window as JSON-shaped data, losing nothing a gate reads."""
+    """One measured window as JSON-shaped data, losing nothing a gate reads; what a period
+    target did over it only where it has that."""
+    stopped = (
+        {}
+        if run.period_stops is None
+        else {"period_stops": run.period_stops.model_dump(mode="json")}
+    )
     return {
         "window": [run.window[0].isoformat(), run.window[1].isoformat()],
         "period": run.period,
@@ -44,12 +55,15 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "capital": run.capital,
         "currency": run.currency,
         "venue_model": dict(run.venue_model),
+        **stopped,
     }
 
 
 def decode_run(payload: Mapping[str, Any]) -> CardRun:
     """One measured window back from its stored form; one stored before funding was booked
-    reads as a run that paid none, which is what it measured."""
+    reads as a run that paid none, which is what it measured, and one stored without what a
+    period target did as a run that had none."""
+    stopped = payload.get("period_stops")
     opens, closes = payload["window"]
     return CardRun(
         window=(date.fromisoformat(opens), date.fromisoformat(closes)),
@@ -69,6 +83,7 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         capital=float(payload["capital"]),
         currency=str(payload["currency"]),
         venue_model=dict(payload["venue_model"]),
+        period_stops=None if stopped is None else PeriodStops.model_validate(stopped),
     )
 
 

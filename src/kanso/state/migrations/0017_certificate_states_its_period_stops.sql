@@ -1,0 +1,11 @@
+-- A certificate records what its hypothesis's period target did, and the row says so too.
+--
+-- The certificates table is the index `cert show`, composition and the stall's repeat check
+-- read a certificate back from, column by column, as the document it was written from. A
+-- certificate of a hypothesis that declares `period_target` now carries `period_stops` -- every
+-- New York week the certification run traded in, each week the target stopped there and the
+-- week open at its last point -- and a row without it would read back a certificate that
+-- recorded none when its file recorded them. The column holds the record as JSON; a row written
+-- before this migration, and one of a hypothesis with no target, holds NULL, which reads back
+-- as a certificate that recorded none, which is what it was.
+ALTER TABLE certificates ADD COLUMN period_stops TEXT;

@@ -39,6 +39,20 @@ paths already fill apart, and so cancel apart, keeps the verdict it had — and 
 session recorded any the payload carries neither path's counts, so a `parity_replay` gate's
 evidence is what it was before kanso counted (`Parity.payload`).
 
+**What a period target did on each path is compared last, exactly, at any tolerance.** A
+session whose hypothesis declares `period_target` records it (`kanso.criteria.run.CardRun`):
+every New York week the path traded in, each stop — the week's opening, anchor and threshold,
+the hit's instant, part of the session and equity, what the stopped week dropped unsent and
+every fill of an order sent while stopped — and the week open at the last point. The harness
+stops a week at a data point both paths are handed alike, so a stop is a decision, and two
+paths that stopped apart diverge at the first element that differs, named by its path in the
+record — `period_stops.stops[1].hit_ns`, say — whatever the tolerance: a stop the intents'
+tolerance moves is a stop that moved. The flatten's fills are compared with it, the one place parity
+reads a fill, because a flatten is the rule's own act. A session of a hypothesis with no
+target records none, nor does one written before kanso kept them, and then nothing is
+compared; where either recorded one the payload carries how many weeks each path traded in
+and stopped (`node_period_stops`, `engine_period_stops`), and nothing where neither did.
+
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
 
@@ -61,7 +75,7 @@ from typing import TYPE_CHECKING, Final
 from kanso.replay import record
 from kanso.replay import run as runner
 from kanso.replay.record import Intent, Session
-from kanso.schemas import Commands
+from kanso.schemas import Commands, PeriodStops
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -70,6 +84,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "COMMANDS",
     "FIELDS",
+    "PERIOD_STOPS",
     "RELEASED",
     "STREAM",
     "Divergence",
@@ -88,6 +103,9 @@ STREAM: Final = "stream_sha256"
 COMMANDS: Final = "commands"
 """The field of a session that says how fast its path sent its orders, compared after them."""
 
+PERIOD_STOPS: Final = "period_stops"
+"""The field of a session that says what its path's period target did, compared last."""
+
 COUNTS: Final = ("submits", "modifies", "cancels", "refused_submits", "refused_modifies")
 """The command counts compared at any instant tolerance, the sent and the refused alike; the
 busiest 60 s only at zero."""
@@ -101,8 +119,9 @@ class Divergence:
     """The first place two sessions stopped agreeing: in what they were fed, or in an order.
 
     `index` is the order's position in submission order, and `None` for a divergence in
-    the stream or in the commands counted, each one record per session rather than a
-    sequence to index.
+    the stream, in the commands counted or in the period stops, each one record per session
+    rather than a sequence to index; a divergence in the stops names the element of the record
+    that differs as its field (`period_stops.stops[1].hit_ns`).
     """
 
     index: int | None
@@ -112,9 +131,10 @@ class Divergence:
 
     def render(self) -> str:
         """One line naming where the paths parted and what each said."""
-        if self.field == COMMANDS:
+        if self.field == COMMANDS or self.field.startswith(PERIOD_STOPS):
             return (
-                f"commands: {self.node!r} on the node path and {self.engine!r} on the engine path"
+                f"{self.field}: {self.node!r} on the node path and {self.engine!r} on the "
+                "engine path"
             )
         where = "stream" if self.index is None else f"intent {self.index}"
         if self.field == MISSING:
@@ -152,12 +172,27 @@ class Parity:
     engine_commands: Commands | None = None
     """How fast each path's strategy sent its orders, as its session recorded it, compared
     after the orders (`counted`)."""
+    node_period_stops: PeriodStops | None = None
+    engine_period_stops: PeriodStops | None = None
+    """What each path's period target did, as its session recorded it, compared last
+    (`stopped`)."""
 
     @property
     def identical(self) -> bool:
-        """Whether the two paths were fed the same points, submitted the same orders and
-        counted the same commands."""
+        """Whether the two paths were fed the same points, submitted the same orders, counted
+        the same commands and stopped the same weeks alike."""
         return self.divergence is None
+
+    @property
+    def stopped(self) -> Divergence | None:
+        """Where the two paths' period stops first differed, or `None`: every element of the
+        record, exactly, whatever the instant tolerance, and nothing when either session
+        recorded none — no target, or written before kanso kept them."""
+        node, engine = self.node_period_stops, self.engine_period_stops
+        if node is None or engine is None:
+            return None
+        found = _apart(node.model_dump(mode="json"), engine.model_dump(mode="json"), PERIOD_STOPS)
+        return None if found is None else Divergence(None, *found)
 
     def counted(self, ts_ns: int) -> Divergence | None:
         """Where the two paths' command counts differed at instant tolerance `ts_ns`, or
@@ -193,20 +228,31 @@ class Parity:
             self,
             ts_ns=ts_ns,
             max_ts_delta_ns=widest,
-            divergence=self.fed or divergence or self.counted(ts_ns),
+            divergence=self.fed or divergence or self.counted(ts_ns) or self.stopped,
         )
 
     def payload(self) -> dict[str, object]:
         """The result as one JSON object. Each path's command counts are carried only when
         either session recorded them, under a stated rate: where neither did the object is the
         one kanso wrote before it counted, so a `parity_replay` gate's evidence, and the
-        certificate holding it, are written as they were then."""
+        certificate holding it, are written as they were then. Each path's period stops are
+        carried the same way, under a `period_target`, as how many weeks it traded in and how
+        many it stopped: the records themselves are the sessions', and a divergence names the
+        element where they parted."""
         counted = (
             {}
             if self.node_commands is None and self.engine_commands is None
             else {
                 "node_commands": _commands(self.node_commands),
                 "engine_commands": _commands(self.engine_commands),
+            }
+        )
+        stopped = (
+            {}
+            if self.node_period_stops is None and self.engine_period_stops is None
+            else {
+                "node_period_stops": _weeks(self.node_period_stops),
+                "engine_period_stops": _weeks(self.engine_period_stops),
             }
         )
         return {
@@ -222,6 +268,7 @@ class Parity:
             "node_stream": self.node_stream,
             "engine_stream": self.engine_stream,
             **counted,
+            **stopped,
             "max_ts_delta_ns": self.max_ts_delta_ns,
             "divergence": None if self.divergence is None else self.divergence.render(),
         }
@@ -313,9 +360,36 @@ def of_sessions(ws: Workspace, node: Session, engine: Session, *, ts_ns: int = 0
         engine_stream=engine.stream_sha256,
         node_commands=node.commands,
         engine_commands=engine.commands,
+        node_period_stops=node.period_stops,
+        engine_period_stops=engine.period_stops,
     ).at(ts_ns)
 
 
 def _commands(sent: Commands | None) -> dict[str, int] | None:
     """A path's command counts as the payload carries them."""
     return None if sent is None else sent.model_dump()
+
+
+def _weeks(record: PeriodStops | None) -> dict[str, int] | None:
+    """A path's period stops as the payload carries them: the weeks traded in and stopped."""
+    return None if record is None else {"periods": record.periods, "stopped": record.stopped}
+
+
+def _apart(node: object, engine: object, path: str) -> tuple[str, object, object] | None:
+    """The first element two JSON-shaped records differ at, by its path, and each side's
+    value there — `None` on the side that has no such element — or `None` when they agree."""
+    if isinstance(node, dict) and isinstance(engine, dict):
+        for key in node:
+            found = _apart(node[key], engine.get(key), f"{path}.{key}")
+            if found is not None:
+                return found
+        return None
+    if isinstance(node, list) and isinstance(engine, list):
+        for index in range(max(len(node), len(engine))):
+            left = node[index] if index < len(node) else None
+            right = engine[index] if index < len(engine) else None
+            found = _apart(left, right, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    return None if node == engine else (path, node, engine)

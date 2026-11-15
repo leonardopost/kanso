@@ -34,6 +34,7 @@ from kanso.schemas.base import (
 )
 from kanso.schemas.duration import parse_duration
 from kanso.schemas.hypothesis import ConstructRef
+from kanso.schemas.run import PeriodStops
 from kanso.schemas.venue import VenueModel
 
 PlanStage = Literal["cert", "paper", "live"]
@@ -290,6 +291,12 @@ class Certificate(Versioned):
     struck from the run the gates judged; `None` on a certificate written before it was
     recorded, on a snapshot nothing could be measured on, and on a window that closed no
     trade."""
+    period_stops: PeriodStops | None = None
+    """What the hypothesis's `period_target` did over the certification run the gates judged
+    (`kanso.criteria.run.CardRun.period_stops`): every week it traded in, each week it stopped
+    and the week open at its last point; `None` for a hypothesis that declares no target, on a
+    snapshot nothing could be measured on, and on a certificate written before it was
+    recorded."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]

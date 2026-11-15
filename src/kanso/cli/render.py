@@ -13,7 +13,8 @@ promised.
 
 `verdict` lives here rather than beside one command because a gate reads the same way
 wherever it is printed — a certificate, a monitoring pass — and two renderers of one thing
-would eventually disagree about it.
+would eventually disagree about it; so does `stopped`, for what a period target did, which a
+measured card, a certificate, a replay session and a monitoring pass all print.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import click
 import typer
 
 from kanso.errors import Exit, KansoError
-from kanso.schemas import EvaluatedGate, GateResult
+from kanso.schemas import EvaluatedGate, GateResult, PeriodStops
 
 LABEL = 11
 """Width of the label column of the human two-column layout."""
@@ -79,6 +80,13 @@ def verdict(gate: GateResult | EvaluatedGate, mark: int, name: int) -> str:
     verdicts = "skip" if gate.skipped is not None else ("pass" if gate.passed else "fail")
     evidence = ", ".join(f"{key}={value}" for key, value in sorted(gate.evidence.items()))
     return f"{verdicts:<{mark}}{gate.id:<{name}}{gate.skipped or evidence or 'no evidence'}"
+
+
+def stopped(record: PeriodStops) -> str:
+    """What a period target did over a run, as the `stops` line prints it: how many of the
+    target's weeks it stopped, of the weeks the run traded in — counted off the target's own
+    New York weeks, never the return periods."""
+    return f"{record.stopped} of {record.periods} target periods"
 
 
 def _render(report: Report, as_json: bool) -> None:

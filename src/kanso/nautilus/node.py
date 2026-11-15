@@ -123,7 +123,7 @@ from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, sign
 from kanso.nautilus.strategy import BAR, BOOK, QUOTE, KansoConfig, _bar_resolution_of
 from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import PRINT_SIZE, venue_config, venues_of
-from kanso.schemas import Hypothesis, Limits, VenueModel
+from kanso.schemas import Hypothesis, Limits, PeriodStops, VenueModel
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -562,7 +562,14 @@ def run(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        struck = Struck() if any(dated_rows(request.venue_model) for request in requests) else None
+        struck = (
+            Struck()
+            if any(
+                dated_rows(request.venue_model) or request.hyp.period_target is not None
+                for request in requests
+            )
+            else None
+        )
         venues = sandbox.attach(kernel, node.venues(), points, struck)
         strategies = _components(built, node.placements)
         for strategy, request in zip(strategies, requests, strict=True):
@@ -571,12 +578,21 @@ def run(
             if request.prefix is not None:
                 warm(strategy, opens_ns)
             backtest.booked(strategy, request, struck)
-            backtest.targeted(strategy, request)
+            backtest.targeted(strategy, request, struck)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points, venues))
         realised = tuple(
-            _realised(placed, request, kernel, groups, books, window.instruments, struck)
-            for placed, request, groups in zip(
-                node.placements, requests, window.per_version, strict=True
+            _realised(
+                placed,
+                request,
+                kernel,
+                groups,
+                books,
+                window.instruments,
+                struck,
+                strategy._target_record(),
+            )
+            for placed, request, groups, strategy in zip(
+                node.placements, requests, window.per_version, strategies, strict=True
             )
         )
         intents = tuple(
@@ -646,7 +662,9 @@ def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
     A restart with nothing new to replay is not a failure and not a crash: the stage is
     current. It produces an empty window for every version, leaves the clock where it was,
     and builds no node at all — starting one to feed it nothing would only close and reopen
-    every position for no reason.
+    every position for no reason. A version under a `period_target` records what a window
+    handed no point records, an empty `PeriodStops` — no week traded in and none open — so an
+    idle window never reads as one of a version with no target.
     """
     return StageRun(
         stage=node.stage,
@@ -659,7 +677,10 @@ def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
                 strategy_id=placed.strategy_id,
                 version=placed.version,
                 capital=placed.capital,
-                run=backtest._empty(request),
+                run=replace(
+                    backtest._empty(request),
+                    period_stops=None if placed.hyp.period_target is None else PeriodStops(),
+                ),
                 positions=(),
                 benchmark=backtest._empty(request) if measures_benchmark(placed.hyp) else None,
             )
@@ -923,6 +944,7 @@ def _realised(
     books: Mapping[tuple[str, str], Book],
     instruments: Sequence[Any],
     struck: Struck | None = None,
+    period_stops: PeriodStops | None = None,
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
@@ -938,17 +960,25 @@ def _realised(
     as its record keeps it (`struck`, `kanso.nautilus.struck`) — the record the version's
     harness read — and never at one read off the version's own view: that view orders its
     series as no venue was handed them, holds none of the series the version's stage-mates
-    trade on its venue, and on a restart holds no prefix the venue was handed again.
+    trade on its venue, and on a restart holds no prefix the venue was handed again. Wherever
+    the window's marks keep a record at all, under a dated spread or a period target, it is
+    that one, so the marks hold no record of their own that no venue was loaded with.
+
+    What the version's period target did over the window is its harness's record, read once
+    the node has flattened and stopped (`period_stops`, `KansoStrategy._target_record`), and is
+    carried on the window's run, an empty one included.
     """
     if not any(groups):
         return Realised(
             strategy_id=placed.strategy_id,
             version=placed.version,
             capital=placed.capital,
-            run=backtest._empty(request),
+            run=replace(backtest._empty(request), period_stops=period_stops),
             positions=(),
         )
     marks = backtest.checked(request, instruments, groups)
+    if marks.record is not None:
+        marks.record = struck
     if marks.pricing is not None:
         marks.pricing = struck
     view = _StrategyView(kernel.cache, placed.identity)
@@ -956,7 +986,7 @@ def _realised(
         strategy_id=placed.strategy_id,
         version=placed.version,
         capital=placed.capital,
-        run=backtest._extract(request, _Engine(view), marks),
+        run=backtest._extract(request, _Engine(view), marks, period_stops),
         positions=tuple(
             book for (holder, _), book in sorted(books.items()) if holder == placed.identity
         ),

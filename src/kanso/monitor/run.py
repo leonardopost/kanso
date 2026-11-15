@@ -58,6 +58,7 @@ from kanso.schemas import (
     CertificationPlan,
     GateResult,
     Hypothesis,
+    PeriodStops,
     Portfolio,
     StrategyFile,
     StrategyVersion,
@@ -149,6 +150,10 @@ class Outcome:
     actions: tuple[str, ...] = ()
     escalations: tuple[str, ...] = ()
     skipped: str | None = None
+    period_stops: PeriodStops | None = None
+    """What the version's `period_target` did over its whole life on the stage, every window
+    it closed there joined (`kanso.monitor.realised.joined`); `None` without a target, and for
+    a version whose every window was recorded before runs kept one."""
 
     @property
     def subject(self) -> str:
@@ -168,7 +173,13 @@ class Outcome:
         return all(result.passed for result in self.gates)
 
     def payload(self) -> dict[str, object]:
-        """The judgement as one JSON object."""
+        """The judgement as one JSON object; `period_stops` only for a version that has them,
+        so every other judgement is the object it was before kanso kept them."""
+        stopped = (
+            {}
+            if self.period_stops is None
+            else {"period_stops": self.period_stops.model_dump(mode="json")}
+        )
         return {
             "stage": self.stage,
             "strategy": self.strategy,
@@ -178,6 +189,7 @@ class Outcome:
             "actions": list(self.actions),
             "escalations": list(self.escalations),
             "skipped": self.skipped,
+            **stopped,
         }
 
 
@@ -366,6 +378,7 @@ def _judge(
         strategy=deployment.id,
         version=deployment.version,
         gates=tuple(results),
+        period_stops=held.run.period_stops,
     )
     if stage == PAPER:
         return _paper(ws, store, outcome, version)

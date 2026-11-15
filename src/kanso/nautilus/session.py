@@ -240,19 +240,19 @@ def run_node_chunked(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        venues = _venues(request, kernel, first, marks.pricing)
+        venues = _venues(request, kernel, first, marks.record)
         strategy = _strategy(request, node)
         strategy._hold_until_cross_section = marked or any(is_marker(p) for p in first)
         if request.prefix is not None:
             warm(strategy, opens)
         backtest.booked(strategy, request, marks.pricing)
-        backtest.targeted(strategy, request)
+        backtest.targeted(strategy, request, marks.record)
         feed = _Feed(kernel, client, strategy, venues, marks, opens, sink)
         chunked = feed.chunks(first, stream, marked=marked)
         del first
         loop.run_until_complete(_drive(node, client, strategy, halt, chunked))
         feed.close()
-        card = backtest._extract(request, kernel, marks)
+        card = backtest._extract(request, kernel, marks, strategy._target_record())
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
@@ -423,7 +423,8 @@ def _venues(
     request: RunRequest, kernel: Any, points: Sequence[Any], struck: Struck | None = None
 ) -> tuple[Any, ...]:
     """One simulated venue per venue the universe trades, wired to this session's bars, and
-    under a dated spread keeping `struck`, the record each fill is priced at.
+    under a dated spread or a period target keeping `struck`, the record of the instant each
+    fill's price was struck at.
 
     The same call a stage node makes, so the exchange a replay is compared against and the
     exchange a deployed stage executes against are one piece of code rather than two that

@@ -42,7 +42,7 @@ import typer
 from kanso import research
 from kanso.certify import certificate
 from kanso.cli.context import global_json, open_workspace, store
-from kanso.cli.render import Report, emit, field, indent
+from kanso.cli.render import Report, emit, field, indent, stopped
 from kanso.criteria import criteria_version
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import daemon, records
@@ -588,9 +588,10 @@ def _measurement(
     opened: StateStore, hyp_id: str, subject: str, evaluated: Sequence[Card]
 ) -> Report:
     """What the newest card of these bytes that kept a measurement was scored from: the
-    objective, its folds and the criteria version that scored it, the trades, and the run's
-    return and equity at each period end — a UTC date, and the time beside it where two ends
-    share one.
+    objective, its folds and the criteria version that scored it, the trades, the run's
+    return periods, how many of its period target's weeks it stopped where the hypothesis
+    declares one, and the run's return and equity at each period end — a UTC date, and the
+    time beside it where two ends share one.
 
     `evaluated` is every card of the bytes, newest last. A newer card that kept none — a
     crash, a card refused before or during its backtest, one recorded by a kanso that kept
@@ -648,6 +649,7 @@ def _measurement(
             "periods",
             f"{len(instants)} of {run.period} · capital {run.capital:.2f} {run.currency} · UTC",
         ),
+        *(() if run.period_stops is None else (field("stops", stopped(run.period_stops)),)),
         *(
             indent(f"{instant.strftime(stamp)}  {change:>+12.2f}  {equity:>14.2f}")
             for instant, change, equity in zip(instants, run.returns, run.equity, strict=True)

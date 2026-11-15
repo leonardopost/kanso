@@ -42,7 +42,7 @@ from kanso.certify.plan import plan as make_plan
 from kanso.certify.run import certify
 from kanso.certify.run import show as newest
 from kanso.cli.context import global_json, open_workspace, store
-from kanso.cli.render import Report, emit, field, indent, verdict
+from kanso.cli.render import Report, emit, field, indent, stopped, verdict
 from kanso.hyp import Registration
 from kanso.hyp import show as registration_of
 from kanso.research.lanes import DEFAULT_LANE
@@ -155,6 +155,7 @@ def _run(ws: Workspace, hyp_id: str, sha: str | None) -> Report:
         field("objective", _objective(made)),
         *_power_line(made),
         *_net_line(made),
+        *_stops_line(made),
         field("pins", _pins(made)),
         field("written", path),
         field("source", source),
@@ -183,6 +184,7 @@ def _show(ws: Workspace, hyp_id: str) -> Report:
         field("objective", _objective(found)),
         *_power_line(found),
         *_net_line(found),
+        *_stops_line(found),
         field("pins", _pins(found)),
         field("written", path),
     )
@@ -241,6 +243,12 @@ def _net_line(made: Certificate) -> list[str]:
             f"{net.sessions_with_trades} session(s)",
         )
     ]
+
+
+def _stops_line(made: Certificate) -> list[str]:
+    """How many of its period target's weeks the certification run stopped, when the
+    certificate records them."""
+    return [] if made.period_stops is None else [field("stops", stopped(made.period_stops))]
 
 
 def _power(stated: Power) -> str:

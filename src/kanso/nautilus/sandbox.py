@@ -429,7 +429,8 @@ class SimulatedVenue(LiveExecutionClient):
             # instant on both code paths, the venue applies every quote and print the sleeve
             # is handed, and under `print_through` what is due by a print lands before it; see
             # `kanso.nautilus.actions`, `kanso.nautilus.availability` and `kanso.nautilus.tape`.
-            # Under a dated spread it keeps each name's last point for the fills priced at it
+            # Under a dated spread or a period target it keeps each name's last point, for the
+            # fills priced at it and the stopped week's fills read at it
             # (`kanso.nautilus.struck`).
             modules=actions.modules(venue.name, struck),
             portfolio=kernel.portfolio,
@@ -616,7 +617,8 @@ def attach(
     """One simulated venue per configured venue, registered and bound to this window's bars
     and, when the window is marked, to its flush markers — and, given `struck`, keeping each
     name's last point in it and hearing every fill the node's execution engine applies, the
-    record a dated spread is read at (`kanso.nautilus.struck`).
+    record a dated spread is read at and a period target records a stopped week's fills at
+    (`kanso.nautilus.struck`).
 
     Returns the clients in the order the venues were given, so a caller can reach an
     exchange afterwards — to read the book a position was marked at, or to check that a

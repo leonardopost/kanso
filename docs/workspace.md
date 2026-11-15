@@ -948,7 +948,10 @@ reads whether its week is stopped from `self.period_stopped`, and its position f
 `self.held`, never from a flag of its own, since the harness may have flattened it; what the
 harness keeps of the rule is denied to it (`strategy_integrity`). The rule adds no charge: a
 flatten is a fill like any other, charged once by the runner. It is the same code on a card, a
-certificate, a replay and a stage node.
+certificate, a replay and a stage node, and each records what it did as `period_stops` — every
+week traded in (handed a point in, whether or not the sleeve placed an order), each stop with
+its flatten's fills, and the week open at the last point (`docs/concepts.md`, Card) — which `research show --measured`, `cert show`, `monitor run` and
+`kanso replay` print, and `kanso replay parity` compares.
 
 What the rule does not do, said here so a card is read as it ran:
 
@@ -2667,7 +2670,8 @@ with their parameters and a rationale each — pinned once, re-minted only by `c
 --replan`. A certificate is the verdict, its evidence and its pins, the `power` it states and
 the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`,
 `sessions_with_trades` and `trades`, struck from the certification run, or `null` for a
-window that closed no trade (`docs/concepts.md`, *Certification*). A certificate whose
+window that closed no trade (`docs/concepts.md`, *Certification*); and, under a
+`period_target`, the `period_stops` that same run recorded (`docs/concepts.md`, Card). A certificate whose
 `net_per_trade` holds a NaN or an infinity, or a value over its error past the largest
 float, is refused. The `.py` beside it is the certified source, byte for byte, so a
 certified subject travels with the files even where `state.db` does not:
@@ -2896,6 +2900,16 @@ recorded any, `--json` carries neither field, and a `parity_replay` gate's evide
 certificate that holds it — is written as it was before kanso counted; and a session that
 recorded none is printed by `kanso replay run --json` and `kanso replay show --json` with no
 `commands` field, as it was before.
+
+**Under a `period_target` a replay session records what the target did.** `period_stops` in
+`session.yaml` is that path's record (`docs/concepts.md`, Card): `openings`, the New York weeks
+it traded in, each it was handed a point in; `stops`, each week it stopped, with the hit and every fill of an order sent while
+stopped; and `last`, the week open at its last point. `kanso replay parity` compares the two
+paths' records after their commands, element by element and exactly at any tolerance, since a
+stop is the harness's decision at a point both paths are handed, and names the first element
+they part at; its payload, and a `parity_replay` gate's evidence, carry how many weeks each
+path traded in and stopped. A session of a hypothesis with no target, and one an earlier kanso
+wrote, holds no such field and is compared on the rest alone.
 
 A `session.yaml` with no `stream_sha256` was written by an earlier kanso, which kept the
 stream beside it as `stream.jsonl`. Nothing reads that file, and its sha256 is the digest a

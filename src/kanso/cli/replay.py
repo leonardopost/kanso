@@ -24,7 +24,7 @@ import typer
 
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.data import as_date
-from kanso.cli.render import Report, emit, field, indent
+from kanso.cli.render import Report, emit, field, indent, stopped
 from kanso.cli.strat import target
 from kanso.replay import NODE
 from kanso.replay import parity as run_parity
@@ -34,6 +34,7 @@ from kanso.replay import show as read_session
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.replay import Session
+    from kanso.schemas import PeriodStops
     from kanso.workspace import Workspace
 
 app = typer.Typer(
@@ -202,6 +203,7 @@ def _parity(
         field("engine", _path(found.engine, found.engine_released, len(found.engine_orders))),
         field("compared", f"{found.compared} · tolerance {found.ts_ns} ns"),
         field("widest", f"{found.max_ts_delta_ns} ns apart"),
+        *_stops_lines(found.node_period_stops, found.engine_period_stops),
     )
     return Report(data=data, lines=lines)
 
@@ -226,11 +228,29 @@ def _show(ws: Workspace, session: str | None) -> Report:
 
 
 def _dumped(session: Session) -> dict[str, Any]:
-    """A session as `--json` prints it: every field of its record, and `commands` only where
-    it recorded them — under a stated `costs.orders_per_minute` — so a session under no stated
-    rate prints what it printed before kanso counted, as `Parity.payload` writes parity's."""
-    unrecorded = {"commands"} if session.commands is None else None
-    return session.model_dump(mode="json", by_alias=True, exclude=unrecorded)
+    """A session as `--json` prints it: every field of its record, `commands` only where it
+    recorded them — under a stated `costs.orders_per_minute` — and `period_stops` only where
+    it recorded them — under a `period_target` — so any other session prints what it printed
+    before kanso kept either, as `Parity.payload` writes parity's."""
+    unrecorded = {
+        name
+        for name, value in (("commands", session.commands), ("period_stops", session.period_stops))
+        if value is None
+    }
+    return session.model_dump(mode="json", by_alias=True, exclude=unrecorded or None)
+
+
+def _stops_lines(node: PeriodStops | None, engine: PeriodStops | None) -> tuple[str, ...]:
+    """Each path's period stops on a `stops` line, where either session recorded them."""
+    if node is None and engine is None:
+        return ()
+    paths = (("node", node), ("engine", engine))
+    return (
+        field(
+            "stops",
+            " · ".join(f"{path} {'none' if one is None else stopped(one)}" for path, one in paths),
+        ),
+    )
 
 
 def _target(strategy: str | None) -> tuple[str | None, int | None]:
@@ -265,5 +285,6 @@ def _session_lines(ws: Workspace, session: Session) -> tuple[str, ...]:
         ),
         indent(", ".join(session.instruments)),
         field("intents", str(session.intents)),
+        *(() if session.period_stops is None else (field("stops", stopped(session.period_stops)),)),
         field("written", _session_dir(ws, session)),
     )

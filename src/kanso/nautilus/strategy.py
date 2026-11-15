@@ -141,7 +141,11 @@ has applied it, until the venue closes the order, and an order sized in the quot
 that the venue has not yet turned into shares, as closing all that is held. So nothing the
 sleeve sends while stopped can take it past flat, alone or beside what is already working,
 whatever its modifies the venue has yet to answer. The strategy reads `period_stopped`, and
-nothing else of it.
+nothing else of it. What the rule did is the run's record, read by the runner once the run
+has ended (`_target_record`, `kanso.criteria.run.CardRun.period_stops`): every week the run
+traded in, each stop — the week's opening, anchor and threshold, the hit's instant and
+`balance`, what was dropped unsent, and every fill of an order sent while stopped, whenever it
+landed, with the `balance` after the last — and the week open at the run's last point.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -342,6 +346,7 @@ from kanso.nautilus.sizing import (
     full_book_quantity,
 )
 from kanso.schemas.duration import is_duration
+from kanso.schemas.run import FlattenFill, OpenPeriod, PeriodStop, PeriodStops
 
 __all__ = [
     "BAR",
@@ -899,6 +904,45 @@ class _Tracked:
     """The ids of its fills booked so far."""
 
 
+@dataclass(eq=False, slots=True)
+class _Stopped:
+    """One week the period target stopped, as the harness keeps it while the run goes on
+    (`KansoStrategy._target_record` reads it out as a `PeriodStop`)."""
+
+    opening_ns: int
+    closes_ns: int
+    anchor: float
+    threshold: float
+    hit_ns: int
+    segment: str
+    """The part of the session the minute the hit's point covers falls in, read off its
+    reference time as `KansoStrategy.session` reads it, never off its availability."""
+    equity: float
+    dropped: int = 0
+    fills: list[dict[str, Any]] = field(default_factory=list)
+    """Each fill of an order sent while stopped, as a `FlattenFill` reads it, its `volume`
+    filled in once the sleeve is handed the bar it was priced at (`_target_volume`)."""
+    flat_equity: float | None = None
+
+    def record(self) -> PeriodStop:
+        """The stop as a run records it, its fills in the order they came."""
+        fills = [FlattenFill.model_validate(fill) for fill in self.fills]
+        return PeriodStop.model_validate(
+            {
+                "opening_ns": self.opening_ns,
+                "anchor": self.anchor,
+                "threshold": self.threshold,
+                "hit_ns": self.hit_ns,
+                "segment": self.segment,
+                "equity": self.equity,
+                "dropped": self.dropped,
+                "fills": fills,
+                "flat_equity": self.flat_equity,
+                "carried": bool(fills) and fills[-1].ts_ns >= self.closes_ns,
+            }
+        )
+
+
 class KansoStrategy(Strategy):  # type: ignore[misc]
     """The sleeve: a whole strategy, with its universe and its limits injected."""
 
@@ -1060,6 +1104,28 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         asked, kept until the venue closes the order, whether or not it has answered them: a
         stopped week reads the order at the most it could come to hold (`_target_leaves`) and
         drops a modify asking more than the least (`modify_order`)."""
+        self._target_open = 0
+        """The opening of the target's week being traded; zero before the window's first
+        point."""
+        self._target_openings: list[int] = []
+        """The opening of every week the run has traded in, in order (`_target_record`)."""
+        self._target_stops: list[_Stopped] = []
+        """Every week the target has stopped, in order, the last the one in force while the
+        sleeve is stopped."""
+        self._target_sent: dict[object, _Stopped] = {}
+        """Each order the sleeve sent while stopped, by client order id, and the stop it was
+        sent under, kept until the venue closes the order: its fills are that stop's
+        (`_target_filled`), whenever they land."""
+        self._target_struck: Any = None
+        """The venue's record of the instant each fill's price was struck at, handed with the
+        target (`kanso.nautilus.struck`): what a stopped week's fills are read at
+        (`_target_filled`)."""
+        self._target_unread: dict[str, list[dict[str, Any]]] = {}
+        """Each name's stopped-week fills priced at a bar the sleeve has yet to be handed,
+        whose volume is read off it when it is (`_target_volume`)."""
+        self._target_staged = False
+        """Whether the order being sent is a stage node's flatten (`_target_close`), which is
+        the stage's and no stop's."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1522,7 +1588,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
             target = self._period_target
             anchor = self._book_at(self._target_last_ns)[0] if self._target_next else self.capital
-            self._target_next = week_opening(ts_ns, target.weekday, minute=target.minute)[1]
+            opens, self._target_next = week_opening(ts_ns, target.weekday, minute=target.minute)
+            self._target_open = opens
+            self._target_openings.append(opens)
             self._target_anchor = anchor
             base = self.capital if target.of == "capital" else anchor
             self._target_threshold = target.target_bp / BASIS_POINT * base
@@ -1537,7 +1605,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`_target_flatten`), and the stop is lifted only at a point at or after the next
         week's opening at which every name is flat or wholly on its way out at market
         (`_own_intended`), so a new week's entry never meets an old one's leg; the new week's
-        target is read at once.
+        target is read at once. A stop is recorded at the hit with the week's opening, anchor
+        and threshold, the point's availability instant, the part of the session the minute it
+        covers falls in — read off its reference time, `data_time`, as `session` reads it, so a
+        bar published after its close names the minute it describes — and the `balance` there
+        (`_target_record`).
         """
         if self._target_until is not None:
             self._target_flatten()
@@ -1547,9 +1619,23 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 return
             self._target_until = None
             self._target_due.clear()
-        if not self._target_next or self.balance - self._target_anchor < self._target_threshold:
+        if (
+            not self._target_next
+            or (equity := self.balance) - self._target_anchor < self._target_threshold
+        ):
             return
         self._target_until = self._target_next
+        self._target_stops.append(
+            _Stopped(
+                opening_ns=self._target_open,
+                closes_ns=self._target_next,
+                anchor=self._target_anchor,
+                threshold=self._target_threshold,
+                hit_ns=self._delivered_ns,
+                segment=session_of(self._data_time).segment,
+                equity=equity,
+            )
+        )
         for instrument_id in self.universe:
             self.cancel_all_orders(instrument_id)
             if self._own_filled(instrument_id.value):
@@ -1570,6 +1656,90 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 del self._target_due[key]
             elif printed and self._own_intended(key):
                 self.submit_exit(key)
+
+    def _target_drop(self, count: int = 1) -> None:
+        """Count what a stopped week dropped unsent — an entry, each order of a list, a
+        modify — on the run and on the stop in force."""
+        self._target_dropped += count
+        self._target_stops[-1].dropped += count
+
+    def _target_note(self, order: Any) -> None:
+        """Note an order the sleeve is sending while stopped under the stop in force, so its
+        fills are that stop's (`_target_filled`): only an order that closes goes in a stopped
+        week, so they are the fills that take the sleeve flat. A stage node's flatten after its
+        window's last point is the stage's and is not noted (`_target_close`)."""
+        if self._target_until is not None and not self._target_staged:
+            self._target_sent[order.client_order_id] = self._target_stops[-1]
+
+    def _target_filled(self, stop: _Stopped, event: Any) -> None:
+        """Record a fill of an order sent under `stop`, and the `balance` after it.
+
+        Its price is read as struck at the instant the venue's record keeps
+        (`kanso.nautilus.struck`), which every kanso runner of a target loads, dated spread or
+        none, and at the fill's own instant for a name the venue had applied nothing of, or on
+        a sleeve no runner handed a record. It is never read off the stream the sleeve is
+        handed: in nautilus_trader 1.231.0 the engine applies a point to the venue before it
+        hands it to the strategy, so a resting order the venue fills while it applies a point
+        is struck at a point the sleeve has yet to be handed, and the sleeve's last point of
+        the name is the one before. The fill's `volume` is that of the name's bar stamped at
+        the instant, read when the sleeve is handed it.
+        """
+        key = event.instrument_id.value
+        struck = None if self._target_struck is None else self._target_struck.at(event)
+        priced = int(event.ts_event) if struck is None else struck
+        fill: dict[str, Any] = {
+            "ts_ns": int(event.ts_event),
+            "instrument_id": key,
+            "side": order_side_to_str(event.order_side),
+            "qty": float(event.last_qty),
+            "price": float(event.last_px),
+            "price_ts_ns": priced,
+            "segment": session_of(priced).segment,
+            "volume": None,
+        }
+        stop.fills.append(fill)
+        stop.flat_equity = self.balance
+        bar = self._last_bar.get(key)
+        if bar is not None and int(bar.ts_event) == priced:
+            fill["volume"] = float(bar.volume)
+        elif bar is None or int(bar.ts_event) < priced:
+            self._target_unread.setdefault(key, []).append(fill)
+
+    def _target_volume(self, key: str, bar: Bar) -> None:
+        """Read the volume of each of the name's stopped-week fills priced at a bar the sleeve
+        had yet to be handed off the first one it is handed, which is that bar — the venue
+        applies a bar before the strategy is handed it — and let go of them all: a fill priced
+        at a print or a quote of the name keeps no volume."""
+        stamped = int(bar.ts_event)
+        for fill in self._target_unread.pop(key, ()):
+            if fill["price_ts_ns"] == stamped:
+                fill["volume"] = float(bar.volume)
+
+    def _target_record(self) -> PeriodStops | None:
+        """What the period target did over the run, as the run records it
+        (`kanso.criteria.run.CardRun.period_stops`); `None` without a target.
+
+        Read once the run has ended — on a stage node after its own flatten, whose cost is then
+        in the open week's P&L, a flatten that is the stage's and stops no week. The open week
+        reads as stopped only when its own stop is in force, not while a stop of the week
+        before waits for the sleeve to be flat.
+        """
+        if self._period_target is None:
+            return None
+        last = None
+        if self._target_next:
+            last = OpenPeriod(
+                opening_ns=self._target_open,
+                anchor=self._target_anchor,
+                threshold=self._target_threshold,
+                pnl=self.balance - self._target_anchor,
+                stopped=self._target_until == self._target_next,
+            )
+        return PeriodStops(
+            openings=list(self._target_openings),
+            stops=[stop.record() for stop in self._target_stops],
+            last=last,
+        )
 
     def _on_restated(self, restated: Any) -> None:
         """Take in a split the venue has just applied, as `kanso.nautilus.actions` announces it.
@@ -1829,6 +1999,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._printed(key, float(bar.close), int(bar.ts_event), int(bar.ts_init))
         if not self._is_extra_bar(bar):
             self._last_bar[key] = bar
+            if self._target_unread:
+                self._target_volume(key, bar)
             self._observe_price(key, float(bar.close), int(bar.ts_event))
         if self._held():
             self._pending.append((bar, None, None))
@@ -2396,7 +2568,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             and (opening or not self._target_sends((order,)))
         ):
             self._forget_clip(order)
-            self._target_dropped += 1
+            self._target_drop()
             return
         exiting = self._command_bucket is not None and (
             closing is not None or (not opening and kind != ENTRY and not self._opens(order))
@@ -2412,6 +2584,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._command_spend(SUBMIT, exiting=exiting)
         self._intents.append(self._intent(order))
         self._track(order)
+        self._target_note(order)
         super().submit_order(order, position_id, client_id, params)
         if kind == ENTRY and not self._hedging:
             self._place_hedges(ctx)
@@ -2445,7 +2618,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
         if self._target_until is not None and not self._target_sends(orders):
-            self._target_dropped += len(orders)
+            self._target_drop(len(orders))
             return
         exiting = self._command_bucket is not None and kind != ENTRY and not self._opens(orders[0])
         if not self._command_spend(SUBMIT, len(orders), exiting=exiting, ask=True):
@@ -2467,6 +2640,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         for order in orders:
             self._intents.append(self._intent(order))
             self._track(order)
+            self._target_note(order)
         super().submit_order_list(order_list, position_id, client_id, params)
         if kind == ENTRY and not self._hedging:
             self._place_hedges(ctx)
@@ -2708,7 +2882,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 if self._target_until is not None and asked > min(
                     least, order.quantity.as_decimal()
                 ):
-                    self._target_dropped += 1
+                    self._target_drop()
                     return
             if not self._command_spend(MODIFY):
                 self._drop_rate(MODIFY)
@@ -3501,14 +3675,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the position's quantity through `submit_order` (`trading/strategy.pyx`), and the
         simulated venue holds a reduce-only fill to an open position in the name
         (`kanso.nautilus.facts`), so it closes no more than is held. Without a target it is
-        `close_position`, sent as before the key existed. A researched strategy may not reach
-        it (`kanso.criteria.integrity.DENIED_TARGET`).
+        `close_position`, sent as before the key existed. Its fills are the stage's and no
+        stop's, so a stopped week records none of them (`_target_note`). A researched strategy
+        may not reach it (`kanso.criteria.integrity.DENIED_TARGET`).
         """
         self._command_closing = (None, None)
+        self._target_staged = True
         try:
             self.close_position(position)
         finally:
             self._command_closing = None
+            self._target_staged = False
 
     # --- cost-aware helpers: where exposure is enforced ---------------------
 
@@ -3568,7 +3745,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 )
             return None
         if self._target_until is not None:
-            self._target_dropped += 1
+            self._target_drop()
             return None
         if self.sized:
             return self._sized_entry(instrument, resolved_id, resolved_side, notional, qty, price)
@@ -4224,6 +4401,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 and self.cache.order(client_order_id).is_closed
             ):
                 del self._target_asked[client_order_id]
+            stop = self._target_sent.get(client_order_id)
+            if stop is not None:
+                if isinstance(event, OrderFilled):
+                    self._target_filled(stop, event)
+                # nautilus_trader 1.231.0 hands the strategy an order's `OrderInitialized`
+                # before the cache holds the order (measured on a card): nothing to close yet.
+                found = self.cache.order(client_order_id)
+                if found is not None and found.is_closed:
+                    del self._target_sent[client_order_id]
         finally:
             if ledger is not None:
                 ledger.running.pop()

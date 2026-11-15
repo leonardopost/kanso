@@ -196,15 +196,18 @@ def book(
     )
 
 
-def target(strategy: object, period_target: object) -> None:
-    """Have the harness hold the sleeve to its hypothesis's period target.
+def target(strategy: object, period_target: object, struck: object = None) -> None:
+    """Have the harness hold the sleeve to its hypothesis's period target, and record each
+    fill of a stopped week at the instant the venue's record says its price was struck at
+    (`struck`, `kanso.nautilus.struck`); a sleeve handed none reads a fill at its own instant.
 
-    Set by the runner exactly as `book` is — a private attribute the harness reads, denied to
+    Set by the runner exactly as `book` is — private attributes the harness reads, denied to
     a `strategy.py` by `strategy_integrity`, and never a configuration field an author could
     read back or a manifest would record. The strategy reads only whether the week is
     stopped (`KansoStrategy.period_stopped`).
     """
     strategy._period_target = period_target  # type: ignore[attr-defined]
+    strategy._target_struck = struck  # type: ignore[attr-defined]
 
 
 def dated(strategy: object, rows: Sequence[object], struck: object) -> None:

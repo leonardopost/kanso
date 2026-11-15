@@ -9,6 +9,7 @@ from kanso.criteria.run import NS_PER_DAY, FundingPayment, midnight_ns
 from kanso.monitor import combined, tenure
 from kanso.monitor.realised import combined_benchmark
 from kanso.portfolio.records import StageResult
+from kanso.schemas import PeriodStops
 
 from .builders import CAPITAL, START, fill_at, run_over
 
@@ -105,6 +106,44 @@ def test_the_funding_of_every_window_is_joined_in_time_order() -> None:
 
     assert joined is not None
     assert joined.funding == (paid(START), paid(SECOND_DAY))
+
+
+def test_the_period_stops_of_every_window_join_by_their_weeks() -> None:
+    """Two windows restarted inside one New York week both traded in it: the joined record
+    holds that week once, each window's stops in turn, and the open week of the newest window
+    handed a point — an empty window after it records none and moves nothing. A version none of
+    whose windows kept a record has none."""
+    week = midnight_ns(START) + 9 * 3_600 * 1_000_000_000
+    stop = {
+        "opening_ns": week,
+        "anchor": CAPITAL,
+        "threshold": 10.0,
+        "hit_ns": week + 1,
+        "segment": "rth",
+        "equity": CAPITAL + 10.0,
+    }
+    last = {"opening_ns": week, "anchor": CAPITAL, "threshold": 10.0, "pnl": 3.0}
+
+    def window(day: date, record: dict[str, object] | None) -> StageResult:
+        made = result((10.0,), start=day)
+        held = None if record is None else PeriodStops.model_validate(record)
+        return replace(made, run=replace(made.run, period_stops=held))
+
+    windows = [
+        window(START, {"openings": [week], "stops": [stop], "last": {**last, "stopped": True}}),
+        window(SECOND_DAY, {"openings": [week], "last": {**last, "stopped": False}}),
+        window(date(2024, 3, 3), {}),
+        window(date(2024, 3, 4), None),
+    ]
+
+    joined = combined(windows)
+
+    assert joined is not None and joined.period_stops is not None
+    assert joined.period_stops.openings == [week]
+    assert [one.hit_ns for one in joined.period_stops.stops] == [week + 1]
+    assert joined.period_stops.last is not None and not joined.period_stops.last.stopped
+    plain = combined([result((10.0,))])
+    assert plain is not None and plain.period_stops is None
 
 
 def test_a_tenure_reads_its_clock_from_the_stage_when_there_is_one() -> None:

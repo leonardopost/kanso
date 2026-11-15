@@ -24,7 +24,7 @@ from kanso.replay.parity import (
     compare,
     of_sessions,
 )
-from kanso.schemas import Commands
+from kanso.schemas import Commands, PeriodStops
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.replay.conftest import (
@@ -354,6 +354,111 @@ def test_the_busiest_minute_is_judged_at_no_tolerance_and_the_counts_at_any() ->
     assert not counted(one, apart).identical
     assert counted(one, apart, 1).identical
     assert counted(one, one).identical
+
+
+WEEK = {
+    "openings": [100, 200],
+    "stops": [
+        {
+            "opening_ns": 100,
+            "anchor": 100_000.0,
+            "threshold": 500.0,
+            "hit_ns": 150,
+            "segment": "rth",
+            "equity": 100_520.0,
+            "dropped": 1,
+            "fills": [
+                {
+                    "ts_ns": 160,
+                    "instrument_id": INSTRUMENT,
+                    "side": "SELL",
+                    "qty": 10.0,
+                    "price": 10.26,
+                    "price_ts_ns": 160,
+                    "segment": "rth",
+                    "volume": 2_000.0,
+                }
+            ],
+            "flat_equity": 100_510.0,
+        }
+    ],
+}
+"""Two weeks traded in, the first stopped at 150 and flattened at 160."""
+
+
+def stopped(node: PeriodStops | None, engine: PeriodStops | None, ts_ns: int = 0) -> Parity:
+    """The same single order on both paths, whose period targets did these."""
+    return replace(
+        fed((1, None), (1, None)), node_period_stops=node, engine_period_stops=engine
+    ).at(ts_ns)
+
+
+def test_two_paths_that_stopped_the_same_weeks_alike_agree_and_the_payload_counts_them() -> None:
+    """The stops are compared after the orders, whole, and two paths that recorded the same
+    agree; the payload carries how many weeks each path traded in and stopped."""
+    both = PeriodStops.model_validate(WEEK)
+
+    result = stopped(both, both)
+
+    assert result.identical
+    assert result.payload()["node_period_stops"] == {"periods": 2, "stopped": 1}
+    assert result.payload()["engine_period_stops"] == {"periods": 2, "stopped": 1}
+
+
+@pytest.mark.parametrize(
+    ("moved", "where", "node", "engine"),
+    [
+        ({"hit_ns": 151}, "period_stops.stops[0].hit_ns", 150, 151),
+        ({"dropped": 0}, "period_stops.stops[0].dropped", 1, 0),
+        ({"fills": [], "flat_equity": None}, "period_stops.stops[0].fills[0]", "fill", None),
+    ],
+)
+def test_a_stop_that_moved_diverges_at_its_element_whatever_the_tolerance(
+    moved: dict[str, Any], where: str, node: object, engine: object
+) -> None:
+    """A stop is the harness's decision at a point both paths are handed, so a stop that moved
+    — its instant, what it dropped, the flatten's fills — is a divergence at any tolerance,
+    named by its place in the record and reported with each path's value there."""
+    held = PeriodStops.model_validate(WEEK)
+    other = PeriodStops.model_validate({**WEEK, "stops": [{**WEEK["stops"][0], **moved}]})
+
+    for ts_ns in (0, 10**9):
+        result = stopped(held, other, ts_ns)
+        assert not result.identical
+        assert result.divergence is not None
+        assert (result.divergence.index, result.divergence.field) == (None, where)
+    shown = held.model_dump(mode="json")["stops"][0]["fills"][0] if node == "fill" else node
+    assert result.divergence.render() == (
+        f"{where}: {shown!r} on the node path and {engine!r} on the engine path"
+    )
+
+
+def test_a_week_one_path_alone_traded_in_diverges_on_the_weeks() -> None:
+    """A path that traded in a week the other did not diverges where its weeks part."""
+    held = PeriodStops.model_validate(WEEK)
+    longer = PeriodStops.model_validate({**WEEK, "openings": [100, 200, 300]})
+
+    result = stopped(held, longer)
+
+    assert result.divergence is not None
+    assert result.divergence.field == "period_stops.openings[2]"
+    assert (result.divergence.node, result.divergence.engine) == (None, 300)
+
+
+def test_stops_only_one_path_recorded_are_not_compared_and_the_payload_says_so() -> None:
+    """Where a session recorded no stops — a target with no period target, or a session an
+    earlier kanso wrote — nothing is compared; the payload carries the one path's counts
+    beside `null`, and neither field where neither path recorded any."""
+    held = PeriodStops.model_validate(WEEK)
+
+    one = stopped(held, None)
+    neither = stopped(None, None)
+
+    assert one.identical and neither.identical
+    assert one.payload()["engine_period_stops"] is None
+    assert one.payload()["node_period_stops"] == {"periods": 2, "stopped": 1}
+    assert "node_period_stops" not in neither.payload()
+    assert "engine_period_stops" not in neither.payload()
 
 
 def test_two_sessions_released_different_points_diverge_on_the_stream(ws: Workspace) -> None:

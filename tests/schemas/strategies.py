@@ -36,6 +36,7 @@ from kanso.schemas import (
     EvaluatedGate,
     ExcludedGate,
     Expectation,
+    FlattenFill,
     GateResult,
     Hypothesis,
     InstrumentEntry,
@@ -47,7 +48,10 @@ from kanso.schemas import (
     ObjectiveParams,
     ObjectiveRef,
     ObjectiveResult,
+    OpenPeriod,
     Origins,
+    PeriodStop,
+    PeriodStops,
     PeriodTarget,
     Pins,
     PlanInputs,
@@ -444,6 +448,68 @@ def cards(draw: st.DrawFn) -> Card:
 INSTANTS = st.integers(0, 2**62)
 """An instant in nanoseconds since the epoch, as a run stamps one."""
 
+WHOLE = st.integers(-(10**9), 10**9).map(float)
+"""A whole number of the account's currency: one a sum or a difference of two holds exactly,
+so a stop's equity less its anchor is at least its threshold as the harness read it."""
+
+SEGMENTS = st.sampled_from(["pre", "rth", "post", "overnight"])
+
+
+@st.composite
+def flatten_fills(draw: st.DrawFn, after: int) -> FlattenFill:
+    """A fill of an order sent in a stopped week, landing at or after the hit at `after`."""
+    return FlattenFill(
+        ts_ns=after + draw(st.integers(0, 10**15)),
+        instrument_id=draw(st.sampled_from(["DEMO.XNAS", "SOXL.ARCX"])),
+        side=draw(st.sampled_from(["BUY", "SELL"])),
+        qty=draw(POSITIVE),
+        price=draw(FINITE),
+        price_ts_ns=draw(INSTANTS),
+        segment=draw(SEGMENTS),
+        volume=draw(st.none() | NON_NEGATIVE),
+    )
+
+
+@st.composite
+def period_stops(draw: st.DrawFn) -> PeriodStops:
+    """What a period target did over a run: weeks in strictly increasing order, a stop on some
+    of them — each hit at or after its week's opening with its equity at least the threshold
+    above the anchor, its flatten fills in time order from the hit, the equity after them
+    exactly when there are any, carried only then — and, where the run traded in a week, the
+    last one open, stopped only where it holds a stop."""
+    openings = sorted(draw(st.sets(st.integers(0, 2**61), max_size=5)))
+    stops: list[PeriodStop] = []
+    for opening in openings:
+        if not draw(st.booleans()):
+            continue
+        hit = opening + draw(st.integers(0, 10**15))
+        anchor, threshold = draw(WHOLE), draw(WHOLE)
+        made = sorted(draw(st.lists(flatten_fills(hit), max_size=3)), key=lambda f: f.ts_ns)
+        stops.append(
+            PeriodStop(
+                opening_ns=opening,
+                anchor=anchor,
+                threshold=threshold,
+                hit_ns=hit,
+                segment=draw(SEGMENTS),
+                equity=anchor + threshold + draw(st.integers(0, 10**6)),
+                dropped=draw(st.integers(0, 10**4)),
+                fills=made,
+                flat_equity=draw(FINITE) if made else None,
+                carried=draw(st.booleans()) if made else False,
+            )
+        )
+    last = None
+    if openings and draw(st.booleans()):
+        last = OpenPeriod(
+            opening_ns=openings[-1],
+            anchor=draw(FINITE),
+            threshold=draw(FINITE),
+            pnl=draw(FINITE),
+            stopped=bool(stops) and stops[-1].opening_ns == openings[-1] and draw(st.booleans()),
+        )
+    return PeriodStops(openings=openings, stops=stops, last=last)
+
 
 @st.composite
 def fills(draw: st.DrawFn) -> Fill:
@@ -532,6 +598,7 @@ def card_runs(draw: st.DrawFn) -> CardRun:
                 )
             )
         ),
+        period_stops=draw(st.none() | period_stops()),
     )
 
 
@@ -661,6 +728,7 @@ def certificates(draw: st.DrawFn) -> Certificate:
         created_at=draw(TIMESTAMPS),
         power=draw(st.none() | powers()),
         net_per_trade=draw(st.none() | net_per_trades()),
+        period_stops=draw(st.none() | period_stops()),
     )
 
 
@@ -955,6 +1023,7 @@ def sessions(draw: st.DrawFn) -> Session:
         stream_sha256=draw(st.none() | SHAS),
         intents=draw(st.integers(0, 10**9)),
         commands=draw(st.none() | commands()),
+        period_stops=draw(st.none() | period_stops()),
         clock_ns=draw(st.none() | st.integers(0, 2**63 - 1)),
         started_at=draw(TIMESTAMPS),
         ended_at=draw(st.none() | TIMESTAMPS),

@@ -16,6 +16,8 @@ from kanso.schemas import (
     CardDigest,
     Commands,
     GateResult,
+    PeriodStop,
+    PeriodStops,
     RunRecord,
     resolve_venue_model,
 )
@@ -386,3 +388,145 @@ def test_a_skipped_gate_passes() -> None:
     )
     assert result.passed
     assert result.model_dump(by_alias=True)["pass"] is True
+
+
+STOP: dict[str, Any] = {
+    "opening_ns": 100,
+    "anchor": 100_000.0,
+    "threshold": 1_000.0,
+    "hit_ns": 150,
+    "segment": "rth",
+    "equity": 101_000.0,
+    "dropped": 2,
+    "fills": [
+        {
+            "ts_ns": 160,
+            "instrument_id": "SOXL.ARCX",
+            "side": "SELL",
+            "qty": 300.0,
+            "price": 31.5,
+            "price_ts_ns": 160,
+            "segment": "rth",
+            "volume": 12_000.0,
+        }
+    ],
+    "flat_equity": 100_990.0,
+    "carried": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "refused"),
+    [
+        ({"hit_ns": 99}, "before the week's opening"),
+        ({"equity": 100_999.0}, "short of the threshold"),
+        ({"fills": [{**STOP["fills"][0], "ts_ns": 149}]}, "lands after the hit"),
+        ({"flat_equity": None}, "after the last flatten fill"),
+        ({"fills": [], "carried": True, "flat_equity": None}, "carried none"),
+        ({"fills": [{**STOP["fills"][0], "qty": 0.0}]}, "qty"),
+        ({"segment": "open"}, "segment"),
+    ],
+)
+def test_a_stop_holds_to_what_stopped_its_week(change: dict[str, Any], refused: str) -> None:
+    """A stop is reached at or after its week's opening at an equity the threshold above the
+    anchor, its flatten fills land from the hit on, in order, the equity after them is kept
+    exactly when there are any, one carries a fill into the next week only when it has one, and
+    a segment is a part of the New York session the clock names."""
+    assert PeriodStop.model_validate(STOP).equity - 100_000.0 == 1_000.0
+
+    with pytest.raises(ValidationError, match=refused):
+        PeriodStop.model_validate({**STOP, **change})
+
+
+@pytest.mark.parametrize(
+    ("record", "refused"),
+    [
+        ({"openings": [100, 100]}, "strictly increasing"),
+        ({"openings": [7], "stops": [STOP]}, "a week the run traded in"),
+        (
+            {
+                "openings": [100, 200],
+                "stops": [
+                    {**STOP, "opening_ns": 200, "hit_ns": 250, "fills": [], "flat_equity": None},
+                    STOP,
+                ],
+            },
+            "in order",
+        ),
+        (
+            {
+                "openings": [100, 200],
+                "last": {
+                    "opening_ns": 100,
+                    "anchor": 1.0,
+                    "threshold": 1.0,
+                    "pnl": 0.0,
+                    "stopped": False,
+                },
+            },
+            "the last week traded in",
+        ),
+        (
+            {
+                "last": {
+                    "opening_ns": 100,
+                    "anchor": 1.0,
+                    "threshold": 1.0,
+                    "pnl": 0.0,
+                    "stopped": False,
+                }
+            },
+            "the last week traded in",
+        ),
+        (
+            {
+                "openings": [100],
+                "last": {
+                    "opening_ns": 100,
+                    "anchor": 1.0,
+                    "threshold": 1.0,
+                    "pnl": 0.0,
+                    "stopped": True,
+                },
+            },
+            "holds a stop",
+        ),
+    ],
+)
+def test_a_period_target_s_record_holds_to_its_weeks(record: dict[str, Any], refused: str) -> None:
+    """The weeks are in order, each stop is of a week the run traded in and in order, and the
+    week open at the last point is the last week, read as stopped only where it holds a stop."""
+    held = PeriodStops.model_validate({"openings": [100, 200], "stops": [STOP]})
+    assert (held.periods, held.stopped) == (2, 1)
+
+    with pytest.raises(ValidationError, match=refused):
+        PeriodStops.model_validate(record)
+
+
+def test_a_span_of_the_record_holds_the_weeks_that_opened_in_it() -> None:
+    """A week belongs to the span its opening falls in, with its stop; the week open at the
+    last point stays only in a span that runs to the run's end and holds its opening. A span
+    that starts the run also holds the weeks that opened before it, so one span over the whole
+    run holds the whole record."""
+    last = {"opening_ns": 200, "anchor": 1.0, "threshold": 1.0, "pnl": 0.0, "stopped": False}
+    held = PeriodStops.model_validate({"openings": [100, 200], "stops": [STOP], "last": last})
+
+    assert held.between(100, 200, starts=False, ends=False).model_dump() == {
+        "openings": [100],
+        "stops": [STOP],
+        "last": None,
+    }
+    assert held.between(150, 300, starts=False, ends=True).last == held.last
+    assert held.between(150, 300, starts=False, ends=False).last is None
+    assert held.between(250, 300, starts=False, ends=True).model_dump() == {
+        "openings": [],
+        "stops": [],
+        "last": None,
+    }
+    assert held.between(150, 300, starts=False, ends=True).openings == [200]
+    assert held.between(150, 300, starts=True, ends=True) == held
+    assert held.between(150, 200, starts=True, ends=False).model_dump() == {
+        "openings": [100],
+        "stops": [STOP],
+        "last": None,
+    }

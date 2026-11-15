@@ -13,14 +13,18 @@ stream a sleeve or an extraction is handed means re-deriving the venue's order o
 which differs between a card, a node and a stage that shares its venue with other versions.
 So it is read here, off the venue, once, and both the extraction (`kanso.nautilus.backtest.
 Marks.priced`) and the harness (`kanso.nautilus.strategy.KansoStrategy._half_of`) read the one
-record: the balance a sleeve sizes against is the equity the runner strikes on every path.
+record: the balance a sleeve sizes against is the equity the runner strikes on every path. A
+period target's record of a stopped week reads each of its fills off it too
+(`KansoStrategy._target_filled`), dated spread or none: a resting order the venue fills while
+it applies a point is struck at that point, which the sleeve has yet to be handed.
 
 `Struck` is the record. Its venue half is a part of the one module a kanso venue loads
-(`kanso.nautilus.actions.parts`), loaded only where a dated spread is charged, and placed last,
-so it is handed each point after the parts that may land commands before the point is applied
-(`kanso.nautilus.tape`) and before the matching engine applies it: it keeps each name's last
-point the engine applies, at that point's `ts_event` — a bar's close, a print's or a quote's
-own stamp, never the instant it was published at. Its other half hears each fill on the bus as
+(`kanso.nautilus.actions.parts`), loaded only where a dated spread is charged or a period
+target declared, and placed last, so it is handed each point after the parts that may land
+commands before the point is applied (`kanso.nautilus.tape`) and before the matching engine
+applies it: it keeps each name's last point the engine applies, at that point's `ts_event` — a
+bar's close, a print's or a quote's own stamp, never the instant it was published at. Its other
+half hears each fill on the bus as
 the execution engine applies it, before the sleeve is handed it, and keeps the name's instant
 for it, by the fill's instrument and trade id. Those are what every event of one fill shares:
 a fill that flips a net position reaches the positions the extraction reads as two events, the
