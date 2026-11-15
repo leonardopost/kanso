@@ -9,8 +9,9 @@ import pytest
 from hypothesis import given
 
 from kanso.errors import Exit, ValidationError
-from kanso.schemas import Hypothesis, embargo, embargo_days
-from tests.schemas.strategies import hypotheses
+from kanso.schemas import Hypothesis, PeriodTarget, embargo, embargo_days
+from kanso.schemas.hypothesis import WEEKDAYS
+from tests.schemas.strategies import hypotheses, period_targets
 
 BASE: dict[str, Any] = {
     "schema": 1,
@@ -538,6 +539,144 @@ def test_depth_refuses_a_quote_series_beside_its_own_level_one() -> None:
 def test_depth_survives_the_round_trip(hyp: Hypothesis) -> None:
     again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
     assert again.depth == hyp.depth
+
+
+WEEKLY: dict[str, Any] = {
+    "period": "week",
+    "opens": "Mon 04:00",
+    "tz": "America/New_York",
+    "target_bp": 1000,
+    "of": "capital",
+}
+
+
+def refusal(**changes: Any) -> ValidationError:
+    with pytest.raises(ValidationError) as refused:
+        build(**changes)
+    return refused.value
+
+
+def test_a_period_target_carries_its_week_its_return_and_its_base() -> None:
+    assert build().period_target is None
+    target = build(period_target=WEEKLY).period_target
+    assert target is not None
+    assert (target.period, target.opens, target.tz, target.target_bp, target.of) == (
+        "week",
+        "Mon 04:00",
+        "America/New_York",
+        1000.0,
+        "capital",
+    )
+    assert (target.weekday, target.minute) == (0, 240)
+    later = build(period_target={**WEEKLY, "opens": "Fri 23:59", "of": "period_open"})
+    assert later.period_target is not None
+    assert (later.period_target.weekday, later.period_target.minute) == (4, 1439)
+
+
+@pytest.mark.parametrize("missing", sorted(WEEKLY))
+def test_every_key_of_a_period_target_is_the_operator_s_and_none_has_a_default(
+    missing: str,
+) -> None:
+    stated = {key: value for key, value in WEEKLY.items() if key != missing}
+    refused = refusal(period_target=stated)
+    assert f"period_target: states no {missing}; every key" in refused.message
+    assert "of: capital or of: period_open" in (refused.remedy or "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "said", "remedy"),
+    [
+        ("tz", "UTC", "period_target: tz: 'UTC' is not America/New_York", "America/New_York"),
+        ("tz", "America/Chicago", "is not America/New_York", "set period_target.tz"),
+        ("opens", "Mon 4:00", "period_target: opens: 'Mon 4:00' is not a weekday", "HH:MM"),
+        ("opens", "Monday 04:00", "is not a weekday and a 24-hour wall time", '"Mon 04:00"'),
+        ("opens", "Mon 24:00", "is not a weekday and a 24-hour wall time", '"Mon 04:00"'),
+        ("opens", "mon 04:00", "is not a weekday and a 24-hour wall time", '"Mon 04:00"'),
+        ("target_bp", 0, "period_target: target_bp: 0 is not a return above zero", "1000"),
+        ("target_bp", -50, "target_bp: -50 is not a return above zero", "+10%"),
+        ("target_bp", float("nan"), "target_bp: nan is not a return above zero", "+10%"),
+        ("target_bp", float("inf"), "target_bp: inf is not a return above zero", "+10%"),
+    ],
+)
+def test_a_period_target_that_cannot_be_read_is_refused_with_its_remedy(
+    field: str, value: object, said: str, remedy: str
+) -> None:
+    refused = refusal(period_target={**WEEKLY, field: value})
+    assert said in refused.message
+    assert remedy in (refused.remedy or "")
+
+
+@pytest.mark.parametrize(("field", "value"), [("period", "month"), ("of", "equity")])
+def test_a_period_target_names_the_one_period_and_the_two_bases_built(
+    field: str, value: str
+) -> None:
+    with pytest.raises(ValidationError, match=f"period_target.{field}"):
+        build(period_target={**WEEKLY, field: value})
+
+
+@pytest.mark.parametrize(
+    ("changes", "said", "remedy"),
+    [
+        ({"book": {"reset": "monthly"}}, "beside book.reset: monthly", "set book.reset to none"),
+        ({"benchmark": {"hold": "first_leg"}}, "beside benchmark", "drop benchmark"),
+        (
+            {"resolution": "tick", "data_requirements": ["book", "trade"]},
+            "requires 'book'",
+            "drop book from data_requirements",
+        ),
+    ],
+)
+def test_a_period_target_beside_what_it_cannot_be_applied_with_is_refused(
+    changes: dict[str, Any], said: str, remedy: str
+) -> None:
+    refused = refusal(period_target=WEEKLY, **changes)
+    assert said in refused.message
+    assert remedy in (refused.remedy or "")
+    assert build(period_target=WEEKLY, book={"financing_rate_bps": 250}).book is not None
+
+
+@pytest.mark.parametrize(
+    ("opens", "day"),
+    [("Sun 02:30", "2024-03-10"), ("Sun 01:30", "2024-11-03"), ("Sun 01:00", "2024-11-03")],
+)
+def test_an_opening_a_change_of_clocks_skips_or_repeats_is_refused(opens: str, day: str) -> None:
+    """New York's clocks change at 02:00 on a Sunday: in March 02:00 to 02:59 never reads, and in
+    November 01:00 to 01:59 reads twice."""
+    refused = refusal(period_target={**WEEKLY, "opens": opens})
+    assert (
+        f"period_target.opens: {opens} America/New_York does not exist, or exists twice, on "
+        in (refused.message)
+    )
+    assert day in refused.message
+    assert '"Mon 04:00" never is' in (refused.remedy or "")
+
+
+def test_an_opening_is_held_to_the_forward_window_s_first_year_too() -> None:
+    """No research or certification date meets a change, and the open forward window's first
+    year does."""
+    windows = {
+        "research": {"start": "2024-04-01", "end": "2024-06-30"},
+        "certification": {"start": "2024-07-08", "end": "2024-09-30"},
+        "forward": {"start": "2024-10-07"},
+    }
+    refused = refusal(windows=windows, period_target={**WEEKLY, "opens": "Sun 01:30"})
+    assert "on 2024-11-03" in refused.message
+    assert build(windows=windows, period_target={**WEEKLY, "opens": "Sun 03:00"}).period_target
+
+
+@given(hypotheses())
+def test_a_period_target_survives_the_round_trip(hyp: Hypothesis) -> None:
+    again = Hypothesis.model_validate(hyp.model_dump(by_alias=True, mode="json"))
+    assert again.period_target == hyp.period_target
+
+
+@given(period_targets())
+def test_a_period_target_reads_back_its_weekday_and_minute(target: PeriodTarget) -> None:
+    again = PeriodTarget.model_validate(target.model_dump(mode="json"))
+    assert again == target
+    assert f"{WEEKDAYS[again.weekday]} {again.minute // 60:02d}:{again.minute % 60:02d}" == (
+        target.opens
+    )
 
 
 MIXED: dict[str, Any] = {

@@ -86,6 +86,7 @@ SCOPE: Final = (
     "book",
     "costs",
     "depth",
+    "period_target",
 )
 """What a `best` is comparable under; a change to any of them clears it."""
 
@@ -99,11 +100,13 @@ BENCHMARK: Final = "benchmark"
 BOOK: Final = "book"
 DEPTH: Final = "depth"
 BAR_RESOLUTION: Final = "bar_resolution"
-"""`sizing` joined the scope in 0.4.0, `warmup`, `benchmark` and `book` in 0.8.0, and `depth`
-and `bar_resolution` each with the key itself; `objective` in 0.5.0, answering from its own
-column. A row pinned before `sizing`, `warmup`, `benchmark`, `book`, `depth` or
-`bar_resolution` holds no key for it, which reads as `None` — the same answer a file without
-the key gives — so an older pin keeps its best until the file actually declares a rule."""
+PERIOD_TARGET: Final = "period_target"
+"""`sizing` joined the scope in 0.4.0, `warmup`, `benchmark` and `book` in 0.8.0, and `depth`,
+`bar_resolution` and `period_target` each with the key itself; `objective` in 0.5.0, answering
+from its own column. A row pinned before `sizing`, `warmup`, `benchmark`, `book`, `depth`,
+`bar_resolution` or `period_target` holds no key for it, which reads as `None` — the same
+answer a file without the key gives — so an older pin keeps its best until the file actually
+declares a rule."""
 COSTS: Final = "costs"
 """The scope field that joined in 0.13; a row pinned before it answers from its pinned file."""
 DATA_BY_INSTRUMENT: Final = "data_by_instrument"
@@ -455,7 +458,7 @@ def _pins(held: sqlite3.Row) -> dict[str, Any]:
 
 
 def scope_of(hyp: Hypothesis) -> dict[str, Any]:
-    """The fourteen fields a metric is only comparable within, in a stable order.
+    """The fifteen fields a metric is only comparable within, in a stable order.
 
     The data a strategy is shown is scope, however the file narrows it: the types it
     requires, the bar size a tick sleeve reads its bars at (`bar_resolution`), which of them
@@ -509,6 +512,7 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
         BOOK: hyp.book.model_dump() if hyp.book else None,
         COSTS: hyp.costs.model_dump(exclude_none=True) if hyp.costs else None,
         DEPTH: hyp.depth.model_dump() if hyp.depth else None,
+        PERIOD_TARGET: hyp.period_target.model_dump() if hyp.period_target else None,
     }
 
 
@@ -526,20 +530,20 @@ def _by_instrument(hyp: Hypothesis) -> dict[str, list[str]] | None:
 def _scope_of(store: StateStore, held: sqlite3.Row, now: dict[str, Any]) -> dict[str, Any]:
     """The scope the row was pinned under, to be compared with `now`.
 
-    The construct and the objective were pinned in their own columns before they joined
-    the pins, and the columns are written with the pins, so a row from before then answers
-    from its column rather than reporting a move that never happened. `sizing`, `warmup`,
-    `benchmark`, `book`, `depth` and `bar_resolution` joined later still and have no column,
+    The construct and the objective were pinned in their own columns before they joined the
+    pins, and the columns are written with the pins, so a row from before then answers from its
+    column rather than reporting a move that never happened. `sizing`, `warmup`, `benchmark`,
+    `book`, `depth`, `bar_resolution` and `period_target` joined later still and have no column,
     and each joined with its key, so no file pinned before could state one: a pin without the
     key answers `None`. `costs`, `data_by_instrument` and `session_scope` joined after files
     could state them (`FROM_FILE`), so a pin without one answers from the file it pinned — the
     bytes stored under the row's `hypothesis_sha`, read by `scope_of` exactly as the file being
-    pinned now is, latency included. Only when the store holds no such bytes, or this kanso
-    no longer reads them as a hypothesis, does it answer `now`'s, since nothing then says
-    what the old pin stated. Answering `now` whenever the key was missing was measured
-    keeping the bests of four hypotheses scored at no latency through a re-pin that added
-    20 ms; answering `None` would clear the best of every hypothesis that states a session
-    scope on the first re-pin after an upgrade, whatever it changed.
+    pinned now is, latency included. Only when the store holds no such bytes, or this kanso no
+    longer reads them as a hypothesis, does it answer `now`'s, since nothing then says what the
+    old pin stated. Answering `now` whenever the key was missing was measured keeping the bests
+    of four hypotheses scored at no latency through a re-pin that added 20 ms; answering `None`
+    would clear the best of every hypothesis that states a session scope on the first re-pin
+    after an upgrade, whatever it changed.
     """
     pins = _pins(held)
     scope = {name: pins.get(name) for name in SCOPE}

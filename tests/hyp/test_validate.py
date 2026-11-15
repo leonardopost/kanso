@@ -2406,6 +2406,90 @@ def test_a_construct_booked_as_its_host_is_admissible(ws: Workspace) -> None:
     assert parsed.book is not None and parsed.book.reset == "monthly"
 
 
+WEEKLY: dict[str, Any] = {
+    "period": "week",
+    "opens": "Mon 04:00",
+    "tz": "America/New_York",
+    "target_bp": 1000,
+    "of": "capital",
+}
+WEEKLY_TEXT = (
+    '{period: week, opens: "Mon 04:00", tz: America/New_York, target_bp: 1000, of: capital}'
+)
+
+
+def test_an_attached_construct_declares_its_host_s_period_target(ws: Workspace) -> None:
+    """The construct's cards run its host under this file's target, and its version is
+    deployed under the host's, so a construct without the host's would be measured unstopped
+    and run stopped."""
+    host_with(ws, period_target=WEEKLY)
+
+    failure = refused(ws, document(**FILTER_CLASSIFICATION))
+
+    assert (
+        f"period_target: host_sleeve@1 runs under a period target of {WEEKLY_TEXT} and this "
+        "file declares none" in failure.message
+    )
+    assert (failure.remedy or "").startswith(f"set period_target to the host's, {WEEKLY_TEXT}")
+
+
+def test_a_construct_targeted_under_an_untargeted_host_is_told_to_drop_it(ws: Workspace) -> None:
+    host_with(ws)
+
+    failure = refused(ws, document(period_target=WEEKLY, **FILTER_CLASSIFICATION))
+
+    assert f"runs under a period target of none and this file declares {WEEKLY_TEXT}" in (
+        failure.message
+    )
+    assert (failure.remedy or "").startswith("drop period_target to match ")
+
+
+def test_a_construct_targeted_as_its_host_is_admissible(ws: Workspace) -> None:
+    host_with(ws, period_target=WEEKLY)
+
+    parsed = accepted(ws, document(period_target=WEEKLY, **FILTER_CLASSIFICATION))
+
+    assert parsed.period_target is not None and parsed.period_target.opens == "Mon 04:00"
+
+
+@pytest.mark.parametrize("period", ["1w", "7d", "2w"])
+def test_under_weekly_return_periods_a_window_opens_on_the_target_s_weekday(
+    ws: Workspace, period: str
+) -> None:
+    """The runner cuts return periods from each window's first UTC midnight and the target cuts
+    New York weeks at its own opening: the two are the same weeks only when the window opens on
+    the target's weekday. Research here opens on Tuesday 2 January."""
+    failure = refused(configured(ws, return_period=period), document(period_target=WEEKLY))
+
+    assert failure.message.startswith(
+        f"windows.research.start: 2024-01-02 is a Tue, and under [research] return_period "
+        f"{period} the return periods are cut from it while period_target opens each week on "
+        "a Mon"
+    )
+    assert failure.remedy == "start windows.research on a Mon, or open period_target on a Tue"
+
+
+def test_every_window_opening_on_the_target_s_weekday_is_admissible(ws: Workspace) -> None:
+    windows = {
+        "research": {"start": "2024-01-01", "end": "2024-12-27"},
+        "certification": {"start": "2025-01-06", "end": "2025-05-30"},
+        "forward": {"start": "2025-06-02"},
+    }
+    weekly = configured(ws, return_period="1w")
+
+    assert accepted(weekly, document(windows=windows, period_target=WEEKLY)).period_target
+    late = {**windows, "forward": {"start": "2025-06-03"}}
+    failure = refused(weekly, document(windows=late, period_target=WEEKLY))
+    assert failure.message.startswith("windows.forward.start: 2025-06-03 is a Tue")
+
+
+def test_a_return_period_that_is_no_whole_week_reads_no_weekday(ws: Workspace) -> None:
+    """Daily periods are cut at every UTC midnight, and every week's opening falls between two."""
+    parsed = accepted(configured(ws, return_period="1d"), document(period_target=WEEKLY))
+
+    assert parsed.period_target is not None
+
+
 TICK_BARS: dict[str, Any] = {
     "universe": ["DEMO", "EURO"],
     "resolution": "tick",

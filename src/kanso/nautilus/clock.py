@@ -42,12 +42,15 @@ skips or meets. Such an opening is the change itself, and the week before it is 
 short for each minute the opening is past 02:00: at 03:00 the whole hour, and the week from
 the change is a full seven days.
 
-No part of the harness reads a week here: `week_opening` is offered to a rule that counts New
-York weeks, and the periods a run's returns are cut into are not these weeks. The runner cuts
-those one `[research] return_period` after another from the UTC midnight that opens the
-window (`RunRequest.bounds` in `kanso.nautilus.backtest`), so a `1w` period of a window that
-opens on a Monday starts at 00:00 UTC, which is the Sunday evening in New York: eight hours
-before that Monday's 04:00 under daylight saving and nine without it.
+One rule of the harness reads a week here, a hypothesis's `period_target`, whose weeks
+open at the reading it states (`KansoStrategy.period_stopped` in `kanso.nautilus.strategy`);
+the periods a run's returns are cut into are not these weeks. The runner cuts those one
+`[research] return_period` after another from the UTC midnight that opens the window
+(`RunRequest.bounds` in `kanso.nautilus.backtest`), so a `1w` period of a window that opens
+on a Monday starts at 00:00 UTC, which is the Sunday evening in New York: eight hours before
+that Monday's 04:00 under daylight saving and nine without it. The two are the same weeks only
+where no point falls between the two cuts, as on US equities, which is why `hyp validate`
+holds the windows to the target's weekday under a return period of whole weeks.
 
 **The zone stays in the package.** A researched `strategy.py` may not import `zoneinfo`
 (`kanso.criteria.integrity`), and `kanso.nautilus.strategy`, which it may import, binds

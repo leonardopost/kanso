@@ -174,6 +174,25 @@ def test_validate_refuses_a_rate_below_what_a_cancel_spends(
     )
 
 
+def test_validate_refuses_a_period_target_with_no_base_and_admits_one_that_states_it(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """What the "+10%" of a weekly target is a percent of is the operator's to state: a target
+    without `of` is refused naming the key, and the same file stating it validates."""
+    target = {"period": "week", "opens": "Mon 04:00", "tz": "America/New_York", "target_bp": 1000}
+
+    refused = at(
+        runner, loaded, "hyp", "validate", write_hypothesis(loaded, period_target=target), "--json"
+    )
+    stated = write_hypothesis(loaded, period_target={**target, "of": "capital"})
+    admitted = at(runner, loaded, "hyp", "validate", stated, "--json")
+
+    assert refused.exit_code == Exit.VALIDATION
+    assert "hypothesis.yaml: period_target: states no of; every key" in payload(refused)["error"]
+    assert "of: capital or of: period_open" in payload(refused)["remedy"]
+    assert admitted.exit_code == Exit.OK, admitted.stdout
+
+
 def test_a_data_type_a_vendor_adapter_registers_is_admissible(
     runner: CliRunner, loaded: Path
 ) -> None:

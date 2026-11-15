@@ -325,13 +325,13 @@ def test_the_module_states_the_weeks_the_property_above_holds() -> None:
 
 
 def test_the_runner_cuts_its_weekly_periods_from_a_utc_midnight_not_from_this_clock() -> None:
-    """The module once said the harness read a point's week here; no part of it does. A run's
-    returns are cut one `return_period` after another from the UTC midnight that opens its
-    window, so a `1w` period of a window that opens on a Monday starts on the Sunday evening
-    in New York, inside the week before: eight hours before that Monday's 04:00 under
-    daylight saving and nine without it. The module says so. The cut is read off a
-    `RunRequest` over a window that opens on the Monday, as the runner reads it, so a cut
-    moved to New York's midnight or to the week's opening fails here."""
+    """The module once said the harness read a point's week here; the period target alone does,
+    and a run's returns are not cut by it. They are cut one `return_period` after another from
+    the UTC midnight that opens its window, so a `1w` period of a window that opens on a Monday
+    starts on the Sunday evening in New York, inside the week before: eight hours before that
+    Monday's 04:00 under daylight saving and nine without it. The module says so. The cut is
+    read off a `RunRequest` over a window that opens on the Monday, as the runner reads it, so a
+    cut moved to New York's midnight or to the week's opening fails here."""
     for monday, hours in ((date(2010, 3, 15), 8), (date(2024, 1, 8), 9)):
         assert monday.weekday() == MONDAY
         request = RunRequest(
@@ -355,7 +355,8 @@ def test_the_runner_cuts_its_weekly_periods_from_a_utc_midnight_not_from_this_cl
     stated = " ".join((clock.__doc__ or "").split())
     assert "minute and week here and only here" not in stated
     assert "which week it falls in" not in stated
-    assert "No part of the harness reads a week here" in stated
+    assert "One rule of the harness reads a week here, a hypothesis's `period_target`" in stated
+    assert "the periods a run's returns are cut into are not these weeks" in stated
     assert (
         "eight hours before that Monday's 04:00 under daylight saving and nine without it"
     ) in stated

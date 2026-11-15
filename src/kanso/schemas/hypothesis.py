@@ -4,7 +4,7 @@ The file is the operator's statement of a falsifiable idea plus the classificati
 agent writes back into it. Status, pins and the hypothesis's best card live in the state
 store, never here, so the file's bytes are stable enough to be content-addressed.
 
-Four families of rule are enforced here, all of them local to the file:
+Five families of rule are enforced here, all of them local to the file:
 
 * the windows are ordered, do not overlap, and the certification window opens no earlier
   than the embargo after research closes — `max(5 x horizon, 1d)`, rounded up to whole
@@ -15,7 +15,9 @@ Four families of rule are enforced here, all of them local to the file:
   read at (`bar_resolution`), a quote-derived spread needs quotes, a fixed spread needs its
   width;
 * a classified hypothesis carries `strategy_integrity` among its constraints;
-* `depth` views a book the hypothesis holds, and nothing else feeds `on_quote_tick`.
+* `depth` views a book the hypothesis holds, and nothing else feeds `on_quote_tick`;
+* a `period_target` is read in New York, opens at a wall time that exists once on every
+  date of the windows, and stands beside no monthly reset, no benchmark and no book.
 
 Whether a universe id resolves to an instrument, whether a construct exists in the
 catalogue and whether an objective applies are checked where those catalogues live.
@@ -24,8 +26,9 @@ catalogue and whether an objective applies are checked where those catalogues li
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Final, Literal
 
 from pydantic import Field, model_validator
@@ -251,6 +254,107 @@ class Depth(KansoModel):
         return self.every_ms * NS_PER_MS
 
 
+NEW_YORK_ZONE: Final = "America/New_York"
+"""The one zone a period target is read in (`PeriodTarget`)."""
+
+WEEKDAYS: Final = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+"""The weekdays a period target's `opens` may name, Monday first, as `date.weekday` counts."""
+
+_OPENS: Final = re.compile(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01][0-9]|2[0-3]):([0-5][0-9])$")
+
+_FORWARD_CHECKED: Final = timedelta(days=371)
+"""How far into the open forward window an `opens` reading is held to existing once: a year
+and a week, so it meets every change of clocks the zone's rules make in a year."""
+
+
+class PeriodTarget(KansoModel):
+    """A return a sleeve stops for the rest of its week on reaching.
+
+    The week opens at the weekday and New York wall time `opens` names — `"Mon 04:00"` — and
+    runs to the same reading a week on, so daylight saving moves it with the market; the
+    weeks are absolute, never cut from a window's start. At every point the harness hands a
+    sleeve it reads the sleeve's `balance` against the equity the runner struck at the
+    previous week's last point; once the week has made `target_bp` of `capital`, or of that
+    opening equity under `of: period_open`, it cancels the sleeve's working orders, flattens
+    every name it holds at that name's next print, and drops every entry until the next week
+    has opened and every name is flat (`kanso.nautilus.strategy.KansoStrategy`). Every key is
+    required and none has a default: it is a rule the operator states, not a threshold kanso
+    picks. Operator-owned like `sizing`, so classification neither reads nor writes it; and
+    scope, so a best that traded every week is not compared with a card stopped in some.
+    """
+
+    period: Literal["week"]
+    opens: str
+    tz: str
+    target_bp: float
+    of: Literal["capital", "period_open"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stated(cls, data: object) -> object:
+        """Every key is the operator's to state, so a missing one is named with its remedy."""
+        if isinstance(data, dict):
+            missing = [name for name in cls.model_fields if name not in data]
+            if missing:
+                raise RemedyError(
+                    f"states no {', '.join(missing)}; every key of a period "
+                    "target is the operator's, and none has a default",
+                    remedy="state period: week, opens (a weekday and New York wall time, "
+                    '"Mon 04:00"), tz: America/New_York, target_bp, and of: capital or of: '
+                    "period_open",
+                )
+        return data
+
+    @model_validator(mode="after")
+    def _readable(self) -> PeriodTarget:
+        if self.tz != NEW_YORK_ZONE:
+            raise RemedyError(
+                f"tz: {self.tz!r} is not {NEW_YORK_ZONE}; a run's return periods "
+                "are cut from a UTC midnight, which meets a week's opening only where no point "
+                "falls between them, as on US equities in New York",
+                remedy=f"set period_target.tz to {NEW_YORK_ZONE}",
+            )
+        if _OPENS.match(self.opens) is None:
+            raise RemedyError(
+                f"opens: {self.opens!r} is not a weekday and a 24-hour wall time",
+                remedy='write it as the weekday\'s three letters and HH:MM, "Mon 04:00"',
+            )
+        if not (math.isfinite(self.target_bp) and self.target_bp > 0):
+            raise RemedyError(
+                f"target_bp: {self.target_bp:g} is not a return above zero",
+                remedy="state the week's return the sleeve stops at, in bp: 1000 is +10%",
+            )
+        return self
+
+    @property
+    def weekday(self) -> int:
+        """The weekday the week opens on, Monday 0, as `date.weekday` counts."""
+        return WEEKDAYS.index(self.opens[:3])
+
+    @property
+    def minute(self) -> int:
+        """The New York minute of the day the week opens at, as `minute_of` counts: 04:00 is 240."""
+        hours, minutes = self.opens[4:].split(":")
+        return int(hours) * 60 + int(minutes)
+
+    def moved_on(self, spans: Sequence[tuple[date, date]]) -> date | None:
+        """The first date of `spans` whose opening reading a change of clocks skips or
+        repeats, or `None`: one whose UTC offset depends on which side of the change it is
+        read on."""
+        from zoneinfo import ZoneInfo
+
+        zone = ZoneInfo(self.tz)
+        wall = time(self.minute // 60, self.minute % 60)
+        for first, last in spans:
+            day = first + timedelta(days=(self.weekday - first.weekday()) % 7)
+            while day <= last:
+                at = datetime.combine(day, wall, tzinfo=zone)
+                if at.utcoffset() != at.replace(fold=1).utcoffset():
+                    return day
+                day += timedelta(days=7)
+        return None
+
+
 class ConstructRef(KansoModel):
     """What `classify` decided this hypothesis is, in portfolio-construction terms."""
 
@@ -331,6 +435,7 @@ class Hypothesis(Versioned):
     warmup: Warmup | None = None
     benchmark: Benchmark | None = None
     book: Book | None = None
+    period_target: PeriodTarget | None = None
     depth: Depth | None = None
     derived_from: list[HypId] = Field(default_factory=list)
     """The hypotheses whose research chose this one — the parent an `explore` draft was
@@ -389,9 +494,60 @@ class Hypothesis(Versioned):
         self._check_scope()
         self._check_costs()
         self._check_book()
+        self._check_period_target()
         self._check_depth()
         self._check_constraints()
         return self
+
+    def _check_period_target(self) -> None:
+        """A period target the rest of the file lets the harness apply as it is written.
+
+        A monthly reset moves cash at a return period's end, which can fall inside a target
+        week and move the balance the target reads with no P&L. The benchmark's hold buys once
+        and never again, so under the target it would be flattened at its first stopped week
+        and sit in cash for the rest of the window. A book's changes reach no point the
+        harness reads the target at. And the week's opening reading exists exactly once on
+        every date of the windows — the open forward window's first year standing for the
+        rest of it — or a change of clocks would move it.
+        """
+        target = self.period_target
+        if target is None:
+            return
+        if self.book is not None and self.book.reset == "monthly":
+            raise RemedyError(
+                "period_target: declared beside book.reset: monthly, whose transfer at a "
+                "return period's end can fall inside a target week and move the balance the "
+                "target reads with no P&L",
+                remedy="set book.reset to none, or drop period_target",
+            )
+        if self.benchmark is not None:
+            raise RemedyError(
+                "period_target: declared beside benchmark, whose hold buys once and never "
+                "again, so the target would flatten it at its first stopped week and leave it "
+                "in cash for the rest of the window",
+                remedy="drop benchmark, or drop period_target",
+            )
+        if "book" in self.data_requirements:
+            raise RemedyError(
+                "period_target: declared on a hypothesis that requires 'book', whose changes "
+                "reach no point the harness reads the target at",
+                remedy="drop book from data_requirements, or drop period_target",
+            )
+        forward = self.windows.forward.start
+        moved = target.moved_on(
+            (
+                (self.windows.research.start, self.windows.research.end),
+                (self.windows.certification.start, self.windows.certification.end),
+                (forward, forward + _FORWARD_CHECKED),
+            )
+        )
+        if moved is not None:
+            raise RemedyError(
+                f"period_target.opens: {target.opens} {target.tz} does not exist, or exists "
+                f"twice, on {moved}, when the clocks change",
+                remedy="open the week at a wall time no change of clocks skips or repeats: "
+                '"Mon 04:00" never is',
+            )
 
     def _check_scope(self) -> None:
         """A scope reads a series the hypothesis requires, and exempts names it holds."""

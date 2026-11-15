@@ -54,6 +54,8 @@ document is parsed. Everything else needs the workspace, and that is this module
   funding at every settlement, so a card not handed the realised rates measures a P&L the
   contract never had. What makes an instrument a perpetual is its resolved definition — the
   same one the settlement check reads — never its id;
+* under a `[research] return_period` of whole weeks, a `period_target` week opens on the
+  weekday every window does, so the objective's weeks are the target's;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
@@ -97,6 +99,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 from kanso import ext
@@ -121,6 +124,7 @@ from kanso.schemas import (
     ConstructRef,
     Hypothesis,
     ObjectiveRef,
+    PeriodTarget,
     StrategyFile,
     VenueDeclaration,
     VenueModel,
@@ -129,7 +133,8 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
-from kanso.schemas.duration import TICK_RESOLUTIONS, is_duration
+from kanso.schemas.duration import TICK_RESOLUTIONS, is_duration, parse_duration
+from kanso.schemas.hypothesis import WEEKDAYS
 from kanso.schemas.venue import (
     DEFAULT_ACCOUNT,
     DEFAULT_CURRENCY,
@@ -221,6 +226,7 @@ def admit(ws: Workspace, path: Path, source: bytes | None = None) -> Admitted:
     _check_required(ws, hyp)
     _check_sizing(ws, hyp)
     _check_benchmark(hyp)
+    _check_period_target(ws, hyp)
     _check_dated_warmup(ws, hyp)
     _check_book(hyp, models)
     _check_print_through(hyp, models)
@@ -346,6 +352,38 @@ def _check_benchmark(hyp: Hypothesis) -> None:
         "over one; a hypothesis held under a day is measured per trade, and a hold has none",
         remedy="remove benchmark from this file, or lengthen the horizon to a day or more",
     )
+
+
+def _check_period_target(ws: Workspace, hyp: Hypothesis) -> None:
+    """Under a return period of whole weeks, every window opens on the target's weekday.
+
+    The runner cuts return periods one after another from the UTC midnight that opens the
+    window, and the target cuts New York weeks at its own opening, so the two meet only when
+    the window opens on that weekday: the objective's weeks are then the target's, with no
+    point between the two cuts on US equities. A window opening on another day would score
+    each week across two target weeks. The rest of the key's rules are the file's own
+    (`kanso.schemas.Hypothesis`).
+    """
+    target = hyp.period_target
+    if target is None:
+        return
+    period = parse_duration(ws.config.research.return_period, "return_period")
+    if period % timedelta(weeks=1):
+        return
+    weekday = WEEKDAYS[target.weekday]
+    for name, opens in (
+        ("research", hyp.windows.research.start),
+        ("certification", hyp.windows.certification.start),
+        ("forward", hyp.windows.forward.start),
+    ):
+        if opens.weekday() != target.weekday:
+            raise ValidationError(
+                f"windows.{name}.start: {opens} is a {WEEKDAYS[opens.weekday()]}, and under "
+                f"[research] return_period {ws.config.research.return_period} the return "
+                f"periods are cut from it while period_target opens each week on a {weekday}",
+                remedy=f"start windows.{name} on a {weekday}, or open period_target on a "
+                f"{WEEKDAYS[opens.weekday()]}",
+            )
 
 
 def venue_models(
@@ -1126,17 +1164,18 @@ def _check_host_pairing(
     ws: Workspace, hyp: Hypothesis, construct_id: str, host: str, strategy: StrategyFile
 ) -> None:
     """What an attached construct must agree with its host on: the grain, the warmup, the
-    book policy, the size the host's bars are read at and the sizing rule.
+    book policy, the period target, the size the host's bars are read at and the sizing rule.
 
     A filter or an exit rule is consulted on the host's grain and has no clock of its own,
     so its resolution is the host's — and, over a host that reads bars beside ticks, its
     `bar_resolution` with it. A card of an attached construct runs the host sleeve
     underneath it, warmed as this file says, so the warmup has to be the host's own or the
     host is measured cold — or warm — under a construct that never asked for that; the
-    book policy likewise, since a construct's cards run under this file's policy and its
-    version is deployed under the sleeve's; and `bar_resolution` too, since the host's bars
-    are read at the size this file states, and a host certified on one size would be
-    handed another, bars of no size, or bars it never read (`_host_bars`). So an overlay
+    book policy and the period target likewise, since a construct's cards run under this
+    file's policy and target and its version is deployed under the sleeve's; and
+    `bar_resolution` too, since the host's bars are read at the size this file states, and a
+    host certified on one size would be handed another, bars of no size, or bars it never read
+    (`_host_bars`). So an overlay
     with a bar clock of its own is refused over a host that reads bars beside ticks: a file
     at a bar-size resolution states no `bar_resolution`, so its cards would hand the host
     bars of no size, and the one way off is the host's own resolution and size. A
@@ -1174,6 +1213,22 @@ def _check_host_pairing(
                 f"drop book to match {path}"
                 if host_hyp.book is None
                 else f"set book to {host_book} to match {path}"
+            ),
+        )
+    if hyp.period_target != host_hyp.period_target:
+        host_target = (
+            "none" if host_hyp.period_target is None else _target_text(host_hyp.period_target)
+        )
+        raise ValidationError(
+            f"period_target: {label} runs under a period target of {host_target} and this "
+            f"file declares "
+            f"{'none' if hyp.period_target is None else _target_text(hyp.period_target)}; a "
+            "construct's cards run its host under this file's target, and its version is "
+            "deployed under the host's",
+            remedy=(
+                f"drop period_target to match {path}"
+                if host_hyp.period_target is None
+                else f"set period_target to the host's, {host_target}, to match {path}"
             ),
         )
     if construct_id in SIZELESS and hyp.resolution != host_hyp.resolution:
@@ -1312,6 +1367,14 @@ def _book_text(book: Book) -> str:
     """A book policy as the file would spell it, for a refusal naming the host's."""
     fields = book.model_dump(exclude_none=True)
     return "{" + ", ".join(f"{name}: {value}" for name, value in fields.items()) + "}"
+
+
+def _target_text(target: PeriodTarget) -> str:
+    """A period target as the file would spell it, for a refusal naming the host's."""
+    return (
+        f'{{period: {target.period}, opens: "{target.opens}", tz: {target.tz}, '
+        f"target_bp: {target.target_bp:g}, of: {target.of}}}"
+    )
 
 
 def _check_objective(ws: Workspace, hyp: Hypothesis, ref: ObjectiveRef, mode: str) -> None:

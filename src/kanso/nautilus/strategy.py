@@ -99,6 +99,33 @@ handed over, and the backtest engine answers it as not found, the order resting 
 where a node obeys it, the order cancelled: the two paths part there as they did before
 (`docs/backlog.md` row 236).
 
+**It holds a sleeve to its hypothesis's period target.** A runner hands the harness the
+`period_target` its hypothesis declares (`kanso.nautilus.cross_section.target`), never on the
+configuration. The weeks are New York's, absolute, each opening at the weekday and wall time
+the key names (`kanso.nautilus.clock.week_opening`), and each is read against its anchor: the
+equity the runner strikes at the last point of the week before, struck when the first point of
+the new one is delivered, after a book policy's period close has booked its carry, so it is the
+card's period-end equity (`_target_turn`); a run's first week, which no warmup turns into, is
+anchored at the capital. At the head of every point dispatched — after what the rate held back
+is sent and before the author's handler — the week's P&L, `balance` less the anchor, reaching
+`target_bp` of the capital or of the anchor stops the week: every working order of every name is
+cancelled, and every name the sleeve holds is due (`_target_step`). A name is due again at every
+fill it takes while stopped, so an entry the venue matches after the hit is flattened too, and a
+due name is sent its whole position at market (`submit_exit`) at the first point dispatched after
+it has printed since — never at the price that made it due (`_target_flatten`). The engine
+matches an order in flight after the strategy's handler of the point it lands on when the feed
+is not marked, and before it when it is (`kanso.nautilus.cross_section`), and nautilus_trader
+1.231.0 drains every order in flight at the first point of any name at or after its arrival,
+filling it at its own name's last price: so under a latency the flatten fills at the close of
+the print it was sent at or of the print after, and sent at the hit's own point it could fill
+at the hit's price. Until the next week has opened and every name is flat or wholly on its way
+out at market (`_own_intended`), every entry is dropped before it is sized, funded or asked of
+the rate: `submit_entry` returns `None`, and `submit_order` and `submit_order_list` drop an
+order that opens as the rate reads one — an entry `submit_entry` sized, one `classify` reads as
+an entry, or one that opens the position the sleeve's orders on their way leave (`_opens`) —
+while an exit `submit_exit` sized goes. The strategy reads `period_stopped`, and nothing else
+of it.
+
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
 sleeve handles a point only after the exchange has already matched against it — measured, a
@@ -986,6 +1013,29 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._sending: Any = None
         """The order `_submitted` is sending, until the engine hands the bus its
         `OrderInitialized` and a book lets it through, once (`_check_booked_event`)."""
+        self._period_target: Any = None
+        """The hypothesis's period target, handed by the runner
+        (`kanso.nautilus.cross_section.target`) and never on the configuration a strategy
+        reads; `None` when it declares none."""
+        self._target_next = 0
+        """The instant the target's week being traded closes and the next opens; zero before
+        the window's first point (`_target_turn`)."""
+        self._target_anchor = 0.0
+        """The equity the runner struck at the last point of the week before this one, or the
+        capital in a run's first week: what the week's P&L is read against."""
+        self._target_threshold = 0.0
+        """The week's P&L at which the sleeve stops: `target_bp` of the capital, or of the
+        anchor under `of: period_open`."""
+        self._target_last_ns = 0
+        """The availability instant of the last point of the week being traded."""
+        self._target_until: int | None = None
+        """While the sleeve is stopped, the instant the week it stopped in closes; `None`
+        while it trades (`period_stopped`)."""
+        self._target_due: dict[str, bool] = {}
+        """While stopped, each name to flatten, and whether it has printed since the hit or
+        since its last fill, whichever is later (`_target_flatten`)."""
+        self._target_dropped = 0
+        """The entries dropped while stopped, each order of a list counted."""
 
     # --- what the hypothesis injected ---------------------------------------
 
@@ -1142,6 +1192,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         (`kanso.nautilus.clock`), which no subclass replaces.
         """
         return session_of(self._data_time)
+
+    @property
+    def period_stopped(self) -> bool:
+        """Whether the hypothesis's `period_target` has stopped this sleeve: from the point at
+        which its week reached the target until the next week has opened and every name it
+        holds is flat or wholly on its way out at market. While it reads true the harness
+        flattens what the sleeve holds and drops every entry it sends, `submit_entry` returning
+        `None` as a refused filter does; exits pass. Read the position from `held`, never from
+        a flag of the sleeve's own, since the harness may have flattened it. Always false
+        without a target. It has no setter: `strategy_integrity` refuses a `strategy.py` that
+        binds it."""
+        return self._target_until is not None
 
     @property
     def intents(self) -> tuple[OrderIntent, ...]:
@@ -1406,13 +1468,82 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._refund()
         if self._filled:
             self._filled = [filled for filled in self._filled if filled[0] >= ts_ns]
-        if self._policy is None or ts_ns < self._anchor_ns or ts_ns < self._trading_from_ns:
+        if ts_ns < self._trading_from_ns:
             return
-        index = (ts_ns - self._anchor_ns) // self._period_ns
-        if self._period_index is not None and index != self._period_index:
-            self._close_period(self._policy, self._period_last_ns)
-        self._period_index = index
-        self._period_last_ns = ts_ns
+        if self._policy is not None and ts_ns >= self._anchor_ns:
+            index = (ts_ns - self._anchor_ns) // self._period_ns
+            if self._period_index is not None and index != self._period_index:
+                self._close_period(self._policy, self._period_last_ns)
+            self._period_index = index
+            self._period_last_ns = ts_ns
+        if self._period_target is not None:
+            self._target_turn(ts_ns)
+
+    def _target_turn(self, ts_ns: int) -> None:
+        """Open the period target's week when a point of a later one is delivered, striking the
+        week's anchor and threshold.
+
+        The anchor is the equity the runner strikes at the last point of the week before
+        (`_book_at`), read after the policy's period close above has booked its carry, so it is
+        the card's period-end equity, carry included, and the gap to the new week's first
+        point counts in the new week; a run's first week is anchored at the capital, since
+        no week turns over a warmup prefix. The weeks are New York's, absolute, and read off
+        the clock at the instant (`kanso.nautilus.clock.week_opening`), imported here so the
+        module a strategy may import binds no week of its own.
+        """
+        if ts_ns >= self._target_next:
+            from kanso.nautilus.clock import week_opening
+
+            target = self._period_target
+            anchor = self._book_at(self._target_last_ns)[0] if self._target_next else self.capital
+            self._target_next = week_opening(ts_ns, target.weekday, minute=target.minute)[1]
+            self._target_anchor = anchor
+            base = self.capital if target.of == "capital" else anchor
+            self._target_threshold = target.target_bp / BASIS_POINT * base
+        self._target_last_ns = ts_ns
+
+    def _target_step(self) -> None:
+        """Read the period target at a point being dispatched, before the author's handler.
+
+        While the sleeve trades, the week's P&L — `balance` less the anchor — reaching the
+        threshold stops it: every working order of every name is cancelled, and every name it
+        holds is due to be flattened. While it is stopped each due name is flattened
+        (`_target_flatten`), and the stop is lifted only at a point at or after the next
+        week's opening at which every name is flat or wholly on its way out at market
+        (`_own_intended`), so a new week's entry never meets an old one's leg; the new week's
+        target is read at once.
+        """
+        if self._target_until is not None:
+            self._target_flatten()
+            if self._delivered_ns < self._target_until or any(
+                self._own_intended(instrument_id.value) for instrument_id in self.universe
+            ):
+                return
+            self._target_until = None
+            self._target_due.clear()
+        if not self._target_next or self.balance - self._target_anchor < self._target_threshold:
+            return
+        self._target_until = self._target_next
+        for instrument_id in self.universe:
+            self.cancel_all_orders(instrument_id)
+            if self._own_filled(instrument_id.value):
+                self._target_due[instrument_id.value] = False
+
+    def _target_flatten(self) -> None:
+        """Send every due name its whole position at market, once it has printed since it was
+        due.
+
+        A name is due from the hit, and again from every fill it takes while the sleeve is
+        stopped — an entry in flight at the hit filling after it, a flatten filling part — so
+        its exit is sent at the first point dispatched after the name printed again, never at
+        the price that made it due, and it is let go once its filled position is flat. An exit
+        is not sent again while the whole position is already on its way out at market.
+        """
+        for key, printed in list(self._target_due.items()):
+            if not self._own_filled(key):
+                del self._target_due[key]
+            elif printed and self._own_intended(key):
+                self.submit_exit(key)
 
     def _on_restated(self, restated: Any) -> None:
         """Take in a split the venue has just applied, as `kanso.nautilus.actions` announces it.
@@ -1702,6 +1833,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         ts_event = int(tick.ts_event)
         self._last_print[key] = mid
         self._print_ns[key] = ts_event
+        if key in self._target_due:
+            self._target_due[key] = True
         mark = self._mark_at.get(key)
         if mark is None or ts_init > mark[0] or (ts_init == mark[0] and mid > mark[1]):
             self._mark_at[key] = (ts_init, mid)
@@ -2000,6 +2133,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return
         self._pay_rated()
         self._send_behind_modify()
+        if self._period_target is not None:
+            self._target_step()
         super().handle_bar(bar, False)
         self._pay_owed()
         self._consult_exit(instrument_id)
@@ -2019,6 +2154,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._pay_rated()
         if self._behind_modify:
             self._send_behind_modify()
+        if self._period_target is not None:
+            self._target_step()
         super().handle_quote_tick(tick, False)
         if self._owed:
             self._pay_owed()
@@ -2035,6 +2172,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._pay_rated()
         if self._behind_modify:
             self._send_behind_modify()
+        if self._period_target is not None:
+            self._target_step()
         super().handle_trade_tick(tick, False)
         if self._owed:
             self._pay_owed()
@@ -2048,6 +2187,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._observe(key, int(getattr(data, "ts_event", self._data_time)), None)
         self._pay_rated()
         self._send_behind_modify()
+        if self._period_target is not None:
+            self._target_step()
         super().handle_data(data)
         self._pay_owed()
         if instrument_id is not None:
@@ -2061,6 +2202,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         latest by availability, and of one instant's, the greatest."""
         self._last_print[key] = price
         self._print_ns[key] = ts_event
+        if key in self._target_due:
+            self._target_due[key] = True
         self._balance_at_quote_traded[key] = (price, ts_event)
         held = self._mark_at.get(key)
         if held is None or ts_init > held[0] or (ts_init == held[0] and price > held[1]):
@@ -2211,6 +2354,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._check_booked(order, "submit_order")
         self._check_hand_built(order)
         kind = self.classify(order)
+        if (
+            self._target_until is not None
+            and closing is None
+            and (opening or kind == ENTRY or self._opens(order))
+        ):
+            self._target_dropped += 1
+            return
         exiting = self._command_bucket is not None and (
             closing is not None or (not opening and kind != ENTRY and not self._opens(order))
         )
@@ -2251,6 +2401,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._check_booked(orders[0], "submit_order_list")
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
+        if self._target_until is not None and (kind == ENTRY or self._opens(orders[0])):
+            self._target_dropped += len(orders)
+            return
         exiting = self._command_bucket is not None and kind != ENTRY and not self._opens(orders[0])
         if not self._command_spend(SUBMIT, len(orders), exiting=exiting, ask=True):
             if not exiting:
@@ -3195,6 +3348,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     {"notional": notional, "qty": qty, "price": price},
                 )
             return None
+        if self._target_until is not None:
+            self._target_dropped += 1
+            return None
         if self.sized:
             return self._sized_entry(instrument, resolved_id, resolved_side, notional, qty, price)
         if not self._command_spend(SUBMIT, ask=True):
@@ -3823,6 +3979,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         try:
             if isinstance(event, OrderFilled):
                 self._fill_arrived(event)
+                if self._target_until is not None:
+                    self._target_due[event.instrument_id.value] = False
             self._arrived(event)
             super().handle_event(event)
             client_order_id = getattr(event, "client_order_id", None)

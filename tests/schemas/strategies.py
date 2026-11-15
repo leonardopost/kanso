@@ -48,6 +48,7 @@ from kanso.schemas import (
     ObjectiveRef,
     ObjectiveResult,
     Origins,
+    PeriodTarget,
     Pins,
     PlanInputs,
     PlannedGate,
@@ -72,6 +73,7 @@ from kanso.schemas import (
     embargo_days,
     parse_duration,
 )
+from kanso.schemas.hypothesis import WEEKDAYS
 from kanso.schemas.screen import (
     CatchUp,
     CatchUpStats,
@@ -201,6 +203,20 @@ def books(draw: st.DrawFn, max_leverage: float) -> Book:
 
 
 @st.composite
+def period_targets(draw: st.DrawFn, weekdays: tuple[str, ...] = WEEKDAYS) -> PeriodTarget:
+    """A period target opening at any minute of the weekdays given, New York's."""
+    day = draw(st.sampled_from(weekdays))
+    minute = draw(st.integers(0, 24 * 60 - 1))
+    return PeriodTarget(
+        period="week",
+        opens=f"{day} {minute // 60:02d}:{minute % 60:02d}",
+        tz="America/New_York",
+        target_bp=draw(POSITIVE),
+        of=draw(st.sampled_from(["capital", "period_open"])),
+    )
+
+
+@st.composite
 def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     resolution = draw(st.one_of(durations(), st.sampled_from(["tick", "quote", "trade"])))
     required = {
@@ -230,6 +246,13 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
     if classified is None:
         classified = draw(st.booleans())
     max_leverage = draw(POSITIVE)
+    benchmark = draw(st.none() | st.just(Benchmark(hold="first_leg")))
+    book = draw(st.none() | books(max_leverage))
+    targetable = (
+        benchmark is None and (book is None or book.reset != "monthly") and "book" not in required
+    )
+    # a Sunday opening can fall in a change of clocks, which the windows would meet
+    period_target = draw(st.none() | period_targets(WEEKDAYS[:6])) if targetable else None
     return Hypothesis(
         id=draw(HYP_IDS),
         title=draw(SAFE_TEXT),
@@ -263,8 +286,9 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         ),
         windows=draw(windows(horizon)),
         warmup=draw(st.none() | st.builds(Warmup, sessions=st.integers(1, 250))),
-        benchmark=draw(st.none() | st.just(Benchmark(hold="first_leg"))),
-        book=draw(st.none() | books(max_leverage)),
+        benchmark=benchmark,
+        book=book,
+        period_target=period_target,
         depth=depth,
         construct=draw(construct_refs()) if classified else None,
         objective=ObjectiveRef(

@@ -126,6 +126,7 @@ def test_registering_pins_the_scope_a_best_is_comparable_under(
             "fixed_bps": 2.0,
         },
         "depth": None,
+        "period_target": None,
     }
 
 
@@ -523,6 +524,53 @@ def test_a_change_of_depth_clears_the_best(ws: Workspace, store: StateStore) -> 
     assert [event.detail["reason"] for event in cleared] == [
         "depth changed from {'every_ms': 100, 'levels': 3} to {'every_ms': 1000, 'levels': 3}"
     ]
+
+
+WEEKLY: dict[str, Any] = {
+    "period": "week",
+    "opens": "Mon 04:00",
+    "tz": "America/New_York",
+    "target_bp": 1000,
+    "of": "capital",
+}
+
+
+def test_adding_a_period_target_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    """A card stopped for the rest of each week it reached its target and one that traded
+    through every week are different books over the same days."""
+    register(ws, store)
+    set_best(store)
+
+    register(ws, store, document(period_target=WEEKLY))
+
+    assert record(ws, store).best_sha is None
+    assert [reason.split(" changed")[0] for reason in cleared_reasons(store)] == ["period_target"]
+
+
+def test_a_change_of_period_target_clears_the_best(ws: Workspace, store: StateStore) -> None:
+    register(ws, store, document(period_target=WEEKLY))
+    set_best(store)
+
+    register(ws, store, document(period_target={**WEEKLY, "of": "period_open"}))
+
+    assert record(ws, store).best_sha is None
+    (reason,) = cleared_reasons(store)
+    assert reason.startswith("period_target changed from ")
+    assert "'of': 'capital'" in reason and "'of': 'period_open'" in reason
+
+
+def test_a_row_pinned_before_period_target_joined_the_scope_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """No file could state the key before it existed, so a pin without it reads as none."""
+    register(ws, store)
+    set_best(store)
+    pin_before(store, "period_target")
+
+    register(ws, store, document(title="A better title"))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert cleared_reasons(store) == []
 
 
 TICK_BARS: dict[str, Any] = {

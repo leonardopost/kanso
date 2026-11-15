@@ -415,6 +415,28 @@ year's median width, in force from that year's first day, so a strategy that rea
 a width the market had not shown yet. A sleeve reserves for the spread through `cost_rate`,
 which reads no date."""
 
+DENIED_TARGET: Final = frozenset(
+    {
+        "_period_target",
+        "_target_next",
+        "_target_anchor",
+        "_target_threshold",
+        "_target_last_ns",
+        "_target_until",
+        "_target_due",
+        "_target_dropped",
+        "_target_turn",
+        "_target_step",
+        "_target_flatten",
+    }
+)
+"""The harness's period target (`kanso.nautilus.cross_section.target`): the rule, the instant
+the week closes, the equity it is read against and the return it stops at, the stopped week,
+the names due to be flattened, the entries dropped, and the three methods that keep them. The
+week's opening is a clock of where each week starts and the anchor a number the strategy
+would otherwise have to strike itself; a strategy reads whether it is stopped through
+`period_stopped`, and its position through `held`, since the harness may flatten it."""
+
 DENIED_BUS: Final = frozenset({"msgbus", "_msgbus"})
 """The engine's message bus, under both the names every `Strategy` and `Actor` holds it by
 (nautilus_trader 1.231.0). Measured through the backtest runner in a book at no latency and
@@ -484,6 +506,12 @@ WHY: Final = {
         "that year's first day, or reads it; reserve for the spread through `cost_rate`, which "
         "reads no date",
     ),
+    **dict.fromkeys(
+        DENIED_TARGET,
+        "it is the harness's own period-target state, a clock of where each week opens and "
+        "what the week is read against; read whether the week is stopped from "
+        "`period_stopped`, and the position from `held`",
+    ),
     **dict.fromkeys(DENIED_BUS, WHY_BUS),
     **dict.fromkeys(DENIED_EVENTS, WHY_EVENTS),
 }
@@ -502,6 +530,7 @@ DENIED_ATTRIBUTES: Final = (
     | DENIED_BOOK
     | DENIED_DEPTH
     | DENIED_SPREAD
+    | DENIED_TARGET
     | DENIED_BUS
     | DENIED_EVENTS
 )

@@ -246,6 +246,7 @@ def run_node_chunked(
         if request.prefix is not None:
             warm(strategy, opens)
         backtest.booked(strategy, request, marks.pricing)
+        backtest.targeted(strategy, request)
         feed = _Feed(kernel, client, strategy, venues, marks, opens, sink)
         chunked = feed.chunks(first, stream, marked=marked)
         del first
