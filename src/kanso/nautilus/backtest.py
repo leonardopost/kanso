@@ -1382,8 +1382,8 @@ def _unrecorded(*_: object, **__: object) -> None:
 
 def add_venue(engine: Any, venue: Any, struck: Struck | None = None) -> None:
     """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
-    with the simulation modules every kanso venue loads — and, under a dated spread, the venue
-    half of `struck` (`kanso.nautilus.struck`)."""
+    with the simulation modules every kanso venue loads — and, under a dated spread or a
+    period target, the venue half of `struck` (`kanso.nautilus.struck`)."""
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
@@ -1487,9 +1487,9 @@ def execute_chunked(
     engine = engine_for()
     try:
         for venue in venue_configs(request.hyp, request.venue_model, request.capital):
-            add_venue(engine, venue, marks.pricing)
-        if marks.pricing is not None:
-            marks.pricing.listen(engine.kernel.msgbus)
+            add_venue(engine, venue, marks.record)
+        if marks.record is not None:
+            marks.record.listen(engine.kernel.msgbus)
         for instrument in instruments:
             engine.add_instrument(instrument)
         cls, config = _sleeve(request)
@@ -1501,7 +1501,7 @@ def execute_chunked(
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
         booked(strategy, request, marks.pricing)
-        targeted(strategy, request)
+        targeted(strategy, request, marks.record)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
         marked = coincident(request.hyp)
@@ -1651,17 +1651,22 @@ def _refuse_unbooked(
         )
 
 
-def targeted(strategy: object, request: RunRequest) -> None:
-    """Hand a sleeve the period target its hypothesis declares, when it declares one.
+def targeted(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:
+    """Hand a sleeve the period target its hypothesis declares, when it declares one, with the
+    venue's record of the instant each fill's price was struck at (`struck`,
+    `kanso.nautilus.struck`), which the run's venue keeps wherever a target is declared.
 
     Every path that runs a sleeve calls this beside `booked`, with the request its run is
     extracted from, so a card, a certificate, a replay and a stage hold one sleeve to one
-    rule, applied by the harness (`kanso.nautilus.strategy.KansoStrategy.period_stopped`).
+    rule, applied by the harness (`kanso.nautilus.strategy.KansoStrategy.period_stopped`), and
+    record each fill of a stopped week at the instant the venue struck its price at, which no
+    stream a sleeve is handed can say: in nautilus_trader 1.231.0 the venue fills a resting
+    order while it applies a point, before the strategy is handed that point.
     """
     from kanso.nautilus.cross_section import target
 
     if request.hyp.period_target is not None:
-        target(strategy, request.hyp.period_target)
+        target(strategy, request.hyp.period_target, struck)
 
 
 def booked(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:
@@ -1801,9 +1806,15 @@ class Marks:
         self._instants: dict[str, list[int]] = {}
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
         self.dated = model.costs.dated or ()
-        self.pricing: Struck | None = Struck() if self.dated else None
-        """The venue's record of the instant each fill's price was struck at, under a dated
-        spread: the run's own, loaded into its venue, or one a stage hands over."""
+        self.record: Struck | None = (
+            Struck() if self.dated or request.hyp.period_target is not None else None
+        )
+        """The venue's record of the instant each fill's price was struck at, which the run
+        loads into its venue wherever a dated spread is charged or a period target declared:
+        the harness reads a stopped week's fills off it (`targeted`)."""
+        self.pricing: Struck | None = self.record if self.dated else None
+        """The same record under a dated spread, which the table is read at: the run's own,
+        or one a stage hands over."""
 
     def take(self, points: Iterable[object]) -> None:
         """Fold a chunk of points, its funding settlements first (see the class).

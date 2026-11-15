@@ -562,7 +562,14 @@ def run(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        struck = Struck() if any(dated_rows(request.venue_model) for request in requests) else None
+        struck = (
+            Struck()
+            if any(
+                dated_rows(request.venue_model) or request.hyp.period_target is not None
+                for request in requests
+            )
+            else None
+        )
         venues = sandbox.attach(kernel, node.venues(), points, struck)
         strategies = _components(built, node.placements)
         for strategy, request in zip(strategies, requests, strict=True):
@@ -571,7 +578,7 @@ def run(
             if request.prefix is not None:
                 warm(strategy, opens_ns)
             backtest.booked(strategy, request, struck)
-            backtest.targeted(strategy, request)
+            backtest.targeted(strategy, request, struck)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points, venues))
         realised = tuple(
             _realised(
@@ -655,7 +662,9 @@ def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
     A restart with nothing new to replay is not a failure and not a crash: the stage is
     current. It produces an empty window for every version, leaves the clock where it was,
     and builds no node at all — starting one to feed it nothing would only close and reopen
-    every position for no reason.
+    every position for no reason. A version under a `period_target` records what a window
+    handed no point records, an empty `PeriodStops` — no week traded in and none open — so an
+    idle window never reads as one of a version with no target.
     """
     return StageRun(
         stage=node.stage,
@@ -668,7 +677,10 @@ def _idle(node: StageNode, requests: Sequence[RunRequest]) -> StageRun:
                 strategy_id=placed.strategy_id,
                 version=placed.version,
                 capital=placed.capital,
-                run=backtest._empty(request),
+                run=replace(
+                    backtest._empty(request),
+                    period_stops=None if placed.hyp.period_target is None else PeriodStops(),
+                ),
                 positions=(),
                 benchmark=backtest._empty(request) if measures_benchmark(placed.hyp) else None,
             )

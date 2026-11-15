@@ -214,9 +214,11 @@ class CardRun:
     `period_stops` is what the hypothesis's `period_target` did over the run, as the harness
     that applied it recorded it (`PeriodStops`): every New York week it traded in, each week
     it stopped — the hit, the entries dropped, the flatten's fills — and the week open at its
-    last point. `None` for a hypothesis that declares no target, and for a run recorded before
-    runs kept it. It is a record of the path and is in no return: the stops are already in the
-    fills and the equity, and nothing an objective or a gate reads changes with it.
+    last point; an empty one for a run handed no point, a stage window with nothing to replay
+    included. `None` for a hypothesis that declares no target, for a run that crashed, whose
+    harness's record nothing read, and for a run recorded before runs kept it. It is a record
+    of the path and is in no return: the stops are already in the fills and the equity, and
+    nothing an objective or a gate reads changes with it.
     """
 
     window: tuple[date, date]

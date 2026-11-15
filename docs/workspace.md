@@ -949,8 +949,8 @@ reads whether its week is stopped from `self.period_stopped`, and its position f
 harness keeps of the rule is denied to it (`strategy_integrity`). The rule adds no charge: a
 flatten is a fill like any other, charged once by the runner. It is the same code on a card, a
 certificate, a replay and a stage node, and each records what it did as `period_stops` — every
-week traded in, each stop with its flatten's fills, and the week open at the last point
-(`docs/concepts.md`, Card) — which `research show --measured`, `cert show`, `monitor run` and
+week traded in (handed a point in, whether or not the sleeve placed an order), each stop with
+its flatten's fills, and the week open at the last point (`docs/concepts.md`, Card) — which `research show --measured`, `cert show`, `monitor run` and
 `kanso replay` print, and `kanso replay parity` compares.
 
 What the rule does not do, said here so a card is read as it ran:
@@ -2903,7 +2903,7 @@ recorded none is printed by `kanso replay run --json` and `kanso replay show --j
 
 **Under a `period_target` a replay session records what the target did.** `period_stops` in
 `session.yaml` is that path's record (`docs/concepts.md`, Card): `openings`, the New York weeks
-it traded in; `stops`, each week it stopped, with the hit and every fill of an order sent while
+it traded in, each it was handed a point in; `stops`, each week it stopped, with the hit and every fill of an order sent while
 stopped; and `last`, the week open at its last point. `kanso replay parity` compares the two
 paths' records after their commands, element by element and exactly at any tolerance, since a
 stop is the harness's decision at a point both paths are handed, and names the first element

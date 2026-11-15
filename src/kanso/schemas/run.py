@@ -198,14 +198,15 @@ class FlattenFill(KansoModel):
     these are the fills that took the sleeve flat after the hit: the harness's own flatten and
     any exit the strategy sent beside it, never the node's flatten at a stage window's end.
     `ts_ns` is the instant it filled and `price` the price it filled at. `price_ts_ns` is the
-    instant that price was struck at: the venue's record of it where the run charges a dated
-    spread (`kanso.nautilus.struck`), and otherwise the instant of the name's last bar or
-    print the sleeve had been handed when the fill came — in nautilus_trader 1.231.0 the
-    point the venue had last applied of the name, at which a market order in flight fills.
-    `segment` is the part of the New York session the minute that price covers falls in
-    (`kanso.nautilus.clock.session_of`), and `volume` the volume of the name's bar of the
-    sleeve's own resolution stamped at that instant, `None` where the sleeve was handed no such
-    bar: what the flatten's size is read against.
+    instant that price was struck at, as the venue's record keeps it (`kanso.nautilus.struck`),
+    which every run of a target loads, dated spread or none: the reference time of the name's
+    last point the venue had applied when it filled — for a resting order, the bar it filled
+    on, which the venue applies before the sleeve is handed it — or the fill's own instant for
+    a name the venue had applied nothing of. `segment` is the part of the New York session the
+    minute that price covers falls in (`kanso.nautilus.clock.session_of`), and `volume` the
+    volume of the name's bar of the sleeve's own resolution stamped at that instant, read when
+    the sleeve is handed it, `None` where it was handed no such bar: what the flatten's size is
+    read against.
     """
 
     ts_ns: Instant
@@ -224,7 +225,9 @@ class PeriodStop(KansoModel):
     `opening_ns` is the week's opening, `anchor` the equity it was read against and
     `threshold` the P&L it stopped at (`KansoStrategy._target_turn`); `hit_ns` is the instant
     of the point it was reached at — its availability — `segment` the part of the New York
-    session the minute that point covers falls in, and `equity` the `balance` there, so
+    session the minute that point covers falls in, read off its reference time as
+    `KansoStrategy.session` reads it, so a bar published after its close names the minute it
+    describes, and `equity` the `balance` there, so
     `equity - anchor` is at least `threshold`. `dropped` counts what the stopped week dropped
     unsent — each entry, each order of a list, each modify — until it was lifted, or until
     the run ended. `fills` are the fills of every order the sleeve sent while stopped

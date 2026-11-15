@@ -9,7 +9,7 @@ fill is charged.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 import pytest
@@ -38,7 +38,7 @@ from kanso.errors import PreconditionError
 from kanso.nautilus.backtest import Marks, RunRequest, folded
 from kanso.nautilus.costs import quote_half_spread
 from kanso.nautilus.cross_section import MARKER_TYPE, KansoCrossSection
-from kanso.schemas import VenueModel
+from kanso.schemas import PeriodTarget, VenueModel
 
 from .conftest import INSTRUMENT, SNAPSHOT, hypothesis, venue_model
 
@@ -279,3 +279,25 @@ def test_a_model_without_a_dated_spread_keeps_no_record_and_notes_no_instant() -
     marks.price([filled])
     assert marks.pricing is None
     assert marks.priced(filled) is None
+    assert marks.record is None
+
+
+def test_a_period_target_keeps_the_record_and_prices_nothing_by_it() -> None:
+    """A run under a period target loads the venue's record, which its harness reads each fill
+    of a stopped week at; without a dated spread the extraction reads no instant off it, so
+    every fill is charged as on a run with no target."""
+    made = _request(quoted=False)
+    target = PeriodTarget(
+        period="week", opens="Mon 04:00", tz="America/New_York", target_bp=50.0, of="capital"
+    )
+    targeted = replace(made, hyp=made.hyp.model_copy(update={"period_target": target}))
+    marks = Marks(targeted, VenueModel.model_validate(targeted.venue_model))
+    filled = _Filled("1", INSTRUMENT, midnight_ns(WINDOW[0]), 1.0, OrderSide.BUY)
+    marks.price([filled])
+
+    assert marks.record is not None
+    assert marks.pricing is None
+    assert marks.priced(filled) is None
+    assert marks.half(filled) == Marks(made, VenueModel.model_validate(made.venue_model)).half(
+        filled
+    )

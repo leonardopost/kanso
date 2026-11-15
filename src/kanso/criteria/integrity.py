@@ -438,6 +438,7 @@ DENIED_TARGET: Final = frozenset(
         "_target_openings",
         "_target_stops",
         "_target_sent",
+        "_target_struck",
         "_target_unread",
         "_target_staged",
         "_target_drop",
@@ -453,7 +454,8 @@ the names due to be flattened, the orders dropped, the quantities each order's m
 until it closes, the three methods that keep them, the four that read what a stopped week
 sends and what is already working beside it, and the close a stage's flatten sends past it;
 and the record the run keeps of it — the week's opening, every week traded in, every stop, the
-orders sent under each and their fills, and the five methods that keep and read it out.
+orders sent under each and their fills, the venue's record of the instant each fill's price was
+struck at that they are read at, and the five methods that keep and read it out.
 The week's opening is a clock of where each week starts and the anchor a number the strategy
 would otherwise have to strike itself; a strategy reads whether it is stopped through
 `period_stopped`, and its position through `held`, since the harness may flatten it."""

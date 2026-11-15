@@ -32,6 +32,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from kanso.criteria.codec import encode_run
 from kanso.nautilus import node, session
 from kanso.nautilus.backtest import RunResult, execute
+from kanso.schemas import PeriodStops
 from tests.nautilus.strategy.test_period_target import (
     FRIDAY,
     LAGG,
@@ -211,8 +212,8 @@ def test_each_flatten_fill_is_read_at_the_bar_its_price_was_struck_at(
     each fills at its own 09:34 close. Under 10 ms both land at 09:35's first point: the leg
     whose bar opens the instant fills at its 09:35 close, the other at its 09:34 close. Each
     fill records its own instant, the instant of the bar its price was struck at, that minute's
-    part of the session and that bar's volume — read off the venue's record under a dated
-    spread, off the last bar the sleeve was handed otherwise, alike."""
+    part of the session and that bar's volume — read off the venue's record, which a target
+    loads under a dated spread or none, alike."""
     lead, lagg, plan = _pair()
     costs = dated(LEAD_ID, LAGG_ID) if is_dated else None
 
@@ -241,27 +242,32 @@ def test_each_flatten_fill_is_read_at_the_bar_its_price_was_struck_at(
     assert stop.flat_equity == pytest.approx(result.run.equity[-1])
 
 
+@pytest.mark.parametrize("is_dated", [False, True], ids=["fixed", "dated"])
 @pytest.mark.parametrize(
-    ("is_dated", "read"), [(False, ("09:33", 2)), (True, ("09:34", 3))], ids=["fixed", "dated"]
+    ("hit", "struck", "segment"),
+    [("09:33", "09:34", "rth"), ("09:30", "09:31", "rth"), ("16:00", "16:01", "post")],
 )
-def test_a_resting_exit_filled_while_stopped_is_read_at_the_bar_it_knew(
-    is_dated: bool, read: tuple[str, int], tmp_path: Path
+def test_a_resting_exit_filled_while_stopped_is_read_at_the_bar_the_venue_filled_it_on(
+    hit: str, struck: str, segment: str, is_dated: bool, tmp_path: Path
 ) -> None:
-    """At the 09:33 hit the sleeve rests a sale of its thousand at 10.65, which the 09:34 bar
-    trades through: the venue fills it as it applies that bar, before the sleeve is handed it.
-    Under a dated spread the venue's record says so, and the fill's volume is read off the bar
-    when the sleeve is handed it; otherwise the fill is read at the last bar the sleeve had,
-    09:33's, which is the point before."""
+    """At the hit, a close of 10.60 flat, the sleeve rests a sale of its thousand at 10.65,
+    which the next bar trades through: the venue fills it as it applies that bar, before the
+    sleeve is handed it, so its price was struck in that bar, whose whole range the hit's
+    excludes. The fill is read there, dated spread or none — at that bar's instant, the part
+    of the session the minute it covers falls in, and that bar's volume, read off it when the
+    sleeve is handed it. The bar stamped 09:30 covers a pre-market minute and the one stamped
+    16:00 a regular one, so a fill read at the bar before would name another part of the
+    session."""
     lead: list[Point] = [
         (ny(MONDAY, "04:01"), 10.00),
         (ny(MONDAY, "04:02"), 10.00),
-        (ny(MONDAY, "09:33"), 10.60),
-        (ny(MONDAY, "09:34"), 10.60, 10.70, 10.55, 10.62),
-        (ny(MONDAY, "09:35"), 10.62),
+        (ny(MONDAY, hit), 10.60),
+        (ny(MONDAY, struck), 10.60, 10.70, 10.55, 10.62),
+        (ny(MONDAY, struck) + 60 * 10**9, 10.62),
     ]
     plan = {
         (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
-        (ny(MONDAY, "09:33"), LEAD_ID): [("limit", LEAD_ID, "SELL:1000@10.65")],
+        (ny(MONDAY, hit), LEAD_ID): [("limit", LEAD_ID, "SELL:1000@10.65")],
     }
 
     result = ran(
@@ -275,10 +281,47 @@ def test_a_resting_exit_filled_while_stopped_is_read_at_the_bar_it_knew(
     record = result.run.period_stops
     assert record is not None
     (stop,) = record.stops
-    stamp, index = read
-    assert [(f.ts_ns, f.price, f.price_ts_ns, f.volume) for f in stop.fills] == [
-        (ny(MONDAY, "09:34"), 10.65, ny(MONDAY, stamp), float(volume_of(LEAD, index)))
+    assert stop.hit_ns == ny(MONDAY, hit)
+    assert [(f.ts_ns, f.price, f.price_ts_ns, f.segment, f.volume) for f in stop.fills] == [
+        (ny(MONDAY, struck), 10.65, ny(MONDAY, struck), segment, float(volume_of(LEAD, 3)))
     ]
+
+
+@pytest.mark.parametrize(("hit", "segment"), [("09:30", "pre"), ("16:00", "rth"), ("10:00", "rth")])
+@pytest.mark.parametrize("delay_s", [0, 30])
+def test_a_stop_names_the_part_of_the_session_its_point_covers(
+    hit: str, segment: str, delay_s: int, tmp_path: Path
+) -> None:
+    """LEAD's bars are stamped at their close and published `delay_s` after it, and the close
+    of 10.60 at `hit` stops the week. The stop's instant is the point's availability, and its
+    part of the session that of the minute the point covers, read off its stamp as
+    `self.session` reads it: the bar stamped 09:30 covers a pre-market minute and the one
+    stamped 16:00 a regular one, however late either was published."""
+    delay = delay_s * 10**9
+    kind = BarType(
+        InstrumentId(Symbol(LEAD), Venue(VENUE)),
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    closes = [
+        (ny(MONDAY, "04:01"), 10.00),
+        (ny(MONDAY, "04:02"), 10.00),
+        (ny(MONDAY, hit), 10.60),
+        (ny(MONDAY, hit) + 60 * 10**9, 10.50),
+    ]
+    bars = tuple(
+        Bar(kind, *[Price(close, 2)] * 4, Quantity.from_int(10**6), ts, ts + delay)
+        for ts, close in closes
+    )
+    plan = {(ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")]}
+    made = request(plan, tmp_path / "seen.txt", universe=(LEAD_ID,))
+
+    result = execute(made, [instrument(LEAD)], [bars])
+
+    record = result.run.period_stops
+    assert record is not None
+    (stop,) = record.stops
+    assert (stop.hit_ns, stop.segment) == (ny(MONDAY, hit) + delay, segment)
 
 
 def test_a_card_with_no_period_target_records_none_and_stores_none(tmp_path: Path) -> None:
@@ -350,6 +393,33 @@ def test_a_stage_window_records_the_stops_the_card_does(tmp_path: Path) -> None:
     assert researched.run.period_stops is not None
     assert len(researched.run.period_stops.stops) == 1
     assert realised.run.period_stops == researched.run.period_stops
+
+
+@pytest.mark.parametrize("targeted", [True, False])
+def test_an_idle_stage_window_records_what_a_window_handed_no_point_does(
+    targeted: bool, tmp_path: Path
+) -> None:
+    """A stage whose clock already stands at the last point the catalog holds has nothing to
+    replay, so it builds no node: a version under a target records the empty record of a
+    window handed no point — no week, no stop, none open — and one with no target records
+    none, so an idle window never reads as one of a version with no target."""
+    lead, lagg, plan = _pair()
+    made = request(plan, tmp_path / "card.txt", costs=COSTS)
+    if not targeted:
+        made = replace(made, hyp=made.hyp.model_copy(update={"period_target": None}))
+    names = {LEAD: volumed(LEAD, lead), LAGG: volumed(LAGG, lagg)}
+    points = [*names[LEAD], *names[LAGG]]
+    held = catalog(tmp_path / "catalog", points, [instrument(LEAD), instrument(LAGG)])
+    staged = replace(
+        made, window=(MONDAY, MONDAY), overrides={"record": str(tmp_path / "stage.txt")}
+    )
+    after = max(int(point.ts_init) for point in points)
+
+    ran_idle = node.run(_stage(_placed(staged, tmp_path), held, MONDAY, after=after))
+
+    assert ran_idle.released == 0
+    (realised,) = ran_idle.realised
+    assert realised.run.period_stops == (PeriodStops() if targeted else None)
 
 
 def test_a_stage_s_own_flatten_is_no_stop_s_and_the_open_week_is_read_after_it(

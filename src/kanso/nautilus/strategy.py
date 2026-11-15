@@ -914,6 +914,9 @@ class _Stopped:
     anchor: float
     threshold: float
     hit_ns: int
+    segment: str
+    """The part of the session the minute the hit's point covers falls in, read off its
+    reference time as `KansoStrategy.session` reads it, never off its availability."""
     equity: float
     dropped: int = 0
     fills: list[dict[str, Any]] = field(default_factory=list)
@@ -930,7 +933,7 @@ class _Stopped:
                 "anchor": self.anchor,
                 "threshold": self.threshold,
                 "hit_ns": self.hit_ns,
-                "segment": session_of(self.hit_ns).segment,
+                "segment": self.segment,
                 "equity": self.equity,
                 "dropped": self.dropped,
                 "fills": fills,
@@ -1113,6 +1116,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Each order the sleeve sent while stopped, by client order id, and the stop it was
         sent under, kept until the venue closes the order: its fills are that stop's
         (`_target_filled`), whenever they land."""
+        self._target_struck: Any = None
+        """The venue's record of the instant each fill's price was struck at, handed with the
+        target (`kanso.nautilus.struck`): what a stopped week's fills are read at
+        (`_target_filled`)."""
         self._target_unread: dict[str, list[dict[str, Any]]] = {}
         """Each name's stopped-week fills priced at a bar the sleeve has yet to be handed,
         whose volume is read off it when it is (`_target_volume`)."""
@@ -1599,7 +1606,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         week's opening at which every name is flat or wholly on its way out at market
         (`_own_intended`), so a new week's entry never meets an old one's leg; the new week's
         target is read at once. A stop is recorded at the hit with the week's opening, anchor
-        and threshold, the point's instant and the `balance` there (`_target_record`).
+        and threshold, the point's availability instant, the part of the session the minute it
+        covers falls in — read off its reference time, `data_time`, as `session` reads it, so a
+        bar published after its close names the minute it describes — and the `balance` there
+        (`_target_record`).
         """
         if self._target_until is not None:
             self._target_flatten()
@@ -1622,6 +1632,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 anchor=self._target_anchor,
                 threshold=self._target_threshold,
                 hit_ns=self._delivered_ns,
+                segment=session_of(self._data_time).segment,
                 equity=equity,
             )
         )
@@ -1663,19 +1674,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _target_filled(self, stop: _Stopped, event: Any) -> None:
         """Record a fill of an order sent under `stop`, and the `balance` after it.
 
-        Its price is read as struck at the instant the venue's record keeps where the run
-        charges a dated spread (`kanso.nautilus.struck`), and otherwise at the instant of the
-        name's last bar or print the sleeve has been handed: in nautilus_trader 1.231.0 the
-        engine applies a point to the venue before it hands it to the strategy, and lands an
-        order in flight, filling it at its name's last price, either before the venue applies
-        the point it lands on or after the strategy's handler of it — so for a market order,
-        the flatten's, that is the point the venue priced it at, and a resting order the venue
-        fills on a point it has yet to hand the sleeve is read at the point before. The fill's
-        `volume` is that of the name's bar stamped there, read when the sleeve is handed it.
+        Its price is read as struck at the instant the venue's record keeps
+        (`kanso.nautilus.struck`), which every kanso runner of a target loads, dated spread or
+        none, and at the fill's own instant for a name the venue had applied nothing of, or on
+        a sleeve no runner handed a record. It is never read off the stream the sleeve is
+        handed: in nautilus_trader 1.231.0 the engine applies a point to the venue before it
+        hands it to the strategy, so a resting order the venue fills while it applies a point
+        is struck at a point the sleeve has yet to be handed, and the sleeve's last point of
+        the name is the one before. The fill's `volume` is that of the name's bar stamped at
+        the instant, read when the sleeve is handed it.
         """
         key = event.instrument_id.value
-        struck = None if self._spread_struck is None else self._spread_struck.at(event)
-        priced = struck if struck is not None else self._print_ns.get(key, int(event.ts_event))
+        struck = None if self._target_struck is None else self._target_struck.at(event)
+        priced = int(event.ts_event) if struck is None else struck
         fill: dict[str, Any] = {
             "ts_ns": int(event.ts_event),
             "instrument_id": key,

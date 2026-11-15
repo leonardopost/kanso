@@ -911,14 +911,19 @@ holds is flattened at that name's next print or quote, and no entry goes until t
 has opened and the sleeve is flat or wholly on its way out at market. The flatten is an
 ordinary fill, charged once by the runner, and the card is the run that held to the rule. The
 run records what the rule did, as the harness did it (`period_stops`): every New York week it
-traded in, each week it stopped — the week's opening, its anchor and threshold, the instant of
-the point the target was reached at, the part of the session that point covers and `balance`
-there, how many orders and modifies the stopped week dropped unsent, and every fill of an order
-the sleeve sent while stopped, whenever it landed, with the instant its price was struck at,
-that minute's part of the session and the volume of the name's bar there, then the `balance`
-after the last of them and whether it landed in the next week — and the week open at the run's
-last point, with its P&L there and whether it stopped. That record is in no return: the stops
-are already in the fills and the equity. A stage window's own flatten after its last point is
+traded in (each it was handed a point in after its warmup, whether or not it placed an order),
+each week it stopped — the week's opening, its anchor and threshold, the instant the point the
+target was reached at became available, the part of the session the minute that point covers
+falls in, read off its reference time as `self.session` reads it, and `balance` there, how many
+orders and modifies the stopped week dropped unsent, and every fill of an order the sleeve sent
+while stopped, whenever it landed, with the instant the venue struck its price at, that
+minute's part of the session and the volume of the name's bar there, then the `balance` after
+the last of them and whether it landed in the next week — and the week open at the run's last
+point, with its P&L there and whether it stopped. The instant a fill's price was struck at is
+read off the venue's record (`kanso.nautilus.struck`), which every run of a target loads,
+dated spread or none, and never off what the sleeve has been handed: the venue fills a resting
+order while it applies a bar, before the sleeve is handed that bar. That record is in no
+return: the stops are already in the fills and the equity. A stage window's own flatten after its last point is
 the stage's and no stop's fill, and the week open there is read after it, so its P&L carries
 that close's cost. `research show --measured`, `cert run`, `cert show`, `monitor run` and
 `kanso replay` print it on a `stops` line — the weeks stopped of the target's weeks traded in,

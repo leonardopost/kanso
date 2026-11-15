@@ -152,7 +152,8 @@ class Outcome:
     skipped: str | None = None
     period_stops: PeriodStops | None = None
     """What the version's `period_target` did over its whole life on the stage, every window
-    it closed there joined (`kanso.monitor.realised.joined`); `None` without a target."""
+    it closed there joined (`kanso.monitor.realised.joined`); `None` without a target, and for
+    a version whose every window was recorded before runs kept one."""
 
     @property
     def subject(self) -> str:
