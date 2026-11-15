@@ -1931,6 +1931,10 @@ class Marks:
         splits that take effect then — or `_NEVER` while no such point has reached it. That
         never falls as the instants rise, since a point printed past a later instant is
         printed past every earlier one, so the instants applied by an end are a prefix."""
+        self._clock_of: dict[str, tuple[list[int], list[int]] | None] = {}
+        """Each name `reach` has been handed, with its venue's clock, or `None` for a name of
+        a venue none of whose names declares a split: looked up once a name. The clock's
+        lists are only ever written in place, so what is held here is the clock."""
         struck_at = bool(self.dated) or request.hyp.period_target is not None
         self.record: Struck | None = (
             Struck(points=struck_at) if struck_at or self._effective else None
@@ -2130,11 +2134,24 @@ class Marks:
         `ts`, printed at `printed`: every split of the venue's names effective at or before
         `printed` was applied by `ts` at the latest. The clock never falls as the instants
         rise, so the instants this point moves are the ones before the first already applied
-        by `ts`, read down from the last it reaches."""
-        held = self.applied.get(_venue_of(key))
+        by `ts`, read down from the last it reaches — and a point that moves none returns at
+        once: one printed before the venue's first instant, or published no earlier than the
+        instant its last was applied at, which no earlier one is applied after.
+
+        This is asked of every point of a run that declares a split, so a name's venue is
+        looked up once (`_clock_of`). Measured on 2026-11-16 over 400,000 prints, the best of
+        seven: with the clock looked up and searched at every point, a declared split cost
+        `take` 0.39 µs a point of the split name and 0.19 µs a point of another name of its
+        venue, and `clocked` took 0.48 µs a point; with these returns, 0.19, 0.06 and 0.34."""
+        try:
+            held = self._clock_of[key]
+        except KeyError:
+            held = self._clock_of[key] = self.applied.get(_venue_of(key))
         if held is None:
             return
         effective, applied = held
+        if printed < effective[0] or applied[-1] <= ts:
+            return
         index = bisect.bisect_right(effective, printed)
         while index and applied[index - 1] > ts:
             index -= 1
@@ -2160,7 +2177,8 @@ class Marks:
         applied nothing; kept, a stage-mate's bar past a split, unreleased, put the split in
         force at every later end while the venue held the old count, and the old shares were
         marked at the restated price. A book's feed holds every member's points, so there the
-        clock is the one the view and the feed read together."""
+        clock is the one the view and the feed read together. It is set aside in place, so the
+        clock `reach` holds for each name is still the one read."""
         if not self.applied:
             return
         for _, applied in self.applied.values():

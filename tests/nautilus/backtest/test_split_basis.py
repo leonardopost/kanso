@@ -329,6 +329,75 @@ def test_a_week_with_a_split_folds_to_the_same_periods_in_any_order(drawn: list,
     assert repr(state(one)) == repr(state(one)), "read twice, the periods read the same"
 
 
+SUCCESSIVE = {
+    "splits": [{"ex_date": EX.isoformat(), "ratio": 0.1}, {"ex_date": "2024-01-04", "ratio": 2.0}]
+}
+"""A one-for-ten on Wednesday and a two-for-one on Thursday: two instants on DEMO's clock."""
+
+clocking = st.lists(
+    st.tuples(
+        INSTANTS,
+        st.sampled_from((INSTRUMENT, SAME_VENUE, OTHER_VENUE)),
+        st.sampled_from((-1, 0, 1)),
+    ),
+    max_size=30,
+)
+
+
+def _earliest(effective: list[int], drawn: list) -> list[int]:
+    """The clock by brute force: for each instant, the earliest publication of a point of DEMO's
+    venue printed at or after it, or never."""
+    return [
+        min(
+            (ts for ts, key, skew in drawn if key.endswith(".XNAS") and ts + skew >= instant),
+            default=backtest._NEVER,
+        )
+        for instant in effective
+    ]
+
+
+def _published(key: str, ts_init: int, ts_event: int) -> TradeTick:
+    return TradeTick(
+        InstrumentId.from_str(key),
+        Price(5.0, 2),
+        Quantity.from_int(100),
+        AggressorSide.BUYER,
+        TradeId("1"),
+        ts_event,
+        ts_init,
+    )
+
+
+@settings(max_examples=150, deadline=None)
+@given(folded_=clocking, fed=clocking)
+def test_the_venue_s_clock_is_each_split_s_earliest_publication_past_it(folded_, fed) -> None:
+    """Points of DEMO, of another name of its venue and of another venue, printed either side of
+    each of two splits, folded in the order drawn: each instant on the clock holds the earliest
+    instant a point of DEMO's venue printed at or after it was published at, as brute force
+    reads it — the returns that skip a point that can move nothing skip only such points. Then
+    handed a feed (`clocked`), the clock is that feed's alone, whatever the view's folding
+    looked up and moved first."""
+    hyp = booked({"maintenance_pct": 30.0})
+    made = RunRequest(
+        hyp=hyp,
+        strategy_source=b"",
+        window=WEEK,
+        snapshot_id=SNAPSHOT,
+        venue_model=venue_model(hyp),
+        capital=CAPITAL,
+        period="1d",
+    )
+    model = VenueModel.model_validate(dict(made.venue_model))
+    marks = Marks(made, model, [instrument(SYMBOL, info=SUCCESSIVE)])
+    for ts, key, skew in folded_:
+        marks.fold(ts, key, 5.0, 5.0, 5.0, ts + skew)
+    effective = marks.applied["XNAS"][0]
+
+    assert marks.applied["XNAS"][1] == _earliest(effective, folded_)
+    marks.clocked([_published(key, ts, ts + skew) for ts, key, skew in fed])
+    assert marks.applied["XNAS"][1] == _earliest(effective, fed)
+
+
 # --- through the engine --------------------------------------------------------------
 
 
