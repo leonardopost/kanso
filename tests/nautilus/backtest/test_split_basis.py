@@ -1237,6 +1237,46 @@ def test_a_record_kept_for_a_split_alone_hears_the_bus_and_keeps_no_point(reques
     assert plain.record is None
 
 
+def test_a_book_keeps_its_record_for_a_split_on_the_bus_alone(monkeypatch) -> None:
+    """No member of a book is charged a dated spread or held to a period target
+    (`_refuse_members`), so the record a book keeps where a split is declared is its bus half
+    alone (`Struck.points`): its venues load no part of it, and each fill it hears it numbers
+    and strikes at no instant, while the split it orders among them is applied to the held
+    position. `_refuse_members`, `execute_book`, `sandbox.attach` and `docs/backlog.md` row 260
+    once said a book's venues kept each name's last point wherever a split was declared."""
+    from kanso.nautilus import actions
+    from kanso.nautilus.struck import Struck, StruckPart
+
+    loaded: list[tuple[Struck | None, set[type]]] = []
+    heard: list[tuple[Struck, object]] = []
+    parts, filled = actions.parts, Struck.filled
+
+    def spied_parts(venue: str, struck: Struck | None = None) -> list[object]:
+        made = parts(venue, struck)
+        loaded.append((struck, {type(part) for part in made}))
+        return list(made)
+
+    def spied_filled(self: Struck, event: object) -> None:
+        filled(self, event)
+        heard.append((self, event))
+
+    monkeypatch.setattr(actions, "parts", spied_parts)
+    monkeypatch.setattr(Struck, "filled", spied_filled)
+    alone = book_request(hyp((INSTRUMENT, "OTHR.XNAS")), RESTS.replace(b"HOLDS", b"True"))
+    run = execute_book(block(), [member("m", alone, 2.0)], _straddled(), [_straddling()]).runs[0]
+
+    assert [item.fills_before for item in run.adjustments] == [1]
+    records = {id(struck): struck for struck, _ in loaded}
+    assert len(records) == 1
+    (record,) = records.values()
+    assert record is not None
+    assert record.points is False
+    assert all(StruckPart not in kinds for _, kinds in loaded)
+    assert heard
+    assert all(held is record for held, _ in heard)
+    assert all(record.heard(event) > 0 and record.at(event) is None for _, event in heard)
+
+
 class _Filled:
     """A fill event as the extraction reads one off a position."""
 
