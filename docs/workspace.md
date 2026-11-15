@@ -983,8 +983,9 @@ point, an opening on a Sunday, or on a Monday no later than 04:00, meets it, and
 Monday, or on Tuesday to Saturday — whose evening before trades past the UTC midnight — scores a
 week's points across two of the objective's. An attached construct states its host's
 `period_target` exactly, as it does its `book`. A shared book refuses a member that declares one
-(exit 2). Classification never touches the key, and `period_stopped` is a name the sleeve base
-owns: a `strategy.py` that binds it is refused, as one that binds `session` is.
+(exit 2). kanso never writes the key, and the classifying model reads it with the rest of the
+file (`docs/backlog.md` row 278); `period_stopped` is a name the sleeve base owns: a
+`strategy.py` that binds it is refused, as one that binds `session` is.
 
 **`depth` is yours too, and scope.** A hypothesis that holds a level-two `book` hands every
 change of it to the simulated venue, which keeps its queues and matches against it, and,

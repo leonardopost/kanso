@@ -282,8 +282,9 @@ class PeriodTarget(KansoModel):
     next week has opened and every name is flat or wholly on its way out at market
     (`kanso.nautilus.strategy.KansoStrategy`). Every key is required and none has a default:
     it is a rule the operator states, not a threshold kanso picks. Operator-owned like
-    `sizing`, so classification neither reads nor writes it; and scope, so a best that traded
-    every week is not compared with a card stopped in some.
+    `sizing`: kanso never writes it, and the classifying model reads it with the rest of the
+    file (`docs/backlog.md` row 278); and scope, so a best that traded every week is not
+    compared with a card stopped in some.
     """
 
     period: Literal["week"]

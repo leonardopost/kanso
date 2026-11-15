@@ -112,7 +112,7 @@ windows:                           # dates YYYY-MM-DD; certification.start ≥ r
 #   maintenance_pct: 25            # floor for the `maintenance_margin` gate: the period-end holdings at the period's
 #                                  # worst prices, as a percentage of their gross; `hyp validate` refuses (exit 3) a
 #                                  # floor above 100 / max_leverage. A reset or a carry needs a margin account (exit 3)
-# period_target:                   # yours: classification never touches it. Scope: changing it clears `best`. Every key is
+# period_target:                   # yours: kanso never writes it. Scope: changing it clears `best`. Every key is
 #                                  # required and none has a default
 #   period: week                   # the one period built
 #   opens: "Mon 04:00"             # the weekday and New York wall time each week opens at; daylight saving moves it with

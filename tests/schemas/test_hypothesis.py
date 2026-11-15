@@ -573,6 +573,21 @@ def test_a_period_target_carries_its_week_its_return_and_its_base() -> None:
     assert (later.period_target.weekday, later.period_target.minute) == (4, 1439)
 
 
+def test_the_classifying_model_reads_a_period_target_and_its_docstring_says_so() -> None:
+    """kanso never writes `period_target`, and the document a classification sends the model
+    carries it whole, as it carries `sizing`; the key's docstring says that, not that
+    classification never reads it (`docs/backlog.md` row 278 records the older keys that
+    still do)."""
+    from kanso.classify.classify import _document
+
+    shown = _document(build(period_target=WEEKLY))
+    said = " ".join((PeriodTarget.__doc__ or "").split())
+
+    assert shown["period_target"] == {**WEEKLY, "target_bp": 1000.0}
+    assert "kanso never writes it, and the classifying model reads it" in said
+    assert "neither reads nor writes" not in said
+
+
 @pytest.mark.parametrize("missing", sorted(WEEKLY))
 def test_every_key_of_a_period_target_is_the_operator_s_and_none_has_a_default(
     missing: str,
