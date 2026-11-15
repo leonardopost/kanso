@@ -106,8 +106,9 @@ class Fill:
     a print's own stamp (`kanso.nautilus.struck`), which under a latency can be another part of
     the session or another day than the fill's own — whose row and part of the session it was
     charged (`kanso.nautilus.costs.dated_half_spread`). `None` where no dated spread was
-    charged, and on every fill recorded before the field was kept: it reads as the fill's own
-    instant.
+    charged, and on every fill recorded before the field was kept: no row was read at an
+    instant, so none was kept, and `None` is not the fill's own `ts_ns`, which under a latency
+    is not the instant its price was struck at.
     """
 
     ts_ns: int

@@ -463,3 +463,19 @@ def test_a_fill_recorded_before_its_increment_was_kept_reads_as_no_tick_to_charg
     decoded = records.decode_run(payload)
 
     assert {(fill.tick, fill.limit) for fill in decoded.fills} == {(0.0, None)}
+
+
+def test_a_fill_no_dated_spread_charged_keeps_no_priced_instant_and_is_stored_as_it_was() -> None:
+    """Only a dated spread reads a row at the instant a fill's price was struck at, so only it
+    keeps one; a fill without one decodes with none, never its own `ts_ns` — under a latency
+    not that instant — and is encoded again to the bytes it was stored as."""
+    priced = replace(a_fill(5), price_ts_ns=3)
+    run = a_run(fills=(priced, a_fill(6)))
+    payload = records.encode_run(run)
+
+    decoded = records.decode_run(payload)
+
+    assert decoded == run
+    assert [fill.price_ts_ns for fill in decoded.fills] == [3, None]
+    assert ["price_ts_ns" in fill for fill in payload["fills"]] == [True, False]
+    assert records.encode_run(decoded) == payload

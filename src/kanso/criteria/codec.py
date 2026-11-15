@@ -140,8 +140,8 @@ def _decode_fill(payload: Mapping[str, Any]) -> Fill:
     no limit, which no `slippage_ticks` charges. One recorded before fills said whether the
     venue struck them at the touch reads as not touched, which is how it was charged: a
     model re-applied to it charges the half-spread it paid. One recorded without the instant
-    its price was struck at — every fill no dated spread charged — reads as priced at its own
-    instant."""
+    its price was struck at — every fill no dated spread charged — decodes with none, `None`,
+    never its own `ts_ns`, and is encoded again as it was stored."""
     return Fill(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
