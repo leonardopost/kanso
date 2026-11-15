@@ -278,11 +278,12 @@ class PeriodTarget(KansoModel):
     sleeve it reads the sleeve's `balance` against the equity the runner struck at the
     previous week's last point; once the week has made `target_bp` of `capital`, or of that
     opening equity under `of: period_open`, it cancels the sleeve's working orders, flattens
-    every name it holds at that name's next print, and drops every entry until the next week
-    has opened and every name is flat (`kanso.nautilus.strategy.KansoStrategy`). Every key is
-    required and none has a default: it is a rule the operator states, not a threshold kanso
-    picks. Operator-owned like `sizing`, so classification neither reads nor writes it; and
-    scope, so a best that traded every week is not compared with a card stopped in some.
+    every name it holds at that name's next print or quote, and drops every entry until the
+    next week has opened and every name is flat or wholly on its way out at market
+    (`kanso.nautilus.strategy.KansoStrategy`). Every key is required and none has a default:
+    it is a rule the operator states, not a threshold kanso picks. Operator-owned like
+    `sizing`, so classification neither reads nor writes it; and scope, so a best that traded
+    every week is not compared with a card stopped in some.
     """
 
     period: Literal["week"]

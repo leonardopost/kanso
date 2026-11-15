@@ -907,19 +907,24 @@ declares `period_target` (`docs/workspace.md`) is held to it by the harness, on 
 a certificate, a replay and a stage: once a New York week's P&L — `balance` less the equity the
 runner struck at the week before's last point, carry included — reaches `target_bp` of the
 capital or of that opening equity, the sleeve's working orders are cancelled, every name it
-holds is flattened at that name's next print, and no entry goes until the next week has opened
-and the sleeve is flat. The flatten is an ordinary fill, charged once by the runner, and the
-card is the run that held to the rule; nothing records which weeks stopped beyond the fills and
-intents they changed (`docs/backlog.md` row 275). The target's weeks are New York's, not the
-return periods. Under a `return_period` of whole weeks `hyp validate` holds each window to the
-target's weekday, and the objective's weeks are then the target's where no point falls between
-a window's first UTC midnight and the target's opening: on US equities, an opening on a Sunday,
-or on a Monday no later than 04:00, whose UTC midnight is a weekend evening. A later Monday
-opening leaves that morning's points between the two cuts, and an opening on Tuesday to
-Saturday the evening before's post-market, so each such week is scored across two of the
-objective's. `cost_stress` and `cost_scenario` re-price the recorded fills and keep the path,
-so a scenario's number keeps the weeks the card stopped, though a cheaper model would have
-stopped more of them and a dearer one fewer (row 269).
+holds is flattened at that name's next print or quote, and no entry goes until the next week
+has opened and the sleeve is flat or wholly on its way out at market. The flatten is an
+ordinary fill, charged once by the runner, and the card is the run that held to the rule;
+nothing records which weeks stopped beyond the fills and intents they changed
+(`docs/backlog.md` row 275). `balance` marks each name at its last print or quote, so on a feed
+that asks for `trade` one print well outside the quote can reach the target or keep it from
+being reached: measured on 2026-10-30 over the first second of nine opens of SPY, QQQ and IWM,
+1,744 of 4,791 prints lay outside the quote in force, and one NVDA print of a single share took
+a card's balance from −0.9 to −54 bp of its book. On bars it reads each bar's close. The
+target's weeks are New York's, not the return periods. Under a `return_period` of whole weeks
+`hyp validate` holds each window to the target's weekday, and the objective's weeks are then
+the target's where no point falls between a window's first UTC midnight and the target's
+opening: on US equities, an opening on a Sunday, or on a Monday no later than 04:00, whose UTC
+midnight is a weekend evening. A later Monday opening leaves that morning's points between the
+two cuts, and an opening on Tuesday to Saturday the evening before's post-market, so each such
+week is scored across two of the objective's. `cost_stress` and `cost_scenario` re-price the
+recorded fills and keep the path, so a scenario's number keeps the weeks the card stopped,
+though a cheaper model would have stopped more of them and a dearer one fewer (row 269).
 
 A card proposed by a model carries the proposer's own account of what it was: `tags`, one
 or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
