@@ -5,7 +5,8 @@ The rule lives in the harness (`kanso.nautilus.strategy.KansoStrategy`), which t
 it to beside the book policy (`kanso.nautilus.backtest.targeted`), so a card, a replay on the
 live code path and a stage node run the same code and stop where each other stops. The flatten
 it sends is an ordinary fill, charged once by the runner in the extraction, and the harness's
-balance — what the target is read on — is that equity at every period end.
+balance — what the target is read on — is that equity at every period end. A filter attached
+to the host leaves the weeks it stops as they were.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from tests.nautilus.strategy.test_period_target import (
     LEAD,
     LEAD_ID,
     MONDAY,
+    _two_weeks,
     card,
     fills,
     ny,
@@ -31,7 +33,7 @@ from tests.nautilus.strategy.test_period_target import (
     series,
 )
 
-from .conftest import catalog, instrument
+from .conftest import FILTER_MODIFIER, catalog, instrument
 from .test_dated_stage import _placed, _stage
 
 BPS = 10_000.0
@@ -80,6 +82,46 @@ def test_the_card_s_equity_is_the_balance_the_target_reads_and_the_flatten_pays_
             rel=1e-12,
         )
     assert seen[-1].balance == pytest.approx(result.run.equity[-1], rel=1e-12)
+
+
+def test_the_card_s_equity_is_the_balance_at_a_period_end_with_a_stop(tmp_path: Path) -> None:
+    """Over two weeks, the second stopped at the 09:33 close and flattened at the next, each
+    fill charged five basis points: the equity of every period whose last point fills nothing
+    is the balance the sleeve read there — the stopped day's among them — so what the target
+    is read on is what the card strikes. An order a handler sends fills after it, so the
+    balance a handler reads at a point that fills is the equity before that fill."""
+    lead, lagg, plan = _two_weeks()
+
+    result, seen = card(plan, lead, lagg, tmp_path, costs=COSTS)
+
+    run = result.run
+    filled = {fill.ts_ns for fill in run.fills}
+    compared = []
+    for end, equity in zip(run.period_ends_ns, run.equity, strict=True):
+        last = next(row for row in reversed(seen) if row.ts <= end)
+        if last.ts not in filled:
+            assert last.balance == pytest.approx(equity, rel=1e-12)
+            compared.append(last)
+    assert any(row.stopped for row in compared)
+
+
+def test_a_filter_attached_to_the_host_stops_the_weeks_its_own_card_does(tmp_path: Path) -> None:
+    """A construct's card runs its host under the construct's own file, which states the
+    host's `period_target` exactly (`hyp validate`): with a filter attached that lets every
+    entry through, the card stops at the same points, and sends and fills what the host's own
+    card does."""
+    lead, lagg, plan = _two_weeks()
+    allows = (("filter", FILTER_MODIFIER, {"allow": True}),)
+
+    host, alone = card(plan, lead, lagg, tmp_path)
+    filtered, attached = card(plan, lead, lagg, tmp_path, modifiers=allows)
+
+    assert any(row.stopped for row in alone)
+    assert [(r.ts, r.name, r.stopped) for r in attached] == [
+        (r.ts, r.name, r.stopped) for r in alone
+    ]
+    assert filtered.intents == host.intents
+    assert filtered.run.fills == host.run.fills
 
 
 @pytest.mark.parametrize("order", [(LEAD, LAGG), (LAGG, LEAD)])

@@ -912,23 +912,27 @@ At the first point the P&L reaches the threshold the week is **stopped**: every 
 of the sleeve is cancelled, and every name it holds — at the hit, or filled afterwards by an
 entry already on its way — is flattened with `submit_exit`, the whole position at market, at
 the first point handed after that name has printed again since the hit or its last fill, so
-never at the price that made it due. With no latency it fills at that print's close; under
-one, at that close or at the close of the name's next bar, whichever the order lands after, so
-the two legs of a pair can fill at the closes of two instants. Every entry — `submit_entry`,
-which returns `None`, an order or a list built by hand, an overlay's leg or clip that opens —
-is dropped, never sent, until the next week has opened and every name is flat or wholly on
-its way out at market; exits go, and the handlers run, so indicators keep warming. A
-flatten still due when the next week opens goes at the name's first print there, and fills in
-the new week, whose anchor is struck before it. The strategy reads whether its week is stopped
-from `self.period_stopped`, and its position from `self.held`, never from a flag of its own,
-since the harness may have flattened it; what the harness keeps of the rule is denied to it
+never at the price that made it due. With no latency it fills at that print's close; under one,
+at that close or at the close of the name's next bar, whichever the order lands after, so the
+two legs of a pair can fill at the closes of two instants. Every entry — `submit_entry`, which
+returns `None`, an order or a list built by hand, an overlay's leg or clip that opens — is
+dropped, never sent, until the next week has opened and every name is flat or wholly on its way
+out at market. A list is read order by order, each against the position the orders before it
+leave, and is dropped whole when any of them opens, so an exit with an entry behind it sends
+neither; a clip so dropped holds nothing, and the overlay's next clip is placed as if it had
+never been asked; exits go, and the handlers run, so indicators keep warming. A flatten still
+due when the next week opens goes at the name's first print there, and fills in the new week,
+whose anchor is struck before it. The strategy reads whether its week is stopped from
+`self.period_stopped`, and its position from `self.held`, never from a flag of its own, since
+the harness may have flattened it; what the harness keeps of the rule is denied to it
 (`strategy_integrity`). The rule adds no charge: a flatten is a fill like any other, charged
 once by the runner. It is the same code on a card, a certificate, a replay and a stage node.
 
 What the rule does not do, said here so a card is read as it ran:
 
 - An entry sent in the handler that sent the exit reaching the target fills, and is flattened
-  at its next print: one more round trip than a rule that tested the target before the entry.
+  at its next print: one more round trip than a rule that tested the target before
+  the entry.
 - Under `costs.orders_per_minute`, a flatten no token is available to is owed rather than
   refused, and is asked for again before the handler of the next point of any name — which
   can come before the held name prints again, so under a latency it can fill at that name's
@@ -940,26 +944,30 @@ What the rule does not do, said here so a card is read as it ran:
   IWM, 1,744 of 4,791 prints lay outside the quote in force; one NVDA print of a single share
   took a card's balance from −0.9 to −54 bp of its book. On bars it reads each bar's close.
 - A clip an overlay holds is its own, and is not flattened (`docs/backlog.md` row 268).
+- An exit built by hand at a limit or a stop rests, and is read as an exit whatever else is
+  on its way: a resting exit beside another exit, or one grown by `modify_order`, can fill
+  past flat in the stopped week, and the position it opens is flattened at the name's next
+  print or quote. A `sizing` rule denies both to a researched strategy (row 276).
 - `cost_stress` and `cost_scenario` re-price the recorded fills and keep the path, so the
   weeks a card stopped stand as recorded, though a cheaper scenario would have stopped more of
   them and a dearer one fewer (row 269).
 - A stage window opens flat at the capital with no stopped week: its first week is anchored at
   the capital, and trades, whatever the window before it earned or stopped (row 270).
 
-`kanso hyp validate` refuses (exit 3) a missing key, a zone other than `America/New_York` —
-a run's return periods are cut from a UTC midnight, which meets a week's opening only where no
+`kanso hyp validate` refuses (exit 3) a missing key, a zone other than `America/New_York` — a
+run's return periods are cut from a UTC midnight, which meets a week's opening only where no
 point falls between them, as on US equities in New York — an `opens` that is not a weekday's
 three letters and `HH:MM`, or that a change of clocks skips or repeats on a date of the
-windows, the open forward window's first year standing for the rest of it, and a `target_bp`
-at or below zero; the key beside `book.reset: monthly`, whose transfer can fall inside a week
-and move the balance with no P&L, beside `benchmark`, whose hold would be flattened at its
-first stopped week and never bought again, or with `book` in `data_requirements`, whose
-changes reach no point the target is read at; and, under a `[research] return_period` of
-whole weeks, a window that opens on another weekday, since the objective's weeks would then be
-cut across the target's. An attached construct states its host's `period_target` exactly, as
-it does its `book`. A shared book refuses a member that declares one (exit 2). Classification
-never touches the key, and `period_stopped` is a name the sleeve base owns: a `strategy.py`
-that binds it is refused, as one that binds `session` is.
+windows, the open forward window's first year standing for the rest of it, and a `target_bp` at
+or below zero; the key beside `book.reset: monthly`, whose transfer can fall inside a week and
+move the balance with no P&L, beside `benchmark`, whose hold would be flattened at its first
+stopped week and never bought again, or with `book` in `data_requirements`, whose changes reach
+no point the target is read at; and, under a `[research] return_period` of whole weeks, a
+window that opens on another weekday, since the objective's weeks would then be cut across the
+target's. An attached construct states its host's `period_target` exactly, as it does its
+`book`. A shared book refuses a member that declares one (exit 2). Classification never touches
+the key, and `period_stopped` is a name the sleeve base owns: a `strategy.py` that binds it is
+refused, as one that binds `session` is.
 
 **`depth` is yours too, and scope.** A hypothesis that holds a level-two `book` hands every
 change of it to the simulated venue, which keeps its queues and matches against it, and,

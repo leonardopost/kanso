@@ -120,11 +120,16 @@ filling it at its own name's last price: so under a latency the flatten fills at
 the print it was sent at or of the print after, and sent at the hit's own point it could fill
 at the hit's price. Until the next week has opened and every name is flat or wholly on its way
 out at market (`_own_intended`), every entry is dropped before it is sized, funded or asked of
-the rate: `submit_entry` returns `None`, and `submit_order` and `submit_order_list` drop an
-order that opens as the rate reads one — an entry `submit_entry` sized, one `classify` reads as
-an entry, or one that opens the position the sleeve's orders on their way leave (`_opens`) —
-while an exit `submit_exit` sized goes. The strategy reads `period_stopped`, and nothing else
-of it.
+the rate: `submit_entry` returns `None`, and `submit_order` drops an order that opens as the
+rate reads one — an entry `submit_entry` sized, one `classify` reads as an entry, or one that
+opens the position the sleeve's orders on their way leave (`_opens`) — and an overlay's clip
+so dropped is taken off the clip ledger, as the rate's drop takes one, while an exit
+`submit_exit` sized goes. `submit_order_list` reads every order of a list so, each against
+the position the list's orders before it leave, and drops the whole list when any of them
+opens (`_list_opens`). An exit built by hand at a limit or a stop rests, and is read as no
+more than the rate reads one: one that fills alongside another exit can carry the position
+past flat, which the next print or quote flattens (`docs/backlog.md` row 276). The strategy
+reads `period_stopped`, and nothing else of it.
 
 **It does not apply corporate actions, and must not.** A split is applied by the venue,
 one call before the ex-date's first point is matched (`kanso.nautilus.actions`), because a
@@ -2359,6 +2364,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             and closing is None
             and (opening or kind == ENTRY or self._opens(order))
         ):
+            self._forget_clip(order)
             self._target_dropped += 1
             return
         exiting = self._command_bucket is not None and (
@@ -2394,14 +2400,20 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         the position the sleeve's orders on their way leave (`_opens`) — is dropped whole and
         each of its orders counted as refused, as an entry is; one whose first order is an exit
         is refused, since kanso owes an exit only as `submit_exit` sized it, and an order of a
-        list is not."""
+        list is not.
+
+        While a period target has stopped the sleeve, the list is read order by order, not by
+        its first: it is dropped whole, each order counted, when any of its orders opens as
+        `submit_order` would read it sent alone after the ones before it (`_list_opens`). So
+        an exit with an entry behind it — the flip of a name written as a list, or another
+        name's entry — sends nothing, as the same orders sent one by one would send no entry."""
         if self._warming():
             return
         orders = list(order_list.orders)  # type: ignore[attr-defined]
         self._check_booked(orders[0], "submit_order_list")
         self._check_hand_built(orders[0])
         kind = self.classify(orders[0])
-        if self._target_until is not None and (kind == ENTRY or self._opens(orders[0])):
+        if self._target_until is not None and self._list_opens(orders):
             self._target_dropped += len(orders)
             return
         exiting = self._command_bucket is not None and kind != ENTRY and not self._opens(orders[0])
@@ -2733,6 +2745,17 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def _is_clip(self, order: object) -> bool:
         key = order.instrument_id.value  # type: ignore[attr-defined]
         return any(order is held for held in self._clip_orders.get(key, ()))
+
+    def _forget_clip(self, order: object) -> None:
+        """Take an order dropped unsent off the clip ledger, if it is a clip: `_clip_order` keeps
+        a clip before it is sent, and one never sent holds nothing, so kept it would read as
+        in flight for the rest of the run — the overlay's next clip on that side placing
+        nothing, and one on the other side or in another name refused (`clip_direction`,
+        `one_clip`). The rate's drop (`_short_of_rate`) and a stopped week's (`submit_order`)
+        forget one so."""
+        key = order.instrument_id.value  # type: ignore[attr-defined]
+        if self._is_clip(order):
+            self._clip_orders[key] = [held for held in self._clip_orders[key] if held is not order]
 
     def _clips_filled(self, key: str) -> float:
         orders = self._clip_orders.get(key)
@@ -3113,10 +3136,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self._owe(key, order.side, closing[0], closing[1])
             return
         if not exiting:
-            if self._is_clip(order):
-                self._clip_orders[key] = [
-                    held for held in self._clip_orders[key] if held is not order
-                ]
+            self._forget_clip(order)
             self._drop_rate(SUBMIT)
             return
         if self._hedging or self._is_clip(order):
@@ -3125,7 +3145,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             )
         self._refuse_rate(key, order_side_to_str(order.side), "an exit the strategy built itself")
 
-    def _opens(self, order: Any) -> bool:
+    def _opens(self, order: Any, ahead: float = 0.0) -> bool:
         """Whether an order the strategy built opens or grows the position this sleeve's
         orders already on their way leave: what `classify` decides on the position filled,
         decided once its market orders in flight have filled and an exit the rate owes at
@@ -3147,7 +3167,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         it in: an unsized sleeve's whole, its overlays' clips in it; under a sizing rule a
         clip's own, owing nothing of the host's, or the sleeve's own without its clips. A clip
         is kept as one before it is sent (`_clip_order`), so its own quantity is taken back
-        out of what the clips intend."""
+        out of what the clips intend. `ahead` is what the orders of a list before this one put
+        in flight in its name (`_list_opens`), applied as `_track` would have applied them
+        sent one by one."""
         key = order.instrument_id.value
         side = order.side
         clip = self._is_clip(order)
@@ -3155,12 +3177,29 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if self.sized and clip:
             held = self._clips_intended(key) - mine
         else:
-            held = self._own_intended(key)
+            held = self._own_intended(key) + ahead
             if not self.sized:
                 held += self._clips_intended(key) - mine
             held = self._left(key, held)
         signed = -float(order.quantity) if side == OrderSide.SELL else float(order.quantity)
         return abs(held + signed) >= abs(held)
+
+    def _list_opens(self, orders: Sequence[Any]) -> bool:
+        """Whether any order of a list opens, each read as `submit_order` reads one sent alone
+        after the orders before it: an entry by `classify`, on the position filled, or one that
+        opens or grows the position the sleeve's orders on their way leave (`_opens`) with the
+        list's earlier market orders in its name applied — a market order being what `_track`
+        keeps in flight, and a limit or a stop resting no more applied here than there. The
+        stopped week's drop reads a list so (`submit_order_list`), so a list and the same
+        orders sent one by one open alike."""
+        ahead: dict[str, float] = {}
+        for order in orders:
+            key = order.instrument_id.value
+            if self.classify(order) == ENTRY or self._opens(order, ahead.get(key, 0.0)):
+                return True
+            if order.order_type == OrderType.MARKET:
+                ahead[key] = ahead.get(key, 0.0) + _signed(order, filled=False)
+        return False
 
     def _left(self, key: str, held: float) -> float:
         """`held`, this sleeve's intended position in a name, once the exit the rate owes on it
