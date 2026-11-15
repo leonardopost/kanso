@@ -668,7 +668,9 @@ def test_the_restart_seed_is_said_as_it_is_read() -> None:
             inspect.getsource(node.Placement).split("target_seed:")[1].split("@property")[0]
         ),
         "cross_section.target": prose(cross_section.target.__doc__ or ""),
-        "DENIED_TARGET": prose(inspect.getsource(integrity)),
+        "DENIED_TARGET": prose(
+            inspect.getsource(integrity).split("\nDENIED_TARGET: Final")[1].split('"""')[1]
+        ),
         "strategy": prose(strategy.__doc__ or ""),
         "_target_resume": prose(strategy.KansoStrategy._target_resume.__doc__ or ""),
     }
