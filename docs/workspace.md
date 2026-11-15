@@ -956,17 +956,19 @@ its flatten's fills, and the week open at the last point (`docs/concepts.md`, Ca
 
 On a paper or live stage the node restarts flat at the version's capital every window, and the
 week carries across the restart. The next window reads the week open at the last point of the
-version's newest window on that stage that opened one — read after the node's own flatten, so
-what it made there carries that close's cost — and resumes it when its own first point falls in
-that week. A week that had stopped stays stopped: every entry is dropped until the next week
+strategy's newest window on that stage that opened one, whichever of its versions ran it —
+read after the node's own flatten, so what it made there carries that close's cost — and
+resumes it when its own first point falls in that week. A week that had stopped stays stopped: every entry is dropped until the next week
 opens, and the window lists that stop again, as the window before struck it, with what it
 dropped under it. A week that had made part of its target is read against the capital less what
 it made, so it stops at what is left: one that had made 600 of a 1,000 bp target stops at 400
 more. What was made and the threshold are stated at the share the window runs at, so the basis
 points carry across a share the limits moved. A week the restart's first point is past is let
-go, and the window's first week opens at the capital as any run's does. A new version, or a
-version on a stage it has not run on, begins no week. `monitor run` joins a version's windows'
-records, a stop two windows list as one.
+go, and the window's first week opens at the capital as any run's does. The week is the
+strategy's, not the version's: a new version that replaces one on the stage — which a passing
+certificate composes and deploys to paper with no one asked — resumes the week the version
+before it left, read at its own share, while a strategy on a stage it has not run on begins no
+week. `monitor run` joins a version's windows' records, a stop two windows list as one.
 
 What the rule does not do, said here so a card is read as it ran:
 

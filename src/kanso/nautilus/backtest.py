@@ -477,13 +477,14 @@ class RunRequest:
     was not running, however long ago it last settled. The book itself opens at `capital`
     either way.
 
-    `target_seed` is where a `period_target` stood when the last window of the same version on
-    the same stage closed: that window's record narrowed to the week open at its last point and
-    the week's stop when it had one, stated at this window's capital
-    (`kanso.portfolio.records.target_seed`). `None` for a card, a certificate, a replay and a
-    first deploy. The harness resumes it when this window's first point falls in that week
-    (`kanso.nautilus.strategy.KansoStrategy`): a stopped week stays stopped until the next
-    opens, and one that had made part of its target is held to what is left of it.
+    `target_seed` is where a `period_target` stood when the last window of the same strategy on
+    the same stage closed, whichever of its versions ran it: that window's record narrowed to
+    the week open at its last point and the week's stop when it had one, stated at this
+    window's capital (`kanso.portfolio.records.target_seed`). `None` for a card, a certificate,
+    a replay and a strategy's first window on the stage. The harness resumes it when this
+    window's first point falls in that week (`kanso.nautilus.strategy.KansoStrategy`): a
+    stopped week stays stopped until the next opens, and one that had made part of its target
+    is held to what is left of it.
 
     `version_source` is the file a composed version's implementation holds the sleeve's bytes
     in (`kanso.strategy.impl`), set by a replay of a version and by the measurement of a

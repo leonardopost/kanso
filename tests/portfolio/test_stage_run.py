@@ -997,13 +997,22 @@ def test_a_week_that_had_made_600_bp_stops_at_400_more(
     assert 0.04 * capital <= stop.equity - capital < 0.1 * capital, "400 bp more, not 1,000"
 
 
+NEXT_BEST = RETRYING + b"\n# the next best snapshot the loop kept\n"
+"""The same sleeve with other bytes: what a research stall certifies, which composes the next
+version."""
+
+
+@pytest.mark.parametrize(
+    ("sleeve", "version"), [(RETRYING, 1), (NEXT_BEST, 2)], ids=["same-bytes", "new-bytes"]
+)
 def test_a_version_deployed_by_its_certificate_resumes_a_stopped_week(
-    ws: Workspace, store: StateStore
+    sleeve: bytes, version: int, ws: Workspace, store: StateStore
 ) -> None:
     """A passing certificate composes its version and deploys the paper stage with no one
-    asked, and the same bytes certified again return that version and deploy the stage again,
-    restarting it. A version on paper whose newest window stopped its week at Tuesday's close
-    resumes that week stopped: it enters nothing until Monday."""
+    asked. The same bytes certified again return that version and deploy the stage again,
+    restarting it; other bytes — what a research stall certifies — compose the next version,
+    which replaces the one on paper. The week is the strategy's, so either resumes the week
+    its newest window stopped at Tuesday's close: it enters nothing until Monday."""
     from kanso.certify import certificate
     from kanso.portfolio.lifecycle import on_certified
     from tests.portfolio.test_lifecycle import a_certificate
@@ -1017,12 +1026,18 @@ def test_a_version_deployed_by_its_certificate_resumes_a_stopped_week(
     assert adopted.deployment is not None and adopted.state == "paper"
     first = adopted.deployment.results[0]
     ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True)
+    best = made
+    if sleeve != RETRYING:
+        best = a_certificate(ws, sha=store.put_blob(sleeve)).model_copy(update={"hyp_id": "weekly"})
+        certificate.write(ws, store, best, sleeve)
 
-    again = on_certified(ws, store, made)
+    again = on_certified(ws, store, best)
 
-    assert again.version is not None and again.version.version == 1
+    assert again.version is not None and again.version.version == version
     assert again.deployment is not None
     (window,) = again.deployment.results
+    assert (window.version, window.capital) == (version, first.capital)
     assert bought_on(window.run)[0] == date(2024, 3, 18)
     assert window.run.period_stops is not None
+    assert window.run.period_stops.stops[0].hit_ns == TUESDAY_CLOSE_NS
     assert window.run.period_stops.stops[0].dropped == 5

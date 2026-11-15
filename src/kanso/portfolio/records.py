@@ -311,7 +311,8 @@ def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
 
 
 def target_seed(results: Sequence[StageResult], capital: float) -> PeriodStops | None:
-    """Where a version's `period_target` stood when its newest window that opened a week closed.
+    """Where a strategy's `period_target` stood when its newest window that opened a week
+    closed, whichever of its versions ran it (`results`, one strategy's windows on one stage).
 
     That window's record narrowed to the week open at its last point (`PeriodStops.last`) —
     read there after the node's own flatten, so its P&L carries that close's cost — and the

@@ -182,10 +182,10 @@ class Placement:
     cushion a monthly reset had set aside and the last period end it settled. The node
     restarts flat at `capital` every window, and these are what carry the policy across."""
     target_seed: PeriodStops | None = None
-    """Where this version's `period_target` stood when its last window on the stage closed:
-    the week open at that window's last point, with its stop when it had stopped, stated at
-    `capital` (`kanso.portfolio.records.target_seed`), which the next window resumes when its
-    first point falls in that week."""
+    """Where this strategy's `period_target` stood when its last window on the stage closed,
+    whichever of its versions ran it: the week open at that window's last point, with its stop
+    when it had stopped, stated at `capital` (`kanso.portfolio.records.target_seed`), which the
+    next window resumes when its first point falls in that week."""
 
     @property
     def tag(self) -> str:

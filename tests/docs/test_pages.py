@@ -616,7 +616,7 @@ def test_the_pages_say_nothing_sent_in_a_stopped_week_takes_the_sleeve_past_flat
 
 
 def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() -> None:
-    """A stage restart reads the week the version's newest window left open and resumes it
+    """A stage restart reads the week the strategy's newest window left open and resumes it
     (`tests/portfolio/test_stage_run.py`): the workspace page and the Stages section say so, no
     page still says a window opens with no stopped week or is seeded with nothing, and the
     backlog row that recorded it is struck through and closed."""
@@ -625,7 +625,8 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert "the week carries across the restart" in workspace
     assert "one that had made 600 of a 1,000 bp target stops at 400 more" in workspace
     assert "A week that had stopped stays stopped" in workspace
-    assert "seeded on a restart with the week its newest window on that stage left open" in stages
+    assert "seeded on a restart with the week its strategy's newest window on that stage" in stages
+    assert "a new version that replaces one on the stage" in workspace
     assert "a week the target had stopped stays stopped" in stages
     for text in (workspace, stages):
         assert "opens flat at the capital with no stopped week" not in text

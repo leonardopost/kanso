@@ -614,22 +614,25 @@ def _opens(placements: tuple[Placement, ...], clock: int | None) -> date:
 
 
 def _seeded(store: StateStore, stage: str, placed: Placement) -> Placement:
-    """The placement with its book policy and its period target where its last window on this
+    """The placement with its book policy and its period target where the last windows on this
     stage left them.
 
-    Per version and per stage: a new version's book, and a version's book on a stage it has
-    not run on, start with nothing set aside, and its target with no week begun. The target is
-    read whether or not the version has a book, at the share it is placed at."""
+    The book is per version and per stage: a new version's book, and a version's book on a
+    stage it has not run on, start with nothing set aside. The target is per strategy and per
+    stage, read whether or not the version has a book, at the share it is placed at: a week
+    is the strategy's, so a new version that replaces one on the stage — a passing
+    certificate composes it and deploys paper with no one asked — resumes the week the
+    version before it left, and a strategy on a stage it has not run on begins no week."""
     if placed.hyp.book is None and placed.hyp.period_target is None:
         return placed
-    results = records.stage_results(
-        store, strategy_id=placed.strategy_id, version=placed.version, stage=stage
-    )
+    results = records.stage_results(store, strategy_id=placed.strategy_id, stage=stage)
     if placed.hyp.period_target is not None:
         placed = replace(placed, target_seed=records.target_seed(results, placed.capital))
     if placed.hyp.book is None:
         return placed
-    cushion, settled_ns = records.book_seed(results)
+    cushion, settled_ns = records.book_seed(
+        [result for result in results if result.version == placed.version]
+    )
     return replace(placed, cushion=cushion, settled_ns=settled_ns)
 
 

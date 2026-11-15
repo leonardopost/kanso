@@ -2795,12 +2795,14 @@ indicators and orders are what a run of it alone would produce. A version under 
 policy is seeded on a restart with the cushion and the last settled end of its newest
 measured window on that stage, and its first carry runs from the instant it resumes. A version
 under a `period_target` is held to it on the stage by the same harness as on its card, and is
-seeded on a restart with the week its newest window on that stage left open, which the window
-resumes when its first point falls in it: a week the target had stopped stays stopped, every
+seeded on a restart with the week its strategy's newest window on that stage left open,
+whichever version ran it, which the window resumes when its first point falls in it: a week the target had stopped stays stopped, every
 entry dropped until the next week opens, and a week that had made part of its target is read
 against the capital less what it made, so it stops at what is left, carried in basis points
-across a share the limits moved. Since a passing certificate deploys the paper stage by itself, and
-every deploy restarts it, this is what keeps a stopped week stopped with no one asked. Each
+across a share the limits moved. Since a passing certificate deploys the paper stage by itself,
+every deploy restarts it, and a certificate of new bytes composes a new version that replaces
+the one on paper and resumes its week, this is what keeps a stopped week stopped with no one
+asked. Each
 window records what the target did in it (Card) — a window that resumed a stopped week lists
 its stop again, with what it dropped under it — and `monitor run` joins a version's windows'
 records into one, each week and each stop once though two windows traded in it, so a paper or
