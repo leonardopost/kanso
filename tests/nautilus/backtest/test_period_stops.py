@@ -477,8 +477,8 @@ def test_a_stage_window_s_marks_hold_the_record_its_venue_was_loaded_with(
     no venue was handed."""
     loaded: list[Struck] = []
 
-    def loading() -> Struck:
-        made = Struck()
+    def loading(points: bool = True) -> Struck:
+        made = Struck(points=points)
         loaded.append(made)
         return made
 
@@ -499,6 +499,7 @@ def test_a_stage_window_s_marks_hold_the_record_its_venue_was_loaded_with(
 
     assert realised.run.period_stops is not None and realised.run.period_stops.stops
     (struck,) = loaded
+    assert struck.points, "the stopped week's fills are read at the points its venue kept"
     assert extracted == [(struck, struck if is_dated else None)]
 
 

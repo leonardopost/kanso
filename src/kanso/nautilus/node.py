@@ -569,13 +569,13 @@ def run(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
+        struck_at = any(
+            dated_rows(request.venue_model) or request.hyp.period_target is not None
+            for request in requests
+        )
         struck = (
-            Struck()
-            if any(
-                dated_rows(request.venue_model) or request.hyp.period_target is not None
-                for request in requests
-            )
-            or any(splits.schedule_of(instrument) for instrument in window.instruments)
+            Struck(points=struck_at)
+            if struck_at or any(splits.schedule_of(instrument) for instrument in window.instruments)
             else None
         )
         venues = sandbox.attach(kernel, node.venues(), points, struck)

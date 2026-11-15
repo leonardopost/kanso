@@ -1043,6 +1043,26 @@ def test_a_fill_an_earlier_point_of_the_instant_matched_is_replayed_before_its_s
     assert fill_path_drawdown_pct(card) == (pytest.approx(fell / CAPITAL * 100.0), PUBLISHED)
 
 
+def test_a_record_kept_for_a_split_alone_hears_the_bus_and_keeps_no_point(request_for) -> None:
+    """Where a split fell among the fills is the order the bus carried them in, and nothing
+    else of the record is read without a dated spread or a period target: the run keeps the
+    record, and its venues load no part that is handed every point to keep each name's last.
+    A run that declares no split keeps none."""
+    from kanso.nautilus import actions
+    from kanso.nautilus.struck import StruckPart
+
+    made = request(request_for)
+    model = VenueModel.model_validate(dict(made.venue_model))
+    split, plain = Marks(made, model, [scheduled(0.1)]), Marks(made, model, [instrument()])
+
+    assert split.record is not None
+    assert split.record.points is False
+    assert split.pricing is None
+    loaded = {type(part) for part in actions.modules("XNAS", split.record)[0].parts}
+    assert StruckPart not in loaded
+    assert plain.record is None
+
+
 class _Filled:
     """A fill event as the extraction reads one off a position."""
 

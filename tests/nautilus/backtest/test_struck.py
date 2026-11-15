@@ -166,6 +166,8 @@ def test_the_part_is_loaded_last_and_only_with_a_record() -> None:
     assert str(loaded[-1].id) == "Struck-XNAS"
     assert loaded[-1].struck is struck
     assert StruckPart not in {type(part) for part in actions.modules("XNAS")[0].parts}
+    unpointed = actions.modules("XNAS", Struck(points=False))[0].parts
+    assert StruckPart not in {type(part) for part in unpointed}
     part = loaded[-1]
     part.process(T0)
     part.log_diagnostics(None)

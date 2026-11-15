@@ -429,9 +429,9 @@ class SimulatedVenue(LiveExecutionClient):
             # instant on both code paths, the venue applies every quote and print the sleeve
             # is handed, and under `print_through` what is due by a print lands before it; see
             # `kanso.nautilus.actions`, `kanso.nautilus.availability` and `kanso.nautilus.tape`.
-            # Under a dated spread, a period target or a split it keeps each name's last point,
-            # for the fills priced at it and the stopped week's fills read at it
-            # (`kanso.nautilus.struck`).
+            # Under a dated spread or a period target it keeps each name's last point, for the
+            # fills priced at it and the stopped week's fills read at it; a record kept for a
+            # split alone keeps none (`kanso.nautilus.struck`).
             modules=actions.modules(venue.name, struck),
             portfolio=kernel.portfolio,
             msgbus=self.relay,

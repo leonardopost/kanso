@@ -1428,8 +1428,9 @@ def _unrecorded(*_: object, **__: object) -> None:
 
 def add_venue(engine: Any, venue: Any, struck: Struck | None = None) -> None:
     """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
-    with the simulation modules every kanso venue loads — and, under a dated spread, a period
-    target or a split, the venue half of `struck` (`kanso.nautilus.struck`)."""
+    with the simulation modules every kanso venue loads — and, given a record that keeps
+    points, under a dated spread or a period target, the venue half of `struck`
+    (`kanso.nautilus.struck`)."""
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
@@ -1930,16 +1931,17 @@ class Marks:
         splits that take effect then — or `_NEVER` while no such point has reached it. That
         never falls as the instants rise, since a point printed past a later instant is
         printed past every earlier one, so the instants applied by an end are a prefix."""
+        struck_at = bool(self.dated) or request.hyp.period_target is not None
         self.record: Struck | None = (
-            Struck()
-            if self.dated or request.hyp.period_target is not None or self._effective
-            else None
+            Struck(points=struck_at) if struck_at or self._effective else None
         )
         """The venue's record of the instant each fill's price was struck at and of the order
-        it made its fills and applied its splits in, which the run loads into its venue
-        wherever a dated spread is charged, a period target declared or a split declared: the
-        harness reads a stopped week's fills off it (`targeted`), and the extraction orders a
-        split among the fills of its instant by it (`_adjusted`)."""
+        it made its fills and applied its splits in, which the run keeps wherever a dated
+        spread is charged, a period target declared or a split declared: the harness reads a
+        stopped week's fills off it (`targeted`), and the extraction orders a split among the
+        fills of its instant by it (`_adjusted`). Where a split alone is declared it is heard
+        on the bus and its venue keeps no point (`Struck.points`), since the order is all such
+        a run reads of it."""
         self.pricing: Struck | None = self.record if self.dated else None
         """The same record under a dated spread, which the table is read at: the run's own,
         or one a stage hands over."""

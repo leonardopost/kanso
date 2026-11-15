@@ -29,20 +29,23 @@ many had been heard when it did — what the runner's extraction orders a split 
 of its instant by (`kanso.nautilus.backtest._adjusted`, `kanso.criteria.Adjustment`).
 
 `Struck` is the record. Its venue half is a part of the one module a kanso venue loads
-(`kanso.nautilus.actions.parts`), loaded only where a dated spread is charged, a period
-target declared or a split declared, and placed last, so it is handed each point after the
-parts that may land commands before the point is applied (`kanso.nautilus.tape`) and before
-the matching engine applies it: it keeps each name's last point the engine applies, at that
-point's `ts_event` — a bar's close, a print's or a quote's own stamp, never the instant it
-was published at. Its other half hears each fill on the bus as the execution engine applies
-it, before the sleeve is handed it, and keeps the name's instant for it, by the fill's
-instrument and trade id, and each split the venue announces. Those are what every event of
-one fill shares:
-a fill that flips a net position reaches the positions the extraction reads as two events, the
+(`kanso.nautilus.actions.parts`), loaded only where a dated spread is charged or a period
+target declared — the runs that read the instant a fill was struck at (`Struck.at`) — and
+placed last, so it is handed each point after the parts that may land commands before the
+point is applied (`kanso.nautilus.tape`) and before the matching engine applies it: it keeps
+each name's last point the engine applies, at that point's `ts_event` — a bar's close, a
+print's or a quote's own stamp, never the instant it was published at. Its other half hears
+each fill on the bus as the execution engine applies it, before the sleeve is handed it, and
+keeps the name's instant for it, by the fill's instrument and trade id, and each split the
+venue announces. The instrument and the trade id are what every event of one fill shares: a
+fill that flips a net position reaches the positions the extraction reads as two events, the
 second under an event id the bus never carried, and both keep the fill's instrument and trade
 id, which the harness is handed whole. A fill of a name the venue had applied nothing of is not
 kept, and is read at its own instant. A level-two venue strikes every fill at the touch, which
-pays no half-spread, so what is kept for one charges nothing.
+pays no half-spread, so what is kept for one charges nothing. A run that declares a split and
+charges no dated spread under no period target keeps the bus half alone (`Struck.points`):
+where a split fell among the fills is the bus's order, and the venue half would be handed
+every point for nothing.
 
 Engine facts this module relies on (nautilus_trader 1.231.0):
 
@@ -108,7 +111,12 @@ class Struck:
     at: the `ts_event` of its name's last point the venue had applied when it filled; and the
     order the bus carried the fills and the venue's splits in."""
 
-    def __init__(self) -> None:
+    def __init__(self, points: bool = True) -> None:
+        self.points = points
+        """Whether a venue loads the venue half (`StruckPart`), which keeps each name's last
+        point and so each fill's instant (`at`): wanted under a dated spread or a period
+        target. A record that keeps none hears the bus alone — the order of the fills and the
+        splits (`heard`, `split`) — and its `at` reads nothing."""
         self._last: dict[Any, int] = {}
         """Each instrument's last point the venue applied, at its `ts_event`."""
         self._grain: dict[Any, tuple[Any, Any]] = {}
