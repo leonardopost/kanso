@@ -565,6 +565,56 @@ def test_the_routes_to_the_zone_the_clock_does_not_close_are_backlog_rows() -> N
     )
 
 
+def test_the_pages_say_nothing_sent_in_a_stopped_week_takes_the_sleeve_past_flat() -> None:
+    """A stopped week holds every order `submit_exit` did not size to what is left to close,
+    counting every exit still working, resting ones included, drops one sized in the quote's
+    currency and every modify asking more than the least the order holds or has been asked to
+    hold, and reads an order at no less than the most its modifies asked until it closes
+    (`tests/nautilus/strategy/test_period_target.py`). The workspace page, the strategy base,
+    the release note and the program template say so, none of them says a resting exit is read
+    as an exit whatever else is on its way, that a modify is dropped only past what is left, or
+    that only a growth against the order's last answer is, the backlog row that recorded the
+    routes past flat is struck through, and the route `submit_exit` keeps outside a stopped
+    week has its own row."""
+    from kanso.nautilus import strategy
+
+    workspace = prose(page("workspace.md"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    template = prose((ROOT / "src" / "kanso" / "templates" / "program.md").read_text("utf-8"))
+    assert "So nothing the sleeve sends in a stopped week takes it past flat." in workspace
+    assert "into a short smaller than the long or larger" in workspace
+    assert "is read as an exit whatever else is on its way" not in workspace
+    assert "So nothing the sleeve sends while stopped can take it past flat" in prose(
+        strategy.__doc__ or ""
+    )
+    assert "so nothing sent in a stopped week takes the sleeve past flat" in changelog
+    assert "an order built by hand that opens never sent" not in changelog
+    assert "is sent only where it closes no more than you hold" in template
+    assert "never when it is sized in the quote's currency" in template
+    assert "asks more than the least the order holds or has been asked to hold is dropped" in (
+        template
+    )
+    for text in (workspace, prose(strategy.__doc__ or ""), changelog):
+        assert "more than the least" in text
+        assert "holds or has been asked to hold" in text
+        assert "at no less than the most any" in text
+        assert "grows an order is dropped whatever it grows it by" not in text
+        assert "by more than is left is dropped" not in text
+    assert "at the most it could close" in workspace
+    assert "sized in the quote's currency (`quote_quantity`)" in workspace
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in page("backlog.md").splitlines()
+        if line.startswith("| ")
+    }
+    row = rows["276"]
+    assert row.split("|")[3].strip().startswith("~~A stopped week reads an exit built by hand")
+    assert "**closed** in review of the period target" in row
+    assert "A stopped week now drops every modify that grows an order" in row
+    assert "A fourth pass found a regrowth sent behind a shrink" in row
+    assert rows["279"].split("|")[3].strip().startswith("`submit_exit` sizes an exit against")
+
+
 SCANS = frozenset({"check", "clashes", "scan"})
 """What `kanso.criteria.integrity` scans a strategy's bytes with."""
 

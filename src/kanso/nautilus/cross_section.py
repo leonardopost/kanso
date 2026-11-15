@@ -78,6 +78,7 @@ __all__ = [
     "coincident",
     "is_marker",
     "ordered",
+    "target",
     "warm",
     "without_markers",
     "with_cross_section",
@@ -193,6 +194,17 @@ def book(
     strategy._carried_from_ns = (  # type: ignore[attr-defined]
         anchor_ns if carried_from_ns is None else carried_from_ns
     )
+
+
+def target(strategy: object, period_target: object) -> None:
+    """Have the harness hold the sleeve to its hypothesis's period target.
+
+    Set by the runner exactly as `book` is — a private attribute the harness reads, denied to
+    a `strategy.py` by `strategy_integrity`, and never a configuration field an author could
+    read back or a manifest would record. The strategy reads only whether the week is
+    stopped (`KansoStrategy.period_stopped`).
+    """
+    strategy._period_target = period_target  # type: ignore[attr-defined]
 
 
 def dated(strategy: object, rows: Sequence[object], struck: object) -> None:

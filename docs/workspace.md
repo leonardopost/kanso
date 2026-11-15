@@ -143,6 +143,9 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | declare `benchmark` on a horizon under a day, or on a construct measured against its host | 3 · at `hyp validate`, on a draft too: no objective measures a hold there |
 | add or remove `benchmark` on a classified file without changing `objective.id` | 3 · at `hyp validate`; the remedy names the objective to write |
 | declare `book.maintenance_pct` above `100 / max_leverage`, a `reset: monthly` or a non-zero `financing_rate_bps` on a venue whose account is `cash`, or a `book` on an attached construct that is not its host's | 3 · at `hyp validate`: the floor is breached at entry, a cash account funds no restore and holds no borrowed notional, and a construct's version is deployed under the host's policy |
+| declare `period_target` without one of its keys, in a zone other than `America/New_York`, with an `opens` that is not a weekday and `HH:MM` or that a change of clocks skips or repeats on a date of the windows, with a `target_bp` at or below zero, or beside `book.reset: monthly`, a `benchmark` or `book` in `data_requirements` | 3 · at `hyp validate` and wherever the file is read, naming the key and its remedy: every key is yours, the weeks are New York's, and the rest would move the balance the target reads, flatten a hold for good, or change a book the target is never read at |
+| declare `period_target` under a `[research] return_period` of whole weeks with a window that opens on another weekday, or on an attached construct that does not state its host's | 3 · at `hyp validate`, naming the window or the host: the objective's weeks would be cut across the target's, or a construct's cards would run its host under another rule than its version |
+| run a version that declares `period_target` as a member of a shared book | 2 · naming the member; leave it out of the book |
 | declare `depth` on a hypothesis whose `data_requirements` does not list `book`, or lists `quote` | 3 · at `hyp validate`: depth is a view of a book the hypothesis holds, and level one reaches `on_quote_tick` from it alone |
 | bind a name the strategy's base class owns in `strategy.py` — `self._close = 3`, `def _fund(...)`, `size = 10` in the class body | 3 · at `hyp validate`, naming the name and the line; a warning in `doctor`'s `base names`; the baseline refused at `research begin` (2), and any card that carries it a `discard` by `strategy_integrity` |
 | name a `leg_edge` leg the universe does not hold | 3 · at `hyp validate`, from `constraints` or `required_constraints`; an `instrument` parameter names one of the universe's own ids |
@@ -881,6 +884,117 @@ The first carry is charged from the instant the restart resumes trading, not fro
 every window ends flat, so the time the version spent off the stage — a stop, or a tenure
 on live before a demotion back to paper — held nothing to borrow against. A new version, or
 a version on a stage it has not run on, starts with nothing set aside.
+
+**`period_target` is yours, and it is scope.** It stops a sleeve for the rest of a week once
+the week has made a return you state, and flattens what it holds:
+
+```yaml
+period_target:                     # scope: adding or changing it clears `best`; every key is required
+  period: week                     # the one period built
+  opens: "Mon 04:00"               # a weekday and New York wall time; daylight saving moves it with the market
+  tz: America/New_York             # the one zone built
+  target_bp: 1000                  # the week's P&L at which the sleeve flattens and stops, in bp of `of`
+  of: capital                      # or period_open: the equity the week opened at
+```
+
+No key has a default, `of` included: whether "+10% a week" is a percent of the capital or of
+what the sleeve held when the week opened is yours to say. The weeks are New York's and
+absolute — each from its opening to the next, never cut from a window's start — so a window
+that opens mid-week, a replay and a stage see the same weeks, and a closed Monday opens its
+week at its own 04:00. Each week is read against its **anchor**, the equity the runner
+struck at the previous week's last point, after that period's carry, or the capital in a run's
+first week; the threshold is `target_bp` of the capital, or of the anchor under `of:
+period_open`. At every bar, quote, print and custom point the harness hands the strategy, and
+before its handler, it reads the week's P&L as `balance` less the anchor — the equity marked at
+each name's last print, which on one-minute bars is each bar's close — and at every finer bar an
+attached overlay reads, before the overlay is consulted on it, so a clip it asks once the week
+has reached its target is held to the stopped week.
+
+At the first point the P&L reaches the threshold the week is **stopped**: every working order
+of the sleeve is cancelled, and every name it holds — at the hit, or filled afterwards by an
+entry already on its way — is flattened with `submit_exit`, the whole position at market, at
+the first point handed after that name has printed or been quoted again since the hit or its
+last fill, so never at the price that made it due. With no latency it fills at that bar's
+close, or at the quote's touch on a feed of quotes; under one, on bars, at that close or at the
+close of the name's next bar, whichever the order lands after, so the two legs of a pair can
+fill at the closes of two instants. Until the next week has opened and every name is flat or
+wholly on its way out at market, `submit_entry` returns `None`, and an order `submit_exit` did
+not size — built by hand, or an overlay's leg or clip — is held to the rule `submit_exit` sizes
+by: it is sent only when it is sized in shares and closes no more of its name than is left to
+close once every order of the sleeve still working on the closing side has filled, a limit or a
+stop resting read as if it filled, and an exit the order rate owes at market as if it went.
+Anything else is dropped, never sent: an order that opens, one that would carry the position
+past flat — into a short smaller than the long or larger — one beside a working exit that
+already closes what it would, one sized in the quote's currency (`quote_quantity`), whose
+shares are known only at the price it fills at, and one contingent on another — a parent or a
+child of one-triggers-other, one-cancels-other or one-updates-other — since a child whose parent
+is in another name is not counted as working until that parent fills. A list is read order by
+order, each with the orders before it applied, and is dropped whole when any of them is, so an
+exit with an entry behind it sends neither; a modify that asks more than the least the order holds or has been
+asked to hold — a growth, or a regrowth behind a shrink the venue has yet to apply — is dropped
+whatever it asks above it, and the order stays as it was; a clip so dropped holds nothing, and
+the overlay's next clip is placed as if it had never been asked. An order still working is
+read, by `submit_exit` and the flatten too, at the most it could close: one kanso sent a modify
+of, at no less than the most any of those modifies asked until the venue closes it — under a
+latency longer than the wait for the name's next print the venue may not have applied them, and
+the order reads only its last answer — so one refused, or grown and then shrunk, is read larger
+than it is and an exit beside it smaller; and one sized in the quote's currency that the venue
+has not yet turned into shares, as closing the whole position, so a flatten beside either is
+owed until the venue has answered it. So nothing the sleeve sends in a stopped week takes it
+past flat. Exits within what is left go, and the handlers run, so
+indicators keep warming. A flatten still due when the next week opens goes at the name's first
+print or quote there, and fills in the new week, whose anchor is struck before it. The strategy
+reads whether its week is stopped from `self.period_stopped`, and its position from
+`self.held`, never from a flag of its own, since the harness may have flattened it; what the
+harness keeps of the rule is denied to it (`strategy_integrity`). The rule adds no charge: a
+flatten is a fill like any other, charged once by the runner. It is the same code on a card, a
+certificate, a replay and a stage node.
+
+What the rule does not do, said here so a card is read as it ran:
+
+- An entry sent in the handler that sent the exit reaching the target fills, and is flattened
+  at its next print or quote: one more round trip than a rule that tested the target before
+  the entry.
+- Under `costs.orders_per_minute`, a flatten no token is available to is owed rather than
+  refused, and is asked for again before the handler of the next point of any name — which
+  can come before the held name prints again, so under a latency it can fill at that name's
+  last close, the price that made it due. So can a flatten owed behind a cancel of a resting
+  order on the closing side still in flight, with or without a rate.
+- `balance` marks a name at its last print or quote, whichever came last, so on a feed that
+  asks for `trade` one print well outside the quote can reach the threshold or keep it from
+  being reached. Measured on 2026-10-30 over the first second of nine opens of SPY, QQQ and
+  IWM, 1,744 of 4,791 prints lay outside the quote in force; one NVDA print of a single share
+  took a card's balance from −0.9 to −54 bp of its book. On bars it reads each bar's close.
+- A clip an overlay holds is its own, and is not flattened (`docs/backlog.md` row 268).
+- `cost_stress` and `cost_scenario` re-price the recorded fills and keep the path, so the
+  weeks a card stopped stand as recorded, though a cheaper scenario would have stopped more of
+  them and a dearer one fewer (row 269).
+- A stage window opens flat at the capital with no stopped week: its first week is anchored at
+  the capital, and trades, whatever the window before it earned or stopped (row 270).
+
+`kanso hyp validate` refuses (exit 3) a missing key, a zone other than `America/New_York` — a
+run's return periods are cut from a UTC midnight, which meets a week's opening only where no
+point falls between them, as on US equities fed from 04:00 to 20:00 New York, with no overnight
+point, for a week opening on a Sunday, or on a Monday no later than 04:00 — an `opens` that is
+not a weekday's three letters and `HH:MM`, or that a change of clocks skips or repeats on a date
+of the windows, the open forward window's first year standing for the rest of it, and a
+`target_bp` at or below zero; the key beside `book.reset: monthly`, whose transfer can fall
+inside a week and move the balance with no P&L, beside `benchmark`, whose hold would be
+flattened at its first stopped week and never bought again, or with `book` in
+`data_requirements`, whose changes reach no point the target is read at; and, under a
+`[research] return_period` of whole weeks, a window that opens on another weekday, since the
+objective's weeks would then be cut across the target's. On the target's weekday they are the
+target's only where no point falls between the window's first UTC midnight and the opening,
+which the check cannot read: on US equities fed from 04:00 to 20:00 New York, with no overnight
+point, an opening on a Sunday, or on a Monday no later than 04:00, meets it, and one later that
+Monday, or on Tuesday to Saturday — whose evening before trades past the UTC midnight — scores a
+week's points across two of the objective's. An attached construct states its host's
+`period_target` exactly, as it does its `book`. A shared book refuses a member that declares one
+(exit 2). kanso never writes the key into your file, and the classifying model reads it with
+the rest of the file (`docs/backlog.md` row 278); a candidate `kanso hyp explore` drafts is a
+file the model writes whole, which can drop the parent's key or change it, and nothing compares
+the two before `hyp add` (row 277). `period_stopped` is a name the sleeve base owns: a
+`strategy.py` that binds it is refused, as one that binds `session` is.
 
 **`depth` is yours too, and scope.** A hypothesis that holds a level-two `book` hands every
 change of it to the simulated venue, which keeps its queues and matches against it, and,
@@ -1724,7 +1838,7 @@ cards were answering.
 A re-pin keeps `best` while the file still asks the same question. A change to the
 `universe`, the `resolution`, `bar_resolution`, the `data_requirements`, `data_by_instrument` (an entry that
 narrows an instrument), `session_scope`, `construct.id`, `sizing`, `objective.id`,
-`warmup`, `benchmark`, `book`, `costs` or `depth` clears it — stripping the classification
+`warmup`, `benchmark`, `book`, `period_target`, `costs` or `depth` clears it — stripping the classification
 counts, since a draft has no construct and the best was earned as one — and the event log
 records `best_cleared` naming the field that moved. So does a re-pin whose card gates —
 `constraints` and `required_constraints` together — name one the held pin did not, or one at

@@ -24,6 +24,7 @@ from kanso.criteria.integrity import (
     DENIED_SCHEDULE,
     DENIED_SPREAD,
     DENIED_STALE_BASIS,
+    DENIED_TARGET,
     DENIED_UNDER_DEPTH,
     RATE_MARKS,
     SEND_MARKS,
@@ -227,6 +228,34 @@ def test_everything_the_harness_keeps_of_a_dated_spread_is_denied() -> None:
 
     assert set(vars(handed)) <= DENIED_SPREAD
     assert kept | reading | {"_half_of", "_charge"} <= DENIED_SPREAD
+
+
+@pytest.mark.parametrize("name", sorted(DENIED_TARGET))
+def test_the_period_target_s_own_state_is_out_of_reach(name: str) -> None:
+    """The week's opening is a clock of where each week starts and the anchor a number the
+    strategy would otherwise strike itself; it reads whether it is stopped, and no more."""
+    (problem,) = scan(f"x = self.{name}")
+
+    assert f"attribute '.{name}' is denied" in problem
+    assert "read whether the week is stopped from `period_stopped`" in problem
+
+
+def test_everything_the_harness_keeps_of_a_period_target_is_denied() -> None:
+    """The rule the runner hands, and everything the harness keeps or reads it through, is
+    out of reach the moment it is added; what the strategy may read is `period_stopped`."""
+    from types import SimpleNamespace
+
+    from kanso.nautilus.cross_section import target
+    from tests.nautilus.strategy.test_sleeve import config
+
+    handed = SimpleNamespace()
+    target(handed, object())
+    kept = {name for name in vars(KansoStrategy(config())) if name.startswith("_target")}
+    reading = {name for name in dir(KansoStrategy) if name.startswith("_target")}
+
+    assert set(vars(handed)) <= DENIED_TARGET
+    assert kept | reading <= DENIED_TARGET
+    assert scan("x = self.period_stopped") == []
 
 
 @pytest.mark.parametrize("name", sorted(DENIED_DEPTH))

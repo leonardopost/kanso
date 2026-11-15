@@ -42,12 +42,20 @@ skips or meets. Such an opening is the change itself, and the week before it is 
 short for each minute the opening is past 02:00: at 03:00 the whole hour, and the week from
 the change is a full seven days.
 
-No part of the harness reads a week here: `week_opening` is offered to a rule that counts New
-York weeks, and the periods a run's returns are cut into are not these weeks. The runner cuts
-those one `[research] return_period` after another from the UTC midnight that opens the
-window (`RunRequest.bounds` in `kanso.nautilus.backtest`), so a `1w` period of a window that
-opens on a Monday starts at 00:00 UTC, which is the Sunday evening in New York: eight hours
-before that Monday's 04:00 under daylight saving and nine without it.
+One rule of the harness reads a week here, a hypothesis's `period_target`, whose weeks
+open at the reading it states (`KansoStrategy.period_stopped` in `kanso.nautilus.strategy`);
+the periods a run's returns are cut into are not these weeks. The runner cuts those one
+`[research] return_period` after another from the UTC midnight that opens the window
+(`RunRequest.bounds` in `kanso.nautilus.backtest`), so a `1w` period of a window that opens
+on a Monday starts at 00:00 UTC, which is the Sunday evening in New York: eight hours before
+that Monday's 04:00 under daylight saving and nine without it. The two are the same weeks only
+where no point falls between the two cuts: on US equities fed from 04:00 to 20:00 New York,
+with no `overnight` point, for that opening and any other on a Monday no later than 04:00 or on
+a Sunday, but not for one later that Monday, whose morning's points come between, nor for one
+on Tuesday to Saturday, whose evening before holds post-market points past the UTC midnight; a
+feed that carries `overnight` points puts the Sunday evening's between them too. `hyp validate`
+holds the windows to the target's weekday under a return period of whole weeks, which is as far
+as a check that reads no point can go.
 
 **The zone stays in the package.** A researched `strategy.py` may not import `zoneinfo`
 (`kanso.criteria.integrity`), and `kanso.nautilus.strategy`, which it may import, binds

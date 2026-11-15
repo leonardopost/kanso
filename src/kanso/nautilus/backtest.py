@@ -1494,6 +1494,7 @@ def execute_chunked(
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
         booked(strategy, request, marks.pricing)
+        targeted(strategy, request)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
         marked = coincident(request.hyp)
@@ -1641,6 +1642,19 @@ def _refuse_unbooked(
             remedy=f"load the book for {', '.join(sorted(missing))} over {first}..{last} with "
             "`kanso data load`, then take a snapshot",
         )
+
+
+def targeted(strategy: object, request: RunRequest) -> None:
+    """Hand a sleeve the period target its hypothesis declares, when it declares one.
+
+    Every path that runs a sleeve calls this beside `booked`, with the request its run is
+    extracted from, so a card, a certificate, a replay and a stage hold one sleeve to one
+    rule, applied by the harness (`kanso.nautilus.strategy.KansoStrategy.period_stopped`).
+    """
+    from kanso.nautilus.cross_section import target
+
+    if request.hyp.period_target is not None:
+        target(strategy, request.hyp.period_target)
 
 
 def booked(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:

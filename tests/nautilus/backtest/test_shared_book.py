@@ -728,6 +728,27 @@ def test_a_member_under_a_book_policy_is_refused() -> None:
         )
 
 
+def test_a_member_held_to_a_period_target_is_refused() -> None:
+    """Its entries are the ledger's to place under the book's own hours and leverage, so a
+    week the target stopped would be a second halt beside the book's that no run composes."""
+    document = hyp((DEMO,)).model_dump(mode="json")
+    document["period_target"] = {
+        "period": "week",
+        "opens": "Mon 04:00",
+        "tz": "America/New_York",
+        "target_bp": 1000,
+        "of": "capital",
+    }
+    with pytest.raises(PreconditionError, match="holds a period target") as refused:
+        execute_book(
+            block(),
+            [member("a", request(Hypothesis.model_validate(document)))],
+            [instrument()],
+            [daily("DEMO")],
+        )
+    assert refused.value.remedy == "leave a out of the book"
+
+
 def test_a_member_s_groups_are_its_own() -> None:
     with pytest.raises(ValidationError, match="each member is handed its own"):
         execute_book(block(), [member("a", request(hyp((DEMO,))))], [instrument()], [])

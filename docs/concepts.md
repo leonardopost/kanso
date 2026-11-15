@@ -902,6 +902,31 @@ catalog holds prints on, whichever venue printed them, and the closures
 `kanso.data.closures` holds decide only which missing days coverage excuses (Snapshot,
 above).
 
+**A period target stops a card's week, and the card is read as it ran.** A hypothesis that
+declares `period_target` (`docs/workspace.md`) is held to it by the harness, on the card as on
+a certificate, a replay and a stage: once a New York week's P&L — `balance` less the equity the
+runner struck at the week before's last point, carry included — reaches `target_bp` of the
+capital or of that opening equity, the sleeve's working orders are cancelled, every name it
+holds is flattened at that name's next print or quote, and no entry goes until the next week
+has opened and the sleeve is flat or wholly on its way out at market. The flatten is an
+ordinary fill, charged once by the runner, and the card is the run that held to the rule;
+nothing records which weeks stopped beyond the fills and intents they changed
+(`docs/backlog.md` row 275). `balance` marks each name at its last print or quote, so on a feed
+that asks for `trade` one print well outside the quote can reach the target or keep it from
+being reached: measured on 2026-10-30 over the first second of nine opens of SPY, QQQ and IWM,
+1,744 of 4,791 prints lay outside the quote in force, and one NVDA print of a single share took
+a card's balance from −0.9 to −54 bp of its book. On bars it reads each bar's close. The
+target's weeks are New York's, not the return periods. Under a `return_period` of whole weeks
+`hyp validate` holds each window to the target's weekday, and the objective's weeks are then
+the target's where no point falls between a window's first UTC midnight and the target's
+opening: on US equities fed from 04:00 to 20:00 New York, with no overnight point, an opening
+on a Sunday, or on a Monday no later than 04:00, whose UTC midnight is a weekend evening. A
+later Monday opening leaves that morning's points between the two cuts, and an opening on
+Tuesday to Saturday the evening before's post-market, so each such week is scored across two of
+the objective's. `cost_stress` and `cost_scenario` re-price the recorded fills and keep the
+path, so a scenario's number keeps the weeks the card stopped, though a cheaper model would
+have stopped more of them and a dearer one fewer (row 269).
+
 A card proposed by a model carries the proposer's own account of what it was: `tags`, one
 or more of the twenty-one strings `kanso.schemas.TAGS` fixes — `signal_*` for what the
 change reads, `horizon_*` for how long it holds, `filter_*`, `exit_*`, `sizing_*`, and
@@ -2748,7 +2773,14 @@ request delivers: a version without a `warmup` beside a warmed one sees nothing 
 prefix, a shallower warmup sees nothing of a deeper one's, and every version's handlers,
 indicators and orders are what a run of it alone would produce. A version under a `book`
 policy is seeded on a restart with the cushion and the last settled end of its newest
-measured window on that stage, and its first carry runs from the instant it resumes.
+measured window on that stage, and its first carry runs from the instant it resumes. A version
+under a `period_target` is held to it on the stage by the same harness as on its card, and is
+seeded with nothing: each window anchors its first week at the capital, so a window restarted
+inside a week the target had stopped trades again before the next week opens (`docs/backlog.md`
+row 270). A window that ends inside a stopped week still ends flat: the node's flatten after
+the window's last point is the stage's, not the version's, and is held neither to its order
+rate nor to its stopped week, so a sale still resting with its cancel in flight, or an exit the
+rate still owes, does not keep the close from going.
 
 **Two versions on one stage that trade one name each trade their own position.** They share
 one account, and what a version reads, sizes and exits by — `self.held(id)`, `submit_exit`,

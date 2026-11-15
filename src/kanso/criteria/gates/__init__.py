@@ -1390,7 +1390,8 @@ def repriced(run: CardRun, scenario: Mapping[str, float | None]) -> CardRun:
     cost on any instrument. The difference between what a
     fill now costs and what it cost is charged to the return period it falls in, exactly as
     a cost multiple is; the carry, the transfers and the cushion stand as recorded, for the
-    reasons `stressed` gives. A key the scenario leaves out is zero, and a scenario that
+    reasons `stressed` gives, and so do the weeks a `period_target` stopped, which `stressed`
+    says too. A key the scenario leaves out is zero, and a scenario that
     states neither `maker_bps` nor `maker_per_share` charges a maker's fill what any fill pays.
     `slippage_ticks` is charged on each fill's recorded increment and capped by its recorded
     limit, as the runner charged it; a fill recorded before either was kept pays none of it.
@@ -1509,7 +1510,10 @@ def stressed(run: CardRun, multiplier: float) -> CardRun:
     notional and not a fill cost, so it is left as recorded. Under a monthly reset the
     transfers stand as struck and the cushion as recorded, so the extra cost stays in the book
     across months where a real reset would have absorbed it at the next turn: a stressed run's
-    returns are exact, and its equity and drawdown are the more conservative for it.
+    returns are exact, and its equity and drawdown are the more conservative for it. The path is
+    kept, so the weeks a `period_target` stopped stand as recorded too, though a cheaper model
+    would have stopped more of them and a dearer one fewer: the run records no stop to say which
+    (`docs/backlog.md` row 269).
     """
     ends = run.period_ends_ns
     added = [0.0] * len(ends)
