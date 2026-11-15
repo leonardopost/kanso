@@ -397,6 +397,31 @@ def test_stage_runs_can_be_narrowed_to_a_stage_or_a_strategy(store: StateStore) 
     assert [r.strategy_id for r in records.stage_results(store, strategy_id="beta")] == ["beta"]
 
 
+def test_a_strategy_s_windows_are_read_without_decoding_another_s(
+    store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restart reads one strategy's windows on one stage, whichever of its versions ran them,
+    and every deploy does it for each version under a target: the events are narrowed before
+    any run is decoded, so the read costs that strategy's windows and not the stage's."""
+    from kanso.nautilus.node import Realised
+
+    def realised(strategy_id: str, version: int) -> Realised:
+        return Realised(
+            strategy_id=strategy_id, version=version, capital=1.0, run=a_run(), positions=()
+        )
+
+    records.record_stage_run(store, "paper", "s1", (realised("alpha", 1), realised("beta", 1)))
+    records.record_stage_run(store, "paper", "s2", (realised("alpha", 2), realised("beta", 1)))
+    records.record_stage_run(store, "live", "s3", (realised("alpha", 1),))
+    decoded: list[object] = []
+    monkeypatch.setattr(records, "decode_run", lambda payload: decoded.append(payload) or a_run())
+
+    read = records.stage_results(store, strategy_id="alpha", stage="paper")
+
+    assert [(one.strategy_id, one.version) for one in read] == [("alpha", 1), ("alpha", 2)]
+    assert len(decoded) == 2
+
+
 def test_clearing_a_stage_reports_what_held_it(store: StateStore) -> None:
     store.connection.execute(
         "INSERT INTO strategies (strategy_id, created_at) VALUES ('alpha', '2024-01-01')"

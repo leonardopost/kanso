@@ -281,16 +281,17 @@ def stage_results(
     version: int | None = None,
     stage: str | None = None,
 ) -> list[StageResult]:
-    """Every realised window recorded, oldest first, narrowed to one version or stage."""
+    """Every realised window recorded, oldest first, narrowed to one strategy, version or stage.
+
+    Each event is narrowed before its run is decoded, so a strategy's windows are read without
+    decoding any other strategy's."""
     subject = None if strategy_id is None or version is None else subject_of(strategy_id, version)
-    found = [
+    return [
         _result(event.detail)
         for event in store.events(kind=STAGE_RUN, subject=subject)
-        if stage is None or event.detail.get("stage") == stage
+        if (stage is None or event.detail.get("stage") == stage)
+        and (strategy_id is None or event.detail.get("strategy") == strategy_id)
     ]
-    if strategy_id is not None and subject is None:
-        found = [one for one in found if one.strategy_id == strategy_id]
-    return found
 
 
 def book_seed(results: Sequence[StageResult]) -> tuple[float, int | None]:
