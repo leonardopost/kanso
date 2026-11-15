@@ -485,6 +485,33 @@ def test_a_stage_reads_a_tick_sleeve_s_bars_at_the_size_a_card_read_them(
     assert "bar_resolution" not in impl._sleeve_config(plain, 1.0, draft)
 
 
+def test_a_stage_configures_a_sleeve_without_its_dated_spread_s_table(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The rows are each a year's median, in force from its first day, so a deployed sleeve's
+    manifest carries the pinned model without them, as a card's configuration does; the node
+    hands the harness the table apart, from the request it builds off the pins."""
+    from kanso.schemas import CostsOverride, resolve_venue_model
+
+    from .conftest import draft_hypothesis, draft_version
+
+    row = {"pre": 9.0, "open": 4.0, "rth": 1.0, "post": 9.0, "n_sessions": 5, "n_open": 25}
+    costs = CostsOverride.model_validate(
+        {"spread": "dated", "dated": [{"instrument": "DEMO.XNAS", "from": "2020-01-01", **row}]}
+    )
+    model = resolve_venue_model("XNAS", max_leverage=1.0, hypothesis_costs=costs)
+    plain = draft_hypothesis(ws, store, "demo_plain")
+    draft = draft_version(store, "demo_plain", ())
+    dated = draft.model_copy(update={"pins": draft.pins.model_copy(update={"venue_model": model})})
+
+    configured = impl._sleeve_config(plain, 1.0, dated)["venue_model"]["costs"]
+    assert configured["spread"] == "dated"
+    assert "dated" not in configured
+    assert impl._sleeve_config(plain, 1.0, draft)[
+        "venue_model"
+    ] == draft.pins.venue_model.model_dump(mode="json")
+
+
 def test_a_stage_shows_a_depth_sleeve_the_book_a_card_showed_it(
     ws: Workspace, store: StateStore
 ) -> None:

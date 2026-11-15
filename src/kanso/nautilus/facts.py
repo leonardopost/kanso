@@ -655,6 +655,21 @@ that strategy, each list was the one read before, grown at its end. That is what
 runner unpickle each snapshot once rather than every one after every chunk
 (`kanso.nautilus.backtest._fills_since`).
 
+**A fill is heard on its instrument's fills topic before its strategy is handed it, and a fill
+that flips a position keeps its trade id in both halves.** `ExecutionEngine._handle_order_fill`
+applies a fill to the position it makes and then publishes it on `events.fills.<instrument
+id>`, inside `_handle_event` and before the order event is published on `events.order.<the
+strategy's id>` (`execution/engine.pyx`). A fill larger than the position it is against is split
+by `_flip_position` into one that closes the position, under the fill's own event id, and one
+that opens the other side, under a new `UUID4`, both copying the fill's instrument and trade
+id; the positions, which the runner reads its fills off, hold the two, and the bus and the
+strategy only the whole. Measured: a long of 10 and a sale of 30 at market on a NETTING venue,
+a subscriber to `events.fills.*` on the strategy's bus hearing each fill before the strategy
+was handed it, the positions holding the buy, the sale's event and a third event of no id the
+bus carried, the sale's trade id on both. So the venue's record of the instant each fill was
+priced at keys a fill by its instrument and trade id (`kanso.nautilus.struck`), which the
+harness's whole fill and the extraction's halves share.
+
 Risk configuration
 ------------------
 `RiskEngineConfig` has exactly five fields: `bypass`, `max_order_submit_rate`,
@@ -1840,6 +1855,99 @@ def _check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end() -> tuple[bo
     return holds, (
         "a NETTING position flipped from long to short, closed, reopened and closed again, "
         "its snapshot lists read after every handler — " + "; ".join(seen)
+    )
+
+
+def _probe_a_flip_on_the_bus() -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
+    """A long of 10, then a sale of 30 at market, which flips it short 20. Returns, in the
+    order they happened, each fill the strategy's `events.fills.*` subscriber heard and each
+    fill it was handed, as (where, event id); and every fill the positions hold at the end, as
+    (event id, instrument, trade id), with the event ids the bus carried named `heard N`."""
+    from nautilus_trader.backtest.engine import BacktestEngine
+    from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
+    from nautilus_trader.model.currencies import USD
+    from nautilus_trader.model.enums import AccountType, OmsType, OrderSide
+    from nautilus_trader.model.identifiers import Venue
+    from nautilus_trader.model.objects import Money, Quantity
+    from nautilus_trader.trading.strategy import Strategy
+
+    equity: Any = _sample_equity()
+    names: dict[str, str] = {}
+
+    def name(event: Any) -> str:
+        return names.setdefault(str(event.id), f"heard {len(names) + 1}")
+
+    class Probe(Strategy):  # type: ignore[misc]
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen = 0
+            self.order: list[tuple[str, str]] = []
+
+        def on_start(self) -> None:
+            self.msgbus.subscribe(topic="events.fills.*", handler=self.heard)
+            self.subscribe_trade_ticks(equity.id)
+
+        def heard(self, event: Any) -> None:
+            self.order.append(("topic", name(event)))
+
+        def on_order_filled(self, event: Any) -> None:
+            self.order.append(("handed", names.get(str(event.id), "unheard")))
+
+        def on_trade_tick(self, tick: object) -> None:
+            self.seen += 1
+            if self.seen in (1, 3):
+                side, quantity = (OrderSide.BUY, 10) if self.seen == 1 else (OrderSide.SELL, 30)
+                self.submit_order(
+                    self.order_factory.market(equity.id, side, Quantity.from_int(quantity))
+                )
+
+    engine = BacktestEngine(config=BacktestEngineConfig(logging=LoggingConfig(bypass_logging=True)))
+    try:
+        engine.add_venue(
+            venue=Venue("XNAS"),
+            oms_type=OmsType.NETTING,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            starting_balances=[Money(1_000_000, USD)],
+        )
+        engine.add_instrument(equity)
+        engine.add_data(_limit_points("trade", 10.0, 10.0, 10.0))
+        probe = Probe()
+        engine.add_strategy(probe)
+        engine.run()
+        held = [
+            (names.get(str(event.id), "new"), event.instrument_id.value, event.trade_id.value)
+            for position in (*engine.cache.position_snapshots(), *engine.cache.positions())
+            for event in position.events
+        ]
+        return probe.order, sorted(set(held))
+    finally:
+        engine.dispose()
+
+
+def _check_a_fill_is_heard_on_its_topic_before_its_strategy_and_a_flip_keeps_its_trade_id() -> (
+    tuple[bool, str]
+):
+    """What `kanso.nautilus.struck.Struck` rests on: each fill is heard on its instrument's
+    fills topic before its strategy is handed it, and a flip's two halves, which the positions
+    hold, keep the instrument and trade id of the fill the bus carried."""
+    order, held = _probe_a_flip_on_the_bus()
+    trades = [trade for _, _, trade in held]
+    heard = [(where, f"heard {n}") for n in (1, 2) for where in ("topic", "handed")]
+    holds = (
+        order == heard
+        and [name for name, _, _ in held] == ["heard 1", "heard 2", "new"]
+        and {instrument for _, instrument, _ in held} == {"AAPL.XNAS"}
+        and len(set(trades)) == 2
+        and trades[1] == trades[2]
+    )
+    return holds, (
+        "a long of 10 and then a sale of 30 at market on a NETTING venue, with a subscriber "
+        f"to events.fills.* on the strategy's bus: (where, fill) in the order they happened "
+        f"{order}; the fills the positions hold at the end, as (fill, instrument, trade id), "
+        f"{held}. Each fill was heard on the topic before the strategy was handed it, and the "
+        "sale that flipped the position reached the positions as the fill the bus carried and "
+        "a new event with its instrument and trade id"
     )
 
 
@@ -6198,6 +6306,12 @@ _CHECKS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
         "position_snapshot_bytes hands back the cache's own list of a position's snapshots, "
         "which a NETTING flip or reopen appends to and nothing else changes",
         _check_a_snapshot_list_is_the_cache_s_own_and_grows_at_its_end,
+    ),
+    (
+        "a fill is published on its instrument's fills topic before its strategy is handed it, "
+        "and a fill that flips a NETTING position reaches the positions as two that keep its "
+        "instrument and trade id, the second under an event id of its own",
+        _check_a_fill_is_heard_on_its_topic_before_its_strategy_and_a_flip_keeps_its_trade_id,
     ),
 )
 

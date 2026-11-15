@@ -243,13 +243,15 @@ from nautilus_trader.model.orders import Order
 from nautilus_trader.trading.strategy import Strategy
 
 from kanso.criteria.run import NS_PER_DAY, day_of
-from kanso.errors import ValidationError
+from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import actions, splits
 from kanso.nautilus.clock import Session, session_of
 from kanso.nautilus.costs import (
     BookPolicy,
     at_touch,
     carry,
+    dated_half_spread,
+    dated_reserve_bps,
     fill_cost,
     fixed_half_spread,
     funding_payment,
@@ -935,6 +937,12 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         rate reads as an entry whatever it does to the position (`_short_of_rate`)."""
         self._kept_quotes = self._charges.get("spread") == "quotes"
         """Whether the spread is the quoted one, which a quote of a name settles that name for."""
+        self._spread_rows: tuple[Any, ...] = ()
+        """The dated spread table a `spread: dated` charges, handed by the runner
+        (`kanso.nautilus.cross_section.dated`) and never on the configuration a strategy reads."""
+        self._spread_struck: Any = None
+        """The venue's record of the instant each fill's price was struck at, handed with the
+        table (`kanso.nautilus.struck`): the one the extraction reads."""
         self._kept_day: tuple[int, date] | None = None
         """The last UTC day a scoped point fell on, and its index from the epoch
         (`_out_of_scope`)."""
@@ -1033,21 +1041,35 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         does not know whether it will rest, so where the model states a maker's rate the
         larger of the two is the one reserved; a rebate reserves nothing of its own. Half of
         the sell-side fee in basis points is reserved on top, because a round trip pays it
-        once and the reserve is struck per side.
+        once and the reserve is struck per side. Under a dated spread the width reserved is the
+        largest of any row of the table at any part of the session, which no day moves
+        (`kanso.nautilus.costs.dated_reserve_bps`); `cost_rate_at` reads one instrument's.
         """
-        costs = self._cfg.venue_model.get("costs")
-        if not isinstance(costs, Mapping):
-            return 0.0
+        return self._cost_rate(None)
+
+    def _cost_rate(self, instrument: str | None) -> float:
+        """`cost_rate`, under a dated spread for `instrument` at the part of the session the
+        point being handled is in, or with none for every instrument and part alike."""
+        costs = self._charges
         bps = float(costs.get("commission_bps") or 0.0) + float(costs.get("slippage_bps") or 0.0)
         if costs.get("spread") == "fixed_bps":
             bps += float(costs.get("fixed_bps") or 0.0)
+        elif costs.get("spread") == "dated":
+            at = None if instrument is None else self._data_time
+            bps += dated_reserve_bps(self._spread_rows, instrument, at)
         maker = _maker_bps(costs)
         if maker is not None:
             bps = max(bps, maker)
         bps += float(costs.get("sell_fee_bps") or 0.0) / 2.0
         return bps / BASIS_POINT
 
-    def cost_rate_at(self, price: float, multiplier: float = 1.0, increment: float = 0.0) -> float:
+    def cost_rate_at(
+        self,
+        price: float,
+        multiplier: float = 1.0,
+        increment: float = 0.0,
+        instrument: InstrumentId | str | None = None,
+    ) -> float:
         """`cost_rate` at a price: the per-share commission, where the model states one, the
         model's `slippage_ticks` of the instrument's price `increment`, and half the per-share
         sell fee are fractions of notional only once the price is known, and a dearer share
@@ -1057,7 +1079,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         them — is the one reserved, as the larger rate is in `cost_rate`; a rebate reserves
         nothing of its own. On a multiplied instrument per share means per contract, and one
         contract's notional is `price x multiplier`, so the fraction is the charge over that,
-        a tick on a contract being worth the increment times the multiplier."""
+        a tick on a contract being worth the increment times the multiplier. Under a dated
+        spread, `instrument` names whose rows are reserved: the largest width any of its rows
+        states for the part of the session the point being handled is in, which no day moves;
+        with none, `cost_rate`'s largest of every row and part."""
         per_share = float(self._charges.get("commission_per_share") or 0.0)
         ticks = float(self._charges.get("slippage_ticks") or 0.0)
         per_share += ticks * increment * multiplier
@@ -1065,9 +1090,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         if maker is not None:
             per_share = max(per_share, maker)
         per_share += float(self._charges.get("sell_fee_per_share") or 0.0) / 2.0
+        rate = self._cost_rate(None if instrument is None else str(instrument))
         if per_share <= 0.0 or price <= 0.0:
-            return self.cost_rate
-        return self.cost_rate + per_share / (price * multiplier)
+            return rate
+        return rate + per_share / (price * multiplier)
 
     @property
     def max_notional(self) -> float:
@@ -2535,7 +2561,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                 budget,
                 price * multiplier,
                 float(instrument.price_increment) * multiplier,
-                self.cost_rate_at(price, multiplier, float(instrument.price_increment)),
+                self.cost_rate_at(price, multiplier, float(instrument.price_increment), key),
             )
             quantity = self._quantise(instrument, raw)
             if quantity is None:
@@ -3368,7 +3394,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             self.budget,
             reference * multiplier,
             increment * multiplier,
-            self.cost_rate_at(reference, multiplier, increment),
+            self.cost_rate_at(reference, multiplier, increment, key),
         )
         ctx = self._context(instrument_id, side, raw, None, "MARKET")
         self._entry_answers = self._ask_overlays(ctx)
@@ -4077,9 +4103,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         stated width, or the last quoted one."""
         price = self._last_print.get(key)
         rate = (
-            self.cost_rate_at(price, self._multiplier_of(key), self._increment_of(key))
+            self.cost_rate_at(price, self._multiplier_of(key), self._increment_of(key), key)
             if price
-            else self.cost_rate
+            else self._cost_rate(key)
         )
         if self._charges.get("spread") == "quotes":
             quote = self._last_quote.get(key)
@@ -4307,7 +4333,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             qty,
             float(self._charges.get("commission_bps") or 0.0),
             float(self._charges.get("slippage_bps") or 0.0),
-            self._half_of(quote),
+            self._half_of(quote, event),
             _maker_bps(self._charges),
             float(self._charges.get("commission_per_share") or 0.0),
             maker=maker,
@@ -4320,11 +4346,28 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             touched=self._levelled or at_touch(px, sell=sell, quote=quote),
         )
 
-    def _half_of(self, quote: tuple[float, float] | None) -> float:
-        """Half the spread one fill pays: the stated width, or under `spread: quotes` the half
-        of the quote it is read against — the stated width when there is none before it."""
+    def _half_of(self, quote: tuple[float, float] | None, event: Any) -> float:
+        """Half the spread one fill pays: the stated width, under `spread: quotes` the half of
+        the quote it is read against — the stated width when there is none before it — and
+        under `spread: dated` the half its row states for the instant the venue struck its
+        price at, read off the record the extraction reads (`kanso.nautilus.struck`), or the
+        fill's own where the venue had applied nothing of its name."""
+        spread = self._charges.get("spread")
+        if spread == "dated":
+            if not self._spread_rows or self._spread_struck is None:
+                raise PreconditionError(
+                    f"costs.spread: dated and {self._cfg.hyp_id}'s sleeve was handed no table, "
+                    "so its balance would charge no spread where the runner charges one",
+                    remedy="run the sleeve through a kanso runner, which hands it the table",
+                )
+            at = self._spread_struck.at(event)
+            return dated_half_spread(
+                self._spread_rows,
+                event.instrument_id.value,
+                int(event.ts_event) if at is None else at,
+            )
         fixed = fixed_half_spread(self._charges.get("fixed_bps"))
-        if self._charges.get("spread") != "quotes" or quote is None:
+        if spread != "quotes" or quote is None:
             return fixed
         return quote_half_spread(*quote)
 

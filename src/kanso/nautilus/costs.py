@@ -31,6 +31,27 @@ A sleeve's harness needs the same number while it runs, to know what its account
 holds, so the arithmetic lives here and both call it: the balance a strategy sizes against
 is the equity the runner strikes.
 
+A dated spread (`spread: dated`) is the half-width of one row of a table
+(`dated_half_spread`): the latest row of the fill's instrument whose `from` is on or before the
+New York date of the instant its price was struck at, and of that row the width of the part of
+the session that instant is in. The instant is the price's, never the fill's own, and the venue
+says which it was (`kanso.nautilus.struck`): the `ts_event` of the fill's name's last point the
+venue had applied when it filled — a bar's close, or a print's own stamp. Under a latency an
+order lands after the first point of an instant, whichever name's, and fills at its own name's
+last price, which can be a bar of another part of the session or another day. The part is read
+off the minute that point covers (`kanso.nautilus.clock.session_of`, the instant a nanosecond
+before its stamp, so a print stamped on a part's first instant reads as the part before it):
+`pre`, `rth` and `post` as the clock reads them, `open` for the bars stamped 09:31 to 09:35,
+which cover 09:30 to 09:35 — a cost window inside regular hours, so the clock's segments, and a
+strategy's `self.session`, keep their four values — and the larger of `pre` and `post`
+overnight. The last row of an instrument stays in force, so a window past the table is charged
+its last year. No calendar of early closes is read: a fill between an early close and 16:00 is
+charged `rth`. A fill with no row in force is charged no spread, which `Hypothesis` refuses for
+every name the hypothesis trades on the New York date its research window's first instant falls
+on, and on the date a warmup reaches at the latest, and `RunRequest` on the date of the first
+instant it delivers. What a sleeve reserves for a dated spread when it sizes is
+`dated_reserve_bps`, which reads no date.
+
 A perpetual's funding is the third charge, and the only one that is neither a fill cost nor
 a period-end policy: at each settlement the holder pays the realised rate on the notional it
 holds then (`funding_payment`), so a long pays a positive rate and a short receives it. The
@@ -57,13 +78,15 @@ published to nothing and applied by no venue (`kanso.nautilus.facts`).
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from math import fsum
 from typing import Any, Final
 
+from kanso.nautilus.clock import OVERNIGHT, RTH, session_of
 from kanso.schemas import Book
+from kanso.schemas.venue import DatedSpread
 
 __all__ = [
     "BPS",
@@ -72,6 +95,10 @@ __all__ = [
     "BookPolicy",
     "at_touch",
     "carry",
+    "dated_half_spread",
+    "dated_part",
+    "dated_reserve_bps",
+    "dated_rows",
     "fill_cost",
     "fill_rate",
     "fixed_half_spread",
@@ -84,6 +111,7 @@ __all__ = [
     "reset",
     "side_rate",
     "tick_slip",
+    "undated",
 ]
 
 BPS: Final = 10_000.0
@@ -98,10 +126,90 @@ MONTHLY: Final = "monthly"
 _EPOCH: Final = date(1970, 1, 1)
 _NS_PER_DAY: Final = 86_400 * 1_000_000_000
 
+OPEN: Final = "open"
+"""The part of regular hours a dated spread charges apart: the bars covering 09:30 to 09:35."""
+
+OPEN_MINUTES: Final = range(9 * 60 + 30, 9 * 60 + 35)
+"""The New York minutes `open` covers: those of the bars stamped 09:31 to 09:35."""
+
+PARTS: Final = ("pre", OPEN, RTH, "post")
+"""The parts of the session a dated row states a width for."""
+
 
 def fixed_half_spread(fixed_bps: float | None) -> float:
     """Half a stated spread width, as a fraction of notional: what one side of a trip pays."""
     return (fixed_bps or 0.0) / 2.0 / BPS
+
+
+def dated_part(price_ts_ns: int) -> tuple[str, date]:
+    """The part of the session a price struck at `price_ts_ns` pays a dated width for, and the
+    New York date its row is read on: those of the minute a point stamped there covers — a
+    bar's, stamped at its close — with `open` for the bars stamped 09:31 to 09:35 and
+    `overnight` before 04:00 and from 20:00."""
+    segment, day, minute = session_of(price_ts_ns)
+    if segment == RTH and minute in OPEN_MINUTES:
+        return OPEN, day
+    return segment, day
+
+
+def _width(row: DatedSpread, part: str) -> float:
+    """A row's full width for a part of the session; overnight, the larger of its two ends."""
+    if part == OVERNIGHT:
+        return max(row.pre, row.post)
+    return float(getattr(row, part))
+
+
+def dated_half_spread(rows: Sequence[DatedSpread], instrument: str, price_ts_ns: int) -> float:
+    """Half the dated width a fill of `instrument` priced at `price_ts_ns` pays, as a fraction
+    of its notional: the latest of the instrument's rows in force on the New York date of the
+    minute that price covers, at that minute's part of the session (`dated_part`). Nothing for
+    a fill with no row in force. A pure function of its arguments, so a recorded fill's charge
+    is struck again from the fill alone."""
+    part, day = dated_part(price_ts_ns)
+    found: DatedSpread | None = None
+    for row in rows:
+        if row.instrument == instrument and row.from_ <= day:
+            found = row
+    return 0.0 if found is None else _width(found, part) / 2.0 / BPS
+
+
+def dated_reserve_bps(
+    rows: Sequence[DatedSpread], instrument: str | None = None, at_ns: int | None = None
+) -> float:
+    """The width a sleeve reserves under a dated spread, in basis points, read off no date: of
+    `instrument`'s rows, the largest width of the part of the session `at_ns` falls in, and with
+    no instrument or no instant, the largest of every row's every part. It is the whole width
+    where a fill pays half, as `fixed_bps` is reserved; and every row of every year stands in
+    it, so what it says is the same on any day of the window and nothing of which row is in
+    force reaches the strategy through it. It covers a fill priced in the part of the session
+    it was sized in, and only that: under a latency an order sized on the bar stamped 16:00
+    can be priced at its name's bar of 16:01, in `post`, and pay a half-width larger than the
+    `rth` width reserved (`docs/backlog.md` row 261)."""
+    held = [row for row in rows if instrument is None or row.instrument == instrument]
+    if instrument is None or at_ns is None:
+        return max((_width(row, part) for row in held for part in PARTS), default=0.0)
+    part, _ = dated_part(at_ns)
+    return max((_width(row, part) for row in held), default=0.0)
+
+
+def dated_rows(venue_model: Mapping[str, object]) -> tuple[DatedSpread, ...]:
+    """The dated table a venue model, as a run carries it, states; none when it states none."""
+    costs = venue_model.get("costs")
+    stated = costs.get("dated") if isinstance(costs, Mapping) else None
+    if not stated:
+        return ()
+    return tuple(DatedSpread.model_validate(row) for row in stated)
+
+
+def undated(venue_model: Mapping[str, object]) -> dict[str, object]:
+    """A venue model without its dated table: what a sleeve's configuration carries, so a
+    strategy that reads the model it is handed reads no row of it. `spread: dated` stays, so
+    the harness knows the table it is handed apart (`kanso.nautilus.cross_section.dated`)
+    is the spread it charges."""
+    costs = venue_model.get("costs")
+    if not isinstance(costs, Mapping) or "dated" not in costs:
+        return dict(venue_model)
+    return {**venue_model, "costs": {k: v for k, v in costs.items() if k != "dated"}}
 
 
 def quote_half_spread(bid: float, ask: float) -> float:

@@ -64,6 +64,9 @@ from kanso.schemas.screen import hours_minutes
 NO_IMPLEMENTATION: Final = "this version of kanso has no implementation for it"
 """Why a declared-but-unbuilt gate is refused, in the words the planner is retried with."""
 
+COST_SCENARIO: Final = "cost_scenario"
+"""The gate that re-prices a run's recorded fills under a schedule its parameters state."""
+
 LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
 
@@ -322,6 +325,11 @@ def check_params(
     return problems
 
 
+def _positive(value: object) -> bool:
+    """Whether a parameter is a number above zero."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+
+
 def plan_complaints(
     included: Sequence[Any],
     excluded: Sequence[Any],
@@ -345,6 +353,11 @@ def plan_complaints(
     such cards with fewer than two of these (`kanso.certify.run.unpriced`), since that
     spread cannot be read, and the gate skips only where fewer than two cards ran and
     traded at all: then nothing was chosen over anything.
+
+    A `cost_scenario` on a hypothesis charged a dated spread states a `fixed_bps` above zero. A
+    scenario's parameters are numbers and cannot carry a table, and one that leaves the width
+    out, or states it at zero, charges no spread, so it would re-price every fill of a run that
+    paid its table's at none.
 
     A gate this version has no implementation for is not part of the toolbox a plan may
     draw on. It is neither offered to the planner, nor accepted from one, nor required of
@@ -416,6 +429,15 @@ def plan_complaints(
             complaints.append(f"excluded.{left.id}: {searched}, so it cannot be left out")
         elif left.id in named:
             complaints.append(f"excluded.{left.id}: is both included and excluded")
+    if hyp.costs is not None and hyp.costs.spread == "dated":
+        complaints.extend(
+            f"gates.{gate.id}.fixed_bps: is {gate.params.get('fixed_bps', 'not set')}, and "
+            f"{hyp.id} is charged a dated spread, which a scenario cannot state: one without a "
+            "fixed_bps above zero re-prices every fill at no spread at all; the width is yours, "
+            "above zero and inside its range"
+            for gate in included
+            if gate.id == COST_SCENARIO and not _positive(gate.params.get("fixed_bps"))
+        )
     return complaints
 
 

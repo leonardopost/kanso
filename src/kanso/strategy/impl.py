@@ -387,8 +387,12 @@ def _sleeve_config(
     the sleeve hypothesis's rule, and `extra_resolutions` the grains its attached overlays
     keep their own clock on, so a stage node runs both as a card did; `bar_resolution` is
     written only where the hypothesis states one, so a version on bars alone, or on ticks
-    alone, is configured with exactly the fields it was before the key existed.
+    alone, is configured with exactly the fields it was before the key existed. The venue model
+    is the pinned one without a dated spread's table (`kanso.nautilus.costs.undated`), which the
+    stage hands the harness apart, as a card's runner does.
     """
+    from kanso.nautilus.costs import undated
+
     return {
         "hyp_id": hyp.id,
         "universe": list(hyp.universe),
@@ -400,7 +404,7 @@ def _sleeve_config(
         "max_drawdown_pct": hyp.risk_limits.max_drawdown_pct,
         "max_leverage": hyp.risk_limits.max_leverage,
         "sizing_budget": 0.0 if hyp.sizing is None else hyp.sizing.budget,
-        "venue_model": version.pins.venue_model.model_dump(mode="json"),
+        "venue_model": undated(version.pins.venue_model.model_dump(mode="json")),
         **({} if hyp.depth is None else {"depth": [hyp.depth.every_ns, hyp.depth.levels]}),
         **({} if hyp.bar_resolution is None else {"bar_resolution": hyp.bar_resolution}),
         **dict(version.config),

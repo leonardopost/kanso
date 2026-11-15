@@ -126,12 +126,14 @@ that is wrong; exit 4 is an operator act that is missing rather than a fault.
 | run anything against a `state.db` behind the schema | 2 · *N* migration(s) behind; `kanso migrate` |
 | write windows with no embargo between research and certification | 3 · at `hyp validate`, changing nothing |
 | leave `costs` at its defaults on a hypothesis that does not require `quote` data | 3 · at `hyp validate`: no quotes to take a spread from, so `fixed_bps` must be set |
+| state `costs.spread: dated` without rows, rows without it, an instrument's rows out of order by `from`, a negative or non-finite width, a count of sessions or marks below one, a row of an instrument outside the universe, a row from after the research window's last day, or, for a name asked for `bar`, `quote` or `trade`, no row in force on the New York date the research window's first instant falls on — the day before its first day, 00:00 UTC being the New York evening before — or, under a warmup of N sessions, on the day before the date N days before the window | 3 · at `hyp validate` and wherever the file is read, naming `costs.dated` and the remedy; under a warmup the catalog resolves, a traded name with no row in force on the day before the first warmup session is refused (3) at `hyp validate` too, and where a run is built, naming that day |
+| state `spread: dated` or `dated` under `venues.<MIC>.costs`, or in a broker's declaration | 3 · at `hyp validate`, `hyp add`, `research begin` and `screen validate`, naming the venue and the layer, with the remedy of dropping it from `portfolio.yaml` or, for a broker's declaration, from its adapter's: a dated spread is a hypothesis's own |
 | require `bar` at resolution `tick`, `quote` or `trade` without `bar_resolution` | 3 · at `hyp validate` and wherever the file is read, naming `bar_resolution`: nothing says what size the bars are read at, and the remedy is to state it |
 | attach an overlay with a bar clock of its own to a host that reads bars beside ticks | 3 · at `hyp validate`, naming `resolution`: a file at a bar-size resolution states no size for the host's bars, and the remedy is the host's resolution and `bar_resolution`, and over a host at `quote` or `trade` that kind required in `data_requirements` and in every `data_by_instrument` entry that asks for more than `bar` |
 | attach a construct whose `bar_resolution` is not its host's | 3 · at `hyp validate`, naming `bar_resolution` and what the host reads: the remedy is the host's size where it states one; over a tick host that reads no bars, `bar` dropped with the key, and a name asked for bars alone dropped from `data_by_instrument` and the universe; and over a host at a bar size, which only an overlay reaches, the host's resolution, since the overlay's card would hand the host its own clock as a bar grain. A filter or an exit rule that states one off its host's grain is refused on `resolution` first, with one remedy that takes the host's resolution and does the same, requiring the host's kind too over a host at `quote` or `trade` |
 | research at tick resolution under a venue model whose `latency_ms` is zero at every layer | 3 · at `hyp validate`, `hyp add` and `research begin`, naming `costs.latency_ms`: an order would land on the point it was sent from |
 | send an exit kanso did not size — one the strategy built itself, at market or at a limit, in any time in force, a stop, an order of a list or a list that closes, the engine's `close_position`, or an overlay's leg or clip — when the venue model's `costs.orders_per_minute` leaves the bucket too few tokens for it | the card is a `discard` carrying a `sizing` gate of rule `order_rate`, as every refusal the harness makes is, saying, for an exit the strategy built itself, to close with `submit_exit`, and, for an overlay's leg or clip, to send fewer commands or state the account's own figure. An entry, an entry's list and a modify past the rate are not refused: each is dropped unsent and counted on the card's `commands`, and the card runs on; an exit `submit_exit` sized is owed and a cancel deferred (`costs.orders_per_minute`) |
-| state a `costs.orders_per_minute` below `costs.requests_per_cancel`, at any layer, the broker's declaration among them | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the venue, both keys and both figures: the bucket never holds what one cancel spends, so the sleeve's first cancel would wait for ever and every entry and modify behind it be dropped |
+| state a `costs.orders_per_minute` below `costs.requests_per_cancel`, at any layer, the broker's declaration among them | 3 · at `hyp validate`, `hyp add`, `research begin` and `screen validate`, naming the venue, both keys and both figures, with the remedy of the figure that admits a cancel, stated in the hypothesis's `costs` — a free screen's `costs.<MIC>` for a screen — or under `venues.<MIC>.costs`: the bucket never holds what one cancel spends, so the sleeve's first cancel would wait for ever and every entry and modify behind it be dropped |
 | state `maker_bps` or `maker_per_share`, at any layer, for a tick-resolution hypothesis on the top-of-book venue under `limit_fill: touch` or `through` | 3 · at `hyp validate`, `hyp add` and `research begin`, naming the key — and, where no layer states a rule and the names alone kept the venue on `touch`, each such name and what it is asked for: those rules credit a resting limit with no queue ahead of it, so the schedule would price fills the tape did not give |
 | put instruments whose venues carry different account currencies in one universe | 3 · at `hyp validate`; a hypothesis trades one account currency |
 | put an instrument in a universe that settles in a currency other than its venue's account currency, or is booked in one — a data leg as well as a traded one | 3 · at `hyp validate`, naming the instrument, its currencies and the account's |
@@ -933,7 +935,7 @@ nor a replay could tell apart. Classification never touches the key.
 `costs` is optional, with one case the scaffold's comment names: a hypothesis whose
 `data_requirements` do not include `quote` has no quotes to take a spread from, so it must
 set `spread: fixed_bps` and a `fixed_bps` width itself, or inherit one from
-`venues.<MIC>.costs` in `portfolio.yaml`. The shipped broker declaration supplies a
+`venues.<MIC>.costs` in `portfolio.yaml`, or state a dated table of its own (below). The shipped broker declaration supplies a
 commission and no spread, so under the defaults a bar-only hypothesis is refused at
 `hyp validate` and `hyp add` (exit 3), naming `costs.fixed_bps`; the demo hypothesis carries
 the block for exactly that reason. The spread is charged where the price does not already
@@ -961,6 +963,82 @@ is gross of what another charges, and `hyp add` clears `best` when any key of it
 in its pins, so its re-pin compares against the costs the file it pinned states, read back
 from the state store; only when the store no longer holds those bytes, or this kanso cannot
 read them as a hypothesis, does the missing key read as unchanged.
+
+`costs.spread: dated` charges a width that moves with the year and the hour, where `fixed_bps`
+states one for every fill: a table of rows under `costs.dated`, each the full widths, in basis
+points of the mid, one instrument pays from its `from` day on, by part of the New York session,
+with the sample it was measured on:
+
+```yaml
+costs:
+  commission_bps: 0.0
+  slippage_bps: 1.0
+  spread: dated
+  dated:                           # one row per instrument and year; the last stays in force
+  - {instrument: DEMO.SIM, from: 2023-01-01, pre: 40, open: 12, rth: 3, post: 60, n_sessions: 5, n_open: 25}
+  - {instrument: DEMO.SIM, from: 2024-01-01, pre: 20, open: 8, rth: 2, post: 30, n_sessions: 5, n_open: 25}
+```
+
+A fill pays half of one width of one row, as it pays half of `fixed_bps`, plus `slippage_bps`
+where its price does not carry the spread (above): the latest row of its instrument whose
+`from` is on or before the New York date of the instant its price was struck at, and of that
+row the part of the session that instant is in — the minute the point covers, a bar being
+stamped at its close, so `pre` is 04:00 to 09:30 (the bar stamped 09:30 among them), `open`
+the bars stamped 09:31 to 09:35, `rth` the rest of regular hours to the bar stamped 16:00,
+`post` to 20:00, and before 04:00 or after 20:00 the larger of `pre` and `post`. The instant is
+the price's, never the fill's, and the venue says which it was: the stamp of the fill's name's
+last point the venue had applied when it filled — a bar's close, never the instant a bar
+published late was published at, or a print's own stamp, read as a bar's is, a nanosecond
+before it. Under a `latency_ms` an order lands after the first point of any name after it
+arrives, and fills at its own name's bar of that instant only where a bar of the name was that
+point, and at its last bar before it otherwise — so an exit sent on the bar stamped 16:00 that
+lands on the 16:01 instant pays `rth` in a name another name's bar opened that instant ahead
+of, and `post` in the name whose bar opened it (`docs/concepts.md`, Delivery). With none, an
+order a fill handler sends while the venue applies an instant's points fills at the market it
+has applied so far. Each recorded fill keeps that instant as `price_ts_ns`. The last row stays
+in force, so a certification window or a stage past the table pays the table's last year,
+which no measurement past it moved. No calendar of early closes is read: a fill between an
+early close and 16:00 pays `rth` (`docs/backlog.md` row 257). A daily bar is stamped at the
+next New York midnight, so a fill at its close reads as overnight on its session's date and
+pays the larger of `pre` and `post`, which is less than `rth` where a row states its `rth`
+wider than both; no rule holds a row's parts to an order (row 266).
+
+The rows are each a year's median, in force from that year's first day, so a strategy that read
+one would know a width the market had not shown yet. They are stated in the hypothesis's own
+`costs` and nowhere else: a `venues.<MIC>.costs` entry or a broker's declaration that states
+`spread: dated` or `dated` is refused (exit 3) wherever the model is resolved, naming the venue.
+No row is in force from after the research window's last day: no research fill pays one, and
+every research card's reserve would read it — the certification year's row, in force from its
+1 January inside the embargo, most of all — so it is refused (exit 3), and the last row on or
+before research's last day stays in force through certification. The file does not say what
+sessions a row was measured on, so a row in force within research must be measured on sessions
+that end before the certification window opens; one measured past that is admitted, and hands
+research a held-out width. Each traded name needs a row in force on
+the New York date of the first instant a run delivers: a window is delivered from 00:00 UTC of
+its first day, which is the evening of the New York day before, so a table whose first row is
+the window's first day is refused, and a warmup reaches further back still. They reach no
+`strategy.py`: the venue model a sleeve is handed (`self.venue_model`, its configuration)
+carries `spread: dated` without the rows, the runner hands the harness the table apart, and
+`strategy_integrity` discards a strategy that reads it; the research loop's proposer and the
+explorer (`hyp explore`, which writes a `strategy.py` of a new hypothesis) are shown
+`hypothesis.yaml` with the rows withheld, the rest of the file re-rendered without its
+comments, and a candidate the explorer writes keeping the line that stands for them keeps the
+parent's rows of the names its own universe lists, in force from on or before its own research
+window's last day: one that trades fewer names than its parent, or researches less, could not
+drop a row it was never shown. What a sleeve
+reserves when it sizes is the largest width any row of the name states for the part of the
+session the point it is handling is in — every year's, so it reads the same on any day — and
+`cost_rate`, which names no instrument, the largest of every row and part; under a latency a
+fill priced in a later part than it was sized in can pay more than that (row 261). A
+`full_book` entry places its budget over one plus twice the rate it reserves, so one sized in a
+part an earlier year was wide in places well short of its budget, however narrow its own year's
+row (row 265). What a fill was charged still reaches the strategy once it fills, through
+`balance`, as every charge does (row 262). A `cost_scenario` on such a hypothesis states a
+`fixed_bps` above zero, which re-prices every fill at that flat width: a scenario's parameters
+are numbers and cannot carry a table, and one without the width, or at zero, would re-price
+every fill at no spread, so `cert plan` and `cert run` refuse it. A screen whose model is
+dated, from its own `costs` or a bound hypothesis's, is refused (exit 3; row 259), and a shared
+book refuses a member charged one (exit 2; row 260).
 
 `costs.maker_bps` charges a fill that rested on the book apart from the rest:
 
@@ -1435,12 +1513,12 @@ rolling minute can hold up to twice the figure. It is the same code on every pat
 `kanso replay` on either path and a stage node hold one strategy to one rate, and `kanso replay
 parity` compares the orders that came of it and the commands counted. A rate below what one
 cancel spends — an `orders_per_minute` under `requests_per_cancel` — is refused wherever the
-venue model is resolved, at `hyp validate`, `hyp add` and `research begin` (exit 3), naming the
-venue, both keys and both figures: the bucket never holds more than the rate, so the sleeve's
-first cancel would wait for ever and every entry and modify behind it be dropped. A command
-finds **no token available** to it when the bucket holds fewer than it costs — a list one for
-each of its orders, all or none — or, for an entry or a modify, while a cancel waits for its
-tokens or an exit owed for want of a token waits for one (below). Then:
+venue model is resolved, at `hyp validate`, `hyp add`, `research begin` and `screen validate`
+(exit 3), naming the venue, both keys and both figures: the bucket never holds more than the
+rate, so the sleeve's first cancel would wait for ever and every entry and modify behind it be
+dropped. A command finds **no token available** to it when the bucket holds fewer than it costs
+— a list one for each of its orders, all or none — or, for an entry or a modify, while a cancel
+waits for its tokens or an exit owed for want of a token waits for one (below). Then:
 
 - **an entry is dropped and counted** — `submit_entry` in every form, sized or not, its
   quantity given or sized by the room, whatever it does to the position; and an order built by
@@ -1713,7 +1791,7 @@ researches. A free screen states `window` instead, and may state `costs` per ven
 | `clock` | `grid`, the step a `grid` estimator samples on, and `hours`: `overlap`, or `{tz, span}` in a named time zone so daylight saving moves it |
 | `measures` | each one of the measure library's: `lead_lag` (`from`, `to`, `estimator: grid` or `hy`, `lags`), `response` (`trigger`, `followers`, `side: with` or `against`, `horizons`, `latency_ms`) or `catch_up` (`leader`, a leg or derived leg; `followers`, never the leader alone; `within`, the trailing span the gap is measured over; `fit: window` or `first_fold` and `beta_over`, where and at what return span the follower's response to its leader is fitted; `enter_bp`, the gap and implied move that open a position; `close`, the share of the entry gap at which it has caught up, each at least 0 and under 1; `stop`, the multiple of it at which it has failed, each over 1; `max_hold`, the safety cap; `latency_ms`) or `condition` (`tests`, name → `{signal, when, against, entry, exit, hold, side}`: a declared signal; `when`, exactly one of `gt`, `ge`, `lt`, `le`, `eq`, `ne` and a number, the favoured state; `against`, under a contrast only, a comparison no number meets together with `when`, or `rest`; `entry` and `exit`, `open` or `close`, the session's first or last point, a period running from the previous session's when they are not `open → close`; `hold`, `while` or `{sessions: k}`; `side`, `long` or `short`, the position the favoured state takes. Then `followers`, a leg or a group of catalog legs, never a derived one; `payoff: contrast` or `long_flat`; `null_by: sign_flip` with `block`, at least every fixed hold, or `circular`, which takes every shift and refuses a `block`; `demean`, a list of `weekday`, `month`, `third_friday_week`, `pre_holiday` and `{turn_of_month: [last, first]}`, `[]` for the window's mean alone; `controls`, declared 0/1 signals, `[]` for none, each read as of the period's exit — the session's open or close, as the test exits — so a point every session, its `ts_init` at or before that exit and its `ts_event` on the session's date in the clock's zone, which a table stamped at midnight UTC on its date is not west of Greenwich; `latency_ms`, how long before the entry the decision is made; and, optional, `mde_power`, and `benchmark: hold`, under `circular` only (exit 3 under `sign_flip`), which sets every cell's positions against buying its follower and keeping it as well and has a verdict judge the cell by that (`condition.hold` below). The null's key is `null_by` and never `null`, which YAML reads as a key that is no value, and a file spelling it so is refused by that key's place (exit 3). Each cell is `condition/<test>/<follower>/<null_by>`, and two measures making one key are refused, so one set of tests can be measured once under each null) |
 | `verdict` | optional, never defaulted: `alpha` (family-wise, over a measure's cells), `min_sessions`, and for a cell that trades — `response` or `catch_up` — `min_margin_bp` (gross per event less the hurdle) and `min_events_per_day`, both stated whatever the measures; an `alpha` below 2^(1 − `min_sessions`), the smallest p that many sessions can give, is refused (exit 3). A `condition` cell trades too, and is judged on its positions' margin and events a day, and on its `mean`, which must be above zero: its p ranks |t| and so is two-sided, and its `mean` is positive when the effect is on the side the test declares, so a cell whose p clears `alpha` with its `mean` at or under zero fails, `mean … bp is against the declared side` — over a hold of several sessions a round trip's gross is mostly the follower's drift, so the margin alone does not catch it; a cell of a measure that declares `benchmark: hold` is judged by the hold in place of its contrast's p and mean, and needs its `condition.hold.p` and `p_above_hold` both at or under `alpha`, failing as `p … against random timing above alpha …` or `p … that its Sharpe … beats the hold's … above alpha …`; its null's own floor refuses an `alpha` below 2^(1 − J) over the J blocks of `block` sessions in `min_sessions`, or under `circular` below 1/`min_sessions`, the floor of a family of `min_sessions` sessions — the fewest a cell is judged on, so the worst case: a family holding more has a lower one |
-| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis. An `orders_per_minute` prices nothing a screen measures, and `kanso screen draft` carries it into the hypothesis as stated |
+| `costs` | a free screen's, per venue, in the `costs` shape `hypothesis.yaml` takes: what its hurdles are struck under, as the last layer over the workspace's venue model; a bound screen is charged its hypothesis's. A `latency_ms` here is ignored: a response's latency is its measure's `latency_ms`, which `kanso screen draft` carries into the hypothesis. An `orders_per_minute` prices nothing a screen measures, and `kanso screen draft` carries it into the hypothesis as stated. A `spread: dated` here, or on a bound screen's hypothesis, is refused (exit 3): a hurdle strikes no fill, so there is no instant to read a row at, and the remedy is a flat `fixed_bps` (`docs/backlog.md` row 259) |
 
 Each parameter of a measure has the range the measure library declares, and `kanso screen
 validate` refuses one outside it (exit 3):

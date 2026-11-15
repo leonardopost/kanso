@@ -366,6 +366,31 @@ def test_one_name_fed_bars_beside_its_quotes_is_charged_by_the_fill_not_the_name
     assert sale.cost == pytest.approx(sale.notional * (HALF + 1.0 / BPS))
 
 
+def test_under_a_dated_spread_a_fill_at_the_touch_pays_no_half_width() -> None:
+    """The buy its quote made is struck at the ask and charged nothing; the sale its bar made
+    is struck at the bar's close, inside the quote, and pays its row's regular-hours half-width
+    and the slippage, at the instant of the bar its price came from."""
+    row = {"pre": 90.0, "open": 50.0, "rth": 6.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
+    hyp = _hypothesis(
+        limit_fill="touch",
+        data_requirements=("bar", "quote"),
+        resolution="1m",
+        spread="dated",
+        dated=[{"instrument": f"{SYMBOL}.{VENUE}", "from": "2023-01-01", **row}],
+    )
+    groups: list[tuple[object, ...]] = [
+        tuple(_quotes()),
+        tuple(_minute_bar(i, 10.00) for i in range(12)),
+    ]
+
+    run = _run(hyp, groups, ON_QUOTE_OFF_BAR)
+
+    buy, sale = run.fills
+    assert (buy.side, buy.px, buy.touched, buy.cost) == ("BUY", 10.01, True, 0.0)
+    assert (sale.side, sale.px, sale.touched) == ("SELL", 10.00, False)
+    assert sale.cost == pytest.approx(sale.notional * (6.0 / 2 + 1.0) / BPS)
+
+
 def test_a_taker_that_lands_on_a_print_inside_the_quote_pays_the_half_spread() -> None:
     """Under `touch` an order in flight lands on the book a print left, at the print's price:
     here 10.00 inside 9.99/10.01, a cent better than the touch each way. The fill does not

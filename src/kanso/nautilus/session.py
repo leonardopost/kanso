@@ -80,6 +80,7 @@ from kanso.nautilus import backtest, sandbox
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest, RunResult
 from kanso.nautilus.cross_section import coincident, is_marker, ordered, warm, without_markers
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
+from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import VenueModel
 
@@ -239,12 +240,12 @@ def run_node_chunked(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        venues = _venues(request, kernel, first)
+        venues = _venues(request, kernel, first, marks.pricing)
         strategy = _strategy(request, node)
         strategy._hold_until_cross_section = marked or any(is_marker(p) for p in first)
         if request.prefix is not None:
             warm(strategy, opens)
-        backtest.booked(strategy, request)
+        backtest.booked(strategy, request, marks.pricing)
         feed = _Feed(kernel, client, strategy, venues, marks, opens, sink)
         chunked = feed.chunks(first, stream, marked=marked)
         del first
@@ -417,15 +418,18 @@ def _config() -> TradingNodeConfig:
     )
 
 
-def _venues(request: RunRequest, kernel: Any, points: Sequence[Any]) -> tuple[Any, ...]:
-    """One simulated venue per venue the universe trades, wired to this session's bars.
+def _venues(
+    request: RunRequest, kernel: Any, points: Sequence[Any], struck: Struck | None = None
+) -> tuple[Any, ...]:
+    """One simulated venue per venue the universe trades, wired to this session's bars, and
+    under a dated spread keeping `struck`, the record each fill is priced at.
 
     The same call a stage node makes, so the exchange a replay is compared against and the
     exchange a deployed stage executes against are one piece of code rather than two that
     have to be kept in step.
     """
     return sandbox.attach(
-        kernel, venue_configs(request.hyp, request.venue_model, request.capital), points
+        kernel, venue_configs(request.hyp, request.venue_model, request.capital), points, struck
     )
 
 

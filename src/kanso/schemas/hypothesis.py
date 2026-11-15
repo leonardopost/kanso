@@ -24,6 +24,7 @@ catalogue and whether an objective applies are checked where those catalogues li
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Final, Literal
 
@@ -39,7 +40,12 @@ from kanso.schemas.base import (
     Versioned,
 )
 from kanso.schemas.duration import Duration, Resolution, is_duration, parse_duration
-from kanso.schemas.venue import CostsOverride
+from kanso.schemas.venue import (
+    CostsOverride,
+    DatedSpread,
+    check_dated_paired,
+    first_new_york_day,
+)
 
 Mechanism = Literal[
     "mean_reversion",
@@ -470,6 +476,16 @@ class Hypothesis(Versioned):
                 "data_by_instrument is read; drop it, or ask an instrument for it"
             )
 
+    def unpriced(self, rows: Sequence[DatedSpread], day: date) -> list[str]:
+        """The names this hypothesis trades — every name asked for `bar`, `quote` or `trade` —
+        for which no row of a dated spread table is in force on `day`."""
+        return [
+            name
+            for name in self.universe
+            if {"bar", "quote", "trade"} & set(self.required_of(name))
+            and not any(row.instrument == name and row.from_ <= day for row in rows)
+        ]
+
     def required_of(self, instrument: str) -> tuple[str, ...]:
         """The types `instrument` must carry: its own list, else every required type."""
         return tuple(self.data_by_instrument.get(instrument, self.data_requirements))
@@ -555,6 +571,63 @@ class Hypothesis(Versioned):
             )
         if self.costs.spread == "fixed_bps" and self.costs.fixed_bps is None:
             raise ValueError("costs.fixed_bps: required when spread is fixed_bps")
+        check_dated_paired(self.costs.spread, self.costs.dated)
+        if self.costs.dated is not None:
+            self._check_dated(self.costs.dated)
+
+    def _check_dated(self, rows: Sequence[DatedSpread]) -> None:
+        """A dated table names the universe's instruments, states no row in force from after
+        the research window's last day, and holds a row in force for each name the hypothesis
+        trades — every name asked for `bar`, `quote` or `trade` — from the first New York date
+        a run of it can read one on, or its fills there would be charged no spread.
+
+        A row from after research is refused because the reserve a sleeve sizes with reads
+        every row of every year (`kanso.nautilus.costs.dated_reserve_bps`), and no research
+        fill is charged one: a row in force from the embargo or the certification window on —
+        the certification year's own, a median of held-out sessions, in force from its first
+        day — would hand research a width measured on the held-out window and charge it
+        nothing. The last row on or before research's last day stays in force through
+        certification instead. What sessions a row was measured on the file does not say, so a
+        row in force within research that was measured past it is not refused here. The first
+        date read is the New York evening before
+        the first UTC day delivered (`first_new_york_day`), and with a warmup of N sessions
+        the first day delivered is at least N days before the window, a session being a day
+        that printed: that is as far as the file can say, and the sessions the catalog
+        resolves are held to the table where they are known — by `hyp validate` when the
+        catalog holds them, and where a run is built (`kanso.nautilus.backtest.RunRequest`)."""
+        outside = sorted({row.instrument for row in rows} - set(self.universe))
+        if outside:
+            raise RemedyError(
+                f"costs.dated: names {', '.join(outside)}, which is not in the universe",
+                remedy="drop the rows of instruments the hypothesis does not trade, or add them "
+                "to the universe",
+            )
+        ends = self.windows.research.end
+        late = sorted({row.instrument for row in rows if row.from_ > ends})
+        if late:
+            raise RemedyError(
+                f"costs.dated: {', '.join(late)} has a row from after the research window, "
+                f"which ends {ends}; no research fill pays it, and the reserve a sleeve sizes "
+                "with reads every row, so research would read a width measured where it may "
+                "not look",
+                remedy=f"drop the rows from after {ends}: the last row on or before it stays "
+                "in force through certification",
+            )
+        start = self.windows.research.start
+        sessions = 0 if self.warmup is None else self.warmup.sessions
+        day = first_new_york_day(start - timedelta(days=sessions))
+        uncovered = self.unpriced(rows, day)
+        if uncovered:
+            reached = (
+                "the research window's first instant falls on"
+                if sessions == 0
+                else f"a warmup of {sessions} session(s) before {start} delivers on at the latest"
+            )
+            raise RemedyError(
+                f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the New "
+                f"York date {reached}, so its fills there would be charged no spread",
+                remedy=f"state a row from {day} or earlier for {', '.join(uncovered)}",
+            )
 
     def _check_constraints(self) -> None:
         if self.constraints is None:

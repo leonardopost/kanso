@@ -100,6 +100,15 @@ class Fill:
     record alike; a fill struck at a print or a bar's close inside the quote, or in a name with
     no quote before it, pays both. A fill recorded before the field was kept reads as not
     touched, which is how it was charged.
+
+    `price_ts_ns` is, under a dated spread, the instant the fill's price was struck at — the
+    `ts_event` of its name's last point the venue had applied when it filled, a bar's close or
+    a print's own stamp (`kanso.nautilus.struck`), which under a latency can be another part of
+    the session or another day than the fill's own — whose row and part of the session it was
+    charged (`kanso.nautilus.costs.dated_half_spread`). `None` where no dated spread was
+    charged, and on every fill recorded before the field was kept: no row was read at an
+    instant, so none was kept, and `None` is not the fill's own `ts_ns`, which under a latency
+    is not the instant its price was struck at.
     """
 
     ts_ns: int
@@ -113,6 +122,7 @@ class Fill:
     tick: float = 0.0
     limit: float | None = None
     touched: bool = False
+    price_ts_ns: int | None = None
 
     @property
     def notional(self) -> float:

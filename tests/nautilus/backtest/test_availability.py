@@ -185,7 +185,7 @@ def fills_of(result: RunResult) -> list[tuple[int, float, float, bool]]:
 def without_the_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """The venue as it was before `Availability`: the corporate actions alone."""
     loaded = actions.parts
-    monkeypatch.setattr(actions, "parts", lambda venue: loaded(venue)[:1])
+    monkeypatch.setattr(actions, "parts", lambda venue, struck=None: loaded(venue, struck)[:1])
 
 
 # --- what the venue fills -------------------------------------------------------

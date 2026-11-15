@@ -294,6 +294,36 @@ def test_a_plan_missing_a_required_gate_is_refused(gate_id: str) -> None:
         validate_plan(without(gate_id), make_hyp(), FOLDS)
 
 
+def test_a_cost_scenario_on_a_dated_hypothesis_states_its_width() -> None:
+    """A scenario's parameters are numbers and carry no table; one that leaves `fixed_bps`
+    out, or states it at zero, re-prices every fill at no spread, so on a hypothesis charged a
+    dated spread it is refused, by `cert plan` and `cert run` alike, and one that states a
+    width above zero is admitted."""
+    row = {"pre": 9.0, "open": 4.0, "rth": 1.0, "post": 9.0, "n_sessions": 5, "n_open": 25}
+    hyp = make_hyp(
+        costs={
+            "spread": "dated",
+            "dated": [{"instrument": "DEMO", "from": "2023-01-01", **row}],
+        }
+    )
+    scenario = {
+        "id": "cost_scenario",
+        "stage": "cert",
+        "params": {"commission_bps": 2.0},
+        "rationale": "another account",
+    }
+    unpriced = plan(gates=[*PLAN["gates"], scenario])
+    free = plan(gates=[*PLAN["gates"], {**scenario, "params": {"fixed_bps": 0.0}}])
+    priced = plan(gates=[*PLAN["gates"], {**scenario, "params": {"fixed_bps": 10.0}}])
+
+    with pytest.raises(ValidationError, match=r"gates.cost_scenario.fixed_bps: is not set"):
+        validate_plan(unpriced, hyp, FOLDS)
+    with pytest.raises(ValidationError, match=r"gates.cost_scenario.fixed_bps: is 0.0"):
+        validate_plan(free, hyp, FOLDS)
+    validate_plan(priced, hyp, FOLDS)
+    validate_plan(unpriced, make_hyp(), FOLDS)
+
+
 def test_a_card_stage_gate_is_not_required_of_a_plan() -> None:
     assert "strategy_integrity" not in {g["id"] for g in PLAN["gates"]}
     validate_plan(PLAN, make_hyp(), FOLDS)

@@ -28,9 +28,14 @@ document is parsed. Everything else needs the workspace, and that is this module
   account currency. A spread taken from quotes needs quotes, and is admitted with a warning
   where it states no width (`fixed_bps`) over an instrument of its venue asked for neither
   quote nor book, since a fill there has no quote to read one from (`cost_warnings`); a fixed
-  spread needs its width; a universe spanning two account currencies would have a leg priced
-  at a rate nothing in the workspace records, so it is refused — and so, for the same reason,
-  is an instrument that settles in a currency other than its venue's account currency;
+  spread needs its width; a dated spread is the hypothesis's own, and one a broker's
+  declaration or a `venues.<MIC>` entry states is refused, naming the venue (the table's own
+  rules are the file's, `kanso.schemas.Hypothesis`), and under a warmup the catalog resolves,
+  a traded name with no row in force on the New York date of the first instant its sessions
+  deliver is refused too (`_check_dated_warmup`); a universe spanning two account
+  currencies would have a leg priced at a rate nothing in the workspace records, so it is
+  refused — and so, for the same reason, is an instrument that settles in a currency other
+  than its venue's account currency;
 * a venue model whose `limit_fill` is `print_through` or `print_through_whole` fills a
   resting limit on prints and a taker on quotes, on the top-of-book venue, so the hypothesis
   must require `quote` and `trade`, may not require `book`, and may not ask an instrument for
@@ -216,6 +221,7 @@ def admit(ws: Workspace, path: Path, source: bytes | None = None) -> Admitted:
     _check_required(ws, hyp)
     _check_sizing(ws, hyp)
     _check_benchmark(hyp)
+    _check_dated_warmup(ws, hyp)
     _check_book(hyp, models)
     _check_print_through(hyp, models)
     check_tick_costs(ws, hyp, models)
@@ -223,6 +229,41 @@ def admit(ws: Workspace, path: Path, source: bytes | None = None) -> Admitted:
     _check_derived_from(ws, hyp)
     _check_screened(ws, hyp)
     return Admitted(hyp, cost_warnings(ws, hyp, instruments, models))
+
+
+def _check_dated_warmup(ws: Workspace, hyp: Hypothesis) -> None:
+    """A dated table holds a row in force, for every name the hypothesis trades, on the New
+    York date of the first instant its warmup delivers, where the catalog resolves the
+    sessions (`kanso.nautilus.backtest.warmup_prefix`, at the hypothesis's own grain).
+
+    The file alone holds the rows as far back as a warmup of N sessions reaches at the latest,
+    N days before the window (`kanso.schemas.Hypothesis`); the sessions themselves are the
+    days the catalog holds a print on, so they are read here when it holds them. A catalog
+    that does not hold them yet resolves nothing to refuse, and the run is held to them where
+    it is built (`kanso.nautilus.backtest.RunRequest`)."""
+    rows = None if hyp.costs is None else hyp.costs.dated
+    if not rows or hyp.warmup is None:
+        return
+    from kanso.data.manifest import catalog_path
+    from kanso.errors import PreconditionError
+    from kanso.nautilus import backtest
+    from kanso.schemas.venue import first_new_york_day
+
+    window = (hyp.windows.research.start, hyp.windows.research.end)
+    try:
+        prefix = backtest.warmup_prefix(hyp, window, catalog_path(ws))
+    except PreconditionError:
+        return
+    day = first_new_york_day(prefix[0]) if prefix is not None else None
+    uncovered = [] if day is None else hyp.unpriced(rows, day)
+    if uncovered:
+        raise ValidationError(
+            f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the New York "
+            f"date of the first instant the {hyp.warmup.sessions} warmup session(s) the "
+            f"catalog holds before {window[0]} deliver, so a fill priced there would be "
+            "charged no spread",
+            remedy=f"state a row from {day} or earlier for {', '.join(uncovered)}",
+        )
 
 
 def _check_derived_from(ws: Workspace, hyp: Hypothesis) -> None:

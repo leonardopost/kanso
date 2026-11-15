@@ -116,10 +116,12 @@ from kanso.criteria.run import CardRun, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits, tape
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
+from kanso.nautilus.costs import dated_rows
 from kanso.nautilus.cross_section import arm, coincident, deliver_from, warm
 from kanso.nautilus.replay_client import SETTLE_TURNS, ReplayDataClient
 from kanso.nautilus.session import SHUTDOWN_TOPIC, Halt, measured, ordered, signals_kept
 from kanso.nautilus.strategy import BAR, BOOK, QUOTE, KansoConfig, _bar_resolution_of
+from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import PRINT_SIZE, venue_config, venues_of
 from kanso.schemas import Hypothesis, Limits, VenueModel
 
@@ -560,17 +562,18 @@ def run(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
-        venues = sandbox.attach(kernel, node.venues(), points)
+        struck = Struck() if any(dated_rows(request.venue_model) for request in requests) else None
+        venues = sandbox.attach(kernel, node.venues(), points, struck)
         strategies = _components(built, node.placements)
         for strategy, request in zip(strategies, requests, strict=True):
             arm(strategy, points)
             deliver_from(strategy, opens_ns if request.prefix is None else request.delivered[0])
             if request.prefix is not None:
                 warm(strategy, opens_ns)
-            backtest.booked(strategy, request)
+            backtest.booked(strategy, request, struck)
         books = loop.run_until_complete(_drive(built, client, strategies, halt, points, venues))
         realised = tuple(
-            _realised(placed, request, kernel, groups, books, window.instruments)
+            _realised(placed, request, kernel, groups, books, window.instruments, struck)
             for placed, request, groups in zip(
                 node.placements, requests, window.per_version, strict=True
             )
@@ -917,6 +920,7 @@ def _realised(
     groups: Sequence[Sequence[Any]],
     books: Mapping[tuple[str, str], Book],
     instruments: Sequence[Any],
+    struck: Struck | None = None,
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
@@ -927,6 +931,12 @@ def _realised(
     What the window *did* hold goes through `backtest.checked`, the same gate the research
     and replay paths pass, so a stage measuring a window whose corporate actions its
     definitions do not schedule refuses rather than reporting the action as return.
+
+    Under a dated spread each fill is priced at the instant the stage's venue struck it at,
+    as its record keeps it (`struck`, `kanso.nautilus.struck`) — the record the version's
+    harness read — and never at one read off the version's own view: that view orders its
+    series as no venue was handed them, holds none of the series the version's stage-mates
+    trade on its venue, and on a restart holds no prefix the venue was handed again.
     """
     if not any(groups):
         return Realised(
@@ -937,6 +947,8 @@ def _realised(
             positions=(),
         )
     marks = backtest.checked(request, instruments, groups)
+    if marks.pricing is not None:
+        marks.pricing = struck
     view = _StrategyView(kernel.cache, placed.identity)
     return Realised(
         strategy_id=placed.strategy_id,

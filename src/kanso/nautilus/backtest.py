@@ -151,6 +151,8 @@ from kanso.nautilus import splits
 from kanso.nautilus.costs import (
     at_touch,
     carry,
+    dated_half_spread,
+    dated_rows,
     fill_cost,
     fixed_half_spread,
     funding_payment,
@@ -161,11 +163,14 @@ from kanso.nautilus.costs import (
     quote_half_spread,
     reset,
     tick_slip,
+    undated,
 )
 from kanso.nautilus.cross_section import BOOK, KansoCrossSection, is_marker
 from kanso.nautilus.sizing import Refusal, SizingError
+from kanso.nautilus.struck import Struck
 from kanso.nautilus.venue import venue_configs
 from kanso.schemas import Commands, Hypothesis, VenueModel, is_duration, parse_duration
+from kanso.schemas.venue import first_new_york_day
 
 __all__ = [
     "ALLOWED_ENV",
@@ -497,13 +502,35 @@ class RunRequest:
     version_hyp: str | None = None
 
     def __post_init__(self) -> None:
-        if self.prefix is None:
+        if self.prefix is not None:
+            first, last = self.prefix
+            if first > last or last > self.window[0]:
+                raise ValidationError(
+                    f"prefix: {first}..{last} is not a span of sessions before the window "
+                    f"opening {self.window[0]}"
+                )
+        self._check_dated()
+
+    def _check_dated(self) -> None:
+        """Under a dated spread, a row in force for every name the hypothesis trades — every
+        name asked for `bar`, `quote` or `trade` — on the New York date of the first instant
+        delivered, warmup sessions included: the evening before the first UTC day delivered
+        (`kanso.schemas.venue.first_new_york_day`). An order is dropped in the warmup, but under
+        a latency a name that has not printed in the window yet fills at its last price in it.
+        The file holds its rows as far as it can say without the catalog
+        (`kanso.schemas.Hypothesis`); this holds them to the sessions the catalog resolved."""
+        rows = dated_rows(self.venue_model)
+        if not rows:
             return
-        first, last = self.prefix
-        if first > last or last > self.window[0]:
+        day = first_new_york_day(self.span[0])
+        uncovered = self.hyp.unpriced(rows, day)
+        if uncovered:
             raise ValidationError(
-                f"prefix: {first}..{last} is not a span of sessions before the window "
-                f"opening {self.window[0]}"
+                f"costs.dated: {', '.join(uncovered)} has no row in force on {day}, the New "
+                f"York date of the first instant {self.hyp.id}'s run delivers, warmup included, "
+                "so a fill priced there would be charged no spread",
+                remedy=f"state a row from {day} or earlier for {', '.join(uncovered)} in "
+                f"hypotheses/{self.hyp.id}/hypothesis.yaml",
             )
 
     @property
@@ -1250,7 +1277,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             max_position_pct=hyp.risk_limits.max_position_pct,
             max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
             max_leverage=hyp.risk_limits.max_leverage,
-            venue_model=dict(request.venue_model),
+            venue_model=undated(request.venue_model),
             # The venue a run fills against is simulated and settles no funding, so the
             # sleeve's balance books it as this extraction does.
             books_funding=True,
@@ -1346,9 +1373,10 @@ def _unrecorded(*_: object, **__: object) -> None:
     nothing."""
 
 
-def add_venue(engine: Any, venue: Any) -> None:
+def add_venue(engine: Any, venue: Any, struck: Struck | None = None) -> None:
     """Add one venue configuration (`kanso.nautilus.venue.venue_config`) to a backtest engine,
-    with the simulation modules every kanso venue loads."""
+    with the simulation modules every kanso venue loads — and, under a dated spread, the venue
+    half of `struck` (`kanso.nautilus.struck`)."""
     from nautilus_trader.backtest.node import (
         get_account_type,
         get_base_currency,
@@ -1387,8 +1415,9 @@ def add_venue(engine: Any, venue: Any) -> None:
         # The venue applies a corporate action one call before it matches the point that
         # carried the market past it, applies every quote and print the sleeve is handed, and,
         # under `print_through`, lands what is due by a print before it; see
-        # `kanso.nautilus.actions`, `availability` and `tape`.
-        modules=modules(venue.name),
+        # `kanso.nautilus.actions`, `availability` and `tape`. Under a dated spread it also
+        # keeps each name's last point for the fills priced at it (`kanso.nautilus.struck`).
+        modules=modules(venue.name, struck),
     )
 
 
@@ -1451,7 +1480,9 @@ def execute_chunked(
     engine = engine_for()
     try:
         for venue in venue_configs(request.hyp, request.venue_model, request.capital):
-            add_venue(engine, venue)
+            add_venue(engine, venue, marks.pricing)
+        if marks.pricing is not None:
+            marks.pricing.listen(engine.kernel.msgbus)
         for instrument in instruments:
             engine.add_instrument(instrument)
         cls, config = _sleeve(request)
@@ -1462,7 +1493,7 @@ def execute_chunked(
             )
         if request.prefix is not None:
             warm(strategy, request.bounds[0])
-        booked(strategy, request)
+        booked(strategy, request, marks.pricing)
         engine.add_strategy(strategy)
         opens, closes = request.delivered
         marked = coincident(request.hyp)
@@ -1612,15 +1643,27 @@ def _refuse_unbooked(
         )
 
 
-def booked(strategy: object, request: RunRequest) -> None:
-    """Hand a sleeve the book policy its request runs under, when the hypothesis has one.
+def booked(strategy: object, request: RunRequest, struck: Struck | None = None) -> None:
+    """Hand a sleeve the book policy its request runs under, when the hypothesis has one, and
+    the dated spread table its venue model states, when it states one, with the venue's record
+    of the instant each fill was priced at (`struck`, `kanso.nautilus.struck`).
 
     Every path that runs a sleeve calls this beside `arm` and `warm`, with the request its
     run is extracted from, so the harness cuts the periods the extraction cuts and settles
-    them with the same policy from the same place.
+    them with the same policy from the same place, and charges each fill the row the
+    extraction charges it, read off the same record.
     """
-    from kanso.nautilus.cross_section import book
+    from kanso.nautilus.cross_section import book, dated
 
+    rows = dated_rows(request.venue_model)
+    if rows:
+        if struck is None:
+            raise PreconditionError(
+                f"costs.spread: dated and {request.hyp.id}'s run keeps no record of the "
+                "instant its venue priced each fill at, which the table is read at",
+                remedy="run the hypothesis through a kanso runner, which keeps one",
+            )
+        dated(strategy, rows, struck)
     policy = policy_of(request.hyp.book)
     if policy is None:
         return
@@ -1707,6 +1750,13 @@ class Marks:
     time-sorted series, and chunks are cut in time. A settlement of a name that has not
     printed by then is marked at nothing, and nothing can be held at it, since a fill
     needs a price.
+
+    Under a dated spread a fill pays the row in force at the instant its price was struck at,
+    which is the venue's to say and is read off it (`pricing`, `kanso.nautilus.struck`): the
+    venue keeps each name's last point as it applies it and each fill's when it is made, and
+    `priced` reads that, so nothing here depends on the order a chunk's points or its groups
+    arrive in. A run that builds its marks after its venue has run — a stage's, from each
+    version's own view — hands them the record its venue kept.
     """
 
     def __init__(self, request: RunRequest, model: VenueModel) -> None:
@@ -1729,6 +1779,10 @@ class Marks:
         self._settled: list[tuple[int, str, float]] = []
         self._instants: dict[str, list[int]] = {}
         self._credited: dict[tuple[str, int | None], tuple[int, float]] = {}
+        self.dated = model.costs.dated or ()
+        self.pricing: Struck | None = Struck() if self.dated else None
+        """The venue's record of the instant each fill's price was struck at, under a dated
+        spread: the run's own, loaded into its venue, or one a stage hands over."""
 
     def take(self, points: Iterable[object]) -> None:
         """Fold a chunk of points, its funding settlements first (see the class).
@@ -1932,6 +1986,16 @@ class Marks:
                     (carried[1], carried[2]) if carried is not None and carried[0] <= ts else None
                 )
 
+    def priced(self, event: Any) -> int | None:
+        """The instant a fill's dated width is read at, as its record keeps it: the instant
+        the venue struck its price at (`pricing`), or the fill's own where the venue had applied
+        nothing of its name. `None` when no dated spread is charged, which the record leaves
+        unwritten."""
+        if self.pricing is None:
+            return None
+        at = self.pricing.at(event)
+        return int(event.ts_event) if at is None else at
+
     def _ordered(self, name: str) -> tuple[Any, Any, Any]:
         """This chunk's quotes of `name` in time order, an instant's in the order folded: the
         arrays as they are when they were folded in order, which every chunk is."""
@@ -1949,9 +2013,13 @@ class Marks:
 
     def half(self, event: Any) -> float:
         """The fraction of notional one side of the spread costs this fill: the stated
-        width's half, or under `spread: quotes` the half of the quote `price` read it against
+        width's half, under `spread: quotes` the half of the quote `price` read it against
         — the stated width's half, when the model states one, for a fill with no quote before
-        it, and nothing when it states none."""
+        it, and nothing when it states none — and under `spread: dated` the half of its row's
+        width at the instant its price was struck at (`priced`)."""
+        at = self.priced(event)
+        if at is not None:
+            return dated_half_spread(self.dated, str(event.instrument_id), at)
         if not self.quotes:
             return self.fixed_half
         quote = self._quote_of.get(str(event.id))
@@ -2196,6 +2264,7 @@ def _extract(request: RunRequest, engine: Any, marks: Marks) -> CardRun:
             increments.get(str(event.instrument_id), 0.0),
             limit_at(cache.order(event.client_order_id), event.trade_id),
             touched=marks.struck(event),
+            priced_ns=marks.priced(event),
         )
         for event in events
     )
@@ -2327,6 +2396,7 @@ def _fill(
     limit: float | None = None,
     *,
     touched: bool = False,
+    priced_ns: int | None = None,
 ) -> Fill:
     """One execution, with the cost this venue model charges it, applied once.
 
@@ -2337,8 +2407,10 @@ def _fill(
     increment `tick` on each share, no further than the order's `limit`; a sale pays the
     sell-side fees the model states on top, maker or taker (`costs.fill_cost`). A fill
     struck at the touch (`touched`, `Marks.struck`) pays neither the half-spread nor
-    `slippage_bps`, since its price carries the spread. The increment, the limit and whether it
-    was touched are recorded on the fill, so a model re-applied to it charges the same.
+    `slippage_bps`, since its price carries the spread. Under a dated spread `half` is its
+    row's at the instant its price was struck at, `priced_ns` (`Marks.priced`). The increment,
+    the limit, whether it was touched and that instant are recorded on the fill, so a model
+    re-applied to it charges the same.
     """
     from nautilus_trader.model.enums import LiquiditySide, order_side_to_str
 
@@ -2379,6 +2451,7 @@ def _fill(
         tick=tick,
         limit=limit,
         touched=touched,
+        price_ts_ns=priced_ns,
     )
 
 

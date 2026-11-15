@@ -23,7 +23,7 @@ from kanso.screen import embargo, validate
 from kanso.state import StateStore
 from kanso.workspace import find
 
-from .conftest import INSTRUMENT, at, payload
+from .conftest import INSTRUMENT, at, payload, portfolio_document, write_hypothesis
 from .test_screen import write_screen
 
 OU: dict[str, Any] = {
@@ -464,6 +464,98 @@ def test_a_follower_with_no_spread_to_charge_is_refused(runner: CliRunner, loade
 
     assert result.exit_code == Exit.VALIDATION
     assert "fixed_bps" in payload(result)["remedy"] and "in the screen" in payload(result)["remedy"]
+
+
+def test_a_screen_under_a_dated_spread_is_refused(runner: CliRunner, loaded: Path) -> None:
+    """A dated row is read at the instant a fill's price was struck at, and a screen strikes
+    no fill, so its hurdle cannot charge one: refused, with the flat width as the remedy."""
+    dated = {
+        **FADE,
+        "costs": {
+            "SIM": {
+                "spread": "dated",
+                "dated": [{"instrument": INSTRUMENT, "from": "2020-01-01", **DATED_ROW}],
+            }
+        },
+    }
+
+    result = at(runner, loaded, "screen", "validate", write_screen(loaded, dated), "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "costs.SIM in the screen state spread: dated" in payload(result)["error"]
+    assert payload(result)["remedy"].startswith("screen under a flat width")
+
+
+DATED_ROW = {"pre": 9.0, "open": 4.0, "rth": 1.0, "post": 9.0, "n_sessions": 5, "n_open": 25}
+
+
+def test_a_screen_bound_to_a_hypothesis_under_a_dated_spread_is_refused(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The bound hypothesis's costs are the screen's, so a dated spread there is refused as one
+    in the screen's own `costs` is."""
+    dated = {
+        "commission_bps": 0.5,
+        "slippage_bps": 1.0,
+        "spread": "dated",
+        "dated": [{"instrument": INSTRUMENT, "from": "2020-01-01", **DATED_ROW}],
+    }
+    assert at(runner, loaded, "hyp", "add", write_hypothesis(loaded, costs=dated)).exit_code == 0
+    bound = {key: value for key, value in FADE.items() if key not in ("window", "costs")}
+
+    result = at(
+        runner,
+        loaded,
+        "screen",
+        "validate",
+        write_screen(loaded, {**bound, "id": "mr_fade", "hyp": "demo_mr"}),
+        "--json",
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "demo_mr's costs state spread: dated" in payload(result)["error"]
+    assert payload(result)["remedy"].startswith("screen under a flat width")
+
+
+def test_a_venue_entry_stating_a_dated_spread_keeps_its_own_remedy_in_a_screen(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """A dated spread in `venues.<MIC>.costs` is refused naming that entry, and the screen
+    hands its remedy on rather than one for a width the screen does not lack."""
+    document = portfolio_document(loaded)
+    document["venues"] = {"SIM": {"costs": {"spread": "dated"}}}
+    (loaded / "portfolio.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
+
+    result = at(runner, loaded, "screen", "validate", write_screen(loaded, FADE), "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "costs.spread: dated on SIM is stated in venues.SIM.costs" in payload(result)["error"]
+    assert payload(result)["remedy"].startswith("drop spread: dated and dated from venues.SIM")
+
+
+def test_a_rate_below_a_cancel_in_a_screen_s_costs_names_the_screen_as_the_remedy(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The refusal's remedy names the layer a sleeve's own costs are written in, and a free
+    screen's are its `costs.<MIC>`, not a hypothesis's."""
+    short = {**FADE["costs"]["SIM"], "orders_per_minute": 1, "requests_per_cancel": 2}
+
+    result = at(
+        runner,
+        loaded,
+        "screen",
+        "validate",
+        write_screen(loaded, {**FADE, "costs": {"SIM": short}}),
+        "--json",
+    )
+
+    assert result.exit_code == Exit.VALIDATION
+    assert "is below costs.requests_per_cancel: 2" in payload(result)["error"]
+    assert payload(result)["remedy"] == (
+        "state costs.orders_per_minute of at least 2 — the share of the account's rate this "
+        "sleeve may spend — under costs.SIM in the screen or under venues.SIM.costs in "
+        "portfolio.yaml"
+    )
 
 
 def test_a_bound_screen_is_charged_its_hypothesis_s_costs(

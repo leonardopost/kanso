@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from datetime import date
+
 import pytest
 from hypothesis import given
+from hypothesis import strategies as st
 
 from kanso.errors import ApprovalError, Exit, PreconditionError, ValidationError
 from kanso.schemas import (
@@ -18,6 +22,7 @@ from kanso.schemas import (
     resolve_venue_model,
     single_currency,
 )
+from kanso.schemas.venue import first_new_york_day
 from tests.schemas.strategies import CURRENCIES
 
 
@@ -549,3 +554,177 @@ def test_each_limit_fill_rule_is_stated_and_layered_like_the_rest(rule: str) -> 
 def test_a_limit_fill_rule_kanso_does_not_know_is_refused() -> None:
     with pytest.raises(ValidationError, match="limit_fill"):
         CostsOverride(limit_fill="print")  # type: ignore[arg-type]
+
+
+_ROW = {"pre": 10.0, "open": 4.0, "rth": 1.0, "post": 20.0, "n_sessions": 5, "n_open": 25}
+
+
+def _dated(*rows: tuple[str, str]) -> list[dict[str, object]]:
+    return [{"instrument": name, "from": day, **_ROW} for name, day in rows]
+
+
+@given(
+    st.lists(
+        st.tuples(
+            st.sampled_from(["A.XNAS", "B.XNAS"]),
+            st.dates(min_value=date(2000, 1, 1), max_value=date(2030, 12, 31)),
+            st.lists(
+                st.floats(min_value=0.0, max_value=5_000.0, allow_nan=False),
+                min_size=4,
+                max_size=4,
+            ),
+        ),
+        min_size=1,
+        max_size=8,
+        unique_by=lambda row: (row[0], row[1]),
+    )
+)
+def test_a_dated_table_round_trips_in_order_and_refuses_one_out_of_it(
+    drawn: list[tuple[str, date, list[float]]],
+) -> None:
+    """Rows in force one after another per instrument round trip through a resolved model as
+    text; the same rows out of order are refused wherever they are stated, with a remedy."""
+    rows = [
+        {
+            "instrument": name,
+            "from": day,
+            "pre": pre,
+            "open": open_,
+            "rth": rth,
+            "post": post,
+            "n_sessions": 5,
+            "n_open": 25,
+        }
+        for name, day, (pre, open_, rth, post) in sorted(drawn, key=lambda row: row[1])
+    ]
+    model = resolve_venue_model(
+        "XNAS", hypothesis_costs=CostsOverride.model_validate({"spread": "dated", "dated": rows})
+    )
+    dumped = model.model_dump()
+    assert all(list(row)[:3] == ["instrument", "from", "pre"] for row in dumped["costs"]["dated"])
+    assert [row["from"] for row in dumped["costs"]["dated"]] == [
+        row["from"].isoformat()
+        for row in rows  # type: ignore[attr-defined]
+    ]
+    assert VenueModel.model_validate(dumped) == model
+    assert VenueModel.model_validate(json.loads(json.dumps(dumped))) == model
+    names = [row["instrument"] for row in rows]
+    if len(set(names)) < len(names):  # some instrument has two rows: backwards, they are refused
+        with pytest.raises(ValidationError) as refused:
+            CostsOverride.model_validate({"spread": "dated", "dated": rows[::-1]})
+        assert "strictly increasing in `from`" in refused.value.message
+        assert refused.value.remedy == "order each instrument's rows by `from`, one row per date"
+
+
+def test_two_rows_of_one_instrument_from_one_day_are_refused() -> None:
+    rows = _dated(("A.XNAS", "2020-01-01"), ("B.XNAS", "2020-01-01"), ("A.XNAS", "2020-01-01"))
+    with pytest.raises(ValidationError, match="A.XNAS's row from 2020-01-01 follows its row"):
+        CostsOverride.model_validate({"spread": "dated", "dated": rows})
+    assert CostsOverride.model_validate({"spread": "dated", "dated": rows[:2]}).dated
+
+
+def test_a_dated_spread_needs_its_rows_and_rows_need_a_dated_spread() -> None:
+    """Where the spread a fill pays is read — the model a hypothesis resolves to — and not by a
+    cost layer alone, which a venue entry is too: one there is refused naming its venue."""
+    with pytest.raises(ValidationError) as caught:
+        Costs(commission_bps=0, slippage_bps=0, spread="dated")
+    assert "costs.dated: required when spread is dated" in caught.value.message
+    assert "{instrument, from, pre, open, rth, post, n_sessions, n_open}" in (
+        caught.value.remedy or ""
+    )
+    with pytest.raises(ValidationError) as caught:
+        Costs.model_validate(
+            {
+                "commission_bps": 0,
+                "slippage_bps": 0,
+                "spread": "fixed_bps",
+                "fixed_bps": 1,
+                "dated": _dated(("A", "2020-01-01")),
+            }
+        )
+    assert "costs.spread is fixed_bps" in caught.value.message
+    assert caught.value.remedy == "state costs.spread: dated beside the rows, or drop costs.dated"
+    assert CostsOverride.model_validate({"spread": "dated"}).dated is None
+    assert CostsOverride.model_validate({"dated": _dated(("A", "2020-01-01"))}).spread is None
+
+
+@pytest.mark.parametrize("key", ["pre", "open", "rth", "post"])
+@pytest.mark.parametrize("value", [-1.0, float("inf"), float("nan")])
+def test_a_width_that_is_negative_or_not_a_number_is_refused_with_a_remedy(
+    key: str, value: float
+) -> None:
+    row = {**_dated(("A.XNAS", "2020-01-01"))[0], key: value}
+    with pytest.raises(ValidationError) as refused:
+        CostsOverride.model_validate({"spread": "dated", "dated": [row]})
+    assert f"dated.0: {key}: {value} in A.XNAS's row from 2020-01-01" in refused.value.message
+    assert refused.value.remedy == (
+        f"state {key} of A.XNAS's row from 2020-01-01 as the full width measured, in bp of the mid"
+    )
+
+
+@pytest.mark.parametrize("key", ["n_sessions", "n_open"])
+def test_a_row_rests_on_at_least_one_measurement(key: str) -> None:
+    row = {**_dated(("A.XNAS", "2020-01-01"))[0], key: 0}
+    with pytest.raises(ValidationError) as refused:
+        CostsOverride.model_validate({"spread": "dated", "dated": [row]})
+    assert f"{key}: 0 in A.XNAS's row from 2020-01-01" in refused.value.message
+    assert f"state {key} of A.XNAS's row from 2020-01-01" in (refused.value.remedy or "")
+
+
+@pytest.mark.parametrize("layer", ["declaration", "override"])
+@pytest.mark.parametrize(
+    "stated",
+    [
+        {"spread": "dated", "dated": _dated(("A.XNAS", "2020-01-01"))},
+        {"spread": "dated"},
+        {"dated": _dated(("A.XNAS", "2020-01-01"))},
+    ],
+)
+def test_a_dated_spread_from_a_broker_or_a_venue_entry_is_refused_naming_the_venue(
+    layer: str, stated: dict[str, object]
+) -> None:
+    """A table a venue layer stated would reach every hypothesis on the venue; it is stated
+    in a hypothesis's own costs and nowhere else."""
+    costs = CostsOverride.model_validate(stated)
+    layers = (
+        {"declaration": VenueDeclaration(costs=costs)}
+        if layer == "declaration"
+        else {"override": VenueOverride(costs=costs)}
+    )
+    with pytest.raises(ValidationError) as refused:
+        resolve_venue_model("ARCX", **layers)  # type: ignore[arg-type]
+    where = "the broker's declaration" if layer == "declaration" else "venues.ARCX.costs"
+    assert f"costs.spread: dated on ARCX is stated in {where}" in refused.value.message
+    remedy = refused.value.remedy or ""
+    if layer == "declaration":  # its adapter's code: no portfolio.yaml entry takes a key out
+        assert "from the costs the broker's adapter declares for ARCX" in remedy
+        assert "portfolio.yaml" not in remedy
+    else:
+        assert "from venues.ARCX.costs in portfolio.yaml" in remedy
+
+
+def test_a_venue_entry_stating_a_dated_spread_parses_and_is_refused_where_a_model_resolves() -> (
+    None
+):
+    """A venue entry stating `spread: dated` alone is not told to add rows there: it is read as
+    any other entry, and refused naming the venue where a model is resolved over it."""
+    entry = VenueOverride.model_validate({"costs": {"spread": "dated"}})
+    with pytest.raises(ValidationError) as refused:
+        resolve_venue_model("ARCX", override=entry)
+    assert "costs.spread: dated on ARCX is stated in venues.ARCX.costs" in refused.value.message
+
+
+def test_the_first_new_york_day_of_a_utc_day_is_the_one_before_in_either_season() -> None:
+    """00:00 UTC is 19:00 or 20:00 the evening before in New York, under either clock."""
+    from kanso.criteria.run import midnight_ns
+    from kanso.nautilus.clock import segment_of
+
+    for day in (date(2024, 1, 3), date(2024, 7, 3), date(2024, 3, 11), date(2024, 11, 4)):
+        assert first_new_york_day(day) == segment_of(midnight_ns(day))[1]
+        assert first_new_york_day(day) == date.fromordinal(day.toordinal() - 1)
+
+
+def test_a_model_stating_no_dated_table_dumps_without_the_key() -> None:
+    model = resolve_venue_model("XNAS", hypothesis_costs=CostsOverride(fixed_bps=2))
+    assert "dated" not in model.model_dump()["costs"]
+    assert "dated" not in model.model_dump(mode="json")["costs"]

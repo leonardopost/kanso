@@ -28,7 +28,7 @@ from kanso.schemas import Hypothesis, ModelSpec, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
-from .conftest import DOCUMENT, HYP_ID, RESEARCH, classify
+from .conftest import DOCUMENT, HYP_ID, INSTRUMENT, RESEARCH, classify
 from .mocked import (  # noqa: F401
     PLAN,
     SEED,
@@ -296,6 +296,43 @@ def test_the_explorer_is_shown_the_research_and_only_ids_of_the_certification(
     assert HYP_ID in facts["taken_ids"] and "portfolio" in facts["taken_ids"]
     # Nothing measured on the certification window travels: no evidence, no passing gate.
     assert "0.123456" not in call.user and "embargoed_window" not in call.user
+
+
+DATED_ROW = {"pre": 872.9, "open": 37.2, "rth": 9.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
+"""A year's widths, as a dated spread states them: each a median of the whole year."""
+
+
+def test_the_explorer_is_shown_no_row_of_a_dated_spread_and_a_candidate_keeps_them(
+    ws: Workspace, store: StateStore, researched: str, recorded: Recorder
+) -> None:
+    """Each row is a year's median, in force from the year's first day, and the explorer
+    writes a `strategy.py`: it is shown the line standing for the rows, and a candidate that
+    keeps that line is written with the parent's rows put back."""
+    costs = {
+        "commission_bps": 0.5,
+        "slippage_bps": 1.0,
+        "spread": "dated",
+        "dated": [
+            {"instrument": INSTRUMENT, "from": "2023-01-01", **DATED_ROW},
+            {"instrument": INSTRUMENT, "from": "2024-01-01", **DATED_ROW},
+        ],
+    }
+    pinned = yaml.safe_dump({**DOCUMENT, "costs": costs}, sort_keys=False)
+    sha = store.put_blob(pinned.encode("utf-8"))
+    store.connection.execute(
+        "UPDATE runs SET hypothesis_sha = ? WHERE hyp_id = ?", (sha, researched)
+    )
+    line = driver.WITHHELD.format(rows=2)
+    explorer(ws, [answer(hypothesis_yaml=candidate_yaml(costs={**costs, "dated": line}))])
+
+    explore.explore(ws, store, researched)
+
+    (call,) = [call for call in recorded.calls if call.task_class == "explore"]
+    shown = call.system + call.user
+    assert "872.9" not in shown and "37.2" not in shown
+    assert "2 rows, withheld" in shown
+    written = ws.path("hypotheses", CANDIDATE_ID, "hypothesis.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(written)["costs"] == yaml.safe_load(pinned)["costs"]
 
 
 @pytest.mark.parametrize("pin", ["hypothesis_sha", "snapshot_id", "criteria_version"])

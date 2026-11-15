@@ -763,8 +763,13 @@ class BookRun:
 
 def _refuse_members(book: SharedBook, members: Sequence[BookMember]) -> None:
     """What a book cannot hold: no member, a member twice, a member at another capital,
-    window or period, a member under a `book` policy, with an attached construct, or holding
-    a level-two book, and a window its hypothesis does not declare."""
+    window or period, a member under a `book` policy, with an attached construct, holding
+    a level-two book or charged a dated spread, and a window its hypothesis does not declare.
+
+    A dated spread is read at the instant the venue priced each fill at, and a book's runner
+    neither keeps that record nor hands its members the table (`kanso.nautilus.struck`), so a
+    member charged one is refused rather than charged nothing (`docs/backlog.md` row 260)."""
+    from kanso.nautilus.costs import dated_rows
     from kanso.nautilus.cross_section import BOOK
 
     if not members:
@@ -800,6 +805,8 @@ def _refuse_members(book: SharedBook, members: Sequence[BookMember]) -> None:
             if request.modifiers
             else "the level-two book"
             if BOOK in request.hyp.data_requirements
+            else "a dated spread"
+            if dated_rows(request.venue_model)
             else None
         )
         if refused is not None:

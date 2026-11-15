@@ -266,3 +266,16 @@ def test_a_fold_keeps_what_the_0_20_fold_kept(drawn: list) -> None:
     assert [list(fold.lows) for fold in marks.periods()] == [
         list(fold.lows) for fold in reference.periods()
     ]
+
+
+# --- the instant a dated fill's price was struck at --------------------------------
+
+
+def test_a_model_without_a_dated_spread_keeps_no_record_and_notes_no_instant() -> None:
+    marks = Marks(
+        _request(quoted=False), VenueModel.model_validate(_request(quoted=False).venue_model)
+    )
+    filled = _Filled("1", INSTRUMENT, midnight_ns(WINDOW[0]), 1.0, OrderSide.BUY)
+    marks.price([filled])
+    assert marks.pricing is None
+    assert marks.priced(filled) is None

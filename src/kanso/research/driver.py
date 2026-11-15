@@ -113,7 +113,11 @@ import json
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING, Any, Final, cast
+
+import yaml
+from pydantic import TypeAdapter
 
 from kanso.config import ResearchConfig
 from kanso.criteria import catalogue
@@ -140,11 +144,14 @@ __all__ = [
     "REPEATED",
     "STRUCTURAL",
     "TASK",
+    "WITHHELD",
     "NothingNewError",
     "Outcome",
     "coverage",
     "phase",
+    "restored",
     "run",
+    "shown",
 ]
 
 TASK: Final = "propose"
@@ -689,7 +696,9 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     settings = ws.config.research
     facts: dict[str, object] = {
         PROGRAM_FILE: store.get_blob(active.program_sha).decode("utf-8", errors="replace"),
-        HYPOTHESIS_FILE: store.get_blob(active.hypothesis_sha).decode("utf-8", errors="replace"),
+        HYPOTHESIS_FILE: shown(
+            store.get_blob(active.hypothesis_sha).decode("utf-8", errors="replace")
+        ),
         "objective": _objective(hyp),
     }
     earlier = _earlier(store, active, settings.context_cards * settings.cards_per_turn)
@@ -945,6 +954,80 @@ def _objective(hyp: Hypothesis) -> dict[str, object]:
         "params": ref.params.model_dump(),
         "meaningful_when": None if item is None else item.meaningful_when,
     }
+
+
+WITHHELD: Final = (
+    "{rows} rows, withheld: each is a year's median width, in force from that year's first "
+    "day, so a strategy written from them would know a width before the market showed it; a "
+    "hypothesis.yaml written from this one that keeps this line keeps the rows of the names "
+    "its own universe lists, in force from on or before its own research window's last day"
+)
+"""What a model writing a `strategy.py` is shown in place of a dated spread's rows."""
+
+
+def shown(text: str) -> str:
+    """A pinned `hypothesis.yaml` as a model that writes a `strategy.py` is shown it — the
+    research loop's proposer, and the explorer (`kanso.research.explore`): as pinned, but for a
+    dated spread's rows, which are withheld and the file shown re-rendered without them. The
+    rows reach no `strategy.py` at run time (`kanso.nautilus.cross_section.dated`), and a model
+    shown them could write one that keys on a year's width. A file without them is shown byte
+    for byte, so no other hypothesis's prompt moves."""
+    document = yaml.safe_load(text)
+    costs = document.get("costs") if isinstance(document, dict) else None
+    if not isinstance(costs, dict) or not costs.get("dated"):
+        return text
+    costs["dated"] = WITHHELD.format(rows=len(costs["dated"]))
+    return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+
+
+def restored(written: str, pinned: str) -> str:
+    """A `hypothesis.yaml` a model wrote from one it was `shown`, with the rows put back where
+    it kept the line that stood for them: the rows of `pinned`, the file it was shown, that the
+    written file itself admits, and the file re-rendered with them. A hypothesis refuses a row
+    of a name its universe does not list and one in force from after its research window's
+    last day (`Hypothesis`), and a file written to trade fewer names than its parent, or to
+    research less, could not drop a row it was never shown, so both are dropped here — the last
+    row on or before that day stays in force through certification, as in any file. What the
+    written file admits is read as the schema reads it: its universe as the names it lists, and
+    its last day and each row's first as dates, a timestamp at midnight included. A universe
+    that is not a list keeps every name, and a last day or a row's first that does not read as
+    a date keeps every row's date, for the judge to read. A file that states rows of its own, or
+    none, or that is not a mapping of YAML, is returned byte for byte, for the judge to read as
+    written."""
+    try:
+        document = yaml.safe_load(written)
+        source = yaml.safe_load(pinned)
+    except yaml.YAMLError:
+        return written
+    costs = document.get("costs") if isinstance(document, dict) else None
+    kept = source.get("costs") if isinstance(source, dict) else None
+    rows = kept.get("dated") if isinstance(kept, dict) else None
+    if (
+        not isinstance(costs, dict)
+        or not rows
+        or costs.get("dated") != WITHHELD.format(rows=len(rows))
+    ):
+        return written
+    costs["dated"] = _admitted(rows, document)
+    return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+
+
+_DAY: Final = TypeAdapter(date)
+"""A date as a hypothesis's schema reads one, from a date, a string or a midnight timestamp."""
+
+
+def _admitted(rows: list[Any], document: Mapping[str, Any]) -> list[Any]:
+    """The rows `document` admits: those of the names its universe lists, where it is a list,
+    in force from on or before its research window's last day, where that day and each row's
+    first read as dates."""
+    names = document.get("universe")
+    if isinstance(names, list):
+        rows = [row for row in rows if row["instrument"] in names]
+    try:
+        end = _DAY.validate_python(document["windows"]["research"]["end"])
+        return [row for row in rows if _DAY.validate_python(row["from"]) <= end]
+    except (KeyError, TypeError, ValueError):
+        return rows
 
 
 def _pinned(store: StateStore, active: RunRecord) -> Hypothesis:
