@@ -1422,8 +1422,9 @@ def add_venue(engine: Any, venue: Any, struck: Struck | None = None) -> None:
         # The venue applies a corporate action one call before it matches the point that
         # carried the market past it, applies every quote and print the sleeve is handed, and,
         # under `print_through`, lands what is due by a print before it; see
-        # `kanso.nautilus.actions`, `availability` and `tape`. Under a dated spread it also
-        # keeps each name's last point for the fills priced at it (`kanso.nautilus.struck`).
+        # `kanso.nautilus.actions`, `availability` and `tape`. Under a dated spread or a period
+        # target it also keeps each name's last point, for the fills priced at it and the
+        # stopped week's fills read at it (`kanso.nautilus.struck`).
         modules=modules(venue.name, struck),
     )
 
