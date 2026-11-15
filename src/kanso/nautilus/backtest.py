@@ -144,7 +144,7 @@ from typing import IO, Any, Final
 import numpy as np
 from nautilus_trader.model.data import Bar, CustomData, QuoteTick, TradeTick
 
-from kanso.criteria import CardRun, Fill, FundingPayment, Trade
+from kanso.criteria import Adjustment, CardRun, Fill, FundingPayment, Trade
 from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
@@ -2309,6 +2309,12 @@ def multipliers_of(instruments: Iterable[Any]) -> dict[str, float]:
     return {str(instrument.id): float(instrument.multiplier) for instrument in instruments}
 
 
+def schedules_of(instruments: Iterable[Any]) -> dict[str, tuple[splits.Split, ...]]:
+    """Each resolved definition's split schedule, by instrument id: what a trade's ledger and a
+    split's adjustment are matched against (`_trades`, `_adjusted`)."""
+    return {str(instrument.id): splits.schedule_of(instrument) for instrument in instruments}
+
+
 def increments_of(instruments: Iterable[Any]) -> dict[str, float]:
     """Each resolved definition's price increment, by instrument id: the tick a venue model's
     `slippage_ticks` is counted in."""
@@ -2344,10 +2350,9 @@ def _extract(
     by_position: dict[int, list[Fill]] = {}
     for owner, made in zip(owners, fills, strict=True):
         by_position.setdefault(owner, []).append(made)
-    schedules = {
-        str(instrument.id): splits.schedule_of(instrument) for instrument in cache.instruments()
-    }
-    curve = _equity(request, marks, fills, multipliers, _adjusted(positions))
+    schedules = schedules_of(cache.instruments())
+    adjustments = _adjusted(positions, schedules)
+    curve = _equity(request, marks, fills, multipliers, adjustments)
     trades = _trades(positions, by_position, multipliers, schedules, curve.funding)
     return CardRun(
         window=request.window,
@@ -2366,6 +2371,7 @@ def _extract(
         worst_ratio=curve.worst_ratio,
         funding=curve.funding,
         period_stops=period_stops,
+        adjustments=adjustments,
     )
 
 
@@ -2607,32 +2613,40 @@ def _trades(
     return tuple(trades)
 
 
-def _adjusted(positions: Sequence[Any]) -> tuple[tuple[int, str, float, float], ...]:
-    """Every split adjustment the run applied, once each, as `(ts, instrument, change,
-    paid)`: the quantity change and the cash the split paid in lieu of the fraction it left.
+def _adjusted(
+    positions: Sequence[Any], schedules: Mapping[str, Sequence[splits.Split]]
+) -> tuple[Adjustment, ...]:
+    """Every split adjustment the run applied, once each, in time order (`Adjustment`): the
+    quantity change, the cash the split paid in lieu of the fraction it left, and the split's
+    ratio from the instrument's schedule, matched as `splits.moves_of` matches it.
 
     Read off the positions the same way the fills are, and deduplicated by event id for
     the same reason: a netting position that closed and reopened lives in the cache twice,
     once as the snapshot taken before the reset and once as the live object.
     """
     seen: set[str] = set()
-    found: list[tuple[int, str, float, float]] = []
+    found: list[Adjustment] = []
     for position in positions:
         for event in position.adjustments:
             key = str(event.id)
             if key in seen or event.quantity_change is None:
                 continue
             seen.add(key)
-            paid = 0.0 if event.pnl_change is None else event.pnl_change.as_double()
+            ts = int(event.ts_event)
+            name = str(event.instrument_id)
+            applied = [split.ratio for split in schedules.get(name, ()) if split.effective_ns <= ts]
             found.append(
-                (
-                    int(event.ts_event),
-                    str(event.instrument_id),
-                    float(event.quantity_change),
-                    paid,
+                Adjustment(
+                    ts_ns=ts,
+                    instrument_id=name,
+                    qty=float(event.quantity_change),
+                    paid=0.0 if event.pnl_change is None else event.pnl_change.as_double(),
+                    ratio=applied[-1] if applied else None,
                 )
             )
-    return tuple(sorted(found))
+    return tuple(
+        sorted(found, key=lambda made: (made.ts_ns, made.instrument_id, made.qty, made.paid))
+    )
 
 
 def _equity(
@@ -2640,7 +2654,7 @@ def _equity(
     marks: Marks,
     fills: Sequence[Fill],
     multipliers: Mapping[str, float],
-    adjustments: Sequence[tuple[int, str, float, float]] = (),
+    adjustments: Sequence[Adjustment] = (),
 ) -> _Curve:
     """The period ends and the equity struck at each, from cash and marked positions.
 
@@ -2795,7 +2809,7 @@ def _equity(
 def _booked_to(
     until: int,
     fills: Sequence[Fill],
-    adjustments: Sequence[tuple[int, str, float, float]],
+    adjustments: Sequence[Adjustment],
     held: dict[str, float],
     cash: float,
     fill: int,
@@ -2809,10 +2823,10 @@ def _booked_to(
         cash -= signed * made.px * made.multiplier + made.cost
         held[made.instrument_id] = held.get(made.instrument_id, 0.0) + signed
         fill += 1
-    while split < len(adjustments) and adjustments[split][0] <= until:
-        _ts, key, change, paid = adjustments[split]
-        held[key] = held.get(key, 0.0) + change
-        cash += paid
+    while split < len(adjustments) and adjustments[split].ts_ns <= until:
+        adjusted = adjustments[split]
+        held[adjusted.instrument_id] = held.get(adjusted.instrument_id, 0.0) + adjusted.qty
+        cash += adjusted.paid
         split += 1
     return cash, fill, split
 

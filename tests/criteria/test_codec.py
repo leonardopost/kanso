@@ -52,3 +52,31 @@ def test_a_run_with_no_period_target_is_stored_as_it_was_and_one_with_one_keeps_
     kept = encode_run(replace(run, period_stops=record))
     assert kept["period_stops"] == {"openings": [5], "stops": [], "last": None}
     assert decode_run(kept).period_stops == record
+
+
+def test_a_run_that_held_nothing_through_a_split_is_stored_as_it_was() -> None:
+    """A run with no split applied to what it held writes no `adjustments` key, so it is stored
+    as runs were before they kept them; one stored that way — every run recorded before —
+    decodes with none, and a run that has some reads them back whole, the ratio included, and
+    one recorded without a ratio as none."""
+    from dataclasses import replace
+
+    from kanso.criteria.run import Adjustment
+    from tests.criteria.builders import build_run
+
+    run = build_run((1.0, -1.0))
+    stored = encode_run(run)
+    split = Adjustment(ts_ns=7, instrument_id="SOXS.ARCX", qty=-2_434.0, paid=23.42, ratio=0.2)
+    unknown = Adjustment(ts_ns=9, instrument_id="SOXS.ARCX", qty=-1.0, paid=0.0)
+
+    assert "adjustments" not in stored
+    assert decode_run(stored).adjustments == ()
+    kept = encode_run(replace(run, adjustments=(split, unknown)))
+    assert kept["adjustments"] == [
+        {"ts_ns": 7, "instrument_id": "SOXS.ARCX", "qty": -2_434.0, "paid": 23.42, "ratio": 0.2},
+        {"ts_ns": 9, "instrument_id": "SOXS.ARCX", "qty": -1.0, "paid": 0.0, "ratio": None},
+    ]
+    assert decode_run(kept).adjustments == (split, unknown)
+    without_ratio = {**kept, "adjustments": [{**kept["adjustments"][1]}]}
+    del without_ratio["adjustments"][0]["ratio"]
+    assert decode_run(without_ratio).adjustments == (unknown,)

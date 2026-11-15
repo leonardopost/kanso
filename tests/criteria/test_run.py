@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from kanso.criteria import CardRun, FundingPayment
+from kanso.criteria import Adjustment, CardRun, FundingPayment
 from kanso.criteria.run import NS_PER_DAY, day_of, midnight_ns
 from kanso.errors import ValidationError
 from kanso.schemas import PeriodStops
@@ -186,6 +186,19 @@ def test_a_fold_carries_only_the_funding_settled_inside_it() -> None:
 
     assert (first.funding, second.funding) == ((paid[0],), (paid[1],))
     assert run.funding == ()
+
+
+def test_a_fold_carries_only_the_splits_applied_inside_it() -> None:
+    run = build_run((0.0, 0.0, 0.0, 0.0))
+    applied = tuple(
+        Adjustment(ts_ns=at(day, 4), instrument_id="DEMO", qty=-90.0, paid=0.5, ratio=0.1)
+        for day in (run.window[0], run.window[0] + timedelta(days=2))
+    )
+
+    first, second = replace(run, adjustments=applied).folds(2)
+
+    assert (first.adjustments, second.adjustments) == ((applied[0],), (applied[1],))
+    assert run.adjustments == ()
 
 
 def test_a_fold_carries_the_target_s_weeks_that_opened_inside_it_and_the_last_runs_to_the_end() -> (

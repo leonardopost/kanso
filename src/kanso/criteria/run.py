@@ -7,8 +7,9 @@ gates, composition expectations and the realised paper and live objectives alike
 
 The shapes are deliberately flat and immutable: a `Fill` is one execution with the cost
 the runner applied to it, a `Trade` is a closed position with the fills that made it, a
-`FundingPayment` is one perpetual's funding settlement on what was held at it, and a
-`CardRun` is a window's worth of all three plus the period-end equity curve. A position
+`FundingPayment` is one perpetual's funding settlement on what was held at it, an
+`Adjustment` is one split the venue applied to what was held, and a `CardRun` is a window's
+worth of all four plus the period-end equity curve. A position
 still open when the window closes keeps its unrealised profit — and what it paid and was
 paid in funding — in `equity` but is not a trade, because a trade is a closed position.
 
@@ -152,6 +153,30 @@ class FundingPayment:
 
 
 @dataclass(frozen=True)
+class Adjustment:
+    """One split the venue applied to a position the run held, as the runner booked it.
+
+    `qty` is the signed change the split made to the quantity held — the venue's own
+    `PositionAdjusted.quantity_change`, floored onto the lot, never recomputed from a ratio —
+    and `paid` the cash it paid in lieu of the fraction it left, signed as cash moves: a long
+    is paid and a short pays. `ratio` is the split's, shares held after per share held
+    before, read off the instrument's schedule — the latest split effective at or before
+    `ts_ns`, the instant the venue applied it, as a trade's ledger matches it — and `None`
+    only where the schedule the extraction read names none, which a split the venue applied
+    from that schedule always finds.
+    The runner books the change into what it holds and the payment into cash at `ts_ns`
+    (`kanso.nautilus.backtest._equity`); a run recorded before runs kept the adjustments
+    carries none, and a reading of it that needs them does without (`fill_path_drawdown_pct`).
+    """
+
+    ts_ns: int
+    instrument_id: str
+    qty: float
+    paid: float
+    ratio: float | None = None
+
+
+@dataclass(frozen=True)
 class Trade:
     """A closed position: what was opened, what closed it, and what it netted after costs.
 
@@ -211,6 +236,13 @@ class CardRun:
     time order — already in the returns and the equity at the end of the period each falls
     in, kept apart because it is a payment on what was held and not a fill cost.
 
+    `adjustments` is every split the venue applied to a held position, in time order (each an
+    `Adjustment`): a quantity no fill changed and the cash paid in lieu, already in the
+    equity and in what `held` holds from the instant each was applied, kept apart because a
+    reading of the run that replays its fills — the path `intraday_drawdown` reads — has to
+    replay them too. Empty for a run that held nothing through a split, and for a run
+    recorded before runs kept them.
+
     `period_stops` is what the hypothesis's `period_target` did over the run, as the harness
     that applied it recorded it (`PeriodStops`): every New York week it traded in, each week
     it stopped — the hit, what the stopped week dropped unsent, the flatten's fills — and the
@@ -241,6 +273,7 @@ class CardRun:
     worst_ratio: tuple[float | None, ...] = ()
     funding: tuple[FundingPayment, ...] = ()
     period_stops: PeriodStops | None = None
+    adjustments: tuple[Adjustment, ...] = ()
 
     def __post_init__(self) -> None:
         start, end = self.window
@@ -297,10 +330,11 @@ class CardRun:
     def between(self, opens: int, closes: int) -> CardRun:
         """This run restricted to the half-open instant span `[opens, closes)`.
 
-        Every series is filtered, `held` and `funding` included: `replace` would carry the
-        whole run's holdings into each fold, so a gate reading them fold-wise would judge
-        periods the fold does not contain. A funding payment belongs to the span holding its
-        settlement instant. A week of the period target belongs to the span holding its
+        Every series is filtered, `held`, `funding` and `adjustments` included: `replace`
+        would carry the whole run's holdings into each fold, so a gate reading them fold-wise
+        would judge periods the fold does not contain. A funding payment belongs to the span
+        holding its settlement instant, and a split's adjustment to the span holding the
+        instant the venue applied it. A week of the period target belongs to the span holding its
         opening, with its stop — a week that opened before the window, as one does where the
         window opens inside it, to the span that opens with the window — and the week open at
         the run's last point stays only in a span that runs to the window's end
@@ -317,6 +351,7 @@ class CardRun:
             fills=tuple(f for f in self.fills if opens <= f.ts_ns < closes),
             held=tuple(h for h in self.held if opens <= h.ts_ns < closes),
             funding=tuple(p for p in self.funding if opens <= p.ts_ns < closes),
+            adjustments=tuple(a for a in self.adjustments if opens <= a.ts_ns < closes),
             cushion=tuple(self.cushion[i] for i in kept) if self.cushion else (),
             carry=tuple(self.carry[i] for i in kept) if self.carry else (),
             worst_ratio=tuple(self.worst_ratio[i] for i in kept) if self.worst_ratio else (),

@@ -652,6 +652,22 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert "**closed** by seeding a restart with the week" in row
 
 
+def test_the_pages_say_the_fill_path_replays_the_runner_s_splits_and_holdings() -> None:
+    """A run records the splits its venue applied, and the fill path replays them and sets
+    every position to the runner's holdings at each end (`tests/criteria/test_gates.py`,
+    `tests/nautilus/backtest/test_splits.py`): the gate row, the measurement and the
+    `research show` row say so."""
+    gates = prose(section(page("concepts.md"), "What a card must satisfy"))
+    concepts = prose(page("concepts.md"))
+    assert "each split the venue applied to a held position is replayed" in gates
+    assert "every position is set to what the runner held there" in gates
+    assert "its path holds a split's lost shares until the next end" in gates
+    assert "A run whose venue applied a split to a position it held keeps each as" in concepts
+    assert "`adjustments` — `ts_ns`, `instrument_id`, `qty`, `paid` and `ratio` each" in prose(
+        page("cli.md")
+    )
+
+
 def test_the_restart_seed_is_said_as_it_is_read() -> None:
     """The seed is the week the newest window that had one open left (`records.target_seed`),
     a newer idle window passed over (`tests/portfolio/test_records.py`), where several

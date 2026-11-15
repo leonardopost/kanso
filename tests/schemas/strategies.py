@@ -7,7 +7,7 @@ from math import floor, sqrt
 
 from hypothesis import strategies as st
 
-from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
+from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Trade
 from kanso.replay.record import Session
 from kanso.research.records import Measurement
 from kanso.schemas import (
@@ -532,7 +532,8 @@ def fills(draw: st.DrawFn) -> Fill:
 def card_runs(draw: st.DrawFn) -> CardRun:
     """A measured run as a card or a stage keeps one: three parallel series over strictly
     increasing period ends, trades carrying the fills that made them, what was held, the
-    funding paid, and the book series present or absent together."""
+    funding paid, the splits applied to what was held, and the book series present or absent
+    together."""
     start = draw(st.dates(min_value=date(2000, 1, 1), max_value=date(2030, 1, 1)))
     ends = tuple(sorted(draw(st.sets(INSTANTS, max_size=6))))
     series = st.lists(FINITE, min_size=len(ends), max_size=len(ends)).map(tuple)
@@ -599,6 +600,21 @@ def card_runs(draw: st.DrawFn) -> CardRun:
             )
         ),
         period_stops=draw(st.none() | period_stops()),
+        adjustments=tuple(
+            draw(
+                st.lists(
+                    st.builds(
+                        Adjustment,
+                        ts_ns=INSTANTS,
+                        instrument_id=st.just("DEMO.XNAS"),
+                        qty=FINITE,
+                        paid=FINITE,
+                        ratio=st.none() | POSITIVE,
+                    ),
+                    max_size=3,
+                )
+            )
+        ),
     )
 
 

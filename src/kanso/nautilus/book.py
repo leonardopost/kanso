@@ -940,7 +940,10 @@ def execute_book(
             union,
             fills,
             backtest.multipliers_of(engine.cache.instruments()),
-            backtest._adjusted(backtest._positions(engine.cache)),
+            backtest._adjusted(
+                backtest._positions(engine.cache),
+                backtest.schedules_of(engine.cache.instruments()),
+            ),
         )
         intents = tuple(
             tuple(

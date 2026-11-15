@@ -18,12 +18,15 @@ from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.objects import Price, Quantity
 
-from kanso.criteria import CardRun
+from kanso.criteria import Adjustment as Recorded
+from kanso.criteria import CardRun, drawdown_pct
+from kanso.criteria.quantities import fill_path_drawdown_pct
 from kanso.criteria.run import midnight_ns
 from kanso.data.loader import to_ns
 from kanso.data.types import CorporateAction
 from kanso.errors import PreconditionError
 from kanso.nautilus.backtest import _adjusted, execute, run, run_subprocess
+from kanso.nautilus.splits import Split
 from kanso.schemas import DateWindow
 
 from .conftest import (
@@ -242,6 +245,28 @@ def test_a_position_paid_out_to_flat_is_a_trade_closed_at_the_split(
     assert paid_out.pnl_net == pytest.approx(-paid_out.cost)
     assert [fill.side for fill in run.fills] == ["BUY", "BUY"]
     assert_the_same(run, record, at_least=15)
+
+
+def test_the_run_records_the_split_and_its_fill_path_falls_by_the_costs_alone(request_for) -> None:
+    """The run carries the split the venue applied — 905 of the 1,005 shares, five paid out at
+    ten — and the fill path `intraday_drawdown` reads replays it: the book fell by its two
+    fills' costs and by nothing else, as its period ends read. Replayed from the fills alone,
+    the sale left 905 shares marked at a hundred, and the path read a fall of 90,450 from a
+    peak the book never reached."""
+    made = card(request_for)
+    ex_point = next(bar.ts_event for bar in restated() if bar.ts_event >= midnight_ns(EX))
+
+    (split,) = made.adjustments
+    assert (split.ts_ns, split.instrument_id, split.qty, split.ratio) == (
+        ex_point,
+        INSTRUMENT,
+        -905.0,
+        0.1,
+    )
+    assert split.paid == pytest.approx(50.0)
+    observed, _ = fill_path_drawdown_pct(made)
+    assert observed == pytest.approx(drawdown_pct(made))
+    assert observed == pytest.approx(sum(fill.cost for fill in made.fills) / CAPITAL * 100.0)
 
 
 def test_a_forward_split_is_the_same_arithmetic_the_other_way(request_for) -> None:
@@ -531,21 +556,43 @@ class Held:
         self.adjustments = list(events)
 
 
+SCHEDULED = {INSTRUMENT: (Split(date(1970, 1, 1), 0.2), Split(date(1970, 1, 2), 0.1))}
+"""Two splits, the first effective a nanosecond into the epoch and so before every
+adjustment below, the second a day later and so after them all."""
+
+
 def test_one_adjustment_held_by_two_positions_is_counted_once() -> None:
     """A netting position lives in the cache twice while a snapshot of it survives, and a
     quantity change counted twice would halve the position the equity curve marks."""
     shared = Adjustment("A", paid=50.0)
 
-    assert _adjusted([Held(shared), Held(shared)]) == ((1_000, INSTRUMENT, -905.0, 50.0),)
+    assert _adjusted([Held(shared), Held(shared)], SCHEDULED) == (
+        Recorded(1_000, INSTRUMENT, -905.0, 50.0, 0.2),
+    )
 
 
 def test_an_adjustment_that_paid_nothing_in_lieu_carries_a_zero_payment() -> None:
-    assert _adjusted([Held(Adjustment("A"))]) == ((1_000, INSTRUMENT, -905.0, 0.0),)
+    assert _adjusted([Held(Adjustment("A"))], SCHEDULED) == (
+        Recorded(1_000, INSTRUMENT, -905.0, 0.0, 0.2),
+    )
+
+
+def test_an_adjustment_carries_the_ratio_of_the_last_split_in_force_at_it() -> None:
+    """Matched as a trade's ledger matches it (`splits.moves_of`): the latest split of the
+    name effective at or before the adjustment, and none when the schedule names none."""
+    later = Adjustment("B")
+    later.ts_event = 2 * 86_400 * 1_000_000_000
+
+    assert [made.ratio for made in _adjusted([Held(Adjustment("A"), later)], SCHEDULED)] == [
+        0.2,
+        0.1,
+    ]
+    assert _adjusted([Held(Adjustment("A"))], {})[0].ratio is None
 
 
 def test_an_adjustment_that_changes_no_quantity_changes_no_holding() -> None:
     """`PositionAdjusted` also carries pure P&L adjustments; those move no shares."""
-    assert _adjusted([Held(Adjustment("A", None))]) == ()
+    assert _adjusted([Held(Adjustment("A", None))], SCHEDULED) == ()
 
 
 PAIR = b"""
