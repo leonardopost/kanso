@@ -487,6 +487,51 @@ def test_a_split_applied_by_a_point_published_after_an_end_is_booked_after_it(
     assert card.worst_ratio[sixteenth] == pytest.approx((cash + 10_050.0) / 10_050.0)
 
 
+FIVE = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.done = False
+
+    def on_bar(self, bar):
+        if not self.done:
+            self.done = True
+            self.submit_entry(bar.bar_type.instrument_id, "BUY", qty=5.0)
+"""
+"""Buys five DEMO on its first bar and holds them."""
+
+
+def test_a_trade_a_split_paid_out_closes_where_the_runner_booked_it(request_for) -> None:
+    """Five DEMO through the one-for-ten are paid out whole, and the split is applied by the
+    ex-date's bar, printed at 16:00 on the 16th and published at 00:30 on the 17th: the trade
+    closes at 00:30, where the runner booked the payout, and the 16th's end, at 20:00 between
+    the two, still holds the five shares. Dated by the bar's print, the trade closed before an
+    end that held it."""
+    made = request_for(RESEARCH, source=FIVE, period="1d")
+    points = restated()
+    eve = next(i for i, bar in enumerate(points) if bar.ts_event >= midnight_ns(REVERSE_EX)) - 1
+    sixteenth_end = midnight_ns(REVERSE_EX) + 20 * 3_600 * SECOND_NS
+    applied = midnight_ns(date(2024, 1, 17)) + 1_800 * SECOND_NS
+    points[eve] = _republished(points[eve], sixteenth_end)
+    points[eve + 1] = _republished(points[eve + 1], applied)
+
+    card = execute(made, [instrument(info=REVERSE)], [tuple(points)]).run
+
+    (split,) = card.adjustments
+    (trade,) = card.trades
+    assert (split.qty, split.ts_ns) == (-5.0, applied)
+    assert trade.closed_ns == applied
+    assert [held.qty for held in card.held if held.ts_ns == sixteenth_end] == [5.0]
+
+
 # --- a view on a shared venue --------------------------------------------------------
 
 EVE_NS = midnight_ns(REVERSE_EX)

@@ -1769,8 +1769,10 @@ _APPLIED: Final = (
 )
 """The points beside a quote, a print and a bar that the engine hands a venue to apply, and
 so that move its clock for a split (`Marks.feed`): in nautilus_trader 1.231.0
-`BacktestEngine._run` hands each of these to its venue's `SimulatedExchange` and every other
-point to the data engine alone."""
+`BacktestEngine._run` hands each of these to its venue's `SimulatedExchange`, which hands it
+to every loaded module's `pre_process` before applying it; an `Instrument` to the exchange's
+`update_instrument`, which hands it to no module, so it applies no split, and which kanso
+never streams; and every other point to the data engine alone."""
 
 Point = tuple[int, str, float | None, float | None, float | None]
 """One stream point: `(ts_init, instrument, price, low, high)`. The price is the mark, and
@@ -2860,7 +2862,9 @@ def _trades(
 
     What a split paid out in lieu is in the profit, realised at the split. A position the
     payout left flat closed there, and the engine dated no close, so it is dated by the
-    adjustment that closed it.
+    adjustment that closed it, at the instant the venue applied it (`_adjusted`), which is
+    where the runner booked the payout: dated by the print of the point that applied it, a
+    trade closed before a period end that still held it.
 
     The trade carries the instrument's multiplier, as its fills do, so its opening value is
     in the currency its profit is.
@@ -2889,7 +2893,7 @@ def _trades(
         book = splits.ledger(splits.moves_of(position, schedule), multiplier)
         opened = min(fills, key=lambda fill: fill.ts_ns) if fills else None
         closed = int(position.ts_closed) or max(
-            (int(event.ts_event) for event in position.adjustments), default=0
+            (int(event.ts_init) for event in position.adjustments), default=0
         )
         times, amounts = paid_at.get(name, ([], []))
         opened_ns = int(position.ts_opened)

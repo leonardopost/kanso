@@ -231,13 +231,15 @@ def test_a_position_paid_out_to_flat_is_a_trade_closed_at_the_split(
     request_for, tmp_path: Path
 ) -> None:
     """Five shares through one-for-ten are paid out whole: a trade closed at the ex-date's
-    first point, at cost, and a fresh position when the sleeve buys again after it."""
+    first point, at the instant it was published, where the venue applied the split and the
+    runner booked the payout, at cost, and a fresh position when the sleeve buys again after
+    it."""
     from .test_balance import assert_the_same
 
     record = tmp_path / "balance.txt"
     again = (EX - RESEARCH[0]).days + 3
     run = recorded(request_for, record, notional=50.0, again_on=again)
-    ex_point = next(bar.ts_event for bar in restated() if bar.ts_event >= midnight_ns(EX))
+    ex_point = next(bar.ts_init for bar in restated() if bar.ts_event >= midnight_ns(EX))
 
     (paid_out,) = run.trades
     assert paid_out.closed_ns == ex_point
