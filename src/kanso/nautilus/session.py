@@ -209,7 +209,7 @@ def run_node_chunked(
     feed order and markers included, once the chunk has run: what a replay records.
     """
     model = VenueModel.model_validate(dict(request.venue_model))
-    marks = backtest.Marks(request, model)
+    marks = backtest.Marks(request, model, instruments)
     stream = backtest.checked_chunks(request, instruments, chunks, marks)
     first = next(stream, ())
     opens, _ = request.bounds
@@ -423,7 +423,8 @@ def _venues(
     request: RunRequest, kernel: Any, points: Sequence[Any], struck: Struck | None = None
 ) -> tuple[Any, ...]:
     """One simulated venue per venue the universe trades, wired to this session's bars, and
-    under a dated spread or a period target keeping `struck`, the record of the instant each
+    under a dated spread, a period target or a split keeping `struck`, the record of where
+    each split fell among the fills and, under either of the others, of the instant each
     fill's price was struck at.
 
     The same call a stage node makes, so the exchange a replay is compared against and the

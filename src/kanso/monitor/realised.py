@@ -168,6 +168,12 @@ def joined(runs: Sequence[CardRun]) -> CardRun | None:
             )
         ),
         period_stops=_stops(runs),
+        adjustments=tuple(
+            sorted(
+                (item for run in runs for item in run.adjustments),
+                key=lambda item: (item.ts_ns, item.instrument_id),
+            )
+        ),
     )
 
 

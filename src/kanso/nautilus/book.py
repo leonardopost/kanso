@@ -767,9 +767,12 @@ def _refuse_members(book: SharedBook, members: Sequence[BookMember]) -> None:
     a level-two book, charged a dated spread or held to a period target, and a window its
     hypothesis does not declare.
 
-    A dated spread is read at the instant the venue priced each fill at, and a book's runner
-    neither keeps that record nor hands its members the table (`kanso.nautilus.struck`), so a
-    member charged one is refused rather than charged nothing (`docs/backlog.md` row 260). A
+    A dated spread is read at the instant the venue priced each fill at, which a book's venues
+    never keep: a book's runner keeps a record only where a split is declared, and then only
+    the order its bus carried the fills and the splits in, for its extraction, with no point
+    and no fill's priced instant (`Struck.points`), and hands neither a record nor the table to
+    a member's sleeve (`kanso.nautilus.struck`), so a member charged one is refused rather than
+    charged nothing (`docs/backlog.md` row 260). A
     member's entries are the ledger's to place, under the book's own hours and leverage, and a
     period target's stop and flatten would be a second halt beside them that no run composes, so
     a member that declares one is refused rather than run unstopped (row 267)."""
@@ -843,7 +846,13 @@ def execute_book(
     refused as a run of it alone refuses it (`backtest.checked`), it is fed only the span its
     own request delivers (`deliver_from`) and trades from its window's open (`warm`), and it is
     extracted from its own positions and its own points' marks, as a stage node extracts a
-    version.
+    version — with a split name's prices read in the era the shared venue had applied at
+    each end, off the whole feed (`Marks.clocked`), since another member's print can be the
+    point that applied a split to this member's position, and each split ordered among the
+    fills of its instant by the book's record (`kanso.nautilus.struck`), which the book keeps
+    wherever a split is declared and hears on its bus alone: no member is charged a dated
+    spread or held to a period target (`_refuse_members`), so its venues load no part of it
+    and it keeps no point and no fill's priced instant (`Struck.points`).
 
     The venues are the members', agreed as a stage's are (`kanso.nautilus.node.agree`), each
     opened at the book's capital and at the largest leverage the block declares, so the
@@ -890,9 +899,12 @@ def execute_book(
     measured = replace(
         deepest.request, capital=book.capital, cushion=0.0, settled_ns=None, resumes_ns=None
     )
-    union = backtest.Marks(measured, models[deepest.id])
+    union = backtest.Marks(measured, models[deepest.id], instruments)
     union.take(points)
     union.check()
+    for member in order:
+        marks[member.id].clocked(points)
+        marks[member.id].record = union.record
     backtest._seed_globals(_seed_of(members))
     engine = backtest.engine_for()
     try:
@@ -900,7 +912,10 @@ def execute_book(
             backtest.add_venue(
                 engine,
                 venue_config(venue, model, book.capital, book.leverage.largest, book=held_book),
+                union.record,
             )
+        if union.record is not None:
+            union.record.listen(engine.kernel.msgbus)
         for instrument in instruments:
             engine.add_instrument(instrument)
         strategies = []
@@ -940,7 +955,10 @@ def execute_book(
             union,
             fills,
             backtest.multipliers_of(engine.cache.instruments()),
-            backtest._adjusted(backtest._positions(engine.cache)),
+            backtest._adjusted(
+                backtest._positions(engine.cache),
+                backtest.schedules_of(engine.cache.instruments()),
+            ),
         )
         intents = tuple(
             tuple(

@@ -512,7 +512,7 @@ def printed(instant: int, close: float) -> object:
 
 def folded_marks(*chunks: list[object]) -> tuple[tuple[int, str, float, float], ...]:
     request = perp_request(perp_hypothesis("1h"))
-    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)))
+    marks = Marks(request, VenueModel.model_validate(dict(request.venue_model)), ())
     for chunk in chunks:
         marks.take(chunk)
     return marks.settlements()

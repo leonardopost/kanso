@@ -52,3 +52,64 @@ def test_a_run_with_no_period_target_is_stored_as_it_was_and_one_with_one_keeps_
     kept = encode_run(replace(run, period_stops=record))
     assert kept["period_stops"] == {"openings": [5], "stops": [], "last": None}
     assert decode_run(kept).period_stops == record
+
+
+def test_a_run_that_held_nothing_through_a_split_is_stored_as_it_was() -> None:
+    """A run with no split applied to what it held writes no `adjustments` key, so it is stored
+    as runs were before they kept them; one stored that way — every run recorded before —
+    decodes with none, and a run that has some reads them back whole, the ratio included, and
+    one recorded without a ratio as none; where it fell among the fills of its instant is
+    written only where some came before it, and one recorded without it reads as before them
+    all."""
+    from dataclasses import replace
+
+    from kanso.criteria.run import Adjustment
+    from tests.criteria.builders import build_run
+
+    run = build_run((1.0, -1.0))
+    stored = encode_run(run)
+    split = Adjustment(ts_ns=7, instrument_id="SOXS.ARCX", qty=-2_434.0, paid=23.42, ratio=0.2)
+    unknown = Adjustment(ts_ns=9, instrument_id="SOXS.ARCX", qty=-1.0, paid=0.0)
+
+    assert "adjustments" not in stored
+    assert decode_run(stored).adjustments == ()
+    kept = encode_run(replace(run, adjustments=(split, unknown)))
+    assert kept["adjustments"] == [
+        {"ts_ns": 7, "instrument_id": "SOXS.ARCX", "qty": -2_434.0, "paid": 23.42, "ratio": 0.2},
+        {"ts_ns": 9, "instrument_id": "SOXS.ARCX", "qty": -1.0, "paid": 0.0, "ratio": None},
+    ]
+    assert decode_run(kept).adjustments == (split, unknown)
+    without_ratio = {**kept, "adjustments": [{**kept["adjustments"][1]}]}
+    del without_ratio["adjustments"][0]["ratio"]
+    assert decode_run(without_ratio).adjustments == (unknown,)
+    after = replace(split, fills_before=2)
+    ordered = encode_run(replace(run, adjustments=(after,)))
+    assert ordered["adjustments"][0]["fills_before"] == 2
+    assert decode_run(ordered).adjustments == (after,)
+
+
+def test_a_holding_says_its_mark_was_under_zero_only_where_it_was() -> None:
+    """A holding marked at or above zero writes no `below_zero` key, so it is stored as
+    holdings were before they said so, and one stored that way decodes as at or above zero;
+    one marked under zero reads back as under it."""
+    from dataclasses import replace
+
+    from kanso.criteria.run import Held
+    from tests.criteria.builders import build_run
+
+    above = Held(ts_ns=1, instrument_id="CL.XNYM", qty=10.0, notional=500.0)
+    under = Held(ts_ns=2, instrument_id="CL.XNYM", qty=10.0, notional=376.3, below_zero=True)
+
+    stored = encode_run(replace(build_run((1.0, -1.0)), held=(above, under)))
+
+    assert stored["held"] == [
+        {"ts_ns": 1, "instrument_id": "CL.XNYM", "qty": 10.0, "notional": 500.0},
+        {
+            "ts_ns": 2,
+            "instrument_id": "CL.XNYM",
+            "qty": 10.0,
+            "notional": 376.3,
+            "below_zero": True,
+        },
+    ]
+    assert decode_run(stored).held == (above, under)

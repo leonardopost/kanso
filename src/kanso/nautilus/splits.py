@@ -119,10 +119,12 @@ __all__ = [
     "Move",
     "Split",
     "apply_to",
+    "applied_by",
     "in_lieu",
     "ledger",
     "moves_of",
     "quantity_after",
+    "reference",
     "schedule",
     "schedule_of",
     "unscheduled",
@@ -141,7 +143,8 @@ UTC_ZONE: Final = "UTC"
 """The zone a schedule is dated in when its instrument names none."""
 
 REASON: Final = "split"
-"""What a `PositionAdjusted` this module raises says it is for."""
+"""What a `PositionAdjusted` this module raises says it is for, ahead of the ex-date that
+names which split (`reference`); and the kind a corporate-action point of a split carries."""
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -335,7 +338,13 @@ def in_lieu(signed_qty: float, ratio: float, lot: float, price: float, multiplie
 
 
 def apply_to(
-    position: Any, split: Split, lot: float, ts_ns: int, price: float, multiplier: float = 1.0
+    position: Any,
+    split: Split,
+    lot: float,
+    ts_ns: int,
+    price: float,
+    multiplier: float = 1.0,
+    applied_ns: int | None = None,
 ) -> Any:
     """Adjust one open position for this split, pay out the fraction it leaves, and hand
     back the event it applied.
@@ -347,6 +356,15 @@ def apply_to(
     the last price in the old share count — and carried on the event as its `pnl_change`,
     where the runner's extraction and the harness read it; a position under one new lot is
     paid out whole and left flat.
+
+    The event carries two instants, as the engine's own events do: `ts_event`, `ts_ns`, the
+    instant the point that applied the split was printed at, and `ts_init`, `applied_ns`,
+    the instant it was published at, which is when the venue applied it and when the
+    runner books it (`kanso.nautilus.backtest._adjusted`); the two are one where no
+    `applied_ns` is given. Its `reason` names the split (`reference`), so two splits the
+    venue applies at one point are told apart. In nautilus_trader 1.231.0
+    `Position.apply_adjustment` reads the event's `ts_event` (into `ts_last`) and never its
+    `ts_init`, and nothing in the engine reads its `reason`.
     """
     from nautilus_trader.core.uuid import UUID4
     from nautilus_trader.model.enums import PositionAdjustmentType
@@ -365,13 +383,27 @@ def apply_to(
         adjustment_type=PositionAdjustmentType.COMMISSION,
         quantity_change=Decimal(repr(target - signed)),
         pnl_change=Money(paid, position.settlement_currency) if paid else None,
-        reason=REASON,
+        reason=reference(split),
         event_id=UUID4(),
         ts_event=ts_ns,
-        ts_init=ts_ns,
+        ts_init=ts_ns if applied_ns is None else applied_ns,
     )
     position.apply_adjustment(event)
     return event
+
+
+def reference(split: Split) -> str:
+    """What a `PositionAdjusted` raised for `split` gives as its reason: `REASON` and the
+    split's ex-date, which names it among its instrument's splits, since a schedule holds
+    one split a day."""
+    return f"{REASON} {split.ex_date.isoformat()}"
+
+
+def applied_by(event: Any, schedule: Sequence[Split]) -> Split | None:
+    """The split of `schedule` an adjustment event applied, as its `reason` names it
+    (`reference`), or `None` for one that names none of them."""
+    reason = getattr(event, "reason", None)
+    return next((split for split in schedule if reason == reference(split)), None)
 
 
 def restating(schedule: Sequence[Split], printed_ns: int, through_ns: int) -> float:

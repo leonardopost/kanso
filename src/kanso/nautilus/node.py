@@ -569,12 +569,13 @@ def run(
         kernel.data_engine.register_client(client)
         kernel.data_engine.register_default_client(client)
         client.attach(kernel.data_engine, kernel.risk_engine, kernel.exec_engine)
+        struck_at = any(
+            dated_rows(request.venue_model) or request.hyp.period_target is not None
+            for request in requests
+        )
         struck = (
-            Struck()
-            if any(
-                dated_rows(request.venue_model) or request.hyp.period_target is not None
-                for request in requests
-            )
+            Struck(points=struck_at)
+            if struck_at or any(splits.schedule_of(instrument) for instrument in window.instruments)
             else None
         )
         venues = sandbox.attach(kernel, node.venues(), points, struck)
@@ -597,6 +598,7 @@ def run(
                 window.instruments,
                 struck,
                 strategy._target_record(),
+                feed=points[: client.released],
             )
             for placed, request, groups, strategy in zip(
                 node.placements, requests, window.per_version, strategies, strict=True
@@ -956,6 +958,8 @@ def _realised(
     instruments: Sequence[Any],
     struck: Struck | None = None,
     period_stops: PeriodStops | None = None,
+    *,
+    feed: Sequence[Any],
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
@@ -972,8 +976,17 @@ def _realised(
     harness read — and never at one read off the version's own view: that view orders its
     series as no venue was handed them, holds none of the series the version's stage-mates
     trade on its venue, and on a restart holds no prefix the venue was handed again. Wherever
-    the window's marks keep a record at all, under a dated spread or a period target, it is
-    that one, so the marks hold no record of their own that no venue was loaded with.
+    the window's marks keep a record at all, under a dated spread, a period target or a split,
+    it is that one, so the marks hold no record of their own that no venue was loaded with —
+    and where a split was applied among the fills of its instant is the stage venue's order
+    too (`backtest._adjusted`). For
+    the same reason the era a split name's prices are read in at each period end is the
+    stage venue's, read off the feed the node released to it (`feed`, `Marks.clocked`): a
+    stage-mate's print can be the point that applied a split to the version's position, and
+    the version's own view need not hold it; and a point a halt left unreleased applied
+    nothing, so it moves no clock. The feed is required, by name: read off no feed, every
+    split would be in force at no end while the venue booked the new count, the old count's
+    prices beside the new count's shares.
 
     What the version's period target did over the window is its harness's record, read once
     the node has stopped — after its own flatten, or where a halt, which flattens nothing,
@@ -989,6 +1002,7 @@ def _realised(
             positions=(),
         )
     marks = backtest.checked(request, instruments, groups)
+    marks.clocked(feed)
     if marks.record is not None:
         marks.record = struck
     if marks.pricing is not None:

@@ -17,6 +17,16 @@ that paid none.
 What a `period_target` did over the run (`period_stops`) is written only where the run has
 it, so every other run is stored as it was before runs kept it, and a stored measurement of
 the same run under the same pins is the same blob; a run stored without it decodes with none.
+The splits the venue applied to what the run held (`adjustments`) are written the same way,
+only where there are some: a run that held nothing through a split is stored as it was, and
+a run stored before runs kept them decodes with none, even one that held a position through
+a split, whose fill path cannot replay what was never kept
+(`kanso.criteria.quantities.fill_path_drawdown_pct` says what it reads instead); an
+adjustment writes where it fell among the fills of its instant (`fills_before`) only where
+some came before it, and one written without it reads as before them all. A holding
+says its mark was under zero (`Held.below_zero`) only where it was, so every other holding is
+stored as it was, and one stored before holdings said so reads as at or above zero, which
+the same fill path reads it as.
 """
 
 from __future__ import annotations
@@ -25,7 +35,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
+from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Trade
 from kanso.schemas import PeriodStops
 
 __all__ = ["decode_run", "encode_run"]
@@ -33,11 +43,16 @@ __all__ = ["decode_run", "encode_run"]
 
 def encode_run(run: CardRun) -> dict[str, Any]:
     """One measured window as JSON-shaped data, losing nothing a gate reads; what a period
-    target did over it only where it has that."""
+    target did over it, and the splits applied to what it held, only where it has those."""
     stopped = (
         {}
         if run.period_stops is None
         else {"period_stops": run.period_stops.model_dump(mode="json")}
+    )
+    adjusted = (
+        {"adjustments": [_encode_adjustment(item) for item in run.adjustments]}
+        if run.adjustments
+        else {}
     )
     return {
         "window": [run.window[0].isoformat(), run.window[1].isoformat()],
@@ -56,13 +71,15 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "currency": run.currency,
         "venue_model": dict(run.venue_model),
         **stopped,
+        **adjusted,
     }
 
 
 def decode_run(payload: Mapping[str, Any]) -> CardRun:
     """One measured window back from its stored form; one stored before funding was booked
-    reads as a run that paid none, which is what it measured, and one stored without what a
-    period target did as a run that had none."""
+    reads as a run that paid none, which is what it measured, one stored without what a
+    period target did as a run that had none, and one stored without the splits applied to
+    what it held as a run that carries none."""
     stopped = payload.get("period_stops")
     opens, closes = payload["window"]
     return CardRun(
@@ -84,24 +101,56 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         currency=str(payload["currency"]),
         venue_model=dict(payload["venue_model"]),
         period_stops=None if stopped is None else PeriodStops.model_validate(stopped),
+        adjustments=tuple(_decode_adjustment(item) for item in payload.get("adjustments", ())),
+    )
+
+
+def _encode_adjustment(item: Adjustment) -> dict[str, Any]:
+    ordered = {"fills_before": item.fills_before} if item.fills_before else {}
+    return {
+        "ts_ns": item.ts_ns,
+        "instrument_id": item.instrument_id,
+        "qty": item.qty,
+        "paid": item.paid,
+        "ratio": item.ratio,
+        **ordered,
+    }
+
+
+def _decode_adjustment(payload: Mapping[str, Any]) -> Adjustment:
+    return Adjustment(
+        ts_ns=int(payload["ts_ns"]),
+        instrument_id=str(payload["instrument_id"]),
+        qty=float(payload["qty"]),
+        paid=float(payload["paid"]),
+        ratio=None if payload.get("ratio") is None else float(payload["ratio"]),
+        fills_before=int(payload.get("fills_before", 0)),
     )
 
 
 def _encode_held(item: Held) -> dict[str, Any]:
-    return {
+    """A holding as stored; `below_zero` only where it is true, so every holding marked at or
+    above zero is stored as it was before the field was kept."""
+    stored: dict[str, Any] = {
         "ts_ns": item.ts_ns,
         "instrument_id": item.instrument_id,
         "qty": item.qty,
         "notional": item.notional,
     }
+    if item.below_zero:
+        stored["below_zero"] = True
+    return stored
 
 
 def _decode_held(payload: Mapping[str, Any]) -> Held:
+    """A recorded holding; one recorded before holdings said whether their mark was under
+    zero reads as at or above it."""
     return Held(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
         qty=float(payload["qty"]),
         notional=float(payload["notional"]),
+        below_zero=bool(payload.get("below_zero", False)),
     )
 
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from kanso.criteria import DatasetFacts, Held, Trade, gates
+from kanso.criteria import Adjustment, CardRun, DatasetFacts, Held, Trade, gates
 from kanso.criteria.gates import (
     NEVER_HELD,
     NO_FLOOR,
@@ -35,8 +35,8 @@ from kanso.criteria.gates import (
     walk_forward_consistency,
 )
 from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
-from kanso.criteria.quantities import periods_per_year, variance
-from kanso.criteria.run import NS_PER_SECOND, Fill
+from kanso.criteria.quantities import fill_path_drawdown_pct, periods_per_year, variance
+from kanso.criteria.run import NS_PER_SECOND, Fill, midnight_ns
 from kanso.errors import PreconditionError
 from tests.criteria.builders import (
     START,
@@ -653,6 +653,211 @@ def test_intraday_drawdown_with_no_fills_is_the_period_end_path() -> None:
     assert not result.passed
     assert result.evidence["max_drawdown_pct"] == pytest.approx(20.0)
     assert result.evidence["trough_ns"] == run.period_ends_ns[1]
+
+
+def _end(day: int) -> int:
+    """The instant `build_run` ends day `day` of its window at."""
+    return midnight_ns(DAYS[day] + timedelta(days=1)) - 1
+
+
+@pytest.mark.parametrize(("mark", "fall"), [(12.0, 0.0), (8.0, 200.0)], ids=["up", "down"])
+def test_a_position_held_across_a_period_end_moves_the_path_once(mark: float, fall: float) -> None:
+    """Bought 100 at 10, marked at an end at `mark` and sold there the next day: the book never
+    moved after the end, so the path reads only what the end read — nothing when the mark
+    rose to 12, the 200 it fell when it fell to 8. Re-marked from the last fill's 10 at the
+    sale, the move to the mark was counted again on top of the re-anchor that already held
+    it: 200 on a book that never fell, and 400 on one that fell 200."""
+    capital = 30_000.0
+    moved = 100.0 * (mark - 10.0)
+    run = build_run(
+        (moved, 0.0),
+        capital=capital,
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 10.0, 0.0),
+            Fill(at(DAYS[1], 10), "DEMO", "SELL", 100.0, mark, 0.0),
+        ),
+        holdings=(Held(ts_ns=_end(0), instrument_id="DEMO", qty=100.0, notional=100.0 * mark),),
+    )
+
+    result = intraday_drawdown.evaluate(context(run))
+
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(fall / capital * 100.0)
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(result.evidence["period_end_pct"])
+
+
+SPLIT_NS = midnight_ns(DAYS[1]) + 1
+"""A one-for-ten reverse split of DEMO, applied at the second day's first instant."""
+
+SPLIT = Adjustment(SPLIT_NS, "DEMO", qty=-905.0, paid=50.0, ratio=0.1)
+"""What it did to 1,005 shares: 100 kept, five old shares paid out at 10."""
+
+
+def _through_a_split(*adjusted: Adjustment) -> CardRun:
+    """1,005 DEMO bought at 10 on the first day and held through `SPLIT`, a share of OTHER
+    bought at 1 the next morning and DEMO's 100 sold at 100 at noon: a book worth 100,000
+    at every instant, and every end struck there."""
+    run = build_run(
+        (0.0, 0.0),
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 1_005.0, 10.0, 0.0),
+            Fill(at(DAYS[1], 11), "OTHER", "BUY", 1.0, 1.0, 0.0),
+            Fill(at(DAYS[1], 12), "DEMO", "SELL", 100.0, 100.0, 0.0),
+        ),
+        holdings=(
+            Held(ts_ns=_end(0), instrument_id="DEMO", qty=1_005.0, notional=10_050.0),
+            Held(ts_ns=_end(1), instrument_id="OTHER", qty=1.0, notional=1.0),
+        ),
+    )
+    return replace(run, adjustments=adjusted)
+
+
+def test_a_split_is_replayed_where_the_runner_booked_it() -> None:
+    """The quantity the split changed, the price restated into the new shares and the cash it
+    paid in lieu: the book reads 100,000 at OTHER's fill and at DEMO's sale, and nothing
+    fell. Replayed from the fills alone the sale left 905 of the shares the split took away,
+    marked at 100: a path that rose 90,450 and fell back at the next end, read as 90.45%."""
+    result = intraday_drawdown.evaluate(context(_through_a_split(SPLIT)))
+
+    assert result.evidence["max_drawdown_pct"] == 0.0
+    assert result.evidence["trough_ns"] is None
+
+
+@pytest.mark.parametrize("before", [0, 1, 2], ids=["none before", "one before", "both before"])
+def test_a_split_is_replayed_among_the_fills_of_its_instant_where_the_venue_applied_it(
+    before: int,
+) -> None:
+    """1,000 DEMO held at 10, and two more fills of DEMO, of 100 and of 10, at the instant the
+    venue applied the one-for-ten: the ones it matched before the split are struck at 10 in
+    the old shares, the rest at 100 in the new, and the split takes nine shares in ten of what
+    was held when it fell. The book is worth 100,000 at every instant, and the path, replaying
+    the split after the fills the venue matched before it (`fills_before`), never falls.
+    Replayed before them all, the path took 990 shares from the 1,000 and marked the 110 left
+    at the add-on's old 10: 9.9% of the book."""
+    added = (100.0, 10.0)
+    held = 1_000.0 + sum(added[:before])
+    split = Adjustment(SPLIT_NS, "DEMO", qty=-0.9 * held, paid=0.0, ratio=0.1, fills_before=before)
+    run = build_run(
+        (0.0, 0.0),
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 1_000.0, 10.0, 0.0),
+            *(
+                Fill(SPLIT_NS, "DEMO", "BUY", qty, 10.0 if index < before else 100.0, 0.0)
+                for index, qty in enumerate(added)
+            ),
+        ),
+        holdings=(Held(ts_ns=_end(0), instrument_id="DEMO", qty=1_000.0, notional=10_000.0),),
+    )
+
+    replayed = replace(run, adjustments=(split,))
+
+    assert fill_path_drawdown_pct(replayed)[0] == pytest.approx(0.0, abs=1e-9)
+    if before:
+        first = replace(run, adjustments=(replace(split, fills_before=0),))
+        assert fill_path_drawdown_pct(first)[0] > 9.0
+
+
+def test_a_run_recorded_without_its_adjustments_keeps_the_lost_shares_to_the_next_end() -> None:
+    """A run stored before runs kept the splits applied to what they held carries none: its
+    path still holds the 905 shares a split took away from the sale to the next period end,
+    where the runner's holdings replace them, and reads the fall that makes."""
+    result = intraday_drawdown.evaluate(context(_through_a_split()))
+
+    assert result.evidence["max_drawdown_pct"] == pytest.approx(90_450.0 / 100_000.0 * 100.0)
+    assert result.evidence["trough_ns"] == _end(1)
+
+
+def test_a_split_whose_ratio_is_unknown_moves_the_shares_and_keeps_the_price() -> None:
+    """An adjustment whose schedule names no split moves the shares and the cash and keeps
+    the last price, which no ratio restates: 100 shares still at 10 at OTHER's fill, 9,000
+    under the book, until the sale re-marks them."""
+    unknown = Adjustment(SPLIT_NS, "DEMO", qty=-905.0, paid=50.0)
+
+    assert fill_path_drawdown_pct(_through_a_split(unknown)) == (
+        pytest.approx(9.0),
+        at(DAYS[1], 11),
+    )
+
+
+def test_a_name_the_runner_did_not_hold_at_an_end_leaves_the_path_there() -> None:
+    """A run stored without its adjustments holds the 905 shares a split took away until the
+    next end, where the runner held no DEMO: they leave the path there, so a later purchase
+    of DEMO at 50 marks only the ten it bought, and the fall is the one that end read. Kept
+    past the end, the 905 were marked down from 100 to 50 at the purchase, a fall of 45,250
+    the book never took."""
+    run = build_run(
+        (0.0, 0.0, 0.0),
+        fills=(
+            *_through_a_split().fills,
+            Fill(at(DAYS[2], 12), "DEMO", "BUY", 10.0, 50.0, 0.0),
+        ),
+        holdings=(
+            *_through_a_split().held,
+            Held(ts_ns=_end(2), instrument_id="DEMO", qty=10.0, notional=500.0),
+            Held(ts_ns=_end(2), instrument_id="OTHER", qty=1.0, notional=1.0),
+        ),
+    )
+
+    assert fill_path_drawdown_pct(run) == (pytest.approx(90.45), _end(1))
+
+
+@pytest.mark.parametrize(
+    ("below_zero", "fall"), [(True, 1_200.0), (False, 1_600.0)], ids=["kept", "recorded before"]
+)
+def test_a_position_marked_under_zero_at_an_end_moves_the_path_once(
+    below_zero: bool, fall: float
+) -> None:
+    """Bought 100 at 10, marked at an end at -2 — a future's price can go under zero — and sold
+    there the next day: the book fell 1,200 to the end and not after it. Its notional is an
+    absolute, and set to it alone the position was marked at +2 after the end, so the sale
+    moved the path by 400 the book never moved — the reading of a holding recorded before
+    holdings said their mark was under zero."""
+    capital = 30_000.0
+    run = build_run(
+        (-1_200.0, 0.0),
+        capital=capital,
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 10.0, 0.0),
+            Fill(at(DAYS[1], 10), "DEMO", "SELL", 100.0, -2.0, 0.0),
+        ),
+        holdings=(
+            Held(
+                ts_ns=_end(0),
+                instrument_id="DEMO",
+                qty=100.0,
+                notional=200.0,
+                below_zero=below_zero,
+            ),
+        ),
+    )
+
+    assert fill_path_drawdown_pct(run)[0] == pytest.approx(fall / capital * 100.0)
+
+
+def test_a_split_of_a_position_the_path_never_saw_opened_moves_nothing_in_it() -> None:
+    """A fold of a run holds the splits applied inside it to a position opened before it: the
+    path holds nothing of that position until the fold's first end hands it the runner's, so
+    the split is not replayed and its payment is left to that end's re-anchor. Replayed, the
+    shares it took away would have been a short of 904 OTHER at its fill."""
+    unseen = Adjustment(SPLIT_NS, "OTHER", qty=-905.0, paid=50.0, ratio=0.1)
+
+    assert fill_path_drawdown_pct(_through_a_split(unseen, SPLIT)) == (0.0, None)
+
+
+def test_a_run_recorded_without_its_holdings_keeps_what_its_fills_leave() -> None:
+    """Before 0.3.0 a run kept no holdings, so the path has no runner's book to set at an end
+    and keeps the quantity its fills leave: 100 bought at 10, half sold at 8 the next day, a
+    fall of 200 on the 100 still held. Set to a book that held nothing, the path would have
+    dropped the 100 at the first end and read none."""
+    run = build_run(
+        (0.0, -200.0),
+        capital=30_000.0,
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 10.0, 0.0),
+            Fill(at(DAYS[1], 10), "DEMO", "SELL", 50.0, 8.0, 0.0),
+        ),
+    )
+
+    assert fill_path_drawdown_pct(run) == (pytest.approx(200.0 / 30_000.0 * 100.0), at(DAYS[1], 10))
 
 
 def test_a_fill_s_cost_is_in_the_path() -> None:

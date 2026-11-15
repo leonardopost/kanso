@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
-from kanso.criteria.run import NS_PER_DAY, FundingPayment, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, Adjustment, FundingPayment, midnight_ns
 from kanso.monitor import combined, tenure
 from kanso.monitor.realised import combined_benchmark
 from kanso.portfolio.records import StageResult
@@ -106,6 +106,30 @@ def test_the_funding_of_every_window_is_joined_in_time_order() -> None:
 
     assert joined is not None
     assert joined.funding == (paid(START), paid(SECOND_DAY))
+
+
+def test_the_splits_applied_in_every_window_are_joined_in_time_order() -> None:
+    """A stage window's run carries the splits its venue applied to what the version held, and
+    the joined run carries them all, for its fill path to replay where they fell."""
+
+    def applied(day: date) -> Adjustment:
+        return Adjustment(
+            ts_ns=midnight_ns(day) + 5 * 3_600 * 1_000_000_000,
+            instrument_id="DEMO.XNAS",
+            qty=-90.0,
+            paid=0.5,
+            ratio=0.1,
+        )
+
+    early = result((10.0,))
+    early = replace(early, run=replace(early.run, adjustments=(applied(START),)))
+    late = result((10.0,), start=SECOND_DAY)
+    late = replace(late, run=replace(late.run, adjustments=(applied(SECOND_DAY),)))
+
+    joined = combined([early, late])
+
+    assert joined is not None
+    assert joined.adjustments == (applied(START), applied(SECOND_DAY))
 
 
 WEEK = midnight_ns(START) + 9 * 3_600 * 1_000_000_000

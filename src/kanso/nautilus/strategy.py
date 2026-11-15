@@ -1392,11 +1392,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         period ends it moves with every fill and every print. It is kept from the fills,
         from the share counts the venue restated at a split and from the cash the split paid
         in lieu of the fraction it left (`_on_restated`), never from the engine's account,
-        whose balance a corporate action leaves quoted in shares no position holds.
-        Two differences are deliberate: a price printed before a split the venue has since
-        applied is restated by the split's ratio, where the card marks it as printed until
-        the name prints again; and a position the sleeve has seen no price for is marked at
-        its own split-aware cost, where the card marks it at the last price its stream holds.
+        whose balance a corporate action leaves quoted in shares no position holds. A price
+        printed before a split the venue has since applied is restated by the split's ratio,
+        as the card restates it. One difference is deliberate: a position the sleeve has seen
+        no price for is marked at its own split-aware cost, where the card marks it at the
+        last price its stream holds.
 
         Entries and an overlay's hedge legs are cut to what the smaller of this and the
         capital can fund, and a strategy may size from it.

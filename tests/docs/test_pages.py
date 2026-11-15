@@ -652,6 +652,100 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert "**closed** by seeding a restart with the week" in row
 
 
+def test_the_pages_say_the_fill_path_replays_the_runner_s_splits_and_holdings() -> None:
+    """A run records the splits its venue applied, and the fill path replays them and sets
+    every position to the runner's holdings at each end (`tests/criteria/test_gates.py`,
+    `tests/nautilus/backtest/test_splits.py`): the gate row, the measurement and the
+    `research show` row say so."""
+    gates = prose(section(page("concepts.md"), "What a card must satisfy"))
+    concepts = prose(page("concepts.md"))
+    assert "each split the venue applied to a held position is replayed" in gates
+    assert "every position is replaced by what the runner held there" in gates
+    assert "under zero where that was" in gates
+    assert "its path holds a split's lost shares until the next end" in gates
+    assert "A run whose venue applied a split to a position it held keeps each as" in concepts
+    assert "the ratio of the split the venue's event names" in concepts
+    assert "how many (`fills_before`), which come first among them in `fills`" in concepts
+    assert "after the fills of its name the venue matched before it there" in gates
+    assert "and `fills_before` where the venue matched some of that instant's fills" in (
+        prose(page("cli.md"))
+    )
+    assert "says so (`below_zero`), since its notional is an absolute" in concepts
+    cli = prose(page("cli.md"))
+    assert "`adjustments` — `ts_ns`, `instrument_id`, `qty`, `paid` and `ratio` each" in cli
+    assert "a holding in `held` whose mark was under zero carrying `below_zero: true`" in cli
+
+
+def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:
+    """The runner restates a split name's prices into the era in force at each period end
+    (`tests/nautilus/backtest/test_split_basis.py`): the gate row and the workspace page say
+    so, row 79 is half closed — the card's mark, and not yet the stage's end-of-window book —
+    and the key that plays no part in it is a backlog row of its own."""
+    gates = prose(section(page("concepts.md"), "What a card must satisfy"))
+    concepts = prose(page("concepts.md"))
+    workspace = prose(page("workspace.md"))
+    assert "read in the shares held at the end, so a low printed before a split" in gates
+    assert "the runner marks it the same way at a period end" in concepts
+    actions = prose(section(page("concepts.md"), "Corporate actions"))
+    assert "**A period is read in the shares held at its end.**" in actions
+    assert "printed past the split's instant reaches it" in actions
+    assert "at the instant that point was published, and the runner books the split" in actions
+    assert "read off the stage's or the book's feed, not their own" in actions
+    assert "a point the node never released was never handed to the venue" in actions
+    assert "The runner reads a period in the shares held at its end." in workspace
+    assert "a stage-mate's or another member's — at the instant that point was published" in (
+        workspace
+    )
+    assert "an eve's daily bar published after the midnight it is stamped at" in workspace
+    assert "a point a halt left unreleased was never handed to the venue" in workspace
+    assert "read in the shares held at the end, so a price printed before a split" in workspace
+    assert "`corporate_actions` plays no part in it" in workspace
+    rows = page("backlog.md").splitlines()
+    half = next(line for line in rows if line.startswith("| 79 |")).split("|")
+    assert half[3].strip().startswith("**Half closed:** ~~At a period end where a held name")
+    assert "The stage's end-of-window book still does" in half[3]
+    assert half[4].strip().startswith("The runner reads every period in the shares held")
+    assert "read it off the whole feed the shared venue was handed" in half[4]
+    key = next(line for line in rows if line.startswith("| 285 |"))
+    assert "`corporate_actions` in `instruments.yaml` is read by nothing at run time" in key
+    found = {line.split("|")[1].strip(): line for line in rows if line.startswith("| 28")}
+    assert "against the last quote of its name the stream holds" in found["286"]
+    assert "count a position from its fills alone" in found["287"]
+    assert "matches an adjustment to the latest split of its name" in found["288"]
+    assert "land an order due at an instant at different points of it" in found["289"]
+
+
+def test_the_pages_say_a_record_kept_for_a_split_alone_keeps_no_point() -> None:
+    """A record a run keeps for a split alone is heard on the bus and loads no venue half
+    (`Struck.points`; `tests/nautilus/backtest/test_split_basis.py`), so it keeps no point and
+    no fill's priced instant. `_refuse_members`, `execute_book`, `sandbox.attach` and row 260
+    once said a book's venues and a stage's kept each name's last point in it wherever a split
+    was declared; and row 260's fix names the record that keeps points, which the book's
+    runner would need to charge a member a dated spread."""
+    from kanso.nautilus import book, sandbox
+
+    refused = prose(book._refuse_members.__doc__ or "")
+    runner = prose(book.execute_book.__doc__ or "")
+    attach = prose(sandbox.attach.__doc__ or "")
+    assert "keeps that record only where a split is declared" not in refused
+    assert "then only the order its bus carried the fills and the splits in" in refused
+    assert "with no point and no fill's priced instant (`Struck.points`)" in refused
+    assert "venues keep wherever a split is declared" not in runner
+    assert "hears on its bus alone" in runner
+    assert "it keeps no point and no fill's priced instant (`Struck.points`)" in runner
+    assert "given `struck`, keeping each name's last point" not in attach
+    assert "where the record keeps points (`Struck.points`" in attach
+    assert "A record kept for a split alone keeps no point." in attach
+    row = next(line for line in page("backlog.md").splitlines() if line.startswith("| 260 |"))
+    cells = row.split("|")
+    assert "loads it only where a split is declared" not in cells[3]
+    assert "then its bus half alone (`Struck(points=False)`)" in cells[3]
+    assert "it keeps no point and no fill's priced instant" in cells[3]
+    fix = cells[5].strip()
+    assert fix.startswith("The book's runner keeping a record that keeps points")
+    assert "(`Struck(points=True)`) wherever a member is charged one" in fix
+
+
 def test_the_restart_seed_is_said_as_it_is_read() -> None:
     """The seed is the week the newest window that had one open left (`records.target_seed`),
     a newer idle window passed over (`tests/portfolio/test_records.py`), where several

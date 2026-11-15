@@ -37,7 +37,7 @@ from math import cos, floor, fsum, pi, sin, sqrt, tan
 
 import numpy as np
 
-from kanso.criteria.run import BPS, CardRun, day_of
+from kanso.criteria.run import BPS, CardRun, Held, day_of
 
 DAYS_PER_YEAR = 365.25
 AUTO = "auto"
@@ -304,15 +304,49 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
     `drawdown_pct` samples the equity where the runner struck it, at the period ends, so a
     position opened and closed inside one period is never seen falling: a book that trades
     many times a day and is flat at the close reads as flat at every sample. This path adds
-    a point at each fill — cash after the fill and its cost, plus every open position at the
-    price it last traded at — and re-anchors at each period end to the equity the runner
-    struck there, so what the runner books at an end and a fill does not carry — a period's
-    mark, funding, a carry, a reset's transfer — enters the path where the runner booked it
-    and the path meets `run.equity` at every end. The peak is never under the capital, as it
-    is not for `drawdown_pct`. A run with no fills is the period-end path alone, so the two
-    agree there; on a reset book the period-end rule's month-by-month peak is not applied
-    between ends, where the book has not been reset, so the fall read here is never the
-    shallower of the two. The instant is `None` when nothing fell.
+    a point at each fill — cash after the fill and its cost, plus every open position marked
+    at the price it last traded at, or at the runner's mark at the last period end when no
+    fill of its name has come since — and re-anchors at each period end to the equity the
+    runner struck there, so what the runner books at an end and a fill does not carry — a
+    funding payment, a carry, a reset's transfer — enters the path where the runner booked
+    it and the path meets `run.equity` at every end. The peak is never under the capital, as
+    it is not for `drawdown_pct`. A run with no fills is the period-end path alone, so the
+    two agree there; on a reset book the period-end rule's month-by-month peak is not
+    applied between ends, where the book has not been reset, so the fall read here is never
+    the shallower of the two. The instant is `None` when nothing fell.
+
+    **What the path holds is what the runner holds.** A split the venue applied
+    (`run.adjustments`) changes a quantity no fill changed, so it is replayed at the instant
+    the runner booked it, the instant the venue applied it, where the venue applied it among
+    the fills of its name at that instant: after the ones it had matched before it
+    (`Adjustment.fills_before`), which are struck in the old shares — an order in flight
+    lands behind the instant's first point, another venue's, and a point published then can
+    come before the one that applies the split — and before the rest. The quantity changes by
+    what the split changed it, the last price is divided by the ratio of the split the
+    adjustment names into the new shares, and what it paid in lieu goes into cash; replayed
+    before a fill the venue matched ahead of it, the path took the split's shares from what it
+    held and then marked the new count at the old fill's price, 9.91% of the capital lost on
+    a book that lost its costs. Replaying the fills alone kept the shares a reverse split took
+    away and re-marked them at every later fill of the name: four-fifths of what was bought
+    through a one-for-five, valued at every later restatement's price, measured on a card at a
+    fall of 1,560.67% of its capital where its period ends fell 116.64%. And at each period end,
+    before the re-anchor, every position is replaced by what the runner held there
+    (`run.held`) — its quantity, valued at its notional over that quantity, the runner's
+    mark times the multiplier, under zero where the runner's mark was (`Held.below_zero`) —
+    and a name it did not hold is dropped, so a fill after the end moves the path by the move
+    since the runner's mark and not again by the move from the name's last fill to that
+    mark, which the re-anchor already holds: bought at 10, marked at 12 at an end and sold at
+    12, the book never fell, and the path read a fall of 2 a share.
+
+    A run recorded before runs kept their adjustments carries none, so its path keeps the
+    shares a split took away from the split to the next period end, where the runner's
+    holdings replace them; one recorded before runs kept their holdings (before 0.3.0)
+    carries none of those either, and its path keeps the quantities its fills leave. One
+    recorded before holdings said whether their mark was under zero reads every holding as
+    at or above it, so a position marked under zero at an end is set to the same price above
+    it, and the next fill of its name moves the path by twice that price on every unit held
+    that the book never moved; only a contract that can print under zero, a future's, meets
+    it.
     """
     marks: dict[str, tuple[float, float, float]] = {}
     cash = run.capital
@@ -322,19 +356,69 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
     trough_at: int | None = None
     ends = list(zip(run.period_ends_ns, run.equity, strict=True))
     fills = sorted(run.fills, key=lambda f: f.ts_ns)
+    waiting = sorted(run.adjustments, key=lambda a: a.ts_ns)
+    held_at: dict[int, list[Held]] | None = None
+    if run.held:
+        held_at = {}
+        for item in run.held:
+            held_at.setdefault(item.ts_ns, []).append(item)
     index = 0
+    booked: dict[str, int] = {}
+    """Each name's fills booked at the instant of the last fill (`booked_at`)."""
+    booked_at: int | None = None
 
     def equity_now() -> float:
         return cash + fsum(qty * px * mult for qty, px, mult in marks.values()) + offset
 
+    def adjust(until: int, *, whole: bool) -> None:
+        """Replay every split applied before `until`, and those applied at it — all of them,
+        `whole`, or only those whose name has booked the fills the venue matched before it."""
+        nonlocal cash
+        at = 0
+        while at < len(waiting) and waiting[at].ts_ns <= until:
+            made = waiting[at]
+            if (
+                not whole
+                and made.ts_ns == until
+                and booked.get(made.instrument_id, 0) < made.fills_before
+            ):
+                at += 1
+                continue
+            del waiting[at]
+            mark = marks.get(made.instrument_id)
+            if mark is None:  # a position this path never saw opened: a fold's, say
+                continue
+            qty, px, mult = mark
+            restated = px if made.ratio is None else px / made.ratio
+            marks[made.instrument_id] = (qty + made.qty, restated, mult)
+            cash += made.paid
+
+    def close(end_ns: int, struck: float) -> None:
+        nonlocal marks, offset, peak, worst, trough_at
+        adjust(end_ns, whole=True)
+        if held_at is not None:
+            marks = {
+                item.instrument_id: (
+                    item.qty,
+                    (-item.notional if item.below_zero else item.notional) / abs(item.qty),
+                    1.0,
+                )
+                for item in held_at.get(end_ns, ())
+            }
+        offset += struck - equity_now()
+        peak = max(peak, struck)
+        if peak - struck > worst:
+            worst, trough_at = peak - struck, end_ns
+
     for fill in fills:
         while index < len(ends) and ends[index][0] < fill.ts_ns:
-            end_ns, struck = ends[index]
-            offset += struck - equity_now()
-            peak = max(peak, struck)
-            if peak - struck > worst:
-                worst, trough_at = peak - struck, end_ns
+            close(*ends[index])
             index += 1
+        if fill.ts_ns != booked_at:
+            booked.clear()
+            booked_at = fill.ts_ns
+        adjust(fill.ts_ns, whole=False)
+        booked[fill.instrument_id] = booked.get(fill.instrument_id, 0) + 1
         signed = fill.qty if fill.side == "BUY" else -fill.qty
         cash -= signed * fill.px * fill.multiplier + fill.cost
         qty, _, _ = marks.get(fill.instrument_id, (0.0, fill.px, fill.multiplier))
@@ -344,10 +428,7 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
         if peak - value > worst:
             worst, trough_at = peak - value, fill.ts_ns
     for end_ns, struck in ends[index:]:
-        offset += struck - equity_now()
-        peak = max(peak, struck)
-        if peak - struck > worst:
-            worst, trough_at = peak - struck, end_ns
+        close(end_ns, struck)
     return worst / run.capital * 100.0, trough_at
 
 

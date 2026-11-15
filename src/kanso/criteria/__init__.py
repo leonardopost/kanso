@@ -56,7 +56,7 @@ from kanso.criteria.quantities import (
     sharpe,
     standard_error,
 )
-from kanso.criteria.run import CardRun, Fill, FundingPayment, Held, Trade
+from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Trade
 
 __all__ = [
     "plan_complaints",
@@ -68,6 +68,7 @@ __all__ = [
     "DENIED_IDENTIFIERS",
     "SCOPED_FILES",
     "SHARPE_FAMILY",
+    "Adjustment",
     "CardRun",
     "DatasetFacts",
     "DeployedBook",
