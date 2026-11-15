@@ -960,7 +960,9 @@ def _realised(
     as its record keeps it (`struck`, `kanso.nautilus.struck`) — the record the version's
     harness read — and never at one read off the version's own view: that view orders its
     series as no venue was handed them, holds none of the series the version's stage-mates
-    trade on its venue, and on a restart holds no prefix the venue was handed again.
+    trade on its venue, and on a restart holds no prefix the venue was handed again. Wherever
+    the window's marks keep a record at all, under a dated spread or a period target, it is
+    that one, so the marks hold no record of their own that no venue was loaded with.
 
     What the version's period target did over the window is its harness's record, read once
     the node has flattened and stopped (`period_stops`, `KansoStrategy._target_record`), and is
@@ -975,6 +977,8 @@ def _realised(
             positions=(),
         )
     marks = backtest.checked(request, instruments, groups)
+    if marks.record is not None:
+        marks.record = struck
     if marks.pricing is not None:
         marks.pricing = struck
     view = _StrategyView(kernel.cache, placed.identity)

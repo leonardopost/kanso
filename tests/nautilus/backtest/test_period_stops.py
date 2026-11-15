@@ -30,8 +30,9 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.objects import Price, Quantity
 
 from kanso.criteria.codec import encode_run
-from kanso.nautilus import node, session
+from kanso.nautilus import backtest, node, session
 from kanso.nautilus.backtest import RunResult, execute
+from kanso.nautilus.struck import Struck
 from kanso.schemas import PeriodStops
 from tests.nautilus.strategy.test_period_target import (
     FRIDAY,
@@ -78,9 +79,9 @@ def volume_of(symbol: str, index: int) -> int:
     return 1_000_000 * (index + 1) + (0 if symbol == LEAD else 50_000_000)
 
 
-def volumed(symbol: str, points: Sequence[Point]) -> tuple[Bar, ...]:
-    """One name's one-minute bars, each stamped and published at its close, with the volume
-    `volume_of` gives it."""
+def volumed(symbol: str, points: Sequence[Point], *, delay_s: int = 0) -> tuple[Bar, ...]:
+    """One name's one-minute bars, each stamped at its close and published `delay_s` after it,
+    with the volume `volume_of` gives it."""
     kind = BarType(
         InstrumentId(Symbol(symbol), Venue(VENUE)),
         BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
@@ -90,7 +91,7 @@ def volumed(symbol: str, points: Sequence[Point]) -> tuple[Bar, ...]:
     for index, (ts, *prices) in enumerate(points):
         ohlc = [Price(price, 2) for price in (prices * 4 if len(prices) == 1 else prices)]
         volume = Quantity.from_int(volume_of(symbol, index))
-        made.append(Bar(kind, *ohlc, volume, ts, ts))
+        made.append(Bar(kind, *ohlc, volume, ts, ts + delay_s * 10**9))
     return tuple(made)
 
 
@@ -393,6 +394,85 @@ def test_a_stage_window_records_the_stops_the_card_does(tmp_path: Path) -> None:
     assert researched.run.period_stops is not None
     assert len(researched.run.period_stops.stops) == 1
     assert realised.run.period_stops == researched.run.period_stops
+
+
+@pytest.mark.parametrize("delay_s", [0, 30])
+def test_a_stage_reads_a_resting_exit_filled_while_stopped_at_the_bar_the_venue_filled_it_on(
+    delay_s: int, tmp_path: Path
+) -> None:
+    """Under a fixed spread, LEAD's bars published `delay_s` after their close, the close of
+    10.60 at 09:33 stops the week and the sleeve rests a sale of its thousand at 10.65, which
+    the 09:34 bar trades through. A stage node's venue fills it as it applies that bar, before
+    the sleeve is handed it, and the stage records the fill as the card does: at the instant it
+    filled, the bar's own instant, the part of the session the minute it covers falls in, and
+    that bar's volume. Published late, the fill's instant is the bar's publication and not the
+    instant its price was struck at, so a stage that kept no venue record under a target alone
+    would read it at neither."""
+    delay = delay_s * 10**9
+    lead: list[Point] = [
+        (ny(MONDAY, "04:01"), 10.00),
+        (ny(MONDAY, "04:02"), 10.00),
+        (ny(MONDAY, "09:33"), 10.60),
+        (ny(MONDAY, "09:34"), 10.60, 10.70, 10.55, 10.62),
+        (ny(MONDAY, "09:35"), 10.62),
+    ]
+    plan = {
+        (ny(MONDAY, "04:01"), LEAD_ID): [("entry", LEAD_ID, "BUY")],
+        (ny(MONDAY, "09:33"), LEAD_ID): [("limit", LEAD_ID, "SELL:1000@10.65")],
+    }
+    made = replace(
+        request(plan, tmp_path / "card.txt", universe=(LEAD_ID,)), window=(MONDAY, MONDAY)
+    )
+    bars = volumed(LEAD, lead, delay_s=delay_s)
+    held = catalog(tmp_path / "catalog", list(bars), [instrument(LEAD)])
+    staged = replace(made, overrides={"record": str(tmp_path / "stage.txt")})
+
+    (realised,) = node.run(_stage(_placed(staged, tmp_path), held, MONDAY)).realised
+    researched = execute(made, [instrument(LEAD)], [bars])
+
+    def read(record: PeriodStops | None) -> list[tuple[int, float, int, str, float | None]]:
+        assert record is not None
+        (stop,) = record.stops
+        return [(f.ts_ns, f.price, f.price_ts_ns, f.segment, f.volume) for f in stop.fills]
+
+    expected = (ny(MONDAY, "09:34") + delay, 10.65, ny(MONDAY, "09:34"), "rth")
+    assert read(researched.run.period_stops) == [(*expected, float(volume_of(LEAD, 3)))]
+    assert read(realised.run.period_stops) == read(researched.run.period_stops)
+
+
+@pytest.mark.parametrize("is_dated", [False, True], ids=["fixed", "dated"])
+def test_a_stage_window_s_marks_hold_the_record_its_venue_was_loaded_with(
+    is_dated: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stage node loads one venue record under a target, dated spread or none, and its
+    harness reads the stopped week's fills off it. The marks the window is extracted with hold
+    that record, and price at it under a dated spread alone: never a record of their own that
+    no venue was handed."""
+    loaded: list[Struck] = []
+
+    def loading() -> Struck:
+        made = Struck()
+        loaded.append(made)
+        return made
+
+    extracted: list[tuple[Struck | None, Struck | None]] = []
+    extract = backtest._extract
+
+    def extracting(request: Any, engine: Any, marks: Any, period_stops: Any = None) -> Any:
+        extracted.append((marks.record, marks.pricing))
+        return extract(request, engine, marks, period_stops)
+
+    monkeypatch.setattr(node, "Struck", loading)
+    monkeypatch.setattr(backtest, "_extract", extracting)
+    lead, lagg, plan = _pair()
+    costs = dated(LEAD_ID, LAGG_ID) if is_dated else COSTS
+    made = request(plan, tmp_path / "card.txt", costs=costs)
+
+    _, realised = _staged(made, lead, lagg, tmp_path)
+
+    assert realised.run.period_stops is not None and realised.run.period_stops.stops
+    (struck,) = loaded
+    assert extracted == [(struck, struck if is_dated else None)]
 
 
 @pytest.mark.parametrize("targeted", [True, False])
