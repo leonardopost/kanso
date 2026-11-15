@@ -1670,7 +1670,7 @@ def test_a_file_written_from_one_shown_keeps_the_rows_where_it_kept_their_line()
     import yaml as pyyaml
 
     row = {"pre": 872.9, "open": 37.2, "rth": 9.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
-    rows = [{"instrument": "DEMO.SIM", "from": "2023-01-01", **row}]
+    rows = [{"instrument": DOCUMENT["universe"][0], "from": "2023-01-01", **row}]
     pinned = pyyaml.safe_dump({**DOCUMENT, "costs": {"spread": "dated", "dated": rows}})
     kept = driver.shown(pinned)
     own = pyyaml.safe_dump({**DOCUMENT, "costs": {"spread": "dated", "dated": rows[:0]}})
@@ -1704,9 +1704,38 @@ def test_a_file_that_researches_less_than_its_parent_keeps_the_rows_its_window_a
     windows = {**shown["windows"], "research": {"start": "2023-11-01", "end": "2023-12-29"}}
     shorter = pyyaml.safe_dump({**shown, "id": "child", "windows": windows})
     undated = pyyaml.safe_dump({**shown, "windows": {"research": {"end": "the year's end"}}})
+    stamped = shorter.replace("end: '2023-12-29'", "end: 2023-12-29 00:00:00")
 
     child = parse_yaml(Hypothesis, driver.restored(shorter, pinned), "hypothesis.yaml")
 
     assert [str(kept.from_) for kept in child.costs.dated or ()] == ["2023-01-01"]
     assert parse_yaml(Hypothesis, driver.restored(driver.shown(pinned), pinned), "x").costs.dated
     assert pyyaml.safe_load(driver.restored(undated, pinned))["costs"]["dated"] == rows
+    assert "2023-12-29 00:00:00" in stamped, "a last day written as a midnight timestamp"
+    at_midnight = parse_yaml(Hypothesis, driver.restored(stamped, pinned), "hypothesis.yaml")
+    assert [str(kept.from_) for kept in at_midnight.costs.dated or ()] == ["2023-01-01"]
+
+
+def test_a_file_that_trades_fewer_names_than_its_parent_keeps_the_rows_of_its_own() -> None:
+    """A row of a name the universe does not list is refused, and a file written from one shown
+    could not drop a row it never saw: one that trades one leg of its parent's pair keeps that
+    leg's rows, and is admitted; one whose universe is no list keeps every row, for the judge to
+    read."""
+    import yaml as pyyaml
+
+    from kanso.schemas import Hypothesis, parse_yaml
+
+    row = {"pre": 872.9, "open": 37.2, "rth": 9.0, "post": 90.0, "n_sessions": 5, "n_open": 25}
+    leg, other = DOCUMENT["universe"][0], "OTHER.SIM"
+    rows = [{"instrument": name, "from": "2023-01-01", **row} for name in (leg, other)]
+    parent = {**DOCUMENT, "universe": [leg, other], "costs": {"spread": "dated", "dated": rows}}
+    pinned = pyyaml.safe_dump(parent)
+    parse_yaml(Hypothesis, pinned, "hypothesis.yaml")
+    shown = pyyaml.safe_load(driver.shown(pinned))
+    narrower = pyyaml.safe_dump({**shown, "id": "child", "universe": [leg]})
+    unlisted = pyyaml.safe_dump({**shown, "universe": leg})
+
+    child = parse_yaml(Hypothesis, driver.restored(narrower, pinned), "hypothesis.yaml")
+
+    assert [kept.instrument for kept in child.costs.dated or ()] == [leg]
+    assert pyyaml.safe_load(driver.restored(unlisted, pinned))["costs"]["dated"] == rows

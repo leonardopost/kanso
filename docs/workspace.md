@@ -1020,8 +1020,9 @@ carries `spread: dated` without the rows, the runner hands the harness the table
 explorer (`hyp explore`, which writes a `strategy.py` of a new hypothesis) are shown
 `hypothesis.yaml` with the rows withheld, the rest of the file re-rendered without its
 comments, and a candidate the explorer writes keeping the line that stands for them keeps the
-parent's rows in force from on or before its own research window's last day: one that
-researches less than its parent could not drop a later row it was never shown. What a sleeve
+parent's rows of the names its own universe lists, in force from on or before its own research
+window's last day: one that trades fewer names than its parent, or researches less, could not
+drop a row it was never shown. What a sleeve
 reserves when it sizes is the largest width any row of the name states for the part of the
 session the point it is handling is in — every year's, so it reads the same on any day — and
 `cost_rate`, which names no instrument, the largest of every row and part; under a latency a
