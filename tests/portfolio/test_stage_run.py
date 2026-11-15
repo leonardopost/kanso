@@ -1226,7 +1226,11 @@ def test_a_version_deployed_by_its_certificate_resumes_a_stopped_week(
     ended_tuesday(store, first, pnl=0.1 * first.capital, stopped=True)
     best = made
     if sleeve != RETRYING:
-        best = a_certificate(ws, sha=store.put_blob(sleeve)).model_copy(update={"hyp_id": "weekly"})
+        # A second later than the first, so composition reads it as the newest by its stamp
+        # and never by how far the wall clock moved between the two.
+        best = a_certificate(ws, sha=store.put_blob(sleeve)).model_copy(
+            update={"hyp_id": "weekly", "created_at": made.created_at + timedelta(seconds=1)}
+        )
         certificate.write(ws, store, best, sleeve)
 
     again = on_certified(ws, store, best)
