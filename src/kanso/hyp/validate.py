@@ -57,8 +57,8 @@ document is parsed. Everything else needs the workspace, and that is this module
 * under a `[research] return_period` of whole weeks, a `period_target` week opens on the
   weekday every window does, so the objective's weeks are cut on the target's weekday — the
   same weeks only where no point falls between a window's first UTC midnight and the
-  target's opening, which on US equities is an opening on a Sunday, or on a Monday no later
-  than 04:00;
+  target's opening, which on US equities fed from 04:00 to 20:00 New York, with no overnight
+  point, is an opening on a Sunday, or on a Monday no later than 04:00;
 * when classification has been written, its construct is in the catalogue, its host is
   present exactly when the construct needs one and names a certified strategy, its
   parameters are ones that construct declares with values inside the sets it declares
@@ -364,9 +364,10 @@ def _check_period_target(ws: Workspace, hyp: Hypothesis) -> None:
     window, and the target cuts New York weeks at its own opening, so the two can meet only
     when the window opens on that weekday; a window opening on another day would score each
     week across two target weeks. On that weekday they are the same weeks only where no point
-    falls between the two cuts, and the check reads no point: on US equities, which trade
-    from 04:00 to 20:00 New York on weekdays, that holds of an opening on a Sunday, or on a
-    Monday no later than 04:00 — the UTC midnight is a weekend evening — and of none later
+    falls between the two cuts, and the check reads no point: on US equities fed from 04:00
+    to 20:00 New York on weekdays, with no `overnight` point (`kanso.nautilus.clock`), whose
+    Sunday evening would come between the cuts too, that holds of an opening on a Sunday, or
+    on a Monday no later than 04:00 — the UTC midnight is a weekend evening — and of none later
     that Monday, whose morning's points come between, nor of one on Tuesday to Saturday,
     whose evening before holds the post-market minutes from 19:00 under standard time, and the
     bar stamped 20:00 under daylight saving, after the UTC midnight. The remedy names the

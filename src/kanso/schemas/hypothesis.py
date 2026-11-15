@@ -314,8 +314,9 @@ class PeriodTarget(KansoModel):
             raise RemedyError(
                 f"tz: {self.tz!r} is not {NEW_YORK_ZONE}; a run's return periods "
                 "are cut from a UTC midnight, which meets a week's opening only where no point "
-                "falls between them, as on US equities in New York for a week opening on a "
-                "Sunday, or on a Monday no later than 04:00",
+                "falls between them, as on US equities fed from 04:00 to 20:00 New York, with "
+                "no overnight point, for a week opening on a Sunday, or on a Monday no later "
+                "than 04:00",
                 remedy=f"set period_target.tz to {NEW_YORK_ZONE}",
             )
         if _OPENS.fullmatch(self.opens) is None:

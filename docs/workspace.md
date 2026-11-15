@@ -960,23 +960,24 @@ What the rule does not do, said here so a card is read as it ran:
 
 `kanso hyp validate` refuses (exit 3) a missing key, a zone other than `America/New_York` — a
 run's return periods are cut from a UTC midnight, which meets a week's opening only where no
-point falls between them, as on US equities in New York for a week opening on a Sunday, or on a
-Monday no later than 04:00 — an `opens` that is not a weekday's three letters and `HH:MM`, or
-that a change of clocks skips or repeats on a date of the windows, the open forward window's
-first year standing for the rest of it, and a `target_bp` at or below zero; the key beside
-`book.reset: monthly`, whose transfer can fall inside a week and move the balance with no P&L,
-beside `benchmark`, whose hold would be flattened at its first stopped week and never bought
-again, or with `book` in `data_requirements`, whose changes reach no point the target is read
-at; and, under a `[research] return_period` of whole weeks, a window that opens on another
-weekday, since the objective's weeks would then be cut across the target's. On the target's
-weekday they are the target's only where no point falls between the window's first UTC midnight
-and the opening, which the check cannot read: on US equities an opening on a Sunday, or on a
-Monday no later than 04:00, meets it, and one later that Monday, or on Tuesday to Saturday —
-whose evening before trades past the UTC midnight — scores a week's points across two of the
-objective's. An attached construct states its host's `period_target` exactly, as it does its
-`book`. A shared book refuses a member that declares one (exit 2). Classification never touches
-the key, and `period_stopped` is a name the sleeve base owns: a `strategy.py` that binds it is
-refused, as one that binds `session` is.
+point falls between them, as on US equities fed from 04:00 to 20:00 New York, with no overnight
+point, for a week opening on a Sunday, or on a Monday no later than 04:00 — an `opens` that is
+not a weekday's three letters and `HH:MM`, or that a change of clocks skips or repeats on a date
+of the windows, the open forward window's first year standing for the rest of it, and a
+`target_bp` at or below zero; the key beside `book.reset: monthly`, whose transfer can fall
+inside a week and move the balance with no P&L, beside `benchmark`, whose hold would be
+flattened at its first stopped week and never bought again, or with `book` in
+`data_requirements`, whose changes reach no point the target is read at; and, under a
+`[research] return_period` of whole weeks, a window that opens on another weekday, since the
+objective's weeks would then be cut across the target's. On the target's weekday they are the
+target's only where no point falls between the window's first UTC midnight and the opening,
+which the check cannot read: on US equities fed from 04:00 to 20:00 New York, with no overnight
+point, an opening on a Sunday, or on a Monday no later than 04:00, meets it, and one later that
+Monday, or on Tuesday to Saturday — whose evening before trades past the UTC midnight — scores a
+week's points across two of the objective's. An attached construct states its host's
+`period_target` exactly, as it does its `book`. A shared book refuses a member that declares one
+(exit 2). Classification never touches the key, and `period_stopped` is a name the sleeve base
+owns: a `strategy.py` that binds it is refused, as one that binds `session` is.
 
 **`depth` is yours too, and scope.** A hypothesis that holds a level-two `book` hands every
 change of it to the simulated venue, which keeps its queues and matches against it, and,
