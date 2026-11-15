@@ -61,6 +61,7 @@ from nautilus_trader.model.enums import (
     AggregationSource,
     AggressorSide,
     BarAggregation,
+    OrderSide,
     PriceType,
 )
 from nautilus_trader.model.identifiers import InstrumentId, Symbol, TradeId, Venue
@@ -978,17 +979,40 @@ def test_an_exit_built_by_hand_beside_a_flatten_the_rate_owes_is_dropped(tmp_pat
     assert result.run.fills[-1].qty == QTY
 
 
+def _room(filled: float, left: float) -> Decimal:
+    """What a stopped week leaves a sale of LEAD to close on a sized sleeve, a name of one
+    decimal of size, that holds `filled` with nothing working, `left` of it once the exit the
+    rate owes has gone (`_target_room`), the harness's reads of all three stood in for."""
+    sizes = SimpleNamespace(size_precision=1)
+    reads: Any = SimpleNamespace(
+        cache=SimpleNamespace(instrument=lambda _: sizes),
+        sized=True,
+        _is_clip=lambda _: False,
+        _own_filled=lambda _: filled,
+        _clip_orders={},
+        _working=lambda *_, **__: [],
+        _left=lambda *_: left,
+        _target_leaves=lambda *_: Decimal(0),
+    )
+    reads._target_exact = lambda *given: KansoStrategy._target_exact(reads, *given)
+    sale = SimpleNamespace(instrument_id=InstrumentId.from_str(LEAD_ID), side=OrderSide.SELL)
+    return KansoStrategy._target_room(reads, sale)
+
+
 def test_a_quantity_summed_in_floats_is_read_at_its_name_s_size_precision() -> None:
-    """`0.3 - 0.1` is an ulp short of 0.2 in floats. A stopped week reads a sized sleeve's
-    holding, a sum of fills less its clips, and what the rate owes of it at the name's size
-    precision, so the room left for an exit of a fractional holding is not an ulp short of
-    what is held (`_target_room`)."""
+    """`0.3 - 0.1` is an ulp short of 0.2 in floats, and `1.1 - 0.9` an ulp over it. A stopped
+    week reads a sized sleeve's holding, a sum of fills less its clips, and what the rate owes
+    of it at the name's size precision, so the room left for an exit of a fractional holding
+    is not an ulp short of what is held, nor of what the owed exit leaves of it: an exit of the
+    0.2 held, and of the 0.9 a holding of 1.1 leaves once 0.2 is owed, goes (`_target_room`)."""
     sizes = SimpleNamespace(size_precision=1)
     reads = SimpleNamespace(cache=SimpleNamespace(instrument=lambda _: sizes))
 
-    assert Decimal(repr(0.3 - 0.1)) < Decimal("0.2")
+    assert Decimal(repr(0.3 - 0.1)) < Decimal("0.2") < Decimal(repr(1.1 - 0.9))
     read = KansoStrategy._target_exact(reads, InstrumentId.from_str(LEAD_ID), 0.3 - 0.1)  # type: ignore[arg-type]
     assert read == Decimal("0.2")
+    assert _room(0.3 - 0.1, 0.3 - 0.1) == Decimal("0.2")
+    assert _room(1.1, 0.9) == Decimal("0.9")
 
 
 def _clipped(backtest: Any, asks: Mapping[int, Clip | Hedge], budget: float = CLIP_BUDGET) -> Any:
