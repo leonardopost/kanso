@@ -21,7 +21,10 @@ The splits the venue applied to what the run held (`adjustments`) are written th
 only where there are some: a run that held nothing through a split is stored as it was, and
 a run stored before runs kept them decodes with none, even one that held a position through
 a split, whose fill path cannot replay what was never kept
-(`kanso.criteria.quantities.fill_path_drawdown_pct` says what it reads instead).
+(`kanso.criteria.quantities.fill_path_drawdown_pct` says what it reads instead). A holding
+says its mark was under zero (`Held.below_zero`) only where it was, so every other holding is
+stored as it was, and one stored before holdings said so reads as at or above zero, which
+the same fill path reads it as.
 """
 
 from __future__ import annotations
@@ -121,20 +124,28 @@ def _decode_adjustment(payload: Mapping[str, Any]) -> Adjustment:
 
 
 def _encode_held(item: Held) -> dict[str, Any]:
-    return {
+    """A holding as stored; `below_zero` only where it is true, so every holding marked at or
+    above zero is stored as it was before the field was kept."""
+    stored: dict[str, Any] = {
         "ts_ns": item.ts_ns,
         "instrument_id": item.instrument_id,
         "qty": item.qty,
         "notional": item.notional,
     }
+    if item.below_zero:
+        stored["below_zero"] = True
+    return stored
 
 
 def _decode_held(payload: Mapping[str, Any]) -> Held:
+    """A recorded holding; one recorded before holdings said whether their mark was under
+    zero reads as at or above it."""
     return Held(
         ts_ns=int(payload["ts_ns"]),
         instrument_id=str(payload["instrument_id"]),
         qty=float(payload["qty"]),
         notional=float(payload["notional"]),
+        below_zero=bool(payload.get("below_zero", False)),
     )
 
 

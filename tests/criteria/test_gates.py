@@ -744,6 +744,39 @@ def test_a_split_whose_ratio_is_unknown_moves_the_shares_and_keeps_the_price() -
     )
 
 
+@pytest.mark.parametrize(
+    ("below_zero", "fall"), [(True, 1_200.0), (False, 1_600.0)], ids=["kept", "recorded before"]
+)
+def test_a_position_marked_under_zero_at_an_end_moves_the_path_once(
+    below_zero: bool, fall: float
+) -> None:
+    """Bought 100 at 10, marked at an end at -2 — a future's price can go under zero — and sold
+    there the next day: the book fell 1,200 to the end and not after it. Its notional is an
+    absolute, and set to it alone the position was marked at +2 after the end, so the sale
+    moved the path by 400 the book never moved — the reading of a holding recorded before
+    holdings said their mark was under zero."""
+    capital = 30_000.0
+    run = build_run(
+        (-1_200.0, 0.0),
+        capital=capital,
+        fills=(
+            Fill(at(DAYS[0], 10), "DEMO", "BUY", 100.0, 10.0, 0.0),
+            Fill(at(DAYS[1], 10), "DEMO", "SELL", 100.0, -2.0, 0.0),
+        ),
+        holdings=(
+            Held(
+                ts_ns=_end(0),
+                instrument_id="DEMO",
+                qty=100.0,
+                notional=200.0,
+                below_zero=below_zero,
+            ),
+        ),
+    )
+
+    assert fill_path_drawdown_pct(run)[0] == pytest.approx(fall / capital * 100.0)
+
+
 def test_a_split_of_a_position_the_path_never_saw_opened_moves_nothing_in_it() -> None:
     """A fold of a run holds the splits applied inside it to a position opened before it: the
     path holds nothing of that position until the fold's first end hands it the runner's, so

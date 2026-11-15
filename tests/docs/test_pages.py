@@ -661,11 +661,14 @@ def test_the_pages_say_the_fill_path_replays_the_runner_s_splits_and_holdings() 
     concepts = prose(page("concepts.md"))
     assert "each split the venue applied to a held position is replayed" in gates
     assert "every position is replaced by what the runner held there" in gates
+    assert "under zero where that was" in gates
     assert "its path holds a split's lost shares until the next end" in gates
     assert "A run whose venue applied a split to a position it held keeps each as" in concepts
     assert "the ratio of the split the venue's event names" in concepts
+    assert "says so (`below_zero`), since its notional is an absolute" in concepts
     cli = prose(page("cli.md"))
     assert "`adjustments` — `ts_ns`, `instrument_id`, `qty`, `paid` and `ratio` each" in cli
+    assert "a holding in `held` whose mark was under zero carrying `below_zero: true`" in cli
 
 
 def test_the_pages_say_a_period_is_read_in_the_shares_held_at_its_end() -> None:

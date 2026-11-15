@@ -327,16 +327,21 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
     of 1,560.67% of its capital where its period ends fell 116.64%. And at each period end,
     before the re-anchor, every position is replaced by what the runner held there
     (`run.held`) — its quantity, valued at its notional over that quantity, the runner's
-    mark times the multiplier — and a name it did not hold is dropped, so a fill after the
-    end moves the path by the move since the runner's mark and not again by the move from
-    the name's last fill to that mark, which the re-anchor already holds: bought at 10,
-    marked at 12 at an end and sold at 12, the book never fell, and the path read a fall of
-    2 a share.
+    mark times the multiplier, under zero where the runner's mark was (`Held.below_zero`) —
+    and a name it did not hold is dropped, so a fill after the end moves the path by the move
+    since the runner's mark and not again by the move from the name's last fill to that
+    mark, which the re-anchor already holds: bought at 10, marked at 12 at an end and sold at
+    12, the book never fell, and the path read a fall of 2 a share.
 
     A run recorded before runs kept their adjustments carries none, so its path keeps the
     shares a split took away from the split to the next period end, where the runner's
     holdings replace them; one recorded before runs kept their holdings (before 0.3.0)
-    carries none of those either, and its path keeps the quantities its fills leave.
+    carries none of those either, and its path keeps the quantities its fills leave. One
+    recorded before holdings said whether their mark was under zero reads every holding as
+    at or above it, so a position marked under zero at an end is set to the same price above
+    it, and the next fill of its name moves the path by twice that price on every unit held
+    that the book never moved; only a contract that can print under zero, a future's, meets
+    it.
     """
     marks: dict[str, tuple[float, float, float]] = {}
     cash = run.capital
@@ -376,7 +381,11 @@ def fill_path_drawdown_pct(run: CardRun) -> tuple[float, int | None]:
         adjust(end_ns)
         if held_at is not None:
             marks = {
-                item.instrument_id: (item.qty, item.notional / abs(item.qty), 1.0)
+                item.instrument_id: (
+                    item.qty,
+                    (-item.notional if item.below_zero else item.notional) / abs(item.qty),
+                    1.0,
+                )
                 for item in held_at.get(end_ns, ())
             }
         offset += struck - equity_now()

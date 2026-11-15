@@ -3022,7 +3022,15 @@ def _equity(
             worth = qty * mark * multiplier
             marked.append(worth)
             if qty:
-                open_at.append(Held(ts_ns=end, instrument_id=key, qty=qty, notional=abs(worth)))
+                open_at.append(
+                    Held(
+                        ts_ns=end,
+                        instrument_id=key,
+                        qty=qty,
+                        notional=abs(worth),
+                        below_zero=mark < 0.0,
+                    )
+                )
                 floor = lows.get(key, mark) if qty > 0 else highs.get(key, mark)
                 adverse.append(qty * floor * multiplier)
         value = cash + fsum(marked)

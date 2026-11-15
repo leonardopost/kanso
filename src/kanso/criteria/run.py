@@ -62,12 +62,18 @@ class Held:
     what neither `Fill.notional` (traded value, struck at one price) nor `Trade.notional`
     (opening value, a cost basis) says. One entry per instrument per period, and only for
     an instrument actually held: a flat instrument is not a position.
+
+    `notional` is an absolute, so `below_zero` says what it cannot: that the mark the runner
+    valued the position at was under zero — a future's, say — and the position's worth is
+    `qty` times the notional over `abs(qty)`, turned negative. A holding recorded before
+    runs said so reads as at or above zero.
     """
 
     ts_ns: int
     instrument_id: str
     qty: float
     notional: float
+    below_zero: bool = False
 
 
 @dataclass(frozen=True)

@@ -572,6 +572,7 @@ def card_runs(draw: st.DrawFn) -> CardRun:
                         instrument_id=st.just("DEMO.XNAS"),
                         qty=FINITE,
                         notional=FINITE,
+                        below_zero=st.booleans(),
                     ),
                     max_size=3,
                 )

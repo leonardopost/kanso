@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from kanso.criteria.run import BPS
+from kanso.criteria.run import BPS, Fill, midnight_ns
 from kanso.errors import ValidationError
-from kanso.nautilus.backtest import _instrument_of, run
+from kanso.nautilus.backtest import _equity, _instrument_of, folded, run
 from kanso.schemas import Hypothesis
 
 from .conftest import (
@@ -423,3 +424,21 @@ def test_a_run_fed_its_window_in_daily_chunks_is_the_run_fed_it_whole(
         (t.opened_ns, t.closed_ns, t.pnl_net) for t in whole.run.trades
     ]
     assert chunked.run.held == whole.run.held
+
+
+def test_a_holding_marked_under_zero_says_so_beside_its_absolute_notional(request_for) -> None:
+    """A future can print under zero: 100 contracts of a multiplier of ten bought at 1 and
+    marked at -2 are worth -2,000, held at a notional of 2,000 that says its mark was under
+    zero, which the notional alone cannot; one marked above zero says nothing of the kind."""
+    made = request_for(RESEARCH, period="1d")
+    first, second = (midnight_ns(date(2024, 1, day)) + 12 * 3_600 * 10**9 for day in (2, 3))
+    stream = [(first, INSTRUMENT, 1.0, 1.0, 1.0), (second, INSTRUMENT, -2.0, -2.0, -2.0)]
+    bought = Fill(first, INSTRUMENT, "BUY", 100.0, 1.0, 0.0, multiplier=10.0)
+
+    curve = _equity(made, folded(made, stream), [bought], {INSTRUMENT: 10.0})
+
+    assert [(held.notional, held.below_zero) for held in curve.held] == [
+        (1_000.0, False),
+        (2_000.0, True),
+    ]
+    assert curve.equity[1] == pytest.approx(CAPITAL - 1_000.0 - 2_000.0)
