@@ -42,12 +42,12 @@ evidence is what it was before kanso counted (`Parity.payload`).
 **What a period target did on each path is compared last, exactly, at any tolerance.** A
 session whose hypothesis declares `period_target` records it (`kanso.criteria.run.CardRun`):
 every New York week the path traded in, each stop — the week's opening, anchor and threshold,
-the hit's instant, part of the session and equity, the entries dropped and every fill of an
-order sent while stopped — and the week open at the last point. The harness stops a week at a
-data point both paths are handed alike, so a stop is a decision, and two paths that stopped
-apart diverge at the first element that differs, named by its path in the record —
-`period_stops.stops[1].hit_ns`, say — whatever the tolerance: a stop the intents' tolerance
-moves is a stop that moved. The flatten's fills are compared with it, the one place parity
+the hit's instant, part of the session and equity, what the stopped week dropped unsent and
+every fill of an order sent while stopped — and the week open at the last point. The harness
+stops a week at a data point both paths are handed alike, so a stop is a decision, and two
+paths that stopped apart diverge at the first element that differs, named by its path in the
+record — `period_stops.stops[1].hit_ns`, say — whatever the tolerance: a stop the intents'
+tolerance moves is a stop that moved. The flatten's fills are compared with it, the one place parity
 reads a fill, because a flatten is the rule's own act. A session of a hypothesis with no
 target records none, nor does one written before kanso kept them, and then nothing is
 compared; where either recorded one the payload carries how many weeks each path traded in
