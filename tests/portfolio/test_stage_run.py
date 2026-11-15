@@ -913,13 +913,14 @@ def ended_tuesday(
     threshold: float | None = None,
     ends_ns: int | None = None,
     clock_ns: int = TUESDAY_CLOSE_NS,
+    hit_ns: int | None = None,
 ) -> None:
     """Record a window of version 1 that ended at the Tuesday close of the week opening at
-    `opening_ns`, or at `ends_ns`, having made `pnl` in that week and stopped at that Tuesday's
-    close or not, at `capital` — the first window's own unless stated — the week anchored at
-    `anchor`, the capital unless stated, and held to `threshold`, a tenth of the capital unless
-    stated; and stand the stage's clock at `clock_ns`, March 12's close unless stated, which a
-    stage-mate moves past a window's own end."""
+    `opening_ns`, or at `hit_ns`, or at `ends_ns`, having made `pnl` in that week and stopped
+    at that close or at `hit_ns` or not, at `capital` — the first window's own unless stated —
+    the week anchored at `anchor`, the capital unless stated, and held to `threshold`, a tenth
+    of the capital unless stated; and stand the stage's clock at `clock_ns`, March 12's close
+    unless stated, which a stage-mate moves past a window's own end."""
     from dataclasses import replace
 
     from kanso.criteria.run import day_of
@@ -929,7 +930,7 @@ def ended_tuesday(
     capital = first.capital if capital is None else capital
     anchor = capital if anchor is None else anchor
     threshold = 0.1 * capital if threshold is None else threshold
-    hit_ns = tuesday_close(opening_ns)
+    hit_ns = tuesday_close(opening_ns) if hit_ns is None else hit_ns
     ends_ns = hit_ns if ends_ns is None else ends_ns
     hit = {
         "opening_ns": opening_ns,
@@ -1336,6 +1337,47 @@ def test_a_week_struck_before_a_re_pin_that_moves_opens_is_resumed_by_its_own_bo
     assert record.openings[:2] == [WEEK_NS, int(next_opens.timestamp()) * NS]
     (resumed, *_) = record.stops
     assert (resumed.opening_ns, resumed.hit_ns, resumed.dropped) == (WEEK_NS, TUESDAY_CLOSE_NS, 5)
+
+
+FRIDAY_WEEK_NS = int(datetime(2024, 3, 8, 21, tzinfo=UTC).timestamp()) * NS
+"""Friday March 8, 16:00 New York: a week struck under `opens: Fri 16:00`."""
+
+
+def test_a_re_pin_to_an_earlier_reading_trades_after_the_old_close_in_a_week_holding_the_stop(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A reading moved earlier in the week holds a resumed stop no longer than one moved later
+    (`docs/backlog.md` row 284). Struck under `Fri 16:00` at Friday March 8's 16:00 and stopped
+    at Tuesday March 12's close, the week is re-pinned with `Mon 04:00` and resumed after the
+    stop, and held to its own close at Friday March 15's 16:00. No Monday 04:00 comes between
+    Tuesday's stop and Saturday's bar, the first after that close, so the sleeve buys there, in
+    the week of the new reading opened at March 11's 04:00, which holds the stop; and that week
+    opened before the old one closed, so the record lists both over the span they share."""
+    from kanso.nautilus.clock import week_closing
+
+    friday = {**WEEKLY, "period_target": {**WEEKLY["period_target"], "opens": "Fri 16:00"}}
+    deployable(ws, store, "weekly", sleeve=RETRYING, doc=friday)
+    first = deploy(ws, store, "paper").results[0]
+    ended_tuesday(
+        store,
+        first,
+        pnl=0.1 * first.capital,
+        stopped=True,
+        opening_ns=FRIDAY_WEEK_NS,
+        hit_ns=TUESDAY_CLOSE_NS,
+    )
+    repinned(ws, store, "Mon 04:00")
+
+    run = deploy(ws, store, "paper").results[0].run
+
+    assert bought_on(run)[0] == date(2024, 3, 16)
+    record = run.period_stops
+    assert record is not None
+    assert record.openings[:2] == [FRIDAY_WEEK_NS, WEEK_NS]
+    assert WEEK_NS <= TUESDAY_CLOSE_NS < NEXT_WEEK_NS, "the new reading's week holds the stop"
+    assert week_closing(FRIDAY_WEEK_NS) > WEEK_NS, "the new week opened before the old closed"
+    (resumed, *_) = record.stops
+    assert (resumed.opening_ns, resumed.hit_ns) == (FRIDAY_WEEK_NS, TUESDAY_CLOSE_NS)
 
 
 def test_a_window_a_halt_ends_after_a_re_pin_joins_the_week_it_resumed(

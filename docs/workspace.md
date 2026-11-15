@@ -980,9 +980,13 @@ share the window runs at, so the basis points carry across a share the limits mo
 keeps its bounds as it keeps its threshold, from its own opening to the same New York reading a
 week on: a hypothesis re-pinned between windows with another `opens` leaves a week struck under
 the old reading in force, stopped or not, until that reading closes it, and the new reading's
-weeks begin at the first point after. Where the new reading falls later in the week than the
-old, a point between the two closes falls in a week of the new reading that opened before the
-old one closed, and can hold the old one's stop, and the window trades in it, as a window that
+weeks begin at the first point after. That point falls in a week of the new reading that
+opened before the old one closed, unless a reading of the new `opens` comes between that close
+and the point, and `openings` then lists both weeks, so the `stops` line counts two weeks over
+the span they share. Where no reading of the new `opens` comes between the old week's stop and
+that point, the new reading's week holds the stop, whichever way the reading moved — from
+`Mon 04:00` to `Mon 09:30` with a pre-market point before Monday's 09:30, or from `Fri 16:00` to
+`Mon 04:00` with a point after Friday's 16:00 — and the window trades in it, as a window that
 opens mid-week trades first in a week opened before it (`docs/backlog.md` row 284). A week the
 restart resumes past is let go, and the window's first week opens at the capital as any run's
 does; so does the week after a resumed one that the window was handed no point of. The week is

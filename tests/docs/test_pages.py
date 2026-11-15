@@ -636,7 +636,12 @@ def test_the_pages_say_a_stage_restart_resumes_the_week_and_row_270_is_closed() 
     assert any(line.startswith("| 282 |") for line in page("backlog.md").splitlines())
     assert "The week keeps its bounds as it keeps its threshold" in workspace
     assert "with another `opens` leaves a week struck under the old reading in force" in workspace
-    assert any(line.startswith("| 284 |") for line in page("backlog.md").splitlines())
+    assert "the new reading's week holds the stop, whichever way the reading moved" in workspace
+    assert "so the `stops` line counts two weeks over the span they share" in workspace
+    assert "falls later in the week than the old" not in workspace
+    repin = next(line for line in page("backlog.md").splitlines() if line.startswith("| 284 |"))
+    assert "whichever way the reading moved: later in the week or earlier" in repin
+    assert "counts two weeks over the span they share" in repin
     assert "a week the target had stopped stays stopped" in stages
     for text in (workspace, stages):
         assert "opens flat at the capital with no stopped week" not in text
