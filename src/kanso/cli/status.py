@@ -25,6 +25,8 @@ from typing import Annotated, Any, Final
 import typer
 
 from kanso import inbox, models
+from kanso.certify.looks import certification_window
+from kanso.certify.looks import looks as looks_at
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.cli.research import spared_by, stopped_line
@@ -141,10 +143,11 @@ def _cards_per_hour(opened: StateStore) -> float:
 
 
 def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
-    """Every registered hypothesis with its status, its best metric, its card count and its
-    newest stall: whether it certified, and the search correction that decided it."""
+    """Every registered hypothesis with its status, its best metric, its card count, its
+    newest stall — whether it certified, and the search correction that decided it — and how
+    many looks its lineage has taken at its certification window."""
     rows = opened.connection.execute(
-        "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric,"
+        "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric, h.hypothesis_sha,"
         " h.consecutive_cert_failures AS cert_failures,"
         " (SELECT COUNT(*) FROM cards c WHERE c.hyp_id = h.hyp_id) AS cards"
         " FROM hypotheses h ORDER BY h.hyp_id"
@@ -158,9 +161,18 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
             "cards": int(row["cards"]),
             "cert_failures": int(row["cert_failures"]),
             "last_stall": scheduler.last_stall(opened, str(row["hyp_id"])),
+            "holdout_looks": _holdout_looks(opened, str(row["hyp_id"]), row["hypothesis_sha"]),
         }
         for row in rows
     ]
+
+
+def _holdout_looks(opened: StateStore, hyp_id: str, pin: object) -> int | None:
+    """The certificates this hypothesis's lineage has made at a window intersecting the
+    certification window its file is pinned to (`kanso.certify.looks`); `None` for a
+    hypothesis with no pinned file that declares one."""
+    window = certification_window(opened, pin)
+    return None if window is None else len(looks_at(opened, hyp_id, window).prior)
 
 
 def _baseline_failed(opened: StateStore) -> list[dict[str, Any]]:
@@ -237,6 +249,8 @@ def _lane_line(row: dict[str, Any]) -> str:
 def _hypothesis_line(row: dict[str, Any]) -> str:
     best = "no keep yet" if row["best_metric"] is None else f"{row['best_metric']:.6f}"
     line = f"{row['id']:<20}{row['status']:<13}{best:<14}{row['cards']} card(s)"
+    if row["holdout_looks"]:
+        line += f" · {row['holdout_looks']} hold-out look(s)"
     stall = row["last_stall"]
     spared = None if stall is None else spared_by(stall["precheck"])
     return line if spared is None else f"{line} · stall spared: {spared}"

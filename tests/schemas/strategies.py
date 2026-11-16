@@ -38,6 +38,7 @@ from kanso.schemas import (
     Expectation,
     FlattenFill,
     GateResult,
+    Holdout,
     Hypothesis,
     InstrumentEntry,
     InstrumentsFile,
@@ -659,6 +660,7 @@ def plans(draw: st.DrawFn) -> CertificationPlan:
                 },
             ),
             n_trials=draw(st.integers(0, 5000)),
+            looks=draw(st.integers(0, 50)),
         ),
         gates=[
             PlannedGate(id=gid, stage=stage, params=draw(PARAMS), rationale=draw(SAFE_TEXT))
@@ -711,6 +713,23 @@ def net_per_trades(draw: st.DrawFn) -> NetPerTrade:
 
 
 @st.composite
+def holdouts(draw: st.DrawFn, hyp_id: str | None = None) -> Holdout:
+    """A certificate's look at its window: the lineage names `hyp_id` first where one is
+    given, as a certificate's own lineage does."""
+    start = draw(st.dates(min_value=date(2000, 1, 1), max_value=date(2030, 1, 1)))
+    others = draw(st.lists(HYP_IDS, max_size=4, unique=True))
+    lineage = (
+        others if hyp_id is None else [hyp_id, *(other for other in others if other != hyp_id)]
+    )
+    return Holdout(
+        window_start=start,
+        window_end=draw(st.dates(min_value=start, max_value=date(2030, 12, 31))),
+        look=draw(st.integers(1, 200)),
+        lineage=lineage or [draw(HYP_IDS)],
+    )
+
+
+@st.composite
 def certificates(draw: st.DrawFn) -> Certificate:
     ids = draw(st.lists(CATALOGUE_IDS, min_size=1, max_size=5, unique=True))
     gates = []
@@ -727,8 +746,9 @@ def certificates(draw: st.DrawFn) -> Certificate:
             )
         )
     evaluated = [g for g in gates if g.skipped is None]
+    hyp_id = draw(HYP_IDS)
     return Certificate(
-        hyp_id=draw(HYP_IDS),
+        hyp_id=hyp_id,
         strategy_sha=draw(SHAS),
         hypothesis_sha=draw(st.one_of(st.none(), SHAS)),
         nautilus_version=draw(VERSION_STRINGS),
@@ -747,6 +767,7 @@ def certificates(draw: st.DrawFn) -> Certificate:
         power=draw(st.none() | powers()),
         net_per_trade=draw(st.none() | net_per_trades()),
         period_stops=draw(st.none() | period_stops()),
+        holdout=draw(st.none() | holdouts(hyp_id)),
     )
 
 

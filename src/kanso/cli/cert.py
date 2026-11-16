@@ -21,6 +21,10 @@ window is a small fraction of that window asks for evidence too noisy to sit ins
 band. The plan is the planner's and the windows are the operator's; the command says what
 the pair costs and pins the plan either way.
 
+`run` and `show` say which look at its certification window a certificate was on a `hold-out`
+line — the count over the hypothesis's lineage, and the level its search correction was held
+to there — and `plan` records the looks taken before it in its inputs (`kanso.certify.looks`).
+
 `plan`, `run` and `show` each state the certification's power on a `power` line: the edge
 the certification window resolves at eighty percent, and how likely `embargoed_window` is
 to pass if the truth is the research estimate and if it is zero, from the research window's
@@ -156,6 +160,7 @@ def _run(ws: Workspace, hyp_id: str, sha: str | None) -> Report:
         *_power_line(made),
         *_net_line(made),
         *_stops_line(made),
+        *_holdout_line(made),
         field("pins", _pins(made)),
         field("written", path),
         field("source", source),
@@ -185,6 +190,7 @@ def _show(ws: Workspace, hyp_id: str) -> Report:
         *_power_line(found),
         *_net_line(found),
         *_stops_line(found),
+        *_holdout_line(found),
         field("pins", _pins(found)),
         field("written", path),
     )
@@ -249,6 +255,29 @@ def _stops_line(made: Certificate) -> list[str]:
     """How many of its period target's weeks the certification run stopped, when the
     certificate records them."""
     return [] if made.period_stops is None else [field("stops", stopped(made.period_stops))]
+
+
+def _holdout_line(made: Certificate) -> list[str]:
+    """`look 4 of 2024-02-19..2026-11-13 by smr_daily_ext · deflation held to 0.9875`: which
+    look of its lineage at its certification window the certificate was, and the level its
+    search correction was held to there, when the certificate records both."""
+    held = made.holdout
+    if held is None:
+        return []
+    line = (
+        f"look {held.look} of {held.window_start}..{held.window_end} by {', '.join(held.lineage)}"
+    )
+    required = next(
+        (
+            gate.evidence["required_probability"]
+            for gate in made.gates
+            if gate.skipped is None and "required_probability" in gate.evidence
+        ),
+        None,
+    )
+    if isinstance(required, float):
+        line += f" · deflation held to {required:.4g}"
+    return [field("hold-out", line)]
 
 
 def _power(stated: Power) -> str:

@@ -104,6 +104,20 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     assert "`dsr` against `min_dsr` under `deflated_sharpe`" in text
 
 
+def test_the_certify_skill_says_every_certificate_is_a_look_and_what_the_split_bounds() -> None:
+    """An agent reporting a certificate reads this file; told nothing of the looks, it would
+    report a later look's failing deflation as a weaker idea, or a pass at a later look as
+    clearing the planner's threshold alone — or re-pin to start the count again."""
+    text = skill(PACKAGED, "kanso-certify")
+    assert "Every certificate is a **look** at its certification window" in text
+    assert "At look `L` the deflation gate requires `1 − (1 − threshold) / L`" in text
+    assert "the planner's threshold is the first look's level" in text
+    assert "`(1 − threshold) × (1 + 1/2 + … + 1/L)`, not by the threshold" in text
+    assert "`hypotheses[].holdout_looks`" in text and "the `hold-out` line" in text
+    assert "never re-plan or re-pin to reset the count" in text
+    assert "(`inputs.looks`)" in text
+
+
 def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None:
     """An agent driving the loop reads what a stall leads to here; told only that a keep above
     zero is certified, it would report a spared stall's missing certificate as a fault."""

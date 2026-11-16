@@ -330,6 +330,49 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     )
 
 
+def test_the_pages_say_how_hold_out_looks_are_counted_and_what_the_split_bounds() -> None:
+    """Every certificate is a look at its window, counted over the lineage, and the
+    deflation's threshold is split across the looks (`kanso.certify.looks`,
+    `kanso.criteria.gates.look_level`). The split bounds the lineage's false passes by the
+    threshold's complement times a harmonic sum, not by the threshold, and every page that
+    states the rule states that bound, so no reader takes the planner's threshold for the
+    lineage's level."""
+    from kanso.criteria.gates import look_level
+    from kanso.schemas import Holdout
+
+    concepts = prose(page("concepts.md"))
+    cli = prose(page("cli.md"))
+    workspace = prose(page("workspace.md"))
+    agents = prose((ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    rule = "1 − (1 − threshold) / L"
+    for text in (concepts, cli, agents, changelog):
+        assert rule in text
+    bound = "(1 − threshold) × (1 + 1/2 + … + 1/L)"
+    assert bound in concepts and bound in changelog
+    assert "the threshold the planner sets is the **first look's level**" in concepts
+    assert "is the first look's level; the lineage's chance of a false pass over `L` looks" in (
+        agents
+    )
+    # The levels the pages state are the rule's.
+    assert "its second to 0.975, its third to 0.9833 and its fourth to 0.9875" in concepts
+    for looks, stated in ((2, 0.975), (3, 0.9833), (4, 0.9875)):
+        assert round(look_level(0.95, looks), 4) == stated
+    assert "**Hold-out looks are counted, and the search correction's level is split" in concepts
+    assert "a sibling certified on the same window looked at the same data" in concepts
+    assert "struck on a snapshot that cannot support a claim read no window and is no look" in (
+        concepts
+    )
+    for key in Holdout.model_fields:
+        assert f"`{key}`" in cli and f"`{key}`" in workspace, key
+    assert "`holdout_looks`" in cli and "`inputs.looks`" in cli
+    assert "`looks`, `required_probability`" in cli
+    assert "hold-out look 4 of 2024-02-19..2026-11-13 by smr_daily_ext · deflation held to" in (
+        concepts
+    )
+    assert "**Migration 0018**" in changelog and "`kanso migrate`" in changelog
+
+
 def test_the_cli_page_states_both_sides_of_the_paper_gate() -> None:
     monitoring = prose(section(page("cli.md"), "Monitoring"))
     assert "a short window is a fail" in monitoring

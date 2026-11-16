@@ -138,6 +138,7 @@ __all__ = [
     "close",
     "encode_measurement",
     "insert",
+    "lineage",
     "matched_book",
     "measurement_of",
     "n_trials",
@@ -404,6 +405,38 @@ def family(store: StateStore, hyp_id: str) -> tuple[str, ...]:
         parents = _derived_from(store, row["hypothesis_sha"])
         queue.extend(parent for parent in parents if parent not in found)
     return tuple(found) or (hyp_id,)
+
+
+def lineage(store: StateStore, hyp_id: str) -> tuple[str, ...]:
+    """The hypothesis and every registered hypothesis joined to it by `derived_from`, either
+    way, transitively: the connected component of that graph among registered hypotheses —
+    its ancestors, its descendants and their other descendants — the hypothesis first, then
+    by how many links away, ties by id.
+
+    `family` is the ancestors alone, which is what a search is priced over: the cards that
+    chose a hypothesis are its own and its parents'. A lineage is what a hold-out is looked at
+    by (`kanso.certify.looks`): a sibling certified on the same window looked at the same
+    data, so a count over ancestors alone would restart at every new sibling. Read off each
+    registered file's `derived_from` under its newest registration, as `family` reads it; a
+    name no hypothesis is registered under links nothing, and a cycle is walked once. A
+    hypothesis that is not registered is a lineage of one.
+    """
+    rows = store.connection.execute("SELECT hyp_id, hypothesis_sha FROM hypotheses").fetchall()
+    linked: dict[str, set[str]] = {str(row["hyp_id"]): set() for row in rows}
+    if hyp_id not in linked:
+        return (hyp_id,)
+    for row in rows:
+        child = str(row["hyp_id"])
+        for parent in _derived_from(store, row["hypothesis_sha"]):
+            if parent in linked:
+                linked[child].add(parent)
+                linked[parent].add(child)
+    found = [hyp_id]
+    frontier = [hyp_id]
+    while frontier:
+        frontier = sorted({other for current in frontier for other in linked[current]} - set(found))
+        found.extend(frontier)
+    return tuple(found)
 
 
 def _derived_from(store: StateStore, sha: object) -> tuple[str, ...]:

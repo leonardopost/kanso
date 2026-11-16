@@ -18,6 +18,7 @@ from kanso.schemas import (
     ConstructItem,
     CriteriaItem,
     Envelope,
+    Holdout,
     Hypothesis,
     InstrumentsFile,
     ModelsFile,
@@ -105,6 +106,16 @@ def test_plan_round_trips(value: CertificationPlan) -> None:
 @given(gen.certificates())
 def test_certificate_round_trips(value: Certificate) -> None:
     assert parse_yaml(Certificate, dump_yaml(value)) == value
+
+
+@given(gen.holdouts())
+def test_holdout_round_trips(value: Holdout) -> None:
+    """A certificate's look at its window reads back whole: a window in order, a look from
+    one, a lineage that names each hypothesis once."""
+    assert Holdout.model_validate(value.model_dump(mode="json")) == value
+    assert value.window_start <= value.window_end
+    assert value.look >= 1
+    assert len(set(value.lineage)) == len(value.lineage) >= 1
 
 
 @given(gen.net_per_trades())

@@ -575,6 +575,97 @@ def test_a_certificate_whose_plan_sets_no_fraction_states_no_pass_probability(
     assert "embargoed_window sets no min_fraction, so no pass probability" in result.stdout
 
 
+def recertified(root: Path, **changes: Any) -> None:
+    """The newest certificate written again under the next plan version with `changes`, as a
+    certification after a replan writes one."""
+    from datetime import timedelta
+
+    from kanso.certify import certificate as certificates
+    from kanso.workspace import find
+
+    ws = find(root)
+    with StateStore(root / "state.db") as store:
+        held = certificates.latest(store, HYP_ID)
+        assert held is not None
+        source = certificates.source_file(ws, HYP_ID, held.strategy_sha).read_bytes()
+        again = {
+            "plan_version": held.plan_version + 1,
+            "created_at": held.created_at + timedelta(seconds=1),
+            **changes,
+        }
+        certificates.write(ws, store, held.model_copy(update=again), source)
+
+
+def test_a_certificate_says_which_look_at_its_window_it_was(
+    runner: CliRunner, researched: Path
+) -> None:
+    """`run` records and prints the look — the first of the demo's lineage of one, whose
+    search correction skipped on one trial and so was held to nothing — and `show` prints the
+    level the correction was held to at a later look where it judged."""
+    from kanso.schemas import EvaluatedGate, Holdout
+
+    printed = at(runner, researched, "cert", "run", HYP_ID).stdout
+    made = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
+
+    window = (made["holdout"]["window_start"], made["holdout"]["window_end"])
+    assert made["holdout"] == {
+        "window_start": window[0],
+        "window_end": window[1],
+        "look": 1,
+        "lineage": [HYP_ID],
+    }
+    assert window[0] <= window[1]
+    assert f"hold-out   look 1 of {window[0]}..{window[1]} by {HYP_ID}" in printed.splitlines()
+
+    judged = EvaluatedGate.model_validate(
+        {
+            "id": "deflated_edge",
+            "stage": "cert",
+            "params": {"min_probability": 0.9},
+            "evidence": {
+                "probability": 0.99,
+                "min_probability": 0.9,
+                "looks": 2,
+                "required_probability": 0.95,
+            },
+            "pass": True,
+        }
+    )
+    held = Holdout.model_validate({**made["holdout"], "look": 2})
+    gates = [judged if gate["id"] == judged.id else gate for gate in made["gates"]]
+    recertified(researched, holdout=held, gates=[EvaluatedGate.model_validate(g) for g in gates])
+
+    again = at(runner, researched, "cert", "show", HYP_ID)
+    recorded = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
+
+    assert recorded["holdout"]["look"] == 2
+    expected = f"look 2 of {window[0]}..{window[1]} by {HYP_ID} · deflation held to 0.95"
+    assert f"hold-out   {expected}" in again.stdout.splitlines()
+
+
+def test_a_certificate_that_recorded_no_look_prints_no_hold_out_line(
+    runner: CliRunner, researched: Path
+) -> None:
+    """One written before kanso counted looks, or on a snapshot that read no window."""
+    at(runner, researched, "cert", "run", HYP_ID)
+    recertified(researched, holdout=None)
+
+    assert payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))["holdout"] is None
+    shown = at(runner, researched, "cert", "show", HYP_ID).stdout
+    assert "hold-out" not in shown
+
+
+def test_a_replan_is_told_the_looks_its_lineage_has_taken(
+    runner: CliRunner, researched: Path
+) -> None:
+    first = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+    at(runner, researched, "cert", "run", HYP_ID)
+
+    second = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+
+    assert (first["inputs"]["looks"], second["inputs"]["looks"]) == (0, 1)
+
+
 def test_show_of_something_that_is_not_a_hypothesis_is_refused(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

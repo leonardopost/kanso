@@ -114,6 +114,53 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
     assert spared in at(runner, mocked_ws, "status").stdout
 
 
+def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """Every certificate of the lineage at the window it is pinned to, whatever its verdict;
+    none for a hypothesis whose pinned file the store does not hold."""
+    from .test_cert import begin, keep, recertified
+
+    begin(runner, mocked_ws)
+    keep(runner, mocked_ws)
+    before = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"][0]
+    assert at(runner, mocked_ws, "cert", "run", HYP_ID).exit_code == Exit.OK
+    recertified(mocked_ws)
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    assert (before["holdout_looks"], entry["holdout_looks"]) == (0, 2)
+    assert "2 hold-out look(s)" in at(runner, mocked_ws, "status").stdout
+    with StateStore(mocked_ws / "state.db") as store:
+        store.connection.execute(
+            "UPDATE hypotheses SET hypothesis_sha = NULL WHERE hyp_id = ?", (HYP_ID,)
+        )
+    (unpinned,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert unpinned["holdout_looks"] is None
+
+
+def test_a_stall_spared_at_a_later_look_says_the_level_it_was_held_to() -> None:
+    """Past the first look the correction is held to its split level, and the line says so;
+    a precheck recorded before looks were counted reads against the threshold it holds."""
+    from kanso.cli.research import spared_by
+
+    spared = {
+        "gate": "deflated_contribution",
+        "judged": True,
+        "pass": False,
+        "evidence": {
+            "probability": 0.97,
+            "min_probability": 0.95,
+            "looks": 3,
+            "required_probability": 0.98333,
+        },
+    }
+    earlier = {**spared, "evidence": {"probability": 0.9, "min_probability": 0.95}}
+
+    assert spared_by(spared) == "deflated_contribution 0.970 < 0.983 at look 3"
+    assert spared_by(earlier) == "deflated_contribution 0.900 < 0.950"
+
+
 def test_today_s_spend_is_what_the_ledger_holds_broken_out_by_lane(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

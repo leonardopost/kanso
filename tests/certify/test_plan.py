@@ -464,6 +464,37 @@ def test_the_trial_count_is_the_search_the_plan_will_be_read_against(
     assert '"n_trials": 2' in seen[0].user
 
 
+def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_threshold_bounds(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """How many certificates the lineage made at the certification window is a dynamic
+    input, beside the trial count; the rule the gate applies to it is an invariant, stated
+    with the bound it keeps — the threshold is the first look's level, not the lineage's."""
+    pin = show(ws, store, HYP_ID).hypothesis_sha
+    store.connection.execute(
+        "INSERT INTO certificates (hyp_id, hypothesis_sha, strategy_sha, plan_version,"
+        " nautilus_version, snapshot_id, criteria_version, gates, n_trials, verdict, path,"
+        " created_at) VALUES (?, ?, ?, 1, '1.231.0', 's1', '0.1.0', ?, 1, 'fail', 'p',"
+        " '2026-01-01T00:00:00+00:00')",
+        (HYP_ID, pin, "b" * 64, '[{"id": "embargoed_window", "stage": "cert", "pass": false}]'),
+    )
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    written = plan(ws, store, HYP_ID)
+
+    assert written.inputs.looks == 1
+    assert '"looks": 1' in seen[0].user
+    assert (
+        "looks is how many certificates this hypothesis's lineage has already made at its "
+        "certification window, so the next is look L = looks + 1: at look L of this "
+        "hypothesis's lineage at its certification window deflated_edge requires "
+        "1 − (1 − threshold) / L, so the threshold you set is the first look's level and the "
+        "lineage's chance of a false pass over L looks is at most "
+        "(1 − threshold) × (1 + 1/2 + … + 1/L)"
+    ) in seen[0].system
+
+
 def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

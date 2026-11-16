@@ -469,14 +469,21 @@ def _stop(ws: Workspace, drain: bool = False) -> Report:
 
 def spared_by(precheck: object) -> str | None:
     """`deflated_contribution 0.792 < 0.950`: the search correction that spared a stall, with
-    its probability and the planner's threshold, or `None` when the precheck spared nothing —
-    it passed, it judged nothing, or the stall recorded none."""
+    its probability and the level it was held to — the planner's threshold at the lineage's
+    first look at its certification window, and that threshold split across the looks after
+    it, with `at look L` — or `None` when the precheck spared nothing: it passed, it judged
+    nothing, or the stall recorded none. A precheck recorded before looks were counted holds
+    no level of its own and is read against the threshold."""
     if not isinstance(precheck, dict) or not precheck.get("judged") or precheck.get("pass"):
         return None
     evidence = precheck["evidence"]
     value = evidence.get("probability", evidence.get("dsr"))
-    floor = evidence.get("min_probability", evidence.get("min_dsr"))
-    return f"{precheck['gate']} {value:.3f} < {floor:.3f}"
+    floor = evidence.get(
+        "required_probability", evidence.get("min_probability", evidence.get("min_dsr"))
+    )
+    looks = evidence.get("looks", 1)
+    at = f" at look {looks}" if looks > 1 else ""
+    return f"{precheck['gate']} {value:.3f} < {floor:.3f}{at}"
 
 
 def stopped_line(children: Sequence[daemon.ChildPid], ending: Sequence[daemon.ChildPid]) -> str:

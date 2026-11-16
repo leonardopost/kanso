@@ -35,7 +35,10 @@ rather than here, so they are offered whether or not their implementations exist
 objective, with its threshold set: the subject a certificate judges is then the best of a
 search, and nothing else in a plan prices that. The planner is told so in the invariants
 and refused when it forgets, through the same check as any other complaint; how high that
-gate's bar sits is still its answer.
+gate's bar sits is still its answer. It is also told how many looks the hypothesis's lineage
+has already taken at its certification window (`looks`, `kanso.certify.looks`) and the rule
+the gate applies to them — at look L its threshold's complement is divided by L — so the
+level it chooses is the first look's, and it may choose a stricter one at a replan.
 
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
@@ -55,6 +58,7 @@ from datetime import UTC, date, datetime, timedelta
 from math import isfinite, sqrt
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from kanso.certify.looks import looks as looks_at
 from kanso.certify.power import power, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
@@ -199,11 +203,13 @@ def plan(
         _refuse_unusable(pinned, hyp, folds, trials)
         return pinned
 
+    window = hyp.windows.certification
     inputs = PlanInputs(
         hypothesis_sha=cast("str", registration.hypothesis_sha),
         construct=construct,
         data_availability=availability(ws, hyp),
         n_trials=trials,
+        looks=len(looks_at(store, hyp_id, (window.start, window.end)).prior),
     )
     accepted: list[Answered] = []
 
@@ -261,8 +267,9 @@ def _call_inputs(hyp: Hypothesis, inputs: PlanInputs, folds: int, check: Check) 
     """The call's two halves: the idea and the toolbox, then what has moved since.
 
     The hypothesis, its construct, the toolbox and the invariants do not change while one
-    hypothesis is planned, so they are the cached prefix; what the workspace holds and how
-    many trials the search has spent are what a replan sees differently.
+    hypothesis is planned, so they are the cached prefix; what the workspace holds, how many
+    trials the search has spent and how many looks its lineage has taken at its certification
+    window are what a replan sees differently.
     """
     return CallInputs(
         subject=hyp.id,
@@ -275,6 +282,7 @@ def _call_inputs(hyp: Hypothesis, inputs: PlanInputs, folds: int, check: Check) 
         dynamic={
             "data_availability": inputs.data_availability.model_dump(mode="json"),
             "n_trials": inputs.n_trials,
+            "looks": inputs.looks,
         },
         check=check,
     )
@@ -331,7 +339,10 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
 
     The search correction is stated as a rule over `n_trials` rather than folded into
     `required_gates`: the gate it names follows from the hypothesis, which is the cached
-    prefix, and whether it is required follows from the trial count, which is not.
+    prefix, and whether it is required follows from the trial count, which is not. How its
+    threshold is split across the lineage's looks at the certification window is stated the
+    same way, as a rule over `looks`, and with the bound it keeps: the threshold is the first
+    look's level, not the lineage's across every look.
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
@@ -342,7 +353,13 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             f"when n_trials is {SEARCH_TRIALS} or more, {gate} is required as well and may "
             f"not be excluded: it is the search correction for this hypothesis's objective, "
             f"{hyp.objective.id}; set its threshold, whose value is yours to choose inside "
-            "its range"
+            "its range",
+            f"looks is how many certificates this hypothesis's lineage has already made at its "
+            f"certification window, so the next is look L = looks + 1: at look L of this "
+            f"hypothesis's lineage at its certification window {gate} requires "
+            "1 − (1 − threshold) / L, so the threshold you set is the first look's level and "
+            "the lineage's chance of a false pass over L looks is at most "
+            "(1 − threshold) × (1 + 1/2 + … + 1/L)",
         ]
     )
     return {

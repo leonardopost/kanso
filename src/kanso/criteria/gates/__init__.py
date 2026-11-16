@@ -785,7 +785,9 @@ class _DeflatedSharpe:
     Sharpe for skewed and fat-tailed returns, fold by fold, widened for serial correlation,
     and Memmel's paired one for a Sharpe differenced against a host or a hold. The estimate,
     the error and the spread are all taken back out of annualised units first, so the
-    deflation is done in the units the return series was actually sampled in.
+    deflation is done in the units the return series was actually sampled in. The deflated
+    ratio is held to `min_dsr` at the first look of the lineage at its certification window
+    and to `look_level` of it at a later one, as `_deflated_mean` holds a probability.
     """
 
     id: ClassVar[str] = "deflated_sharpe"
@@ -806,9 +808,10 @@ class _DeflatedSharpe:
         if error <= 0:
             return skipped(self.id, "the research return series does not vary")
         dsr = NormalDist().cdf((estimate / scale - expected) / (error / scale))
+        required = look_level(floor, ctx.looks)
         return verdict(
             self.id,
-            dsr >= floor,
+            dsr >= required,
             {
                 "dsr": dsr,
                 "min_dsr": floor,
@@ -817,6 +820,8 @@ class _DeflatedSharpe:
                 "expected_maximum": expected,
                 "trials": searched,
                 "scored_trials": len(metrics),
+                "looks": ctx.looks,
+                "required_probability": required,
             },
         )
 
@@ -866,6 +871,25 @@ def _searched(ctx: GateContext, metrics: Sequence[float]) -> int:
     where nothing did, so the set's own count is the floor.
     """
     return max(ctx.trials, len(metrics))
+
+
+def look_level(floor: float, looks: int) -> float:
+    """The probability a deflation requires at the `looks`-th look of a lineage at one
+    certification window: the planner's `floor` with its complement split across the looks,
+    `1 − (1 − floor) / looks` — a Bonferroni split of the level the planner chose.
+
+    The first look is held to the planner's level itself, exactly, so a lineage that has
+    never certified on its window is judged as it always was. A false pass at any look needs
+    the deflation to pass falsely there, and look `ℓ` spends `(1 − floor) / ℓ`, so by the
+    union bound the lineage's chance of one over `L` looks is at most `(1 − floor)` times
+    `1 + 1/2 + … + 1/L` — 1.5 times the planner's complement at two looks, 2.08 at four, 2.93
+    at ten — where it would be `L` times it with no split. No schedule keeps the first look at
+    the planner's level and the total at it too. The bound is as good as the deflation's own
+    probability, which is a normal approximation.
+    """
+    if looks <= 1:
+        return floor
+    return 1.0 - (1.0 - floor) / looks
 
 
 def expected_maximum(trial_variance: float, n_trials: int) -> float:
@@ -922,7 +946,11 @@ def _deflated_mean(
     it: the probability it exceeds the expected maximum of the search by its own error.
 
     `units` names the estimate's evidence key and what its error was read off — periods or
-    trades — which is all that differs between a contribution and a per-trade edge.
+    trades — which is all that differs between a contribution and a per-trade edge. The
+    probability is held to the planner's `min_probability` at the first look of the
+    hypothesis's lineage at its certification window and to `look_level` of it at a later one
+    (`looks`, which certification counts and nothing else does), both in the evidence beside
+    the level they set (`required_probability`).
     """
     floor = number(ctx, "min_probability")
     if floor is None:
@@ -941,9 +969,10 @@ def _deflated_mean(
     searched = _searched(ctx, metrics)
     expected = expected_maximum(spread, searched)
     probability = NormalDist().cdf((estimate - expected) / error)
+    required = look_level(floor, ctx.looks)
     return verdict(
         gate,
-        probability >= floor,
+        probability >= required,
         {
             "probability": probability,
             "min_probability": floor,
@@ -954,6 +983,8 @@ def _deflated_mean(
             "trials": searched,
             "scored_trials": len(metrics),
             counted: count_of,
+            "looks": ctx.looks,
+            "required_probability": required,
         },
     )
 

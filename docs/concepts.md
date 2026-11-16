@@ -2585,9 +2585,10 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
-           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, looks=1, min_probability=0.95, probability=0.9999999999999918, required_probability=0.95, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+hold-out   look 1 of 2025-01-06..2025-05-30 by demo_mr · deflation held to 0.95
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
@@ -2721,6 +2722,48 @@ The engine version is in that condition on purpose. A certificate is a claim abo
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
 
+**Hold-out looks are counted, and the search correction's level is split across them.** A
+certification window is the one sample research never saw, and every certificate reads it:
+pass or fail, a new best, the same bytes after a replan or an engine upgrade, a sibling
+written after the first one failed — each is one more look at the same sample, and enough
+looks find something there by chance as surely as enough cards find it in research. So kanso
+counts them, over the hypothesis's **lineage**: every registered hypothesis joined to it by
+`derived_from`, either way — its parents, its children and their other children — because a
+sibling certified on the same window looked at the same data, and a count over ancestors
+alone would start again at every new sibling. A look is a certificate of any member of the
+lineage, under any plan, engine or verdict, whose certification window — the one the file its
+run pinned declares — shares a day with the subject's; a re-pin that moves the window by a
+day keeps the count, and one onto a window that opens after this one closes starts a new one.
+A certificate written before kanso recorded its pin is read under its hypothesis's file as it
+stands. A certificate struck on a snapshot that cannot support a claim read no window and is
+no look, and a spared stall writes none. The count is struck from the certificates each time,
+so certificates written before kanso counted looks count at once.
+
+At look `L` the search correction — `deflated_sharpe`, `deflated_contribution` or
+`deflated_edge` — requires its probability to reach `1 − (1 − threshold) / L`, a Bonferroni
+split of the planner's threshold: at a planned 0.95 a lineage's first look is held to 0.95,
+its second to 0.975, its third to 0.9833 and its fourth to 0.9875. A false pass at any look
+needs the correction to pass falsely there, and look `L` spends `(1 − threshold) / L`, so the
+threshold the planner sets is the **first look's level**, and the lineage's chance of a false
+pass over `L` looks is at most `(1 − threshold) × (1 + 1/2 + … + 1/L)` — 1.5 times the
+threshold's complement at two looks, 2.08 at four, 2.93 at ten — not the threshold itself:
+without the split it would be `L` times it, and no rule keeps the first look at the planner's
+level and the total at it too. The bound is as good as the correction's own probability,
+which is a normal approximation. The correction carries the split because it is the one
+statistical gate every plan carries from the second card, with a level the planner chose;
+`embargoed_window` is a fraction rule with no error rate to split. The planner is shown the
+looks already taken (`looks`, beside `n_trials`) and the rule, and may choose a stricter
+threshold at a replan; the threshold stays its own. A stall's precheck, in the lane and in
+the certification child, is held to the level of the look its certificate would be, and the
+certificate records it (`holdout`: the window, the look and the lineage), which `cert run`
+and `cert show` print on a `hold-out` line:
+
+```
+hold-out   look 4 of 2024-02-19..2026-11-13 by smr_daily_ext · deflation held to 0.9875
+```
+
+Looks at the forward window, and looks across lineages, are not counted.
+
 **A failing verdict is not an error, and it ends nothing.** `cert run` exits 0 and says
 `fail`, because the certificate is what the command produces and a fail is evidence: it
 counts toward the `[certify] n_fail` run, the **ids** of its failing gates are fed back into
@@ -2742,8 +2785,10 @@ control for a run scored on a contribution, and `deflated_edge` for one scored o
 edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
 trade, against the expected maximum of the search — as many draws as it had candidates, from
 the spread of its trials in the same units — over the estimate's own error, the one its card
-carried, reported as a probability and held to `min_probability` — at a stall, on research
-data before the certification window is read (above). The trials' spread is read robustly, as
+carried, reported as a probability and held to `min_probability` at the lineage's first look
+at its certification window and to that threshold split across the looks after it
+(*Hold-out looks*, above), the level in its evidence as `required_probability` beside
+`looks` — at a stall, on research data before the certification window is read (above). The trials' spread is read robustly, as
 1.4826 times the median absolute deviation of their metrics, so a few trials that blew up — a
 rule that traded itself to ruin, a seed that fired once — do not widen the search past any
 candidate the selection weighed; the spread it used is in the evidence as `trial_spread_bps`.

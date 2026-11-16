@@ -211,3 +211,44 @@ def test_a_net_per_trade_whose_numbers_disagree_is_refused(
 ) -> None:
     with pytest.raises(ValidationError, match=said):
         Certificate.model_validate({**CERT, "net_per_trade": {**NET, **change}})
+
+
+HOLDOUT: dict[str, Any] = {
+    "window_start": "2024-02-19",
+    "window_end": "2026-11-13",
+    "look": 4,
+    "lineage": ["demo_mr", "demo_child"],
+}
+
+
+def test_a_certificate_records_which_look_at_its_window_it_was() -> None:
+    made = Certificate.model_validate({**CERT, "holdout": HOLDOUT})
+
+    assert made.holdout is not None
+    assert (made.holdout.look, made.holdout.lineage[0]) == (4, "demo_mr")
+    assert Certificate.model_validate(CERT).holdout is None, "older certificates hold none"
+
+
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [
+        ({"window_end": "2024-02-18"}, "window_end: 2024-02-18 is before 2024-02-19"),
+        ({"look": 0}, "look"),
+        ({"lineage": []}, "lineage"),
+        ({"lineage": ["demo_mr", "demo_mr"]}, "names a hypothesis twice"),
+        ({"lineage": ["demo_child"]}, "its lineage does not name demo_mr"),
+    ],
+)
+def test_a_hold_out_that_is_no_look_of_this_certificate_is_refused(
+    change: dict[str, Any], said: str
+) -> None:
+    with pytest.raises(ValidationError, match=said):
+        Certificate.model_validate({**CERT, "holdout": {**HOLDOUT, **change}})
+
+
+def test_a_plan_counts_the_looks_taken_before_it_and_one_made_before_counts_none() -> None:
+    assert CertificationPlan.model_validate(PLAN).inputs.looks == 0
+    counted = {**PLAN, "inputs": {**PLAN["inputs"], "looks": 3}}
+    assert CertificationPlan.model_validate(counted).inputs.looks == 3
+    with pytest.raises(ValidationError, match="looks"):
+        CertificationPlan.model_validate({**PLAN, "inputs": {**PLAN["inputs"], "looks": -1}})
