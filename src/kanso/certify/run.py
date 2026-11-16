@@ -25,12 +25,13 @@ fails the certificate whatever the certification window shows. Reading that wind
 a verdict already known and spends a look at the one window research never saw. So before a
 stall certifies, the correction is judged on research data (`precheck`): in the lane that
 stalled, from the measurement the subject card kept, when that measurement was struck the way
-certification would strike it now; and in the certification child itself, on the research
-window it has just run, before the certification window is read (`certify_at_stall`). Either
-refusal spares the stall: no certification window is read and no certificate is written. A
-correction that judged nothing — a plan that carries none before the search has two cards,
-or a gate that skips on the research run — spares nothing, since it would judge nothing in
-the certificate either. `kanso cert run` is the operator's own act and is never spared.
+certification would strike it now, on a snapshot that can support a claim; and in the
+certification child itself, on the research window it has just run, before the certification
+window is read (`certify_at_stall`). Either refusal spares the stall: no certification window
+is read and no certificate is written. A correction that judged nothing — a plan that carries
+none before the search has two cards, or a gate that skips on the research run — spares
+nothing, since it would judge nothing in the certificate either. `kanso cert run` is the
+operator's own act and is never spared.
 
 **Both windows are measured the way a card is.** The objective the certificate records,
 and every gate's reading of it, is taken over the workspace's `[research] folds` equal
@@ -549,11 +550,15 @@ def precheck(
     read only when it was struck the way certification would strike the research window now —
     the pin's objective, `[research] folds` and `return_period`, the subject's capital and the
     installed `criteria_version` — and otherwise the precheck judges nothing and says which
-    differed, as it does for a card that kept no measurement. The gate is evaluated by its own
-    `evaluate` on the context certification would build for it (`_judge`), the measurement's
-    run in both `run` and `research_run` and the host and benchmark it was differenced
-    against beside it, with the trials certification counts: one arithmetic, so what this
-    judges is what the certificate's correction would judge from the same run.
+    differed, as it does for a card that kept no measurement. Nor does it judge on a snapshot
+    that cannot support a claim: certification runs no window there and judges no correction,
+    and the failing certificate it writes is how that snapshot reaches the operator, so the
+    lane leaves the stall to it rather than spare it on a reading certification would not
+    make. Where it does judge, the gate is evaluated by its own `evaluate` on the context
+    certification would build for it (`_judge`), the measurement's run in both `run` and
+    `research_run` and the host and benchmark it was differenced against beside it, with the
+    trials certification counts: one arithmetic, so what this judges is what the
+    certificate's correction would judge from the same run.
 
     The same run is what certification makes only where nothing moved since the card was
     measured that the guards cannot see. A run upgraded mid-way to a build that changed a
@@ -620,6 +625,12 @@ def precheck(
                 f"certification would measure it under {now}",
                 measured=False,
             )
+    snapshot = read_snapshot(ws, run.snapshot_id)
+    blocked = _inadmissible(ws, snapshot)
+    if blocked:
+        # Certification fails every gate on this snapshot without judging the correction,
+        # and that failing certificate is how such a snapshot reaches the operator.
+        return _unsupported(hyp.objective.id, snapshot, blocked)
     return _deflation(
         store,
         planned,
@@ -1334,7 +1345,7 @@ def _judge(
             None,
             None,
             None,
-        ), None if spare is None else _unsupported(subject, snapshot, blocked)
+        ), None if spare is None else _unsupported(subject.objective_id, snapshot, blocked)
     first = _research(subject)
     checked = None if spare is None else spare(first)
     if checked is not None and checked.spared:
@@ -1494,17 +1505,17 @@ def _blocked(planned: PlannedGate, snapshot: Snapshot, reasons: Sequence[str]) -
     )
 
 
-def _unsupported(subject: Subject, snapshot: Snapshot, reasons: Sequence[str]) -> Precheck:
+def _unsupported(objective_id: str, snapshot: Snapshot, reasons: Sequence[str]) -> Precheck:
     """A stall's precheck on a snapshot that cannot support a claim: certification runs no
-    window there, so the child judges no correction and says why, with the evidence the
-    certificate's own gates fail on (`_blocked`)."""
+    window there and judges no correction, so neither the lane nor the child judges one, and
+    each says why, with the evidence the certificate's own gates fail on (`_blocked`)."""
     return Precheck(
-        deflation_gate(subject.objective_id),
+        deflation_gate(objective_id),
         judged=False,
         passed=None,
         evidence={"snapshot_id": snapshot.snapshot_id, "inadmissible": list(reasons)},
         reason=f"snapshot {snapshot.snapshot_id[:12]} cannot support a claim, so certification "
-        f"ran no window and judged no correction: {'; '.join(reasons)}",
+        f"runs no window on it and judges no correction: {'; '.join(reasons)}",
         measured=False,
     )
 

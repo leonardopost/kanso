@@ -2502,16 +2502,17 @@ best's newest card kept — by the gate's own `evaluate`, on the context certifi
 for it, with that research run in the run's place — running nothing. A card measured under
 another `[research] folds`, `return_period` or capital, or another criteria version, or one
 that kept no measurement, is no reading of the arithmetic certification would use: the lane
-judges nothing. Whatever the lane read, the certification child it starts runs the research
-window first and judges the correction again on it before it reads the certification
-window — on a snapshot that cannot support a claim it runs neither window, and the failing
-certificate it writes is recorded beside a precheck that judged nothing and says why. A
-refusal in either place spares
-the stall — no certification window read, no certificate, no failure counted toward
-`n_fail`, the hypothesis back in the queue at −1 — and the `stalled` event records the
-precheck (`docs/cli.md`). A correction that judged nothing spares nothing: a plan carries
-none before the second card, and a gate that skips on the research run would skip in the
-certificate too. `cert run` by hand is never spared.
+judges nothing. Nor does it on a snapshot that cannot support a claim, where certification
+judges no correction and whose failing certificate is how that snapshot reaches the operator,
+so a stall on one is never spared. Whatever the lane read, the certification child it starts
+runs the research window first and judges the correction again on it before it reads the
+certification window — on a snapshot that cannot support a claim it runs neither window, and
+the failing certificate it writes is recorded beside a precheck that judged nothing and says
+why. A refusal in either place spares the stall — no certification window read, no
+certificate, no failure counted toward `n_fail`, the hypothesis back in the queue at −1 — and
+the `stalled` event records the precheck (`docs/cli.md`). A correction that judged nothing
+spares nothing: a plan carries none before the second card, and a gate that skips on the
+research run would skip in the certificate too. `cert run` by hand is never spared.
 
 The lane's reading is the certificate's exactly — measured on the research suite's
 synthetic workspace, a card the loop itself measured, the probability, the expected maximum
@@ -2525,9 +2526,9 @@ instead of reading them off the card — the warmup prefix, from the catalog as 
 which a `kanso data load` adding a printed day inside the lookback moves, and an attached
 construct's budget and grains, from its host's registration as it stands. And the trials
 are counted when each reading is made, so a card another lane records, of a hypothesis this
-one derives from, between the lane's reading and the child's moves the search they price. In those cases a stall the
-lane lets through is judged again by the child on the run it makes, which is the
-certificate's own, and a stall the lane spares is spared on the card's reading.
+one derives from, between the lane's reading and the child's moves the search they price. In
+those cases a stall the lane lets through is judged again by the child on the run it makes,
+which is the certificate's own, and a stall the lane spares is spared on the card's reading.
 
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
@@ -2739,15 +2740,16 @@ edge, where `deflated_sharpe` skips: the research estimate in basis points per p
 trade, against the expected maximum of the search — as many draws as it had candidates, from
 the spread of its trials in the same units — over the estimate's own error, the one its card
 carried, reported as a probability and held to `min_probability` — at a stall, on research
-data before the certification window is read (above). The trials' spread is read robustly, as 1.4826 times the median absolute
-deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
-seed that fired once — do not widen the search past any candidate the selection weighed; the
-spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe
-the same way, by the Sharpe's own error and the plain spread of its trials, all out of
-annualised units. Which of the three a plan carries is not the planner's to choose once the
-hypothesis has two cards (above). `min_event_days` is a card gate counting the distinct
-sessions any fill fell on, for a rule that fires on a regime or an event and could put its whole sample
-into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
+data before the certification window is read (above). The trials' spread is read robustly, as
+1.4826 times the median absolute deviation of their metrics, so a few trials that blew up — a
+rule that traded itself to ruin, a seed that fired once — do not widen the search past any
+candidate the selection weighed; the spread it used is in the evidence as `trial_spread_bps`.
+`deflated_sharpe` deflates a Sharpe the same way, by the Sharpe's own error and the plain
+spread of its trials, all out of annualised units. Which of the three a plan carries is not
+the planner's to choose once the hypothesis has two cards (above). `min_event_days` is a card
+gate counting the distinct sessions any fill fell on, for a rule that fires on a regime or an
+event and could put its whole sample into a handful of days that `min_trades` would count as
+many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker's rate or per-share charge, a slippage in ticks, a fixed
 width, the sell-side fees — through the runner's own per-fill

@@ -155,13 +155,15 @@ remedy `kanso cert plan ID --replan`) and judges the correction on the measureme
 newest card kept, running nothing. A card measured under another `[research] folds`,
 `return_period`, capital or criteria version — a run's baseline struck by the build before an
 upgrade, say — or one that kept no measurement is no reading of the arithmetic certification
-would use, so the lane judges nothing. Whatever the lane read, the certification child it
-starts runs the research window first and judges the correction again on that run, before it
-reads the certification window — the run is the certificate's own, so a stall the lane let
-through on the card's reading can still be refused there — unless its snapshot cannot support
-a claim, where it runs no window at all (below). A refusal in either place
-**spares** the stall: no certification window is read, no certificate is written,
-the hypothesis keeps its status and goes back to the queue at −1, and nothing counts toward
+would use, so the lane judges nothing. Nor does it judge on a snapshot that cannot support a
+claim: certification judges no correction there, and its failing certificate is how such a
+snapshot reaches the operator, so a stall on one is never spared. Whatever the lane read, the
+certification child it starts runs the research window first and judges the correction again
+on that run, before it reads the certification window — the run is the certificate's own, so
+a stall the lane let through on the card's reading can still be refused there — unless its
+snapshot cannot support a claim, where it runs no window at all (below). A refusal in either
+place **spares** the stall: no certification window is read, no certificate is written, the
+hypothesis keeps its status and goes back to the queue at −1, and nothing counts toward
 `[certify] n_fail`. A correction that judged nothing — a plan that carries none before the
 search's second card, or a gate that skips on the research run — spares nothing, since it
 would judge nothing in the certificate either. The `stalled` event records the precheck as
@@ -173,7 +175,8 @@ window it ran — `evidence` — the gate's own evidence: the probability and it
 and `min_dsr` under `deflated_sharpe`), the estimate and its error, the expected maximum,
 `trials` and `scored_trials` — and `reason` where it judged nothing. Those are
 research-window numbers, and the proposer is shown none of them. It is the lane's where no
-child was started and the child's wherever one was, judged or not, since that is the one the
+child was started — a spare, since a lane that judged nothing starts one, so its reason is
+never recorded — and the child's wherever one was, judged or not, since that is the one the
 certificate agrees with; the child runs the research window before anything else, so every
 stall that certified records `measured: true` but one on a snapshot that cannot support a
 claim. A certification the stall does make moves the hypothesis to `candidate`, with a
@@ -185,10 +188,10 @@ support a claim and its `evidence` the reasons the certificate's gates fail on.
 `kanso cert run` is the operator's own act and is never spared.
 
 The certification is made in a child of the lane, exactly as `cert run` makes it but for that
-spare, held to what a card of the judged run may hold (`docs/concepts.md`, Run, lane and the envelope), and the
-`stalled` event records what it cost (`cert_peak_mem_gb`, `cert_wall_s`), a spared child's
-too; one killed over that share is refused, and the lane records the refusal and puts the
-hypothesis back. "Certified" means a certificate of
+spare, held to what a card of the judged run may hold (`docs/concepts.md`, Run, lane and the
+envelope), and the `stalled` event records what it cost (`cert_peak_mem_gb`, `cert_wall_s`),
+a spared child's too; one killed over that share is refused, and the lane records the refusal
+and puts the hypothesis back. "Certified" means a certificate of
 those bytes under the pinned plan and the installed engine, whatever came after it: a best
 certified before other bytes were is not certified again, because a certificate is immutable
 and the repeat would be refused. Either verdict returns the

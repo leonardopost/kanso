@@ -92,6 +92,13 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     # a certified stall says `true` whatever its card was measured under, but for that one.
     assert "because the card was measured under another" not in text
     assert "`measured` — whether the research window was run for it, not why" in text
+    # A lane that could not judge starts the child, whose precheck replaces the lane's, so the
+    # lane's reason never reaches `last_stall` or `stall`: the one lane precheck recorded is a
+    # spare, and a `measured: false` that carries a reason is the snapshot's.
+    assert "with a `reason` where it could not" not in text
+    assert "its precheck is recorded only where it spared the stall" in text
+    assert "its reason is not recorded: the certification child is started" in text
+    assert "so a stall on one is never spared" in text
     assert "so every stall that certified says `true` — but one on a snapshot that" in text
     assert "`null` beside a spared stall, whatever an earlier plan or `hypothesis.yaml`" in text
     assert "`dsr` against `min_dsr` under `deflated_sharpe`" in text

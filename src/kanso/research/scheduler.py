@@ -415,14 +415,16 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     running nothing. A refusal spares the stall: no child is started, no certification window
     is read, the hypothesis stays where it was and goes back to the queue at −1. A
     measurement struck under another `[research]` reading or criteria version, or none at
-    all, judges nothing here. Whatever the lane read, a child it starts runs the research
-    window first and judges the correction again on that run, before it reads the
-    certification window, and spares the stall itself when it refuses
+    all, judges nothing here, and nor does a snapshot that cannot support a claim, whose
+    failing certificate is how it reaches the operator. Whatever the lane read, a child it
+    starts runs the research window first and judges the correction again on that run,
+    before it reads the certification window, and spares the stall itself when it refuses
     (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its reading
     is the one a certificate agrees with. On a snapshot that cannot support a claim the child
     runs no window at all and writes its failing certificate, and its precheck judges nothing
     and says why. The `stalled` event records the lane's precheck where no child was started
-    and the child's wherever one was. A correction that judged nothing spares nothing.
+    — a spare, the only lane precheck that keeps a child from starting — and the child's
+    wherever one was. A correction that judged nothing spares nothing.
 
     The verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
     fail returns it to research, and either way it is requeued at −1, because the queue is

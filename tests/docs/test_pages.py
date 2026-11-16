@@ -305,6 +305,12 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     assert f"so every stall that certified records `measured: true` {exception}" in cli
     assert f"`measured` is `true` on every stall that certified {exception}" in changelog
     assert "the child's wherever one was, judged or not" in cli
+    # A lane that judged nothing starts the child, so the lane's precheck a stall records is a
+    # spare; and the lane judges nothing on a snapshot certification judges nothing on, so its
+    # failing certificate, never a spare, is how that snapshot reaches the operator.
+    assert "a spare, since a lane that judged nothing starts one, so its reason is" in cli
+    for text in (cli, concepts, changelog):
+        assert "so a stall on one is never spared" in text
     assert "`dsr` and `min_dsr` under `deflated_sharpe`" in cli
     status = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso status`")

@@ -530,26 +530,36 @@ def test_a_stall_the_child_refuses_on_research_data_is_spared_by_the_child(
     assert float(str(stalled.detail["cert_wall_s"])) > 0, "the child ran the research window"
 
 
-@pytest.mark.parametrize("kept", [True, False], ids=["lane-passed", "lane-unjudged"])
+@pytest.mark.parametrize(
+    ("kept", "trials"),
+    [(True, TIGHT), (True, WIDE), (False, TIGHT)],
+    ids=["kept-tight", "kept-wide", "none-kept"],
+)
 def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_records_the_child_s_precheck(
-    ws: Workspace, store: StateStore, kept: bool
+    ws: Workspace, store: StateStore, kept: bool, trials: tuple[float, ...]
 ) -> None:
-    """The child runs no window on such a snapshot and writes its failing certificate, so its
-    precheck judged nothing, ran nothing and says why — and that is what the stall records,
-    never the lane's reading of the card, which would set a passing correction or a reason
-    about the card beside a certificate whose correction failed on the snapshot."""
+    """Certification judges no correction on such a snapshot, so neither does the lane, however
+    the card's own measurement would read — a reading of it that refused the best would spare
+    a stall whose failing certificate is how the snapshot reaches the operator. The child runs
+    no window and writes that certificate, counted toward `n_fail`, and its precheck judged
+    nothing, ran nothing and says why — and that is what the stall records, never the lane's
+    reading of the card, which would set a correction's verdict or a reason about the card
+    beside a certificate whose correction failed on the snapshot."""
     a_manifest(ws, publication="unknown")
     snapshots.freeze(ws)
     hyp_id = classify(ws, store, DOCUMENT, REVERTING)
     set_status(store, hyp_id, "researching")
     sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store) if kept else None)
-    searched(ws, store, *TIGHT)
+    searched(ws, store, *trials)
     lane = precheck(ws, store, hyp_id, sha, write_plan(ws, gates=[*CERT_GATES, SEARCHED]))
-    assert (lane.judged, lane.passed) == ((True, True) if kept else (False, None))
+    assert (lane.judged, lane.passed, lane.measured) == (False, None, False)
+    assert lane.reason is not None
+    assert ("cannot support a claim" in lane.reason) is kept, "the snapshot, where a card kept"
 
     stall = scheduler.on_stall(ws, store, hyp_id)
 
     assert (stall.certifiable, stall.verdict) == (True, "fail")
+    assert show(ws, store, hyp_id).cert_failures == 1  # type: ignore[union-attr]
     assert stall.precheck is not None
     assert (stall.precheck["judged"], stall.precheck["pass"]) == (False, None)
     assert stall.precheck["measured"] is False, "the child ran no window for it"
