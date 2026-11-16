@@ -354,14 +354,15 @@ def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
     its root, whose bytes hash to the digest stated.
 
     A path that is absolute, resolves outside the root, climbs above the root to name a file
-    inside it, cannot be named on this host — a NUL in it, a name longer than the filesystem
-    holds, a symlink loop — is not there or is not a file is refused, and so is a digest its
-    bytes do not hash to. Refusing the climb is what keeps `./` and `..` from giving one file
-    two keys in `PriorTrials.grid`: inside the root they normalise away, and a climb out by the
-    root's own name and back in would not. Python 3.12's `Path.resolve` raises `RuntimeError`
-    on a symlink loop where 3.13's returns the path, and `is_file` answers some errors as no
-    file on one and raises them on the other, so the path is resolved and then `stat`ed, and
-    every interpreter refuses the same source the same way.
+    inside it, cannot be named or read on this host — a NUL in it, a name longer than the
+    filesystem holds, a symlink loop, a mode that forbids reading — is not there or is not a
+    file is refused, and so is a digest its bytes do not hash to. Refusing the climb is what
+    keeps `./` and `..` from giving one file two keys in `PriorTrials.grid`: inside the root
+    they normalise away, and a climb out by the root's own name and back in would not.
+    Python 3.12's `Path.resolve` raises `RuntimeError` on a symlink loop where 3.13's returns
+    the path, and `is_file` answers some errors as no file on one and raises them on the
+    other, so the path is resolved and then `stat`ed, and every interpreter refuses the same
+    source the same way.
     """
     root = ws.root.resolve()
     named = Path(declared.source)
@@ -406,7 +407,11 @@ def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
         raise unopenable(exc) from None
     if not S_ISREG(mode):
         raise ValidationError(f"prior_trials.source: {declared.source} is not a file", remedy=place)
-    digest = sha256(read_source(target)).hexdigest()
+    try:
+        held = target.read_bytes()
+    except OSError as exc:
+        raise unopenable(exc) from None
+    digest = sha256(held).hexdigest()
     if digest != declared.sha256:
         raise ValidationError(
             f"prior_trials.sha256: the bytes of {declared.source} hash to {digest}, not the "

@@ -6,6 +6,7 @@ so the test asserts both rather than only that something went wrong.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date
 from hashlib import sha256
@@ -311,6 +312,24 @@ def test_a_source_with_a_nul_in_it_is_refused_as_inadmissible(ws: Workspace) -> 
 
     assert failure.message.startswith(f"prior_trials.source: {source!r} is not a path this host")
     assert "null" in failure.message
+    assert "evidence/" in (failure.remedy or "")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file whatever its mode")
+def test_a_source_the_host_may_not_read_is_refused_as_inadmissible(ws: Workspace) -> None:
+    """A file `stat` sees and the host may not read is refused as every other source is,
+    the field named and the remedy given."""
+    block = evidence(ws)
+    held = ws.root / block["source"]
+    held.chmod(0)
+    try:
+        failure = refused(ws, document(prior_trials=block))
+    finally:
+        held.chmod(0o644)
+
+    assert failure.message.startswith(
+        "prior_trials.source: 'evidence/grid.md' is not a path this host can open: "
+    )
     assert "evidence/" in (failure.remedy or "")
 
 

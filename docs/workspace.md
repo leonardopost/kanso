@@ -460,8 +460,8 @@ under `evidence/` say, and commit it with the rest. `kanso hyp validate` and `ka
 read it to check `sha256` against its bytes when the block is new, differing in any key from
 the one the hypothesis's pinned file states, and refuse (exit 3) a source that is absolute,
 resolves outside the workspace, climbs out of the root to name a file inside it, is not a path
-the host can open, is not there or is not a file, a digest the bytes do not hash to, and a
-block an ancestor already states, which `derived_from` already counts; so does `kanso
+the host can open or read, is not there or is not a file, a digest the bytes do not hash to,
+and a block an ancestor already states, which `derived_from` already counts; so does `kanso
 classify`, which pins the file as it is on disk, for a block written in since the pin. Once a
 pin states the block only the pinned file is read: a re-pin of the same block, `kanso
 classify`'s included, reads nothing of the evidence, and moving or editing it refuses nothing.
