@@ -2507,12 +2507,15 @@ card gates: `kanso classify` and `kanso hyp validate` ask a contribution for `ed
 alone. A per-trade edge (`net_edge_bps`), a Sharpe already measured against a hold, a marginal
 objective and an attached construct carry it only where the planner chooses — a sub-daily
 certification window is often tens of sessions, whose few whole-session shifts cannot resolve a
-small `p`. A plan pinned without it is refused where it is read, as one without its correction
-is — here the demo re-pinned to `wf_sharpe_net` at a `1d` horizon, on the plan it had before:
+small `p`. A plan pinned without it is refused where it is read, by `cert plan` and by `cert
+run`, as one without its correction is. Here the demo, researched as `README.md` runs it and
+planned by `kanso cert plan demo_mr` — a plan that carries `deflated_edge` and leaves
+`deflated_sharpe` out, as a per-trade edge's does — has ended its run and been re-pinned to
+`wf_sharpe_net` at a `1d` horizon; its plan is refused for both, the correction first (exit 3):
 
 ```
-$ kanso cert run demo_mr
-error: the plan pinned for demo_mr is not one this kanso can run: gates: entry_timing is required for wf_sharpe_net, its objective, and every plan for it includes the gate with every parameter set; the values are yours, inside their ranges
+$ kanso cert plan demo_mr
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_sharpe is the search correction for wf_sharpe_net, and a plan includes it once n_trials, every card of the hypothesis, reaches 2 (it is 4); gates: entry_timing is required for wf_sharpe_net, its objective, and every plan for it includes the gate with every parameter set; the values are yours, inside their ranges; excluded.deflated_sharpe: is the search correction for wf_sharpe_net, and a plan includes it once n_trials, every card of the hypothesis, reaches 2 (it is 4), so it cannot be left out
 remedy: run `kanso cert plan demo_mr --replan` to plan again
 ```
 
