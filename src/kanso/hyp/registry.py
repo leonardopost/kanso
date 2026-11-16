@@ -490,7 +490,19 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     of what a number is comparable under, read in both places. A row pinned before a field
     joined is read by `_scope_of`; for the cost model, the instruments' own types and the
     session scope that means this function again, over the file the row pinned.
+
+    It is returned as the pins store it, through JSON, because a re-pin compares it with a
+    held row's pins read back from JSON: a model holds a dated spread table as a tuple of
+    rows and JSON reads it back as a list, and a tuple never equals a list, so the same
+    table compared unequal — measured clearing seven bests with "costs changed" from a
+    table to the same table on a re-pin that only declared each hypothesis's grid.
     """
+    scope: dict[str, Any] = json.loads(json.dumps(_scope_fields(hyp)))
+    return scope
+
+
+def _scope_fields(hyp: Hypothesis) -> dict[str, Any]:
+    """`scope_of`'s fields as the models dump them, before they are put in the pins' shape."""
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
