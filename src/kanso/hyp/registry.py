@@ -490,7 +490,19 @@ def scope_of(hyp: Hypothesis) -> dict[str, Any]:
     of what a number is comparable under, read in both places. A row pinned before a field
     joined is read by `_scope_of`; for the cost model, the instruments' own types and the
     session scope that means this function again, over the file the row pinned.
+
+    It is returned as the pins store it, through JSON, because a re-pin compares it with a
+    held row's pins read back from JSON: a model holds a dated spread table as a tuple of
+    rows and JSON reads it back as a list, and a tuple never equals a list, so the same
+    table compared unequal — measured clearing seven bests with "costs changed" from a
+    table to the same table on a re-pin that only declared each hypothesis's grid.
     """
+    scope: dict[str, Any] = json.loads(json.dumps(_scope_fields(hyp)))
+    return scope
+
+
+def _scope_fields(hyp: Hypothesis) -> dict[str, Any]:
+    """`scope_of`'s fields as the models dump them, before they are put in the pins' shape."""
     return {
         "universe": sorted(hyp.universe),
         "resolution": hyp.resolution,
@@ -596,7 +608,14 @@ def gates_added(before: Hypothesis | None, after: Hypothesis) -> list[str]:
 
 
 def _gate_key(gate: str, params: dict[str, Any]) -> str:
-    return f"{gate} {json.dumps(params, sort_keys=True)}"
+    """A gate at its parameters, a number keyed by its value: `2` and `2.0` are one threshold,
+    because a gate reads a `float` parameter as a float (`criteria.context.number`) and a
+    file can only state an `int` one as an integer (`criteria.library.check_params`)."""
+    values = {
+        name: float(value) if isinstance(value, int) and not isinstance(value, bool) else value
+        for name, value in params.items()
+    }
+    return f"{gate} {json.dumps(values, sort_keys=True)}"
 
 
 def moved(before: dict[str, Any], after: dict[str, Any]) -> str:

@@ -28,6 +28,7 @@ read, so this arithmetic is the noise floor of the whole loop.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
@@ -298,6 +299,12 @@ class CardRun:
         parse_duration(self.period, "period")
         if self.capital <= 0:
             raise ValidationError(f"capital: {self.capital} is not above zero")
+        # The venue model is held as the codec stores it and reads it back, so a run carried
+        # in memory and the same run decoded from a measurement compare equal: the model
+        # dumps a dated spread table as a tuple of rows and JSON reads it back as a list, and
+        # a card compared with a best read from the store as a host or a benchmark paired
+        # with none (`records.Measurement.against`).
+        object.__setattr__(self, "venue_model", json.loads(json.dumps(dict(self.venue_model))))
         lengths = {len(self.period_ends_ns), len(self.returns), len(self.equity)}
         if len(lengths) != 1:
             raise ValidationError(

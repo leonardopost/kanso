@@ -18,7 +18,15 @@ from kanso.criteria.objectives import difference, wf_contribution_bps
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
-from kanso.schemas import Card, Costs, ObjectiveRef, PriorTrials, RunRecord, resolve_venue_model
+from kanso.schemas import (
+    Card,
+    Costs,
+    CostsOverride,
+    ObjectiveRef,
+    PriorTrials,
+    RunRecord,
+    resolve_venue_model,
+)
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.schemas import strategies as gen
@@ -808,6 +816,41 @@ def test_a_card_less_the_best_is_paired_period_by_period_and_only_what_pairs_is_
         {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
     )
     assert card.against(replace(best, objective=other)) is None, "another objective"
+
+
+def test_a_card_pairs_with_a_stored_best_against_a_benchmark_under_a_dated_spread() -> None:
+    """A run's venue model is held as the store reads it back, so the benchmark a card was
+    measured against in memory and the same benchmark decoded with the best compare equal.
+    The model dumps a dated spread table as a tuple and JSON reads it back as a list; compared
+    as they were, no card under a dated spread paired with a stored best."""
+    ref = ObjectiveRef.model_validate(
+        {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    costs = CostsOverride.model_validate(
+        {
+            "spread": "dated",
+            "dated": [
+                {
+                    "instrument": "SPY.XNAS",
+                    "from": "2023-01-02",
+                    **{"pre": 4.0, "open": 3.0, "rth": 1.0, "post": 4.0},
+                    **{"n_sessions": 200, "n_open": 200},
+                }
+            ],
+        }
+    )
+    model = resolve_venue_model("XNAS", hypothesis_costs=costs).model_dump()
+    assert isinstance(model["costs"]["dated"], tuple), "the model's own shape"
+    base = replace(a_run(days=6), returns=(10.0, -50.0, 80.0, -30.0, 40.0, -20.0))
+    best_run = replace(base, venue_model=model)
+    better = replace(best_run, returns=tuple(r + 2.0 for r in best_run.returns))
+    best = records.Measurement(ref, 2, best_run, benchmark=best_run, criteria_version="v")
+    card = records.Measurement(ref, 2, better, benchmark=best_run, criteria_version="v")
+
+    stored = records.read_measurement(json.loads(zlib.decompress(records.encode_measurement(best))))
+
+    assert card.against(stored) == card.against(best)
+    assert card.against(stored) is not None
 
 
 def test_a_number_measured_under_another_reading_is_no_anchor(

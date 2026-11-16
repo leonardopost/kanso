@@ -238,6 +238,60 @@ def test_a_re_pin_that_only_declares_a_grid_keeps_the_best(
     assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
 
 
+DATED_ROW: dict[str, Any] = {
+    "pre": 872.9,
+    "open": 37.2,
+    "rth": 9.0,
+    "post": 90.0,
+    "n_sessions": 5,
+    "n_open": 25,
+}
+"""A year's widths, as a dated spread states them."""
+
+DATED_COSTS: dict[str, Any] = {
+    "commission_bps": 0.5,
+    "slippage_bps": 1.0,
+    "spread": "dated",
+    "dated": [
+        {"instrument": "DEMO", "from": "2023-01-01", **DATED_ROW},
+        {"instrument": "DEMO", "from": "2024-01-01", **DATED_ROW},
+    ],
+}
+
+
+def test_a_re_pin_under_the_same_dated_spread_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The pin holds the table as JSON reads it back and the file states it as rows the
+    model holds; they are one table, so a re-pin that moves nothing else keeps the best.
+    Measured clearing seven bests with "costs changed" from a table to the same table, on a
+    re-pin that only declared each hypothesis's grid."""
+    register(ws, store, document(costs=DATED_COSTS))
+    set_best(store)
+
+    register(ws, store, document(costs=DATED_COSTS, title="A better title"))
+
+    found = record(ws, store)
+    assert found.best_sha == "c" * 64
+    assert found.best_metric == 1.5
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
+
+
+def test_a_re_pin_that_moves_a_row_of_a_dated_spread_clears_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store, document(costs=DATED_COSTS))
+    set_best(store)
+    wider = {**DATED_COSTS["dated"][1], "rth": 12.0}
+
+    register(ws, store, document(costs={**DATED_COSTS, "dated": [DATED_COSTS["dated"][0], wider]}))
+
+    found = record(ws, store)
+    assert found.best_sha is None
+    cleared = [event for event in store.events(subject=HYP_ID) if event.kind == "best_cleared"]
+    assert "costs changed" in str(cleared[-1].detail["reason"])
+
+
 def test_reordering_the_universe_is_not_a_change_of_scope(ws: Workspace, store: StateStore) -> None:
     register(ws, store, document(universe=["DEMO", "EURO"]))
     set_best(store)
@@ -951,6 +1005,23 @@ def test_a_card_gate_added_clears_the_best_and_names_it(ws: Workspace, store: St
             "without them"
         )
     )
+
+
+def test_a_card_gate_spelled_again_at_the_same_values_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`2` and `2.0` are one threshold to the gate, so a re-pin that only re-spells them has
+    added nothing; keyed by their JSON spelling they read as a gate added and cleared the
+    best."""
+    guard = {"id": "edge_per_trade", "params": {"min_bps": 2, "k_se": 1}}
+    register(ws, store, document(**SLEEVE_CLASSIFICATION, required_constraints=[guard]))
+    set_best(store)
+    respelled = {"id": "edge_per_trade", "params": {"min_bps": 2.0, "k_se": 1.0}}
+
+    register(ws, store, document(**SLEEVE_CLASSIFICATION, required_constraints=[respelled]))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
 
 
 def test_a_card_gate_moved_to_other_parameters_clears_the_best(
