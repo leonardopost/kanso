@@ -46,10 +46,17 @@ before a winter fill's time of day on a summer session, so a trade moved across 
 clocks is dropped from that draw. One factor per trade scales every fill of it, its opening
 notional — the sum over its opening fills of quantity, price and multiplier — over the same
 sum at the moved prices, so the moved trade opens the same notional and closes flat. A split
-between two of a trade's fills is undone before anything is scaled: each fill is restated onto
-the share basis its trade opened in (`kanso.nautilus.splits.restating`), the recorded fills by
-the instants they filled at and the moved ones by the instants they land on, so a draw that
-straddles a one-for-five is no fivefold move.
+between two of a trade's fills is undone before anything is scaled, each fill restated onto
+the share basis its trade opened in by the clock its own price was struck on, never by the
+instant it lands at. A recorded fill is in the shares the venue held its name in when it
+filled: every split the venue had applied to the name before it, as the run booked them
+(`CardRun.adjustments`) and where among the fills of their instant (`fills_before`) — the
+venue applies a split only once a point printed past it reaches it, so a sale struck at the
+eve's daily bar, printed at the New York midnight that opens the ex-date and published after
+it, is in the old shares though it filled past the split's instant. A moved fill is in the
+shares of the instant the reading it is struck at was printed at, its `ts_event`, since a price
+is published in the shares of its own instant: the eve's bar is in the old shares on whichever
+session reads it. So a draw that straddles a one-for-five is no fivefold move.
 
 **Costs are the runner's, charged as it charges a fill struck at that close.** Each moved fill
 pays `kanso.nautilus.costs.fill_cost` under the run's venue model: half the spread — the dated
@@ -87,11 +94,11 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from math import fsum
+from math import fsum, prod
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Trade, midnight_ns
+from kanso.criteria.run import BPS, NS_PER_SECOND, Adjustment, CardRun, Fill, Trade, midnight_ns
 from kanso.nautilus.costs import (
     at_touch,
     dated_half_spread,
@@ -101,7 +108,7 @@ from kanso.nautilus.costs import (
     quote_half_spread,
     tick_slip,
 )
-from kanso.nautilus.splits import Split, restating
+from kanso.nautilus.splits import Split
 from kanso.schemas.venue import DatedSpread
 
 __all__ = [
@@ -123,6 +130,7 @@ __all__ = [
     "offsets",
     "place",
     "runner_bps_per_trade",
+    "struck_in",
     "wall_of",
 ]
 
@@ -384,12 +392,45 @@ class Placed:
         return self.last - self.first
 
 
-def place(trade: Trade, prices: SessionPrices) -> Placed:
-    """A trade on the session grid of `prices`, every fill restated onto its opening basis."""
+def struck_in(run: CardRun) -> dict[Fill, float]:
+    """The shares each of the run's fills was struck in, as a multiple of a share its name held
+    before any split the run booked: the product of the ratios of every split the venue had
+    applied to the name before the fill (`CardRun.adjustments`) — at an earlier instant, or at
+    the fill's own after the fills of the name the venue matched there first
+    (`Adjustment.fills_before`), counted in the order `CardRun.fills` holds them. A fill the
+    venue struck before any split is at one, as is every fill of a run that booked none, and an
+    adjustment that names no split of the schedule restates nothing."""
+    booked: dict[str, list[Adjustment]] = {}
+    for made in run.adjustments:
+        booked.setdefault(made.instrument_id, []).append(made)
+    found: dict[Fill, float] = {}
+    matched: dict[tuple[str, int], int] = {}
+    for fill in run.fills:
+        instant = (fill.instrument_id, fill.ts_ns)
+        before = matched.get(instant, 0)
+        matched[instant] = before + 1
+        found[fill] = prod(
+            (
+                1.0 if made.ratio is None else made.ratio
+                for made in booked.get(fill.instrument_id, ())
+                if made.ts_ns < fill.ts_ns
+                or (made.ts_ns == fill.ts_ns and made.fills_before <= before)
+            ),
+            start=1.0,
+        )
+    return found
+
+
+def place(
+    trade: Trade, prices: SessionPrices, shares: Mapping[Fill, float] | None = None
+) -> Placed:
+    """A trade on the session grid of `prices`, every fill restated onto its opening basis by
+    the shares it was struck in (`struck_in`): a fill `shares` does not name is in the shares
+    the trade opened in, as every fill of a run that booked no split is."""
     index = {day: at for at, day in enumerate(prices.sessions)}
     fills = sorted(trade.fills, key=lambda fill: fill.ts_ns)
-    schedule = prices.schedules.get(trade.instrument_id, ())
-    opened = fills[0].ts_ns
+    held = shares or {}
+    opened = held.get(fills[0], 1.0)
     opening_side = fills[0].side
     legs: list[Leg] = []
     for fill in fills:
@@ -397,7 +438,7 @@ def place(trade: Trade, prices: SessionPrices) -> Placed:
         session = index.get(day)
         if session is None:
             return Placed((), 0, 0, 0.0)
-        factor = restating(schedule, opened, fill.ts_ns)
+        factor = held.get(fill, opened) / opened
         legs.append(
             Leg(
                 session=session,
@@ -536,7 +577,7 @@ def _priced(
     is dropped — it holds no session, it crosses the window's end, or a leg has no price."""
     if not trade.legs or trade.first + k < total <= trade.last + k:
         return None
-    struck: list[tuple[Leg, int, float, int, Reading | None]] = []
+    struck: list[tuple[Leg, float, int, Reading | None]] = []
     for leg in trade.legs:
         session = (leg.session + k) % total
         readings = prices.marks.get((leg.instrument, leg.wall))
@@ -545,14 +586,13 @@ def _priced(
             return None
         quoted = prices.quotes.get((leg.instrument, leg.wall))
         quote = None if quoted is None else quoted[session]
-        at = instant_at(prices.sessions[session], leg.wall)
-        struck.append((leg, at, mark.price(sell=leg.sell), mark.priced_ns, quote))
+        struck.append((leg, mark.price(sell=leg.sell), mark.priced_ns, quote))
     schedule = prices.schedules.get(trade.legs[0].instrument, ())
-    opened = struck[0][1]
-    factors = [restating(schedule, opened, at) for _, at, _, _, _ in struck]
+    opened = _shares(schedule, struck[0][2])
+    factors = [_shares(schedule, priced) / opened for _, _, priced, _ in struck]
     moved = fsum(
         leg.qty * px * factor * leg.multiplier
-        for (leg, _, px, _, _), factor in zip(struck, factors, strict=True)
+        for (leg, px, _, _), factor in zip(struck, factors, strict=True)
         if leg.opening
     )
     if moved <= 0.0:
@@ -560,7 +600,7 @@ def _priced(
     scale = trade.notional / moved
     flows: list[float] = []
     fees: list[float] = []
-    for (leg, _, px, priced, quote), factor in zip(struck, factors, strict=True):
+    for (leg, px, priced, quote), factor in zip(struck, factors, strict=True):
         qty = scale * leg.qty * factor
         notional = qty * px * leg.multiplier
         fees.append(
@@ -585,6 +625,14 @@ def _priced(
         )
         flows.append(notional if leg.sell else -notional)
     return fsum(flows) - fsum(fees), tuple(fees)
+
+
+def _shares(schedule: Sequence[Split], printed_ns: int) -> float:
+    """The shares a price printed at `printed_ns` is quoted in, as a multiple of a share held
+    before the schedule's first split: the product of the ratios of every split in force at the
+    instant it was printed. A price is published in the shares of its own instant, so this is
+    read at a reading's `ts_event` and never at the instant a fill struck at it lands."""
+    return prod((split.ratio for split in schedule if split.effective_ns <= printed_ns), start=1.0)
 
 
 def runner_bps_per_trade(run: CardRun) -> float:

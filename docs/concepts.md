@@ -2769,7 +2769,13 @@ touch of a quote — and never at one carried from an earlier session, so a dela
 where its delay puts it, as the venue applied it, and no draw prices a fill at what the market
 had yet to publish. One factor per trade, its opening notional over the same sum at the moved
 prices, scales every fill of it, so a moved trade opens the same notional and closes flat; a
-split between its fills is restated onto the shares it opened in, so a draw across a
+split between its fills is restated onto the shares it opened in, each fill by the clock its
+price was struck on and never by the instant it lands at — a recorded fill is in the shares
+the venue held its name in when it filled, every split the run booked before it
+(`adjustments`), and a moved one in the shares of the instant its reading was printed at, its
+`ts_event` — so the eve's daily bar, printed at the New York midnight that opens the ex-date
+and published after it, is in the old shares wherever it is read, as the venue, which applies
+a split only once a point printed past it reaches it, struck it, and a draw across a
 one-for-five is no fivefold move. Every moved fill is charged by `fill_cost` under the
 subject's venue model as the runner charges a fill struck at that close — never a maker's,
 touched where its instrument's last quote says so and on a venue that matches a level-two book

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from kanso.criteria import CardRun, Fill, Trade, gates
+from kanso.criteria import Adjustment, CardRun, Fill, Trade, gates
 from kanso.criteria.gates import entry_timing
 from kanso.criteria.gates.entry_timing import (
     ATTACHED,
@@ -46,6 +46,7 @@ from kanso.criteria.timing import (
     offsets,
     place,
     runner_bps_per_trade,
+    struck_in,
     wall_of,
 )
 from kanso.data.loaders.synthetic import SyntheticLoader
@@ -537,18 +538,116 @@ def test_a_draw_across_a_reverse_split_is_restated_and_moves_nothing() -> None:
 
 
 def test_a_trade_the_runner_held_through_a_split_is_restated_onto_the_shares_it_opened_in() -> None:
+    """Bought 100 at 10.00, and the 20 a one-for-five left sold at 50.00: the venue applied the
+    split between the two fills, and the run booked it there."""
     days = weekdays(6)
     split = Split(days[3], 0.2, "America/New_York")
     closes = [10.0, 10.0, 10.0, 50.0, 50.0, 50.0]
     prices = folded(closes, days, schedules={NAME: (split,)})
     trade = a_trade(a_fill(days[1], "BUY", 100.0, 10.0), a_fill(days[4], "SELL", 20.0, 50.0))
+    applied = Adjustment(instant_at(days[3], CLOSE), NAME, -80.0, 0.0, 0.2)
+    run = replace(a_run([trade], days), fills=trade.fills, adjustments=(applied,))
 
-    placed = place(trade, prices)
+    placed = place(trade, prices, struck_in(run))
     own = draw([placed], prices, MODEL, 0)
 
     assert [leg.qty for leg in placed.legs] == [100.0, pytest.approx(100.0)]
     assert [leg.px for leg in placed.legs] == [10.0, pytest.approx(10.0)]
     assert own.costs[0] == tuple(f.cost for f in trade.fills)
+
+
+def test_a_fill_at_the_instant_a_split_was_applied_is_in_the_shares_it_was_matched_in() -> None:
+    """At the instant the venue applied a one-for-five it matched one sale of the name first, in
+    the old shares, and the next after it, in the new — as the run records it, one fill of the
+    instant before the split (`fills_before`). Each is placed in the shares it was struck in."""
+    days = weekdays(4)
+    at = instant_at(days[2], CLOSE)
+    trade = a_trade(
+        a_fill(days[1], "BUY", 100.0, 10.0),
+        replace(a_fill(days[2], "SELL", 50.0, 10.0), ts_ns=at),
+        replace(a_fill(days[2], "SELL", 10.0, 50.0), ts_ns=at),
+    )
+    applied = Adjustment(at, NAME, -40.0, 0.0, 0.2, fills_before=1)
+    elsewhere = Adjustment(instant_at(days[0], CLOSE), OTHER, 0.0, 0.0, 4.0)
+    run = replace(a_run([trade], days), fills=trade.fills, adjustments=(elsewhere, applied))
+
+    shares = struck_in(run)
+    placed = place(trade, folded([10.0] * 4, days), shares)
+
+    assert [shares[fill] for fill in trade.fills] == [1.0, 1.0, 0.2]
+    assert [leg.qty for leg in placed.legs] == [100.0, 50.0, pytest.approx(50.0)]
+    assert [leg.px for leg in placed.legs] == [10.0, 10.0, pytest.approx(10.0)]
+
+
+def midnight_closes(
+    closes: list[float], days: list[date], split: Split, *, lag: int = 0, wall: int | None = None
+) -> SessionPrices:
+    """Each day's close stamped at the New York midnight that ends it, as a vendor's daily bar
+    is, and published `lag` after it, keyed at `wall` past midnight — `lag` unless given."""
+    fold = Fold(((NAME, lag if wall is None else wall),), (days[0], days[-1]), {NAME: (split,)})
+    for day, close in zip(days, closes, strict=True):
+        at = instant_at(day + timedelta(days=1), 0)
+        fold.take(BAR, NAME, at + lag, close, close, at)
+    return fold.prices()
+
+
+def at_midnight(day: date, side: str, qty: float, px: float, wall: int) -> Fill:
+    """A fill struck at the daily bar of `day`, `wall` past the New York midnight ending it."""
+    return a_fill(day + timedelta(days=1), side, qty, px, wall=wall)
+
+
+@pytest.mark.parametrize("lag", [0, 15 * MINUTE], ids=["published", "delayed"])
+def test_a_sale_struck_at_the_eve_s_bar_past_the_split_s_instant_is_in_the_old_shares(
+    lag: int,
+) -> None:
+    """The eve's daily bar of a fifteen-for-one is printed at the New York midnight that opens
+    the ex-date and, on a delayed feed, published after it. The venue applies the split only
+    once a point printed past it reaches it, the ex-date's own bar, so a sale struck at the
+    eve's is in the old shares though it filled past the split's instant, and the run books no
+    split. Placed, the trade sells what it bought; moved onto a value that never changed —
+    a leg read at the eve's bar on the ex-date's session among them — it makes its costs."""
+    days = weekdays(16)
+    ex = days[8]
+    split = Split(ex, 15.0, "America/New_York")
+    closes = [603.0 if day < ex else 40.2 for day in days]
+    prices = midnight_closes(closes, days, split, lag=lag)
+    trade = a_trade(
+        at_midnight(days[5], "BUY", 16.0, 603.0, lag),
+        at_midnight(days[7], "SELL", 16.0, 603.0, lag),
+    )
+    placed = place(trade, prices, struck_in(replace(a_run([trade], days), fills=trade.fills)))
+
+    assert (trade.fills[1].ts_ns > split.effective_ns) == (lag > 0)
+    assert [(leg.qty, leg.px) for leg in placed.legs] == [(16.0, 603.0), (16.0, 603.0)]
+    for k in range(len(prices.sessions)):
+        moved = draw([placed], prices, MODEL, k)
+        for pnl, costs in zip(moved.pnl, moved.costs, strict=True):
+            assert pnl == pytest.approx(-sum(costs)), f"offset {k} moved {pnl + sum(costs):.2f}"
+    assert draw([placed], prices, MODEL, 0).pnl == (pytest.approx(trade.pnl_net),)
+
+
+@pytest.mark.parametrize("wall", [0, 50 * 1_000_000, 15 * MINUTE])
+def test_a_moved_fill_is_in_the_shares_of_the_instant_its_reading_was_printed(wall: int) -> None:
+    """A trade with no split in its own span, moved to open on an ex-date's session at a time
+    of day past its midnight: the reading there is the eve's bar, printed at that midnight in
+    the old shares, and the close two sessions on is in the new. A one-for-five leaves the
+    value unchanged, so the move makes nothing but its costs, wherever past the midnight it
+    is read."""
+    days = [date(2025, 4, 1) + timedelta(days=i) for i in range(16)]
+    ex = days[8]
+    split = Split(ex, 0.2, "America/New_York")
+    closes = [10.0 if day < ex else 50.0 for day in days]
+    prices = midnight_closes(closes, days, split, wall=wall)
+    trade = a_trade(
+        at_midnight(days[1], "BUY", 100.0, 10.0, wall),
+        at_midnight(days[3], "SELL", 100.0, 10.0, wall),
+    )
+    placed = place(trade, prices)
+
+    moved = draw([placed], prices, MODEL, prices.sessions.index(ex) - placed.first)
+
+    assert moved.kept == 1
+    assert moved.pnl[0] == pytest.approx(-sum(moved.costs[0]))
 
 
 def test_a_dated_spread_is_read_at_the_instant_the_reading_refers_to() -> None:
@@ -966,6 +1065,39 @@ def test_a_book_long_a_rising_series_at_arbitrary_times_is_not_credited_with_tim
 
     assert sum(passed for passed, _ in found) <= 2
     assert len({p for _, p in found}) > 5, "p is spread, not pinned at either end"
+
+
+@pytest.mark.parametrize("lag", [0, 15 * MINUTE], ids=["published", "delayed"])
+def test_a_book_on_a_value_that_never_moved_across_a_split_is_not_credited_with_timing(
+    lag: int,
+) -> None:
+    """Sixty days of one value, 100.00 and then 50.00 from a two-for-one's ex-date: nothing to
+    time. One of the two trades is sold at the eve's bar, in the old shares, as the venue fills
+    it on a delayed feed past the split's instant. Every draw makes its costs and no more, so
+    the book is not credited with timing."""
+    days = [date(2025, 4, 1) + timedelta(days=i) for i in range(60)]
+    ex = days[30]
+    closes = [100.0 if day < ex else 50.0 for day in days]
+    prices = midnight_closes(closes, days, Split(ex, 2.0, "America/New_York"), lag=lag)
+    trades = [
+        a_trade(
+            at_midnight(days[4], "BUY", 100.0, 100.0, lag),
+            at_midnight(days[7], "SELL", 100.0, 100.0, lag),
+        ),
+        a_trade(
+            at_midnight(days[26], "BUY", 100.0, 100.0, lag),
+            at_midnight(days[29], "SELL", 100.0, 100.0, lag),
+        ),
+    ]
+    run = replace(a_run(trades, days), fills=tuple(f for t in trades for f in t.fills))
+
+    result = judged(run, prices, max_p=0.10)
+
+    assert (result.passed, result.skipped) == (False, None)
+    assert result.evidence["observed_bps_per_trade"] == pytest.approx(
+        result.evidence["observed_runner_bps_per_trade"]
+    )
+    assert result.evidence["null_max"] == pytest.approx(result.evidence["observed_bps_per_trade"])
 
 
 def test_the_window_is_read_once_for_every_key_the_trades_need() -> None:

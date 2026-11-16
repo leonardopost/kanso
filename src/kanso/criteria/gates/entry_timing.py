@@ -38,7 +38,14 @@ import numpy as np
 
 from kanso.criteria.context import Gate, GateContext, number, skipped, verdict
 from kanso.criteria.quantities import mean, stdev
-from kanso.criteria.timing import draw, keys_of, offsets, place, runner_bps_per_trade
+from kanso.criteria.timing import (
+    draw,
+    keys_of,
+    offsets,
+    place,
+    runner_bps_per_trade,
+    struck_in,
+)
 from kanso.schemas import GateResult
 
 MIN_TRADES: Final = 2
@@ -100,7 +107,8 @@ class _EntryTiming:
         if missing:
             return verdict(self.id, False, {**reading, "unpriced": missing, "reason": UNPRICED})
         levelled = LEVELLED in ctx.hyp.data_requirements
-        placed = [place(trade, prices) for trade in run.trades]
+        shares = struck_in(run)
+        placed = [place(trade, prices, shares) for trade in run.trades]
         own = draw(placed, prices, run.venue_model, 0, levelled=levelled)
         observed = own.bps_per_trade(run.capital)
         if own.dropped or observed is None:
