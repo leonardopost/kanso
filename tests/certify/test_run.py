@@ -1350,6 +1350,26 @@ def test_a_card_scored_under_the_objective_before_the_re_pin_is_not_certified_by
     )
 
 
+def test_a_card_scored_before_the_re_pin_is_not_certified_by_name_behind_one_card_and_a_grid(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One card is no search, but one card behind a declared grid is the best of 28: the plan
+    made for the contribution carries no correction for the Sharpe that card was scored
+    under, and that is what refuses it, before its spread is asked for."""
+    classify(ws, store, {**SWITCHED, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    before = a_card(ws, store, blob_from("9"), seq=1, metric=2.0, best=False)
+    write_plan(ws, gates=[*CERT_GATES, PRICED])
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr "
+        "carries no deflated_sharpe with its threshold, the search correction for it, so the "
+        "search that selected it would go unpriced"
+    )
+
+
 def test_a_card_of_another_objective_is_certified_when_the_plan_carries_its_correction(
     ws: Workspace, store: StateStore
 ) -> None:

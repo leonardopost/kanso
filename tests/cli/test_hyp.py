@@ -335,6 +335,7 @@ def test_validate_add_and_show_carry_the_grid_a_file_declares(
     checked = at(runner, loaded, "hyp", "validate", path, "--json")
     said = at(runner, loaded, "hyp", "validate", path)
     added = at(runner, loaded, "hyp", "add", path, "--json")
+    repinned = at(runner, loaded, "hyp", "add", path)
     assert at(runner, loaded, "hyp", "add", plain).exit_code == Exit.OK
     one = at(runner, loaded, "hyp", "show", HYP_ID, "--json")
     shown = at(runner, loaded, "hyp", "show", HYP_ID)
@@ -343,6 +344,8 @@ def test_validate_add_and_show_carry_the_grid_a_file_declares(
     assert (checked.exit_code, said.exit_code, added.exit_code) == (Exit.OK,) * 3
     assert payload(checked)["prior_trials"] == payload(added)["prior_trials"] == block
     assert "prior_trials" in said.stdout and line in said.stdout
+    assert repinned.exit_code == Exit.OK
+    assert "prior_trials" in repinned.stdout and line in repinned.stdout
     assert payload(one)["prior_trials"] == block
     assert "prior_trials" in shown.stdout and line in shown.stdout
     assert {entry["id"]: entry["prior_trials"] for entry in payload(listed)["hypotheses"]} == {
