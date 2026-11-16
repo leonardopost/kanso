@@ -535,6 +535,8 @@ def test_both_pages_say_the_judge_reads_the_rewinds_of_earlier_runs() -> None:
     alignment = prose(section(page("concepts.md"), "Alignment"))
     assert "A direction refused in one run is not met fresh in the next" in alignment
     assert "`same_program` and `same_thesis`" in alignment
+    # a re-pin of what the syntax tree reads can lift a refusal, so it is said
+    assert "`bar_resolution` or `data_requirements` the syntax tree reads" in alignment
     assert "cut to forty lines with the rest counted" in alignment
     # a drift the syntax tree finds shows no model a diff, and records `from` all the same
     assert "`from`, the bytes the run's last check left the lane on" in alignment

@@ -22,11 +22,12 @@ import yaml
 
 from kanso import inbox, research
 from kanso.errors import ValidationError
+from kanso.hyp import HYPOTHESIS_FILE
 from kanso.models import INSTRUCTIONS, Call, spend
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
-from kanso.schemas import RunRecord
+from kanso.schemas import Hypothesis, RunRecord, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -777,8 +778,9 @@ def repinned(store: StateStore, run: RunRecord, **changes: object) -> str:
 def test_a_re_pin_that_changes_nothing_the_judge_reads_is_the_same_thesis(
     store: StateStore, ws: Workspace
 ) -> None:
-    """The judge reads the thesis, mechanism, universe and horizon of `hypothesis.yaml`, and an
-    operator re-pins the file for much else — a title, a risk limit, a field a release adds.
+    """A check reads the thesis, mechanism, universe and horizon of `hypothesis.yaml`, and the
+    resolution and data it requires, and an operator re-pins the file for much else — a
+    title, a risk limit, a field a release adds.
     Told that every re-pin was a new thesis, a judge would discount the very history it is
     shown each time a hypothesis was re-pinned for anything at all."""
     scripted(ws)
@@ -798,6 +800,55 @@ def test_a_re_pin_that_changes_nothing_the_judge_reads_is_the_same_thesis(
         ("20261102-1", False),
         ("20261101-1", True),
     ]
+
+
+TRADING = SEED.replace(b"# end", b"def on_trade_tick(self, tick):\n    return None\n\n# end")
+"""A file that reads trade data, which a hypothesis requiring only bars refuses."""
+
+HOURLY = SEED.replace(b"# end", b'Strategy.bars = "DEMO.XNAS-1-HOUR-LAST-EXTERNAL"\n\n# end')
+"""A file that reads hourly bars, which a hypothesis reading daily bars refuses."""
+
+TICKS: dict[str, object] = {"resolution": "tick", "data_requirements": ["bar", "trade"]}
+
+
+@pytest.mark.parametrize(
+    ("earlier", "now", "source"),
+    [
+        ({}, {"data_requirements": ["bar", "trade"]}, TRADING),
+        ({}, {"resolution": "1h"}, HOURLY),
+        ({**TICKS, "bar_resolution": "1d"}, {**TICKS, "bar_resolution": "1h"}, HOURLY),
+    ],
+    ids=["data_requirements", "resolution", "bar_resolution"],
+)
+def test_a_re_pin_that_permits_what_the_syntax_tree_refused_is_another_thesis(
+    store: StateStore,
+    ws: Workspace,
+    earlier: dict[str, object],
+    now: dict[str, object],
+    source: bytes,
+) -> None:
+    """The syntax tree reads `hypothesis.yaml` too — the data it requires and the size it
+    reads its bars at — and re-pinning either is how an operator permits a direction the tree
+    refused. Told that such a run had this one's thesis, the judge would read a refusal the
+    operator has since lifted as standing, and refuse the direction again."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    pinned = repinned(store, run, **earlier)
+    permitting = repinned(store, run, **now)
+    ok, reason = align.align_static(pinned_hypothesis(store, pinned), source)
+    assert ok is False and reason is not None
+    assert align.align_static(pinned_hypothesis(store, permitting), source) == (True, None)
+    before = ended_run(store, run, "20261101-1", hypothesis_sha=pinned)
+    drifted(store, before, reason, drifted=store.put_blob(source))
+
+    (entry,) = align.rewound_before(store, run.model_copy(update={"hypothesis_sha": permitting}), 1)
+
+    assert entry["same_thesis"] is False
+
+
+def pinned_hypothesis(store: StateStore, sha: str) -> Hypothesis:
+    return parse_yaml(Hypothesis, store.get_blob(sha).decode("utf-8"), HYPOTHESIS_FILE)
 
 
 def test_a_change_is_cut_only_where_the_cut_shortens_it(store: StateStore, ws: Workspace) -> None:
@@ -884,7 +935,8 @@ def test_the_judge_is_told_how_to_read_earlier_runs_and_what_can_return() -> Non
     said = INSTRUCTIONS["align_check"]
     assert "When `rewound_in_earlier_runs` is given" in said
     assert "`same_program: false` means the program has been edited since that verdict" in said
-    assert "`same_thesis: false` that its thesis, mechanism, universe or horizon has" in said
+    assert "`same_thesis: false` that its thesis, mechanism, universe or horizon, or" in said
+    assert "the resolution or data it requires, has changed since" in said
     assert "Only a change in `diff_since_last_check` can return in such a direction" in said
 
 

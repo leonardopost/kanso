@@ -87,11 +87,13 @@ meets the next run's judge fresh. Observed in a live workspace on 2026-11-15: on
 rewound for a trend filter and then for a volatility filter, and the next run kept a file
 carrying such a filter and its check passed it. A reason alone does not say which change it
 refused, so each earlier one comes with that change, as a diff from the bytes the run was
-rewound to, and with whether the `program.md` it was given under, and the thesis, mechanism,
-universe and horizon its `hypothesis.yaml` stated, are this run's: an operator who permitted
-the direction since has changed one of them, and the judge must not read the old verdict as
-though they had not. A re-pin that changes none of them — a title, a limit, a field a
-release adds — changes nothing the judge reads, and is not said to. The `drifted` event
+rewound to, and with whether the `program.md` it was given under, and what a check reads of
+its `hypothesis.yaml` — the thesis, mechanism, universe and horizon the model is shown, and
+the resolution, `bar_resolution` and `data_requirements` the syntax tree compares against —
+are this run's: an operator who permitted the direction since has changed one of them, and
+the judge must not read the old verdict as though they had not. A re-pin that changes none of
+them — a title, a limit, a field a release adds — changes nothing a check reads, and is not
+said to. The `drifted` event
 records the bytes it refused for this; one written before it did reads the newest keep, of
 the cards that check judged, that it marked not aligned, and carries no diff where there is
 none to show. This buys consistency across runs, not a stricter judge, and it never reaches a
@@ -191,7 +193,8 @@ HANDLERS: Final[dict[str, str]] = {
 
 @dataclass(frozen=True)
 class _Stated:
-    """What the hypothesis states, in the shapes the syntax tree is compared against."""
+    """What the hypothesis states, in the shapes the syntax tree is compared against. A field
+    read here is one `_judged` compares across runs: a re-pin of it can lift a refusal."""
 
     universe: tuple[str, ...]
     known: frozenset[str]
@@ -561,11 +564,10 @@ def rewound_before(
     A direction once each, as `rewound_for` lists them, and none this run was rewound for
     too: this run's own list says it already. Each entry is `{reason, run, same_program,
     same_thesis, diff}`: the run's tag; whether that run pinned the `program.md` this one did,
-    and a `hypothesis.yaml` stating the thesis, mechanism, universe and horizon this one's
-    does (`_judged`), since the operator permits a direction by editing one of them; and the
-    change as a unified diff from the bytes the run was rewound to, at most `diff_lines` lines
-    (`_refused`), or `None` where there is none to show. Like `rewound_for` it carries nothing
-    measured, on any window.
+    and a `hypothesis.yaml` stating what a check reads of this one's (`_judged`), since the
+    operator permits a direction by editing one of them; and the change as a unified diff from
+    the bytes the run was rewound to, at most `diff_lines` lines (`_refused`), or `None` where
+    there is none to show. Like `rewound_for` it carries nothing measured, on any window.
     """
     rows = store.connection.execute(
         "SELECT e.event_id, e.subject, e.detail, r.run_id, r.tag, r.program_sha,"
@@ -601,8 +603,11 @@ def rewound_before(
 
 
 def _judged(store: StateStore, pin: str) -> dict[str, object]:
-    """What the judge reads of a pinned `hypothesis.yaml` (`_ask`), read as a plain mapping
-    so a file pinned under an older schema is still read."""
+    """What a check reads of a pinned `hypothesis.yaml`, read as a plain mapping so a file
+    pinned under an older schema is still read: the thesis, mechanism, universe and horizon
+    the model is shown (`_ask`), and the resolution, bar size and data types the syntax tree
+    compares the file against (`_Stated.of`), since re-pinning one of those is how an
+    operator permits a direction the tree refused."""
     found = yaml.safe_load(store.get_blob(pin).decode("utf-8"))
     document = found if isinstance(found, dict) else {}
     return {
@@ -610,6 +615,9 @@ def _judged(store: StateStore, pin: str) -> dict[str, object]:
         "mechanism": document.get("mechanism"),
         "universe": sorted(str(name) for name in document.get("universe") or ()),
         "horizon": document.get("horizon"),
+        "resolution": document.get("resolution"),
+        "bar_resolution": document.get("bar_resolution"),
+        "data_requirements": sorted(str(kind) for kind in document.get("data_requirements") or ()),
     }
 
 

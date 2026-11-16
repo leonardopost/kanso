@@ -432,11 +432,11 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "those directions, each with the change refused; a change that returns in one of them "
         "is drift again unless the program permits it and the thesis does not state the "
         "opposite — `same_program: false` means the program has been edited since that "
-        "verdict, and `same_thesis: false` that its thesis, mechanism, universe or horizon has "
-        "changed since. Only a change in `diff_since_last_check` can return in such a "
-        "direction: what the file held before it is this run's base or was answered for by an "
-        "earlier check. Answer the same change the same way every time it is put to you. Give "
-        "the reason in under 200 characters."
+        "verdict, and `same_thesis: false` that its thesis, mechanism, universe or horizon, or "
+        "the resolution or data it requires, has changed since. Only a change in "
+        "`diff_since_last_check` can return in such a direction: what the file held before it "
+        "is this run's base or was answered for by an earlier check. Answer the same change "
+        "the same way every time it is put to you. Give the reason in under 200 characters."
     ),
     "certify_plan": (
         "You decide what would count as proof for one trading hypothesis.\n\n"

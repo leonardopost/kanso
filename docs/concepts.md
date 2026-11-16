@@ -1688,9 +1688,10 @@ next run kept a file carrying such a filter and its check passed it. So an earli
 reason comes with the change the check refused — a unified diff from the bytes that run was
 rewound to, cut to forty lines with the rest counted on the last — the run's tag, and
 `same_program` and `same_thesis`: false where that run pinned another `program.md`, or a
-`hypothesis.yaml` whose thesis, mechanism, universe or horizon differ from this one's. A
-direction you have permitted since is judged under the program that permits it, and a re-pin
-that changes none of what the judge reads — a title, a limit, a window — is not taken for a
+`hypothesis.yaml` whose thesis, mechanism, universe or horizon differ from this one's, or the
+resolution, `bar_resolution` or `data_requirements` the syntax tree reads. A direction you
+have permitted since is judged under the program or the pin that permits it, and a re-pin
+that changes none of what a check reads — a title, a limit, a window — is not taken for a
 new thesis. The `drifted` event records the bytes it refused for this (`drifted`, beside
 `from`, the bytes the run's last check left the lane on); for one an earlier kanso wrote, the
 change is read from the newest keep that check marked not aligned among the cards it judged,
