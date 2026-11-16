@@ -87,6 +87,7 @@ __all__ = [
     "drop",
     "enqueue",
     "hold",
+    "last_stall",
     "on_baseline_failed",
     "on_host_composed",
     "on_stall",
@@ -514,6 +515,28 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     reseed = _reseed(store, hyp_id, best, ws.config.research.reseed_after_stalls)
     requeue(store, hyp_id, STALL_PRIORITY, reseed_from=reseed)
     return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict, reseed, checks)
+
+
+def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
+    """The newest stall of a hypothesis as `kanso status` and `research run` show it: when,
+    on which best, whether a certification followed, its verdict and the precheck that
+    decided it — `None` before the first stall, and a `precheck` of `None` on a stall
+    recorded before stalls judged one."""
+    row = store.connection.execute(
+        "SELECT ts, detail FROM events WHERE kind = ? AND subject = ?"
+        " ORDER BY event_id DESC LIMIT 1",
+        (STALLED, hyp_id),
+    ).fetchone()
+    if row is None:
+        return None
+    detail = json.loads(str(row["detail"]))
+    return {
+        "at": str(row["ts"]),
+        "best_sha": detail.get("best_sha"),
+        "certifiable": detail.get("certifiable"),
+        "verdict": detail.get("verdict"),
+        "precheck": detail.get("precheck"),
+    }
 
 
 def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str | None:

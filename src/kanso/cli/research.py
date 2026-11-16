@@ -45,7 +45,7 @@ from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent, stopped
 from kanso.criteria import criteria_version
 from kanso.errors import PreconditionError, ValidationError
-from kanso.research import daemon, records
+from kanso.research import daemon, records, scheduler
 from kanso.research.lanes import DEFAULT_LANE
 from kanso.schemas import Card, CardDigest, GateResult
 from kanso.state import StateStore
@@ -347,6 +347,9 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         # One of another subject is not: a rewound `best` leaves an older certificate
         # newest, and reporting that as this run's outcome would be a lie.
         newest = certificate.latest(opened, hyp_id) if outcome.ended else None
+        # The stall this invocation ended on wrote the hypothesis's newest `stalled` event:
+        # whether it went on to certify, and the search correction that decided it.
+        stall = scheduler.last_stall(opened, hyp_id) if outcome.ended else None
     certified = newest if newest is not None and newest.strategy_sha == outcome.best_sha else None
     data: dict[str, Any] = {
         **outcome.payload(),
@@ -354,6 +357,9 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         "certificate": None
         if certified is None
         else {"sha7": certified.sha7, "verdict": certified.verdict},
+        "stall": None
+        if stall is None
+        else {"certifiable": stall["certifiable"], "precheck": stall["precheck"]},
     }
     best = (
         "none yet"
@@ -374,6 +380,13 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
     ]
     if certified is not None:
         lines.append(field("certified", f"{certified.sha7} · {certified.verdict}"))
+    spared = None if stall is None else spared_by(stall["precheck"])
+    if spared is not None:
+        lines.append(
+            field(
+                "certification", f"spared · {spared} on research data, so the window was not read"
+            )
+        )
     lines.append(
         field(
             "next",
@@ -426,6 +439,18 @@ def _stop(ws: Workspace, drain: bool = False) -> Report:
     # No run is ended and nothing is removed, so the next `start` resumes.
     lines.append(field("runs", "left open, with their lane directories"))
     return Report(data=data, lines=tuple(lines))
+
+
+def spared_by(precheck: object) -> str | None:
+    """`deflated_contribution 0.792 < 0.950`: the search correction that spared a stall, with
+    its probability and the planner's threshold, or `None` when the precheck spared nothing —
+    it passed, it judged nothing, or the stall recorded none."""
+    if not isinstance(precheck, dict) or not precheck.get("judged") or precheck.get("pass"):
+        return None
+    evidence = precheck["evidence"]
+    value = evidence.get("probability", evidence.get("dsr"))
+    floor = evidence.get("min_probability", evidence.get("min_dsr"))
+    return f"{precheck['gate']} {value:.3f} < {floor:.3f}"
 
 
 def stopped_line(children: Sequence[daemon.ChildPid], ending: Sequence[daemon.ChildPid]) -> str:

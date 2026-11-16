@@ -292,6 +292,14 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     )
     for key in Precheck("deflated_edge", False, None, {}, "why").payload():
         assert f"`{key}`" in cli, key
+    research_run = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
+    )
+    assert "carries `stall`" in research_run and "`certification` line" in research_run
+    status = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso status`")
+    )
+    assert "`last_stall`" in status and "stall spared:" in status
     assert "`cert run` by hand is never spared" in concepts
     assert "measured on the demo, the probability, the expected maximum and the trial" in (concepts)
 
