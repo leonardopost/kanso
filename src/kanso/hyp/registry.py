@@ -608,7 +608,14 @@ def gates_added(before: Hypothesis | None, after: Hypothesis) -> list[str]:
 
 
 def _gate_key(gate: str, params: dict[str, Any]) -> str:
-    return f"{gate} {json.dumps(params, sort_keys=True)}"
+    """A gate at its parameters, a number keyed by its value: `2` and `2.0` are one threshold,
+    because a gate reads a `float` parameter as a float (`criteria.context.number`) and a
+    file can only state an `int` one as an integer (`criteria.library.check_params`)."""
+    values = {
+        name: float(value) if isinstance(value, int) and not isinstance(value, bool) else value
+        for name, value in params.items()
+    }
+    return f"{gate} {json.dumps(values, sort_keys=True)}"
 
 
 def moved(before: dict[str, Any], after: dict[str, Any]) -> str:

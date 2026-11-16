@@ -1007,6 +1007,23 @@ def test_a_card_gate_added_clears_the_best_and_names_it(ws: Workspace, store: St
     )
 
 
+def test_a_card_gate_spelled_again_at_the_same_values_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`2` and `2.0` are one threshold to the gate, so a re-pin that only re-spells them has
+    added nothing; keyed by their JSON spelling they read as a gate added and cleared the
+    best."""
+    guard = {"id": "edge_per_trade", "params": {"min_bps": 2, "k_se": 1}}
+    register(ws, store, document(**SLEEVE_CLASSIFICATION, required_constraints=[guard]))
+    set_best(store)
+    respelled = {"id": "edge_per_trade", "params": {"min_bps": 2.0, "k_se": 1.0}}
+
+    register(ws, store, document(**SLEEVE_CLASSIFICATION, required_constraints=[respelled]))
+
+    assert record(ws, store).best_sha == "c" * 64
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
+
+
 def test_a_card_gate_moved_to_other_parameters_clears_the_best(
     ws: Workspace, store: StateStore
 ) -> None:
