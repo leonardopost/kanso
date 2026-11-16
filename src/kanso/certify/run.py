@@ -94,10 +94,10 @@ subject's lineage has already made at a certification window intersecting the su
 (`kanso.certify.looks`) are counted when the certificate is written, under the write lock its
 row is written under, so two certifications of one lineage judged at once are two looks in
 the order they were written; the certificate records the window, its look — one more than
-those — and the lineage (`holdout`). The count is shown and judges nothing: every gate,
-the search correction included, is held to the threshold the plan pins at any look, a stall's
-precheck as well. One struck on a snapshot that cannot support a claim read no window and
-records none.
+those — and the lineage (`holdout`). The count is shown and judges nothing: every gate that
+judges, the search correction included, does so by the threshold the plan pins at any look, a
+stall's precheck as well, and a correction that skips passes at any look as at the first. One
+struck on a snapshot that cannot support a claim read no window and records none.
 
 The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
 to research with the ids of its failing gates recorded where the proposer reads them, and

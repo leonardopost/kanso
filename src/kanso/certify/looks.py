@@ -5,9 +5,10 @@ pass or fail, the verdict is a look, and a lineage that looks again — a new be
 an engine upgrade's re-certification, a sibling written after the first failed — is drawing
 again from the same sample. Nothing about a certificate's own gates counts the draws, so this
 module does. The count is shown — to the planner when it plans (`PlanInputs.looks`), on the
-certificate (`Certificate.holdout`), on `kanso status` — and judges nothing: every gate is
-held to the threshold the plan pins at any look, so how high the bar sits at a later look
-stays the planner's, at a replan.
+certificate (`Certificate.holdout`), on `kanso status` — and judges nothing: every gate that
+judges does so by the threshold the plan pins at any look, and a search correction that skips
+judges a look by none and passes, so how high the bar sits at a later look stays the
+planner's, at a replan. A certificate whose correction skipped is a look like any other.
 
 **A look is a certificate of the lineage that read a window intersecting this one.** The
 lineage is the connected component of `derived_from` among registered hypotheses

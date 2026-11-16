@@ -7,7 +7,8 @@ descendants included — which certificates count — any verdict, plan or engin
 that intersects, that read a window at all, read off any spelling of a day the schema admits —
 that the count a certificate records is the one standing when it was written, and that the
 count moves no verdict: the certificate's correction, the certification child's precheck and
-the lane's are held to the plan's own threshold at every look.
+the lane's judge by the plan's own threshold at every look, and a correction that skips is a
+look it judged by none.
 
 The workspace is the research suite's synthetic saw-tooth. A certificate a test needs only
 as a prior look is written by `certificate.write` from a document built here, since what is
@@ -484,6 +485,31 @@ def test_a_certificate_records_its_look_and_its_correction_is_held_to_the_plan_a
     assert 0.9 < deflation(second)["dsr"] < 0.95 and deflation(second)["min_dsr"] == 0.9
     assert (first.verdict, second.verdict) == ("pass", "pass")
     assert certificate.latest(store, HYP_ID) == second, "the row reads back what was written"
+
+
+def test_a_certificate_whose_correction_skipped_is_a_look_its_correction_judged_by_none(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plan that carries the correction with its threshold still skips it while fewer than
+    two cards ran and traded, and a skip passes: the certificate passes and is a look, its
+    gate keeping the plan's threshold in `params` beside the `skipped` that says it judged by
+    none. The bound the pages state counts that look as up to one, not the threshold's
+    complement, and this is the case it is stated for."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    first = certify(ws, store, HYP_ID)
+    monkeypatch.setattr(run, "engine_version", lambda: "9.9.9")
+    second = certify(ws, store, HYP_ID)
+
+    for made, look in ((first, 1), (second, 2)):
+        (gate,) = [gate for gate in made.gates if gate.id == SEARCHED["id"]]
+        assert gate.skipped == "fewer than two trials, so the trial spread is unknown"
+        assert gate.passed and gate.params == SEARCHED["params"] and not gate.evidence
+        assert made.verdict == "pass"
+        assert made.holdout is not None and made.holdout.look == look
+    assert len(looks(store, HYP_ID, WINDOW).prior) == 2
 
 
 def test_a_look_written_while_a_certificate_is_judged_is_counted_before_it(

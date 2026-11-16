@@ -109,15 +109,20 @@ def test_the_certify_skill_says_every_certificate_is_a_look_and_that_it_moves_no
     report a pass at a later look as a first look's, or re-plan to make a later look pass.
     Told a re-pin never resets the count, it would report a count a re-pin moved as standing;
     told the lineage's bound is `L` times the threshold being set, it would understate it
-    wherever an earlier look was held lower."""
+    wherever an earlier look was held lower, and told each look was held to the threshold in
+    its correction's `params`, it would understate it at every look whose correction skipped,
+    which passes with those `params` in place."""
     text = skill(PACKAGED, "kanso-certify")
     assert "Every certificate is a **look** at its certification window" in text
     assert "The count judges nothing" in text
-    assert "held to the threshold the plan pins at every look" in text
+    assert "held to the threshold the plan pins at every look" not in text
+    assert "does so by the threshold the plan pins at every look" in text
     assert (
-        "up to the sum of each look's complement of the threshold its own plan held it to — "
-        "`L × (1 − threshold)` only where all `L` were held to one threshold"
+        "up to the sum of each look's complement of the threshold its correction judged it by, "
+        "one for a look whose correction judged nothing, under a plan that carried none or "
+        "because it skipped — `L × (1 − threshold)` only where all `L` judged by one threshold"
     ) in text
+    assert "read the gate's `skipped` before its threshold" in text
     assert "up to `L × (1 − threshold)`, not the threshold" not in text
     assert "`hypotheses[].holdout_looks`" in text and "the `hold-out` line" in text
     assert "A replan or a re-pin does not reset the count" not in text

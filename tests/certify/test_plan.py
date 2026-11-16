@@ -472,8 +472,10 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
     stated as the fact it is — no rule moves the threshold with the count, which stays the
     planner's to weigh. The look taken here was judged under no correction at all, so the
     bound is the sum of each look's own complement, never `L` times the one being set: the
-    planner is told the looks behind it were held to their own plans' thresholds, which it
-    is not shown."""
+    planner is told the looks behind it were judged by their own plans' thresholds, which it
+    is not shown, where their corrections judged, and by none where a plan carried no
+    correction or its correction skipped, which passes — so a plan that carries the correction
+    is not told a look it held to nothing was held to its threshold."""
     pin = show(ws, store, HYP_ID).hypothesis_sha
     store.connection.execute(
         "INSERT INTO certificates (hyp_id, hypothesis_sha, strategy_sha, plan_version,"
@@ -492,18 +494,27 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
     assert (
         "looks is how many certificates this hypothesis's lineage — every registered "
         "hypothesis joined to it by derived_from, either way — has already made that read a "
-        "window sharing a day with its certification window, one struck on a snapshot that "
-        "could not support a claim reading none, so the next is look L = looks + 1. Each look "
-        "already taken was judged under the plan its own hypothesis had pinned when it was "
-        "made, its search correction held to that plan's threshold — which you are not shown "
-        "— or to none where that plan carried no correction; deflated_edge is held to the "
-        "threshold you set at every look this plan judges. So the lineage's chance of a false "
-        "pass over its looks at that window is at most the sum, over every look, of 1 − the "
-        "threshold its correction was held to, counting 1 for a look held to none: each look "
-        "this plan judges adds 1 − threshold, and the sum is L × (1 − threshold) only where "
-        "every look was held to the threshold you set"
+        "window sharing a day with its certification window, one whose own window cannot be "
+        "read counting as one that did and one struck on a snapshot that could not support a "
+        "claim reading none, so the next is look L = looks + 1. Each look already taken was "
+        "judged under the plan its own hypothesis had pinned when it was made: its search "
+        "correction judged it by that plan's threshold where it judged, and by none where "
+        "that plan carried no correction or the correction skipped — a skip judges nothing "
+        "and passes, as the correction does while fewer than two cards of the search ran and "
+        "traded, among other cases. You are not shown those thresholds, nor which looks "
+        "skipped. deflated_edge judges by the threshold you set at every look this plan "
+        "judges where it judges, and by none where it skips. So the lineage's chance of a "
+        "false pass over its looks at that window is at most the sum, over every look, of "
+        "1 − the threshold its correction judged it by, counting 1 for a look whose "
+        "correction judged nothing: each look this plan judges adds 1 − threshold where the "
+        "correction judges and up to 1 where it skips, and the sum is L × (1 − threshold) "
+        "only where every look's correction judged by the threshold you set"
     ) in seen[0].system
     assert "held to the threshold you set at every look," not in seen[0].system
+    assert "is held to the threshold you set at every look this plan judges" not in (
+        seen[0].system
+    ), "a correction that skips holds a look to no threshold"
+    assert "or to none where that plan carried no correction;" not in seen[0].system
     assert "over L looks at that window is at most L × (1 − threshold)" not in seen[0].system
 
 

@@ -2749,24 +2749,32 @@ counted looks count at once; a certificate records the count standing when it is
 taken under the lock its row is written under, so two certifications of one lineage judged at
 once are two looks, in the order they were written.
 
-The count judges nothing. At every look each gate, the search correction included, is held
-to the threshold of the plan its hypothesis has pinned when the look is made, and so is a
-stall's precheck, in the lane and in the child. A correction held to a threshold passes a
-search with no edge with a chance of about the threshold's complement at that look, so the
-lineage's chance of a false pass over its looks at one window is up to the sum of each look's
-own complement — not the threshold, and as good as the correction's own probability, which
-is a normal approximation. Over `L` looks all held to one threshold that sum is
-`L × (1 − threshold)`; it is more where an earlier plan, or a sibling's, sat lower, and a
-look judged under a plan that carried no correction — as one made before the hypothesis's
-second card is — adds up to one. Each certificate keeps the threshold it was held to among
-its gates' `params`, so the sum is read off the lineage's certificates. How high the bar
-should sit at a later look is therefore a decision, and it stays the planner's: it is shown
-the looks already taken (`looks`, beside `n_trials`), told that each was held to its own
-plan's threshold — which it is not shown — and that the threshold it sets adds its
-complement at every look its plan judges, and sets that threshold inside the gate's range
-at a plan or a replan, as it always does. The certificate records its look (`holdout`: the
-window, the look and the lineage), which `cert run` and `cert show` print on a `hold-out`
-line, and `kanso status` gives each hypothesis the looks its lineage has taken:
+The count judges nothing. At every look each gate that judges, the search correction
+included, judges by the threshold of the plan its hypothesis has pinned when the look is
+made, and so does a stall's precheck, in the lane and in the child. A correction that judges
+by a threshold passes a search with no edge with a chance of about the threshold's complement
+at that look, so the lineage's chance of a false pass over its looks at one window is up to
+the sum of each look's own complement — not the threshold, and as good as the correction's
+own probability, which is a normal approximation. Over `L` looks whose corrections all judged
+by one threshold that sum is `L × (1 − threshold)`; it is more where an earlier plan, or a
+sibling's, sat lower, and a look whose correction judged nothing adds up to one: one judged
+under a plan that carried no correction, as one made before the hypothesis's second card is,
+and one whose correction skipped, which passes — as the correction does while fewer than two
+cards are candidates (above), and on a research run too short to give an error or whose
+error is zero, among the reasons a skip names. Each certificate keeps its plan's threshold
+among its correction's `params`, and a correction that skipped records why under `skipped`
+with its `params` unchanged, so the sum is read off the lineage's certificates: the
+complement of the threshold in `params` for a correction that judged, and one for a
+correction that skipped or a plan that carried none. How high the bar should sit at a later
+look is therefore a decision, and it stays the planner's: it is shown the looks already taken
+(`looks`, beside `n_trials`), told that each was judged by its own plan's threshold where its
+correction judged and by none where it judged nothing — and shown neither those thresholds
+nor which looks skipped — and that the threshold it sets adds its complement at every look
+its plan judges where the correction judges, and up to one where it skips, and sets that
+threshold inside the gate's range at a plan or a replan, as it always does. The certificate
+records its look (`holdout`: the window, the look and the lineage), which `cert run` and
+`cert show` print on a `hold-out` line, and `kanso status` gives each hypothesis the looks
+its lineage has taken:
 
 ```
 $ kanso cert plan demo_mr --replan        # after one certificate; the plan's lines are elided

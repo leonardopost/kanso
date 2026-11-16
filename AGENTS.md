@@ -113,9 +113,11 @@ certification window sharing a day with its own is a look, but one struck on a s
 cannot support a claim, which read no window. The looks are counted by `certify/looks.py`,
 recorded on the certificate and shown to the planner beside `n_trials` with what a threshold
 bounds across them — a false pass up to the sum of each look's complement of the threshold
-its own plan held it to, which is `L × (1 − threshold)` only where all `L` were held to one,
-and never the threshold — and the gate holds the threshold the plan pins at every look.
-`tests/certify/test_looks.py` fails when the count moves a verdict.
+its correction judged it by, one for a look whose correction judged nothing, under a plan
+that carried none or because the gate skipped, which passes; `L × (1 − threshold)` only where
+all `L` judged by one, and never the threshold — and wherever the gate judges, at every look,
+it judges by the threshold the plan pins. `tests/certify/test_looks.py` fails when the count
+moves a verdict.
 The objective itself is the classifying model's to name, from the set the toolbox's
 `applies` admits; the predicate bounds the set and picks nothing in it. Another invariant is
 that a contribution, which rewards trading less once every trade loses, is scored only

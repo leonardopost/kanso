@@ -42,14 +42,17 @@ and refused when it forgets, through the same check as any other complaint; how 
 gate's bar sits is still its answer. It is also told how many looks the hypothesis's lineage
 has already taken at its certification window (`looks`, `kanso.certify.looks`) and what a
 threshold bounds across them. Each look was judged under the plan its own hypothesis had
-pinned when it was made, its correction held to that plan's threshold or, before the
-correction was required, to none; the threshold being set holds at every look the new plan
-judges. A lineage's chance of a false pass at the window is therefore up to the sum of every
-look's complement of the threshold it was held to — one for a look held to none — which is
-`L` times one threshold's complement only where every look was held to that threshold. The
-planner is not shown the thresholds earlier looks were held to, and is told so. The count
-judges nothing, and whether it moves the threshold, at a plan or a replan, is the planner's
-answer like the threshold itself.
+pinned when it was made: its correction judged it by that plan's threshold where it judged,
+and by none where that plan carried no correction or the correction skipped — a skip judges
+nothing and passes, as the gate does while fewer than two cards are candidates. The
+threshold being set holds wherever the correction judges at a look the new plan judges, and
+holds nothing where it skips. A lineage's chance of a false pass at the window is therefore
+up to the sum of every look's complement of the threshold its correction judged it by — one
+for a look whose correction judged nothing — which is `L` times one threshold's complement
+only where every look's correction judged by that threshold. The planner is not shown the
+thresholds earlier looks were judged by, nor which of them skipped, and is told so. The
+count judges nothing, and whether it moves the threshold, at a plan or a replan, is the
+planner's answer like the threshold itself.
 
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
@@ -366,17 +369,22 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             f"{hyp.objective.id}; set its threshold, whose value is yours to choose inside "
             "its range",
             "looks is how many certificates this hypothesis's lineage — every registered "
-            "hypothesis joined to it by derived_from, either way — has already made that read "
-            "a window sharing a day with its certification window, one struck on a snapshot "
-            "that could not support a claim reading none, so the next is look L = looks + 1. "
-            "Each look already taken was judged under the plan its own hypothesis had pinned "
-            "when it was made, its search correction held to that plan's threshold — which you "
-            "are not shown — or to none where that plan carried no correction; "
-            f"{gate} is held to the threshold you set at every look this plan judges. So the "
-            "lineage's chance of a false pass over its looks at that window is at most the sum, "
-            "over every look, of 1 − the threshold its correction was held to, counting 1 for "
-            "a look held to none: each look this plan judges adds 1 − threshold, and the sum is "
-            "L × (1 − threshold) only where every look was held to the threshold you set",
+            "hypothesis joined to it by derived_from, either way — has already made that read a "
+            "window sharing a day with its certification window, one whose own window cannot be "
+            "read counting as one that did and one struck on a snapshot that could not support a "
+            "claim reading none, so the next is look L = looks + 1. Each look already taken was "
+            "judged under the plan its own hypothesis had pinned when it was made: its search "
+            "correction judged it by that plan's threshold where it judged, and by none where "
+            "that plan carried no correction or the correction skipped — a skip judges nothing "
+            "and passes, as the correction does while fewer than two cards of the search ran and "
+            "traded, among other cases. You are not shown those thresholds, nor which looks "
+            f"skipped. {gate} judges by the threshold you set at every look this plan judges where "
+            "it judges, and by none where it skips. So the lineage's chance of a false pass over "
+            "its looks at that window is at most the sum, over every look, of 1 − the threshold "
+            "its correction judged it by, counting 1 for a look whose correction judged nothing: "
+            "each look this plan judges adds 1 − threshold where the correction judges and up to "
+            "1 where it skips, and the sum is L × (1 − threshold) only where every look's "
+            "correction judged by the threshold you set",
         ]
     )
     return {

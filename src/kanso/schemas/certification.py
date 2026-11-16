@@ -274,7 +274,8 @@ class Holdout(KansoModel):
     (`kanso.research.records.lineage`), its own first. `look` is one more than the
     certificates of that lineage already made on a window intersecting this one that read a
     window at all (`kanso.certify.looks`), counted when this one was written. It is shown and
-    judges nothing: the certificate's gates were held to the thresholds its plan pins.
+    judges nothing: the certificate's gates judged by the thresholds its plan pins, where they
+    judged at all.
     """
 
     window_start: date
