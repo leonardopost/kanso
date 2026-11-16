@@ -16,7 +16,7 @@ old one instead of contradicting it.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from math import isfinite
 from typing import Literal
 
@@ -70,6 +70,13 @@ class PlanInputs(KansoModel):
     construct_: ConstructRef = Field(alias="construct")
     data_availability: DataAvailability
     n_trials: int = Field(ge=0)
+    looks: int = Field(default=0, ge=0)
+    """How many certificates the hypothesis's lineage had already made, when the plan was
+    made, that read a window sharing a day with the certification window its subject is read
+    on: the one declared by the file the run that carded its best — or the card the
+    certification that made the plan names — pinned (`kanso.certify.looks.subject_pin`), so
+    that subject's next certificate is look `looks + 1`; 0 on a plan made before kanso
+    counted them."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]
@@ -262,6 +269,32 @@ class NetPerTrade(KansoModel):
         return self
 
 
+class Holdout(KansoModel):
+    """Which look at its certification window a certificate was, and by whom.
+
+    `window_start` and `window_end` are the certification window the certificate read, and
+    `lineage` the hypotheses joined to its own by `derived_from` when it was made
+    (`kanso.research.records.lineage`), its own first. `look` is one more than the
+    certificates of that lineage already made on a window intersecting this one that read a
+    window at all (`kanso.certify.looks`), counted when this one was written. It is shown and
+    judges nothing: the certificate's gates judged by the thresholds its plan pins, where they
+    judged at all.
+    """
+
+    window_start: date
+    window_end: date
+    look: int = Field(ge=1)
+    lineage: list[HypId] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _ordered_and_named_once(self) -> Holdout:
+        if self.window_end < self.window_start:
+            raise ValueError(f"window_end: {self.window_end} is before {self.window_start}")
+        if len(set(self.lineage)) != len(self.lineage):
+            raise ValueError("lineage: names a hypothesis twice")
+        return self
+
+
 class Certificate(Versioned):
     """The immutable record of one plan run against one strategy under one engine."""
 
@@ -297,6 +330,11 @@ class Certificate(Versioned):
     and the week open at its last point; `None` for a hypothesis that declares no target, on a
     snapshot nothing could be measured on, and on a certificate written before it was
     recorded."""
+    holdout: Holdout | None = None
+    """Which look at its certification window this certificate was, over which window and
+    by whose lineage; `None` on a certificate written before kanso counted looks, and on one
+    struck on a snapshot nothing could be measured on, which read no window and so is no
+    look."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]
@@ -330,6 +368,8 @@ class Certificate(Versioned):
         ids = [g.id for g in self.gates]
         if len(set(ids)) != len(ids):
             raise ValueError("gates: names a gate twice")
+        if self.holdout is not None and self.hyp_id not in self.holdout.lineage:
+            raise ValueError(f"holdout: its lineage does not name {self.hyp_id}")
         evaluated = [g for g in self.gates if g.skipped is None]
         expected: Verdict = "pass" if all(g.passed for g in evaluated) else "fail"
         if self.verdict != expected:

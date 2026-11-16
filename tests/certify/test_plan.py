@@ -464,6 +464,64 @@ def test_the_trial_count_is_the_search_the_plan_will_be_read_against(
     assert '"n_trials": 2' in seen[0].user
 
 
+def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_threshold_bounds(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """How many certificates the lineage made at the certification window is a dynamic
+    input, beside the trial count; what the threshold bounds across them is an invariant,
+    stated as the fact it is — no rule moves the threshold with the count, which stays the
+    planner's to weigh. The look taken here was judged under no correction at all, so the
+    bound is the sum of each look's own complement, never `L` times the one being set: the
+    planner is told the looks behind it were judged by their own plans' thresholds, which it
+    is not shown, where their corrections judged, and by none where a plan carried no
+    correction or its correction skipped, which passes — so a plan that carries the correction
+    is not told a look it held to nothing was held to its threshold."""
+    pin = show(ws, store, HYP_ID).hypothesis_sha
+    store.connection.execute(
+        "INSERT INTO certificates (hyp_id, hypothesis_sha, strategy_sha, plan_version,"
+        " nautilus_version, snapshot_id, criteria_version, gates, n_trials, verdict, path,"
+        " created_at) VALUES (?, ?, ?, 1, '1.231.0', 's1', '0.1.0', ?, 1, 'fail', 'p',"
+        " '2026-01-01T00:00:00+00:00')",
+        (HYP_ID, pin, "b" * 64, '[{"id": "embargoed_window", "stage": "cert", "pass": false}]'),
+    )
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    written = plan(ws, store, HYP_ID)
+
+    assert written.inputs.looks == 1
+    assert '"looks": 1' in seen[0].user
+    assert (
+        "looks is how many certificates this hypothesis's lineage — every registered "
+        "hypothesis joined to it by derived_from, either way — has already made that read a "
+        "window sharing a day with the certification window its subject is read on — the one "
+        "declared by the file the research run that carded the subject pinned, the subject "
+        "being its best or the card a certification names, which is the window of the "
+        "hypothesis you are shown unless a re-pin moved it and no run under the new file has "
+        "carded the subject since — one whose own window cannot be read counting as one that "
+        "did and one struck on a snapshot that could not support a claim reading none, so the "
+        "subject's next certificate is look L = looks + 1. Each look already taken was "
+        "judged under the plan its own hypothesis had pinned when it was made: its search "
+        "correction judged it by that plan's threshold where it judged, and by none where "
+        "that plan carried no correction or the correction skipped — a skip judges nothing "
+        "and passes, as the correction does while fewer than two cards of the search ran and "
+        "traded, among other cases. You are not shown those thresholds, nor which looks "
+        "skipped. deflated_edge judges by the threshold you set at every look this plan "
+        "judges where it judges, and by none where it skips. So the lineage's chance of a "
+        "false pass over its looks at that window is at most the sum, over every look, of "
+        "1 − the threshold its correction judged it by, counting 1 for a look whose "
+        "correction judged nothing: each look this plan judges adds 1 − threshold where the "
+        "correction judges and up to 1 where it skips, and the sum is L × (1 − threshold) "
+        "only where every look's correction judged by the threshold you set"
+    ) in seen[0].system
+    assert "held to the threshold you set at every look," not in seen[0].system
+    assert "is held to the threshold you set at every look this plan judges" not in (
+        seen[0].system
+    ), "a correction that skips holds a look to no threshold"
+    assert "or to none where that plan carried no correction;" not in seen[0].system
+    assert "over L looks at that window is at most L × (1 − threshold)" not in seen[0].system
+
+
 def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

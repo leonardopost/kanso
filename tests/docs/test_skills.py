@@ -104,6 +104,52 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     assert "`dsr` against `min_dsr` under `deflated_sharpe`" in text
 
 
+def test_the_certify_skill_says_every_certificate_is_a_look_and_that_it_moves_no_bar() -> None:
+    """An agent reporting a certificate reads this file; told nothing of the looks, it would
+    report a pass at a later look as a first look's, or re-plan to make a later look pass.
+    Told a re-pin never resets the count, it would report a count a re-pin moved as standing;
+    told the lineage's bound is `L` times the threshold being set, it would understate it
+    wherever an earlier look was held lower, and told each look was held to the threshold in
+    its correction's `params`, it would understate it at every look whose correction skipped,
+    which passes with those `params` in place."""
+    text = skill(PACKAGED, "kanso-certify")
+    assert "Every certificate is a **look** at its certification window" in text
+    assert "The count judges nothing" in text
+    assert "held to the threshold the plan pins at every look" not in text
+    assert "does so by the threshold the plan pins at every look" in text
+    assert (
+        "up to the sum of each look's complement of the threshold its correction judged it by, "
+        "one for a look whose correction judged nothing, under a plan that carried none or "
+        "because it skipped — `L × (1 − threshold)` only where all `L` judged by one threshold"
+    ) in text
+    assert "read the gate's `skipped` before its threshold" in text
+    assert "up to `L × (1 − threshold)`, not the threshold" not in text
+    assert "`hypotheses[].holdout_looks`" in text and "the `hold-out` line" in text
+    assert "A replan or a re-pin does not reset the count" not in text
+    assert (
+        "A replan does not reset the count, nor does a re-pin that keeps `derived_from` and a "
+        "certification window sharing a day with the last; a re-pin onto a window sharing no "
+        "day with it starts a new count once the subject is read there, and one that drops a "
+        "`derived_from` link can split the lineage"
+    ) in text
+    assert (
+        "a best carried across a re-pin that moved only the window is certified on — and "
+        "counted at — the old window until a research run under the new file cards it again; "
+        "`holdout_looks` counts where the best's next certificate reads"
+    ) in text
+    # A plan `cert run --sha` makes, none being pinned, is shown the looks at the named card's
+    # window (`kanso.certify.plan.plan`), which a re-pin that moved only the window leaves
+    # apart from the best's: told `inputs.looks` always counts where the best's next
+    # certificate reads, an agent would report that plan's count as the best's prior looks.
+    assert "`holdout_looks` and `inputs.looks` count where the best's next certificate" not in text
+    assert (
+        "`inputs.looks` where the next certificate of the card its plan was made for read — "
+        "the best's, or the named card's where `cert run --sha` made the plan"
+    ) in text
+    assert "never re-plan to make a later look pass" in text
+    assert "(`inputs.looks`)" in text
+
+
 def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None:
     """An agent driving the loop reads what a stall leads to here; told only that a keep above
     zero is certified, it would report a spared stall's missing certificate as a fault."""

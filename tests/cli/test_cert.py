@@ -575,6 +575,119 @@ def test_a_certificate_whose_plan_sets_no_fraction_states_no_pass_probability(
     assert "embargoed_window sets no min_fraction, so no pass probability" in result.stdout
 
 
+def recertified(root: Path, **changes: Any) -> None:
+    """The newest certificate written again under the next plan version with `changes`, as a
+    certification after a replan writes one."""
+    from datetime import timedelta
+
+    from kanso.certify import certificate as certificates
+    from kanso.workspace import find
+
+    ws = find(root)
+    with StateStore(root / "state.db") as store:
+        held = certificates.latest(store, HYP_ID)
+        assert held is not None
+        source = certificates.source_file(ws, HYP_ID, held.strategy_sha).read_bytes()
+        again = {
+            "plan_version": held.plan_version + 1,
+            "created_at": held.created_at + timedelta(seconds=1),
+            **changes,
+        }
+        certificates.write(ws, store, held.model_copy(update=again), source)
+
+
+def test_a_certificate_says_which_look_at_its_window_it_was(
+    runner: CliRunner, researched: Path
+) -> None:
+    """`run` records and prints the look — the first of the demo's lineage of one — and
+    `show` prints a later one as it was recorded."""
+    from kanso.schemas import Holdout
+
+    printed = at(runner, researched, "cert", "run", HYP_ID).stdout
+    made = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
+
+    window = (made["holdout"]["window_start"], made["holdout"]["window_end"])
+    assert made["holdout"] == {
+        "window_start": window[0],
+        "window_end": window[1],
+        "look": 1,
+        "lineage": [HYP_ID],
+    }
+    assert window[0] <= window[1]
+    assert f"hold-out   look 1 of {window[0]}..{window[1]} by {HYP_ID}" in printed.splitlines()
+
+    recertified(researched, holdout=Holdout.model_validate({**made["holdout"], "look": 2}))
+
+    again = at(runner, researched, "cert", "show", HYP_ID)
+    recorded = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
+
+    assert recorded["holdout"]["look"] == 2
+    expected = f"hold-out   look 2 of {window[0]}..{window[1]} by {HYP_ID}"
+    assert expected in again.stdout.splitlines()
+
+
+def test_a_certificate_that_recorded_no_look_prints_no_hold_out_line(
+    runner: CliRunner, researched: Path
+) -> None:
+    """One written before kanso counted looks, or on a snapshot that read no window."""
+    at(runner, researched, "cert", "run", HYP_ID)
+    recertified(researched, holdout=None)
+
+    assert payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))["holdout"] is None
+    shown = at(runner, researched, "cert", "show", HYP_ID).stdout
+    assert "hold-out" not in shown
+
+
+def test_a_replan_is_told_the_looks_its_lineage_has_taken(
+    runner: CliRunner, researched: Path
+) -> None:
+    first = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+    at(runner, researched, "cert", "run", HYP_ID)
+
+    second = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+
+    assert (first["inputs"]["looks"], second["inputs"]["looks"]) == (0, 1)
+
+
+def test_status_and_the_planner_count_where_a_carried_best_is_certified(
+    runner: CliRunner, researched: Path
+) -> None:
+    """A re-pin that moves only the certification window keeps the best, which is certified
+    on the window of the run that carded it until a run under the new file cards it again: the
+    count `status` shows and the planner is told is the one there, so the next certificate is
+    the look after it; the run that begins under the new file re-cards the best as its
+    baseline, and the count moves to the new window, where nothing has looked yet."""
+    from .conftest import HYPOTHESIS
+
+    first = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))["holdout"]
+    assert at(runner, researched, "research", "end", HYP_ID, "--json").exit_code == Exit.OK
+    windows = {
+        **HYPOTHESIS["windows"],
+        "certification": {"start": "2024-06-03", "end": "2024-06-21"},
+        "forward": {"start": "2024-06-24"},
+    }
+    path = write_hypothesis(researched, mocked.SEED, windows=windows)
+    assert at(runner, researched, "hyp", "add", path, "--json").exit_code == Exit.OK
+    classify(researched)
+
+    (shown,) = payload(at(runner, researched, "status", "--json"))["hypotheses"]
+    planned = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+    second = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))["holdout"]
+    (after,) = payload(at(runner, researched, "status", "--json"))["hypotheses"]
+
+    assert second["window_start"] < "2024-06-03" and first["look"] == 1
+    assert {**second, "look": 1} == first, "the carried best is read on its run's window"
+    assert second["look"] == planned["inputs"]["looks"] + 1 == shown["holdout_looks"] + 1 == 2
+    assert after["holdout_looks"] == 2
+
+    begin(runner, researched)
+    (moved,) = payload(at(runner, researched, "status", "--json"))["hypotheses"]
+    replanned = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+
+    assert moved["best_sha"] == shown["best_sha"]
+    assert moved["holdout_looks"] == replanned["inputs"]["looks"] == 0
+
+
 def test_show_of_something_that_is_not_a_hypothesis_is_refused(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

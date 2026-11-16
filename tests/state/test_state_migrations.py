@@ -618,6 +618,48 @@ def test_a_run_whose_baseline_traded_is_given_its_base_as_the_card_its_budget_wa
         assert records.require_active(store, "idle").budget_sha is None
 
 
+def test_a_certificate_recorded_before_looks_were_counted_reads_back_with_no_hold_out(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0018 adds `certificates.holdout` over certificates that exist: one written before
+    holds NULL and reads back as a certificate that recorded no look — and, struck from the
+    rows each time, it is a look at its window at once."""
+    from datetime import date
+
+    from kanso.certify import certificate
+    from kanso.certify.looks import looks
+    from kanso.schemas import resolve_venue_model
+
+    venue = json.dumps(resolve_venue_model("XNAS", max_leverage=1.0).model_dump(mode="json"))
+    gates = json.dumps([{"id": "embargoed_window", "stage": "cert", "pass": True}])
+    older = migrations()[:17]
+    monkeypatch.setattr(store_module, "migrations", lambda: older)
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in older]
+        conn = store.connection
+        conn.execute(
+            "INSERT INTO hypotheses (hyp_id, status, created_at, updated_at)"
+            " VALUES ('demo_mr', 'certified', 't', 't')"
+        )
+        conn.execute(
+            "INSERT INTO certificates (hyp_id, hypothesis_sha, strategy_sha, plan_version,"
+            " nautilus_version, venue_model, snapshot_id, criteria_version, construct, objective,"
+            " gates, n_trials, verdict, path, created_at) VALUES ('demo_mr', '', ?, 1,"
+            " '1.231.0', ?, 's1', '0.20.0', '{\"id\": \"sleeve\"}',"
+            ' \'{"id": "wf_sharpe_net", "value": 1.0, "se": 0.5}\', ?, 4, \'pass\', \'p\','
+            " '2026-01-01T00:00:00+00:00')",
+            ("a" * 64, venue, gates),
+        )
+        conn.commit()
+    monkeypatch.undo()
+    with StateStore(db_path) as store:
+        assert store.migrate() == [m.name for m in migrations()[17:]]
+        (held,) = certificate.of(store, "demo_mr")
+        assert held.holdout is None
+        found = looks(store, "demo_mr", (date(2024, 1, 1), date(2024, 12, 31)))
+        assert found.look == 2, "a hypothesis whose pin is unknown cannot show it looked elsewhere"
+
+
 # --- a database this package cannot correctly write, in either direction ------
 
 

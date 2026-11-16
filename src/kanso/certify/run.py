@@ -89,6 +89,20 @@ correction the pinned plan does not carry, with its threshold, once the search h
 cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
 objective the hypothesis has now.
 
+**Every certificate is a look at its window, and records which.** The certificates the
+subject's lineage has already made at a certification window intersecting the subject's
+(`kanso.certify.looks`) are counted when the certificate is written, under the write lock its
+row is written under, so two certifications of one lineage judged at once are two looks in
+the order they were written; the certificate records the window, its look — one more than
+those — and the lineage (`holdout`). The window is the subject's, read off the file its run
+pinned, and a plan certification makes where none is pinned is shown the looks taken there,
+not at the window the hypothesis is registered under now (`plan`'s `sha`), so a card carded
+before a re-pin that moved the window is the look after those its planner was told of. The
+count is shown and judges nothing: every gate that
+judges, the search correction included, does so by the threshold the plan pins at any look, a
+stall's precheck as well, and a correction that skips passes at any look as at the first. One
+struck on a snapshot that cannot support a claim read no window and records none.
+
 The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
 to research with the ids of its failing gates recorded where the proposer reads them, and
 every `n_fail`-th consecutive failure escalates. The ids alone, because a certification
@@ -117,6 +131,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso import ext
 from kanso.certify import certificate
+from kanso.certify.looks import INADMISSIBLE, read_no_window
+from kanso.certify.looks import looks as looks_at
 from kanso.certify.plan import plan as plan_for
 from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
@@ -445,7 +461,7 @@ def _certify(
     registration = _registration(ws, store, hyp_id)
     _certifiable(registration)
     subject = _subject(ws, store, hyp_id, sha)
-    plan = plan_for(ws, store, hyp_id, lane=lane)
+    plan = plan_for(ws, store, hyp_id, lane=lane, sha=subject.strategy_sha)
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
     _refuse_uncorrected(plan, subject, n_trials, registration)
@@ -481,26 +497,32 @@ def _certify(
     if judged is None:
         return None, checked
     evaluated, objective, stated, struck, stops = judged
-    made = Certificate(
-        hyp_id=hyp_id,
-        strategy_sha=subject.strategy_sha,
-        hypothesis_sha=subject.hypothesis_sha,
-        nautilus_version=engine,
-        venue_model=subject.venue_model,
-        snapshot_id=subject.snapshot_id,
-        criteria_version=criteria_version(),
-        plan_version=plan.plan_version,
-        construct=subject.construct,
-        objective=objective,
-        gates=evaluated,
-        n_trials=n_trials,
-        verdict=_verdict(evaluated),
-        created_at=datetime.now(tz=UTC),
-        power=stated,
-        net_per_trade=struck,
-        period_stops=stops,
-    )
-    certificate.write(ws, store, made, subject.source)
+    read = not read_no_window(gate.evidence for gate in evaluated)
+    # The look is counted under the write lock the row is written under, so a certificate of
+    # the lineage written while this one was judged — a sibling's lane, a `cert run` by hand —
+    # is counted before it, and the next one to write counts this one.
+    with store.transaction():
+        made = Certificate(
+            hyp_id=hyp_id,
+            strategy_sha=subject.strategy_sha,
+            hypothesis_sha=subject.hypothesis_sha,
+            nautilus_version=engine,
+            venue_model=subject.venue_model,
+            snapshot_id=subject.snapshot_id,
+            criteria_version=criteria_version(),
+            plan_version=plan.plan_version,
+            construct=subject.construct,
+            objective=objective,
+            gates=evaluated,
+            n_trials=n_trials,
+            verdict=_verdict(evaluated),
+            created_at=datetime.now(tz=UTC),
+            power=stated,
+            net_per_trade=struck,
+            period_stops=stops,
+            holdout=looks_at(store, hyp_id, subject.certification).holdout() if read else None,
+        )
+        certificate.write(ws, store, made, subject.source)
     _apply(ws, store, made)
     return made, checked
 
@@ -568,7 +590,7 @@ def precheck_at_stall(
     """
     try:
         ws = find(root)
-        planned = plan_for(ws, store, hyp_id, lane=lane)
+        planned = plan_for(ws, store, hyp_id, lane=lane, sha=sha)
     except KansoError:
         raise
     except Exception as fault:
@@ -1554,7 +1576,7 @@ def _blocked(planned: PlannedGate, snapshot: Snapshot, reasons: Sequence[str]) -
             "id": planned.id,
             "stage": planned.stage,
             "params": dict(planned.params),
-            "evidence": {"snapshot_id": snapshot.snapshot_id, "inadmissible": list(reasons)},
+            "evidence": {"snapshot_id": snapshot.snapshot_id, INADMISSIBLE: list(reasons)},
             "pass": False,
         }
     )
@@ -1568,7 +1590,7 @@ def _unsupported(objective_id: str, snapshot: Snapshot, reasons: Sequence[str]) 
         deflation_gate(objective_id),
         judged=False,
         passed=None,
-        evidence={"snapshot_id": snapshot.snapshot_id, "inadmissible": list(reasons)},
+        evidence={"snapshot_id": snapshot.snapshot_id, INADMISSIBLE: list(reasons)},
         reason=f"snapshot {snapshot.snapshot_id[:12]} cannot support a claim, so certification "
         f"runs no window on it and judges no correction: {'; '.join(reasons)}",
         measured=False,

@@ -107,6 +107,18 @@ or names it without its threshold, is refused — by the planner's own check, an
 the way out. Whether a search is corrected for is not a decision; how high the bar sits is,
 and stays the model's. `criteria/library.py` holds the rule and
 `tests/criteria/test_library.py` fails when an objective has no gate or a plan escapes it.
+That includes how high it sits at a lineage's later look at its hold-out: every certificate
+of a hypothesis's lineage — every registered hypothesis joined to it by `derived_from` — at a
+certification window sharing a day with the one its subject is read on, which the file the
+run that carded the subject pinned declares, is a look, but one struck on a snapshot that
+cannot support a claim, which read no window. The looks are counted by `certify/looks.py`,
+recorded on the certificate and shown to the planner beside `n_trials` with what a threshold
+bounds across them — a false pass up to the sum of each look's complement of the threshold
+its correction judged it by, one for a look whose correction judged nothing, under a plan
+that carried none or because the gate skipped, which passes; `L × (1 − threshold)` only where
+all `L` judged by one, and never the threshold — and wherever the gate judges, at every look,
+it judges by the threshold the plan pins. `tests/certify/test_looks.py` fails when the count
+moves a verdict.
 The objective itself is the classifying model's to name, from the set the toolbox's
 `applies` admits; the predicate bounds the set and picks nothing in it. Another invariant is
 that a contribution, which rewards trading less once every trade loses, is scored only

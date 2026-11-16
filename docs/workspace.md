@@ -2736,8 +2736,15 @@ with their parameters and a rationale each — pinned once, re-minted only by `c
 --replan`. A certificate is the verdict, its evidence and its pins, the `power` it states and
 the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`,
 `sessions_with_trades` and `trades`, struck from the certification run, or `null` for a
-window that closed no trade (`docs/concepts.md`, *Certification*); and, under a
-`period_target`, the `period_stops` that same run recorded (`docs/concepts.md`, Card). A certificate whose
+window that closed no trade (`docs/concepts.md`, *Certification*); under a
+`period_target`, the `period_stops` that same run recorded (`docs/concepts.md`, Card); and
+`holdout` — `window_start`, `window_end`, `look` and `lineage` — which look of the
+hypothesis's lineage at its certification window it was — the window the file the run that
+carded its subject pinned declares — counted when it was written and judging nothing
+(`docs/concepts.md`, *Hold-out looks*), or `null` on a certificate written before kanso
+counted looks and on one struck on a snapshot that cannot support a claim, which read no
+window. The count is struck from `state.db` each time, so a certificate
+file moved or deleted does not move it. A certificate whose
 `net_per_trade` holds a NaN or an infinity, or a value over its error past the largest
 float, is refused. The `.py` beside it is the certified source, byte for byte, so a
 certified subject travels with the files even where `state.db` does not:

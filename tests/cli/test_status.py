@@ -114,6 +114,64 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
     assert spared in at(runner, mocked_ws, "status").stdout
 
 
+def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """Every certificate of the lineage at the window the next certificate of its best reads,
+    whatever its verdict — the window of the file the run that carded the best pinned, which
+    the hypothesis's own pin does not move; none for a hypothesis with no best whose pinned
+    file the store does not hold."""
+    from .test_cert import begin, keep, recertified
+
+    begin(runner, mocked_ws)
+    keep(runner, mocked_ws)
+    before = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"][0]
+    assert at(runner, mocked_ws, "cert", "run", HYP_ID).exit_code == Exit.OK
+    recertified(mocked_ws)
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    assert (before["holdout_looks"], entry["holdout_looks"]) == (0, 2)
+    assert "2 hold-out look(s)" in at(runner, mocked_ws, "status").stdout
+    with StateStore(mocked_ws / "state.db") as store:
+        store.connection.execute(
+            "UPDATE hypotheses SET hypothesis_sha = NULL WHERE hyp_id = ?", (HYP_ID,)
+        )
+    (carded,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert carded["holdout_looks"] == 2, "counted where the best's run pinned its window"
+    with StateStore(mocked_ws / "state.db") as store:
+        store.connection.execute(
+            "UPDATE hypotheses SET best_sha = NULL WHERE hyp_id = ?", (HYP_ID,)
+        )
+    (unpinned,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert unpinned["holdout_looks"] is None
+
+
+def test_a_hypothesis_whose_window_is_written_as_midnight_timestamps_is_listed(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The schema admits a day written as a timestamp at midnight, and `hyp add` pins the file
+    as written; the screen reads its window as the schema did rather than refuse to draw."""
+    from datetime import datetime
+
+    from .conftest import CERTIFICATION, HYPOTHESIS, write_hypothesis
+
+    stamped = {
+        "start": f"{CERTIFICATION[0].isoformat()}T00:00:00Z",
+        "end": datetime(CERTIFICATION[1].year, CERTIFICATION[1].month, CERTIFICATION[1].day),
+    }
+    path = write_hypothesis(loaded, windows={**HYPOTHESIS["windows"], "certification": stamped})
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    assert "00:00:00" in path.read_text(encoding="utf-8")
+
+    result = at(runner, loaded, "status", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    (entry,) = payload(result)["hypotheses"]
+    assert entry["holdout_looks"] == 0
+    assert at(runner, loaded, "status").exit_code == Exit.OK
+
+
 def test_today_s_spend_is_what_the_ledger_holds_broken_out_by_lane(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

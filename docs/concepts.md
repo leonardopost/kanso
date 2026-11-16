@@ -2437,8 +2437,11 @@ seen.
 the register what would count as proof for *this* hypothesis: which gates, at which stage —
 `cert`, `paper` or `live` — with which parameters chosen inside the ranges the toolbox
 declares, and why. The planner is shown the hypothesis, its construct, the toolbox, what
-data the workspace holds and the trial count. It is **never** shown a card metric, a
-certificate or the strategy source, so a plan cannot be tuned to the result it is about to
+data the workspace holds, the trial count and how many certificates the hypothesis's lineage
+has already made that read the certification window its subject is certified on — its
+best's, or the named card's where `cert run --sha` made the plan (*Hold-out looks* below).
+It is **never** shown a card metric, a certificate — its verdict, its evidence or what it
+certified — or the strategy source, so a plan cannot be tuned to the result it is about to
 judge. kanso validates the plan against structural invariants — every required gate present,
 every parameter inside its range, at least one gate at each of the three stages — and sends
 the complaints back to the same model, then to the next tier up; a plan still invalid after
@@ -2588,6 +2591,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+hold-out   look 1 of 2025-01-06..2025-05-30 by demo_mr
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
 written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
@@ -2720,6 +2724,81 @@ offer a planner those refusals. Whether the certification window holds the edge 
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
 unchanged bytes is then a plain `cert run`, with no replan and no frontier planner call.
+
+**Hold-out looks are counted and shown, and they move no bar.** A certification window is
+the one sample research never saw, and every certificate reads it: pass or fail, a new best,
+the same bytes after a replan or an engine upgrade, a sibling written after the first one
+failed — each is one more look at the same sample, and enough looks find something there by
+chance as surely as enough cards find it in research. So kanso counts them, over the
+hypothesis's **lineage**: every registered hypothesis joined to it by `derived_from`, either
+way — its parents, its children and their other children — because a sibling certified on
+the same window looked at the same data, and a count over ancestors alone would start again
+at every new sibling. The links are read off each member's file as it stands, as the
+trials a search is priced over are, so a re-pin that drops a `derived_from` link can split
+the lineage, taking the hypothesis's looks out of the others' count and theirs out of its
+own. A look is a certificate of any member of the lineage, under any plan, engine or
+verdict, whose certification window — the one the file its run pinned declares, read as the
+schema read it when the file was added, however its days are spelled — shares a day with the
+subject's. A replan keeps the count, and so does a re-pin that keeps `derived_from` and moves
+the window by a day; one onto a window sharing no day with the last — opening after it
+closes, or closing before it opens — starts a new one once the subject is read there. A card
+is certified on the window of the file the research run that carded it pinned, and the window
+is no part of a hypothesis's scope, so a re-pin that moves only the window keeps the best,
+which is certified on the old window, and counted there, until a research run under the new
+file cards those bytes again, as a run's baseline does when it begins from the best. So the
+count `kanso status` shows and the planner is shown is the one at the window the next
+certificate of the best reads, and that certificate is the look after it; a hypothesis with
+no best counts at the window its own file declares. `cert run --sha` of a card another run
+carded under another window reads that window: a plan the certification makes, none being
+pinned, is shown the looks taken there, while a plan already pinned was shown those at the
+window of the card it was made for — the best's, or the named card's where `cert run --sha`
+made it — and the certificate's `hold-out` line says which look it was. A certificate
+written before kanso recorded its pin is read under its hypothesis's file as it stands, and
+one whose file declares no window that reads is counted wherever asked. A certificate struck
+on a snapshot that cannot support a claim read no window and is no look, and a spared stall
+writes none. The count is struck from the certificates each time, so certificates written
+before kanso counted looks count at once; a certificate records the
+count standing when it is written, taken under the lock its row is written under, so two
+certifications of one lineage judged at once are two looks, in the order they were written —
+save two of one subject under one pin, plan and engine, which collide (`docs/backlog.md` row
+294).
+
+The count judges nothing. At every look each gate that judges, the search correction
+included, judges by the threshold of the plan its hypothesis has pinned when the look is
+made, and so does a stall's precheck, in the lane and in the child. A correction that judges
+by a threshold passes a search with no edge with a chance of about the threshold's complement
+at that look, so the lineage's chance of a false pass over its looks at one window is up to
+the sum of each look's own complement — not the threshold, and as good as the correction's
+own probability, which is a normal approximation. Over `L` looks whose corrections all judged
+by one threshold that sum is `L × (1 − threshold)`; it is more where an earlier plan, or a
+sibling's, sat lower, and a look whose correction judged nothing adds up to one: one judged
+under a plan that carried no correction, as one made before the hypothesis's second card is,
+and one whose correction skipped, which passes — as the correction does while fewer than two
+cards are candidates (above), and on a research run too short to give an error or whose
+error is zero, among the reasons a skip names. Each certificate keeps its plan's threshold
+among its correction's `params`, and a correction that skipped records why under `skipped`
+with its `params` unchanged, so the sum is read off the lineage's certificates: the
+complement of the threshold in `params` for a correction that judged, and one for a
+correction that skipped or a plan that carried none. How high the bar should sit at a later
+look is therefore a decision, and it stays the planner's: it is shown the looks already taken
+(`looks`, beside `n_trials`), told that each was judged by its own plan's threshold where its
+correction judged and by none where it judged nothing — and shown neither those thresholds
+nor which looks skipped — and that the threshold it sets adds its complement at every look
+its plan judges where the correction judges, and up to one where it skips, and sets that
+threshold inside the gate's range at a plan or a replan, as it always does. The certificate
+records its look (`holdout`: the window, the look and the lineage), which `cert run` and
+`cert show` print on a `hold-out` line, and `kanso status` gives each hypothesis the looks
+its lineage has taken:
+
+```
+$ kanso cert plan demo_mr --replan        # after one certificate; the plan's lines are elided
+$ kanso cert run demo_mr                  # every line but the hold-out line is elided
+hold-out   look 2 of 2025-01-06..2025-05-30 by demo_mr
+$ kanso status                            # the hypothesis's line
+demo_mr             certified    9.986730      4 card(s) · 2 hold-out look(s)
+```
+
+Looks at the forward window, and looks across lineages, are not counted.
 
 **A failing verdict is not an error, and it ends nothing.** `cert run` exits 0 and says
 `fail`, because the certificate is what the command produces and a fail is evidence: it

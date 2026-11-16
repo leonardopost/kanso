@@ -330,6 +330,153 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     )
 
 
+def test_the_pages_say_how_hold_out_looks_are_counted_and_that_they_move_no_bar() -> None:
+    """Every certificate is a look at its window, counted over the lineage and recorded
+    (`kanso.certify.looks`), and the count judges nothing: each look's correction judges by the
+    threshold of the plan that judged it, where it judges, which bounds the lineage's false
+    passes by the sum of every look's complement, not by the threshold — `L` times one
+    complement only where every look judged by it, since a replan or a sibling's plan sets its
+    own — and every page that
+    states the count says so, so no reader takes a later look for a stricter test than it was,
+    or the planner's threshold for the lineage's level."""
+    from kanso.schemas import Holdout
+
+    concepts = prose(page("concepts.md"))
+    cli = prose(page("cli.md"))
+    workspace = prose(page("workspace.md"))
+    agents = prose((ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    bound = "`L × (1 − threshold)`"
+    for text in (concepts, cli, changelog):
+        assert bound in text
+    assert "lineage's chance of a false pass over its looks at one window is up to the sum of" in (
+        concepts
+    )
+    assert "it is more where an earlier plan, or a sibling's, sat lower" in concepts
+    for text in (cli, changelog, agents):
+        assert "up to the sum of each look's complement of the threshold its correction judged" in (
+            text
+        )
+    for text in (concepts, cli, changelog, agents):
+        assert "only where all `L` judged by one" in text or (
+            "Over `L` looks whose corrections all judged by one threshold that sum is "
+            "`L × (1 − threshold)`" in text
+        )
+    assert "over `L` looks at one window the lineage's chance of a false pass" not in concepts
+    assert "chance of a false pass over `L` looks is up to" not in cli + changelog
+    assert "a false pass up to `L × (1 − threshold)`, not the threshold" not in agents
+    assert "the gate holds the threshold the plan pins at every look" not in agents
+    assert "wherever the gate judges, at every look, it judges by the threshold the plan pins" in (
+        agents
+    )
+    assert "but one struck on a snapshot that cannot support a claim, which read no window" in (
+        agents
+    )
+    # A plan `cert run --sha` makes, none being pinned, is shown the looks at the named card's
+    # window (`kanso.certify.plan.plan`), not the best's, so a page saying the planner always
+    # counts at the best's window has a reader take that plan's count for the best's looks.
+    assert "the certification window its best is certified on" not in concepts
+    assert "at the window of the best it was made for" not in concepts
+    assert (
+        "the trial count and how many certificates the hypothesis's lineage has already made "
+        "that read the certification window its subject is certified on — its best's, or the "
+        "named card's where `cert run --sha` made the plan"
+    ) in concepts
+    assert (
+        "a plan already pinned was shown those at the window of the card it was made for — "
+        "the best's, or the named card's where `cert run --sha` made it"
+    ) in concepts
+    assert "a re-pin that drops a `derived_from` link can split the lineage" in concepts
+    assert "one onto a window sharing no day with the last" in concepts
+    assert "starts a new one once the subject is read there" in concepts
+    for where, text, said in (
+        (
+            "concepts",
+            concepts,
+            "the count `kanso status` shows and the planner is shown is the "
+            "one at the window the next certificate of the best reads",
+        ),
+        ("cli", cli, "the certification window the next certificate of its best reads"),
+        ("CHANGELOG", changelog, "Both count at the window the next certificate of the best reads"),
+    ):
+        assert said in text, (where, "a carried best is counted where it is certified")
+    assert "where there are any, `N hold-out look(s)`" in changelog, "the line is shown with looks"
+    for text in (concepts, changelog, cli, workspace, agents):
+        assert "1 − (1 − threshold) / L" not in text, "no rule splits the threshold"
+    assert "**Hold-out looks are counted and shown, and they move no bar.**" in concepts
+    assert "The count judges nothing." in concepts and "The count judges nothing" in changelog
+    assert "a sibling certified on the same window looked at the same data" in concepts
+    assert "struck on a snapshot that cannot support a claim read no window and is no look" in (
+        concepts
+    )
+    assert "two certifications of one lineage judged at once are two looks" in concepts
+    for key in Holdout.model_fields:
+        assert f"`{key}`" in cli and f"`{key}`" in workspace, key
+    assert "`holdout_looks`" in cli and "`inputs.looks`" in cli
+    assert "leaving out any struck on a snapshot that cannot support a claim" in cli
+    assert "counting one whose own window cannot be read as one that did" in cli, (
+        "`kanso status` counts a look whose window cannot be read, and its row says so"
+    )
+    assert "hold-out look 2 of 2025-01-06..2025-05-30 by demo_mr" in concepts
+    assert "demo_mr certified 9.986730 4 card(s) · 2 hold-out look(s)" in concepts
+    assert "**Migration 0018**" in changelog and "`kanso migrate`" in changelog
+
+
+def test_every_page_stating_the_bound_says_a_skipped_correction_judged_its_look_by_none() -> None:
+    """A deflation gate the plan carries with its threshold still skips — while fewer than
+    two cards behind the subject ran and traded, among other cases — and a skip passes, so
+    that look was judged by no correction and adds up to one to the lineage's bound, though
+    the gate's `params` still show the threshold. Each place that states the bound says so,
+    and none says the threshold holds at every look unqualified, or names a plan that carried
+    no correction as the only look held to none: summing each look's threshold off its
+    `params` undercounts every look whose correction skipped."""
+    import kanso.certify.plan as planning
+
+    statements = {
+        "concepts": prose(page("concepts.md")),
+        "cli": prose(page("cli.md")),
+        "AGENTS": prose((ROOT / "AGENTS.md").read_text(encoding="utf-8")),
+        "CHANGELOG": prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8")),
+        "skill": prose(
+            (ROOT / "src" / "kanso" / "skills" / "kanso-certify" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+        ),
+        "plan": prose(planning.__doc__ or ""),
+    }
+    for name, text in statements.items():
+        assert "a look whose correction judged nothing" in text, name
+        assert "skipped" in text, name
+        for claim in (
+            "held to the threshold the plan pins at every look",
+            "the gate holds the threshold the plan pins at every look",
+            "its own plan held it to",
+            "up to one for a look judged under no correction",
+            "the threshold you set at every look this plan judges.",
+            "a plan that carried no correction — as one made before the hypothesis's second "
+            "card is — adds up to one",
+            "Each certificate keeps the threshold it was held to among its gates' `params`",
+            "held to the threshold of the plan that judged it",
+            "holds at every look its own plan judges",
+            "holds at every look the new plan judges",
+        ):
+            assert claim not in text, (name, claim)
+    concepts, cli = statements["concepts"], statements["cli"]
+    assert "a correction that skipped records why under `skipped` with its `params` unchanged" in (
+        concepts
+    )
+    assert "one for a correction that skipped or a plan that carried none" in concepts
+    assert "read the gate's `skipped` before its threshold" in statements["skill"]
+    assert "a search correction that skipped, which passes, judged that look by none" in cli
+    assert (
+        "under a plan that carried none, or one that skipped, which passes, as it does while "
+        "fewer than two cards behind the subject ran and traded"
+    ) in statements["CHANGELOG"], "the CHANGELOG's own statement of the skip, not any `skipped`"
+    assert "one whose certification window cannot be read counts as one that did" in cli, (
+        "a look whose window cannot be read is counted, and the planner's page says so"
+    )
+
+
 def test_the_cli_page_states_both_sides_of_the_paper_gate() -> None:
     monitoring = prose(section(page("cli.md"), "Monitoring"))
     assert "a short window is a fail" in monitoring

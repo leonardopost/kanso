@@ -19,12 +19,15 @@ and safe to run in a loop.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Set
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final
 
 import typer
 
 from kanso import inbox, models
+from kanso.certify.looks import Window, subject_pin, window_of
+from kanso.certify.looks import looks as looks_at
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.cli.research import spared_by, stopped_line
@@ -141,14 +144,20 @@ def _cards_per_hour(opened: StateStore) -> float:
 
 
 def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
-    """Every registered hypothesis with its status, its best metric, its card count and its
-    newest stall: whether it certified, and the search correction that decided it."""
+    """Every registered hypothesis with its status, its best metric, its card count, its
+    newest stall — whether it certified, and the search correction that decided it — and how
+    many looks its lineage has taken at the certification window its best is read on, counted
+    over a lineage graph and pinned windows read once for every row, and once for each lineage
+    and window rather than once for each member that shares them."""
     rows = opened.connection.execute(
-        "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric,"
+        "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric, h.hypothesis_sha,"
         " h.consecutive_cert_failures AS cert_failures,"
         " (SELECT COUNT(*) FROM cards c WHERE c.hyp_id = h.hyp_id) AS cards"
         " FROM hypotheses h ORDER BY h.hyp_id"
     ).fetchall()
+    linked = records.links(opened)
+    pinned: dict[object, Window | None] = {}
+    counted: dict[tuple[frozenset[str], Window], int] = {}
     return [
         {
             "id": str(row["hyp_id"]),
@@ -158,9 +167,43 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
             "cards": int(row["cards"]),
             "cert_failures": int(row["cert_failures"]),
             "last_stall": scheduler.last_stall(opened, str(row["hyp_id"])),
+            "holdout_looks": _holdout_looks(
+                opened,
+                str(row["hyp_id"]),
+                subject_pin(opened, str(row["hyp_id"]), row["best_sha"], row["hypothesis_sha"]),
+                linked,
+                pinned,
+                counted,
+            ),
         }
         for row in rows
     ]
+
+
+def _holdout_looks(
+    opened: StateStore,
+    hyp_id: str,
+    pin: object,
+    linked: Mapping[str, Set[str]],
+    pinned: dict[object, Window | None],
+    counted: dict[tuple[frozenset[str], Window], int],
+) -> int | None:
+    """The certificates this hypothesis's lineage has made at a window intersecting the
+    certification window the next certificate of its best reads — that of `pin`, the file
+    the run that carded the best pinned, or its own with no best (`kanso.certify.looks`) —
+    so that certificate is the look after them; `None` where that file is not held or
+    declares no window that reads.
+
+    The count is the lineage's, whichever member asks, so a member whose window another has
+    already asked about takes the count from `counted` rather than reading every
+    certificate of the lineage again."""
+    window = window_of(opened, pin, pinned)
+    if window is None:
+        return None
+    key = (frozenset(records.lineage(opened, hyp_id, linked)), window)
+    if key not in counted:
+        counted[key] = len(looks_at(opened, hyp_id, window, linked=linked, pinned=pinned).prior)
+    return counted[key]
 
 
 def _baseline_failed(opened: StateStore) -> list[dict[str, Any]]:
@@ -237,6 +280,8 @@ def _lane_line(row: dict[str, Any]) -> str:
 def _hypothesis_line(row: dict[str, Any]) -> str:
     best = "no keep yet" if row["best_metric"] is None else f"{row['best_metric']:.6f}"
     line = f"{row['id']:<20}{row['status']:<13}{best:<14}{row['cards']} card(s)"
+    if row["holdout_looks"]:
+        line += f" · {row['holdout_looks']} hold-out look(s)"
     stall = row["last_stall"]
     spared = None if stall is None else spared_by(stall["precheck"])
     return line if spared is None else f"{line} · stall spared: {spared}"

@@ -107,7 +107,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import KW_ONLY, dataclass, replace
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -138,6 +138,8 @@ __all__ = [
     "close",
     "encode_measurement",
     "insert",
+    "lineage",
+    "links",
     "matched_book",
     "measurement_of",
     "n_trials",
@@ -404,6 +406,49 @@ def family(store: StateStore, hyp_id: str) -> tuple[str, ...]:
         parents = _derived_from(store, row["hypothesis_sha"])
         queue.extend(parent for parent in parents if parent not in found)
     return tuple(found) or (hyp_id,)
+
+
+def lineage(
+    store: StateStore, hyp_id: str, linked: Mapping[str, Set[str]] | None = None
+) -> tuple[str, ...]:
+    """The hypothesis and every registered hypothesis joined to it by `derived_from`, either
+    way, transitively: the connected component of that graph among registered hypotheses —
+    its ancestors, its descendants and their other descendants — the hypothesis first, then
+    by how many links away, ties by id.
+
+    `family` is the ancestors alone, which is what a search is priced over: the cards that
+    chose a hypothesis are its own and its parents'. A lineage is what a hold-out is looked at
+    by (`kanso.certify.looks`): a sibling certified on the same window looked at the same
+    data, so a count over ancestors alone would restart at every new sibling. Walked over
+    `links`, read now or passed as `linked` by a caller asking for many lineages at once. A
+    hypothesis that is not registered is a lineage of one.
+    """
+    graph = links(store) if linked is None else linked
+    if hyp_id not in graph:
+        return (hyp_id,)
+    found = [hyp_id]
+    frontier = [hyp_id]
+    while frontier:
+        frontier = sorted({other for current in frontier for other in graph[current]} - set(found))
+        found.extend(frontier)
+    return tuple(found)
+
+
+def links(store: StateStore) -> dict[str, set[str]]:
+    """Every registered hypothesis with the registered hypotheses one `derived_from` link
+    joins it to, either way: the graph `lineage` walks, read off each registered file's
+    `derived_from` under its newest registration, as `family` reads it, each file once. A
+    name no hypothesis is registered under links nothing, and a hypothesis that names itself
+    round through others is linked to each of them once."""
+    rows = store.connection.execute("SELECT hyp_id, hypothesis_sha FROM hypotheses").fetchall()
+    linked: dict[str, set[str]] = {str(row["hyp_id"]): set() for row in rows}
+    for row in rows:
+        child = str(row["hyp_id"])
+        for parent in _derived_from(store, row["hypothesis_sha"]):
+            if parent in linked:
+                linked[child].add(parent)
+                linked[parent].add(child)
+    return linked
 
 
 def _derived_from(store: StateStore, sha: object) -> tuple[str, ...]:
