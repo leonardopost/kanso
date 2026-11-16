@@ -31,8 +31,13 @@ def test_a_pass_judges_the_deployed_version_and_promotes_it(
     judged = next(
         one for one in outcome["outcomes"] if one["strategy"] == HYP_ID and one["stage"] == "paper"
     )
-    assert [gate["id"] for gate in judged["gates"]] == ["paper_forward"]
-    assert judged["gates"][0]["pass"] is True
+    assert [gate["id"] for gate in judged["gates"]] == ["paper_forward", "forward_holdout"]
+    assert all(gate["pass"] is True for gate in judged["gates"])
+    forward = judged["gates"][1]["evidence"]
+    assert forward["judged"] is True, "the four forward weeks resolve the certified value"
+    assert forward["periods"] >= forward["required_periods"]
+    assert forward["realised"] > forward["bar"] == 0.0
+    assert forward["window"][0] == forward["forward_start"] == "2024-06-03"
     assert payload(at(runner, deployed, "strat", "show", f"{HYP_ID}@1", "--json"))["state"] == (
         "promotable"
     )
@@ -68,7 +73,7 @@ def test_the_pass_reads_as_the_stages_then_the_versions(runner: CliRunner, deplo
 
     assert result.exit_code == Exit.OK
     assert "within limits" in result.stdout
-    assert "paper_forward" in result.stdout
+    assert "paper_forward" in result.stdout and "forward_holdout" in result.stdout
     assert "promotable" in result.stdout
 
 

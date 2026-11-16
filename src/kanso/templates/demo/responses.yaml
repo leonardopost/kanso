@@ -24,6 +24,7 @@ certify_plan:
       - {id: bootstrap, stage: cert, params: [{name: n, value: 1000}], rationale: "drawdown band, and a band of the objective that must reach above zero"}
       - {id: deflated_edge, stage: cert, params: [{name: min_probability, value: 0.95}], rationale: "the search correction for a per-trade edge; required behind two or more trials"}
       - {id: paper_forward, stage: paper, params: [{name: min_duration, value: 5d}, {name: horizon_mult, value: 20}], rationale: "≥1 paper gate required"}
+      - {id: forward_holdout, stage: paper, params: [{name: resolve, value: 1.0}, {name: min_fraction, value: 0.0}], rationale: "required; judged once one forward error spans the certified value, then above zero"}
       - {id: live_drift, stage: live, params: [], rationale: "≥1 live gate required"}
     excluded:
       - {id: deflated_sharpe, reason: "intraday objective is per-trade edge, not Sharpe"}

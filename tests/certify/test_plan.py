@@ -25,6 +25,7 @@ from kanso.certify.plan import (
     _ranges,
     availability,
     certificates_dir,
+    forward_note,
     paper_window_note,
     plan,
     plan_file,
@@ -137,6 +138,12 @@ def answer(**changes: Any) -> dict[str, Any]:
                 "params": pairs({"min_duration": "30d", "horizon_mult": 10.0}),
                 "rationale": "forward evidence",
             },
+            {
+                "id": "forward_holdout",
+                "stage": "paper",
+                "params": pairs({"resolve": 1.0, "min_fraction": 0.0}),
+                "rationale": "the forward window, once it resolves the certified value",
+            },
             {"id": "live_drift", "stage": "live", "params": pairs(), "rationale": "drift"},
         ],
         "excluded": [{"id": "deflated_sharpe", "reason": "a per-trade objective, not a Sharpe"}],
@@ -194,8 +201,11 @@ def prompts(monkeypatch: pytest.MonkeyPatch) -> list[Call]:
     return seen
 
 
-def a_card(store: StateStore, *, metric: float, seq: int = 1) -> None:
-    """One recorded card, so the hypothesis has a trial count and a measurement."""
+def a_card(
+    store: StateStore, *, metric: float, seq: int = 1, pinned: str = "a" * 64, se: float = 0.25
+) -> None:
+    """One recorded card, so the hypothesis has a trial count and a measurement; `pinned` is
+    the hypothesis file its run pinned."""
     run = records.insert(
         store,
         RunRecord.model_validate(
@@ -206,7 +216,7 @@ def a_card(store: StateStore, *, metric: float, seq: int = 1) -> None:
                 "lane": "op",
                 "dir": f"runs/op/{HYP_ID}",
                 "base_sha": "a" * 64,
-                "hypothesis_sha": "a" * 64,
+                "hypothesis_sha": pinned,
                 "program_sha": "a" * 64,
                 "snapshot_id": "snap1",
                 "criteria_version": "0.1.0",
@@ -227,7 +237,7 @@ def a_card(store: StateStore, *, metric: float, seq: int = 1) -> None:
                 "lane": "op",
                 "strategy_sha": sha,
                 "metric": metric,
-                "metric_se": 0.25,
+                "metric_se": se,
                 "n_trials": 1,
                 "n_trades": 40,
                 "wall_s": 1.0,
@@ -290,6 +300,7 @@ def test_a_plan_is_written_pinned_and_recorded(ws: Workspace, store: StateStore)
         "parity_replay",
         "bootstrap",
         "paper_forward",
+        "forward_holdout",
         "live_drift",
     ]
     assert [left.id for left in written.excluded] == ["deflated_sharpe"]
@@ -986,3 +997,88 @@ def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
 
     assert pinned.paper_window_s("30m") is None
     assert paper_window_note(ws, store, pinned) is None
+
+
+# --- when the forward window first judges --------------------------------------
+
+
+def forward_of(resolve: float) -> list[dict[str, Any]]:
+    """The usable plan's gates, with `forward_holdout` judging at `resolve`."""
+    return replacing("forward_holdout", params=pairs({"resolve": resolve, "min_fraction": 0.0}))
+
+
+def test_a_plan_without_the_forward_check_is_retried_and_one_pinned_without_it_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """No version is `promotable` before the forward window judges it, so every plan carries
+    the gate; one pinned before it was required is refused, with the replan, where it is read."""
+    script(ws, certify_plan=[answer(gates=gates_of(drop="forward_holdout")), answer()])
+
+    written = plan(ws, store, HYP_ID)
+
+    assert "forward_holdout" in [gate.id for gate in written.gates]
+    document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
+    document["gates"] = [gate for gate in document["gates"] if gate["id"] != "forward_holdout"]
+    plan_file(ws, HYP_ID).write_text(yaml.safe_dump(document), encoding="utf-8")
+    with pytest.raises(ValidationError) as refused:
+        plan(ws, store, HYP_ID)
+    assert "forward_holdout is a structural invariant" in refused.value.message
+    assert refused.value.remedy == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+
+
+def test_the_forward_note_states_the_wait_from_the_best_card(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The demo researches over 365 days; a best of 1.0 ± 0.25 is four errors clear, so at a
+    resolve of 2 the forward window judges once its error is half the value: after a quarter
+    of the research window's days, 91.25, which is 92 one-day periods. A year of it errs by
+    exactly the research error, the two windows being a year each."""
+    pinned_sha = show(ws, store, HYP_ID).hypothesis_sha
+    a_card(store, metric=1.0, pinned=str(pinned_sha))
+    script(ws, certify_plan=[answer(gates=forward_of(2.0))])
+    written = plan(ws, store, HYP_ID)
+
+    note = forward_note(ws, store, written)
+
+    research = the_hypothesis(ws).windows.research
+    days = ((research.end - research.start).days + 1) * (2.0 * 0.25 / 1.0) ** 2
+    assert note is not None
+    assert (note.resolve, note.period) == (2.0, ws.config.research.return_period)
+    assert note.days_to_judge == pytest.approx(days) == pytest.approx(91.25)
+    assert note.periods_to_judge == 92
+    assert note.se_after_one_year == pytest.approx(0.25)
+    assert note.payload() == {
+        "resolve": 2.0,
+        "period": "1d",
+        "days_to_judge": note.days_to_judge,
+        "periods_to_judge": 92,
+        "se_after_one_year": note.se_after_one_year,
+    }
+
+
+def test_the_forward_note_says_a_best_at_or_below_zero_never_judges(
+    ws: Workspace, store: StateStore
+) -> None:
+    pinned_sha = show(ws, store, HYP_ID).hypothesis_sha
+    a_card(store, metric=-1.0, pinned=str(pinned_sha))
+    script(ws, certify_plan=[answer()])
+
+    note = forward_note(ws, store, plan(ws, store, HYP_ID))
+
+    assert note is not None and note.days_to_judge is None and note.periods_to_judge is None
+    assert note.se_after_one_year > 0
+
+
+def test_the_forward_note_states_nothing_without_a_best_an_error_or_a_resolve(
+    ws: Workspace, store: StateStore
+) -> None:
+    script(ws, certify_plan=[answer()])
+    written = plan(ws, store, HYP_ID)
+    unset = written.model_copy(
+        update={"gates": [gate for gate in written.gates if gate.id != "forward_holdout"]}
+    )
+
+    assert forward_note(ws, store, written) is None, "no best card yet"
+    a_card(store, metric=1.0, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=0.0)
+    assert forward_note(ws, store, written) is None, "an error of zero states no dispersion"
+    assert forward_note(ws, store, unset) is None, "no resolve to state the wait at"

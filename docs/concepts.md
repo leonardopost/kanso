@@ -2798,7 +2798,8 @@ $ kanso status                            # the hypothesis's line
 demo_mr             certified    9.986730      4 card(s) · 2 hold-out look(s)
 ```
 
-Looks at the forward window, and looks across lineages, are not counted.
+Looks at the forward window (`docs/backlog.md` row 330), and looks across lineages, are not
+counted.
 
 **A failing verdict is not an error, and it ends nothing.** `cert run` exits 0 and says
 `fail`, because the certificate is what the command produces and a fail is evidence: it
@@ -2941,6 +2942,14 @@ the certificate with no decision left in them, and a loop that runs indefinitely
 at every certificate to ask for a command with only one possible form. In the transcript
 above nothing was deployed by hand: `cert run` passed, and paper had the version.
 
+**The paper stage is where the forward window is read.** A stage resumes at its clock's day,
+or, with no clock, at the earliest `windows.forward.start` of what it holds, and no research or
+certification run may read a forward window. So what a version realises on paper is the only
+evidence kanso holds from a window no search and no certification looked at, and
+`forward_holdout` judges it before the version can be promotable (Promotion and demotion),
+counting only the days from that version's own forward start: a version that joins a stage
+whose clock is earlier is not credited with the days before its window opened.
+
 A stage node restarts flat, and a version whose hypothesis declares a `warmup` re-warms on
 every restart: the sessions before the window on the first, and on a restart the sessions
 at or before the stage's clock — the data it already replayed, fed again with every order
@@ -3077,14 +3086,16 @@ strategies in one account would share the book and the volume a fill walks.
 happens without a person: classification, research, certification, composition, paper
 deployment, demotion, halting a stage. Moving a version onto real capital does not.
 
-What moves a paper version to `promotable` is one gate, `paper_forward`, and it is strict
+What moves a paper version to `promotable` is every paper gate of its plan passing, at least
+one of them having judged, and every plan carries two that do. `paper_forward` is strict
 both ways: the version must have been on the stage for the longer of the plan's minimum
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
 objective it realised must fall **inside** the band struck for the paper window it realised
 it over, above the band as much a fail as below it, because a stage that out-performs its
 certification is not reproducing what was certified. Of the sleeve's card-stage constraints it
 judges `max_drawdown` and `maintenance_margin` on the stage's own run, and a breach of either
-is a fail. `docs/cli.md` has the pass.
+is a fail. `forward_holdout`, below, holds the forward window to the certified value as
+`embargoed_window` held the certification window to research's. `docs/cli.md` has the pass.
 
 **The band is a prediction band for the paper window, not a confidence band of the
 certification.** The realised value and the certified one are two estimates of one quantity,
@@ -3125,6 +3136,64 @@ chose. `live_drift` holds a live version to the lower end of the band struck for
 window — opened back through its live tenure until it strikes one — which a version behaving
 as certified falls below nominally one time in twenty, 0.014 to 0.075 of the time a look in
 simulation.
+
+**The forward window is an extra check, never a replacement.** A version reaches paper only
+from a certificate, and nothing about certification changes. `forward_holdout`, required in
+every plan, asks of the paper window what `embargoed_window` asks of the certification window
+— is the objective above zero and at least a stated fraction of what was certified — and asks
+it only once the window can answer:
+
+```
+se_fwd   = se × √(N × Σ w(m_k) / K²)               the band's own term for the window
+judged   once  expected ≥ resolve × se_fwd         resolve: 1 to 3, the planner's
+passes   once judged, when  realised > max(0, min_fraction × expected)
+```
+
+`expected` and `se_fwd` are struck exactly as `paper_forward`'s band is, by one function, and
+`se_fwd` is that band without the certification value's own error: the error of the paper
+window's value if the version is what was certified. At `resolve` one, a true edge equal to
+the certified value stands one forward error clear of zero when the gate first judges. Before
+that the gate **fails** — it does not skip, because a skip passes and the version would be
+promotable on `paper_forward` alone — and its evidence carries the window's `periods`, the
+`required_periods` an evenly filled window needs, `N × (resolve × se / value)²` and at least
+the fewest that strike a band, and `se_fwd`. Every pass states the window's power beside it:
+`resolves = 2.49 × se_fwd`, the true value a one-sided five-percent test detects four times in
+five, `pass_at_expected = Φ((expected − bar) / se_fwd)` and `pass_at_zero = Φ(−bar / se_fwd)`;
+at a `min_fraction` of zero a version with no edge at all passes half the time once judged, and
+the evidence says so in numbers. It reads only the days from midnight of the hypothesis's
+`windows.forward.start` on, and like `paper_forward` the window since the version's current
+join, so a redeploy restarts it. With no stage record, no expectation, or an expectation that
+records no error or period count, it skips and says so, as `paper_forward` does.
+
+**What it costs is time, and at a low trade rate a great deal of it.** A mean's error falls as
+the root of the periods behind it, so the wait to judge grows as `resolve²` and as the square
+of the certified value's error over the value. Take a weekly lane researched over 720 weeks
+whose research mean, 40 bp a week ± 11.5, stands 3.5 errors clear of zero, trading once every
+four to eleven weeks. At `resolve` one it first judges after 60 forward weeks; after 52 its
+forward error is ±43 bp a week (`11.5 × √(5,038 / 364)` over a research window of 5,038 days),
+it resolves 107, and the research mean is 0.93 of an error from zero, on five to fourteen
+trades. At `resolve` two it waits about 240 weeks and at three about 540, and a certified value
+half the research one multiplies each by four — and research's value is the optimistic one,
+since selection inflated it. Since `promote --live` takes only a `promotable` version, no
+version in any workspace reaches live capital before `forward_holdout` has judged it. The
+planner sets that wait when it chooses `resolve`, blind to every metric; `kanso cert plan`
+states it for the operator on its `forward` line, from the best card, and the planner never
+sees it.
+
+**A plan pinned before `forward_holdout` was required promotes nothing.** The monitor reads
+the pinned plan as written, and nothing re-checks it against the toolbox between a `cert run`
+and a pass, so before it judges a paper version it holds the plan to the required paper gates
+itself: one that lacks `forward_holdout`, or names it without both its parameters, judges
+nothing and marks nothing, and the outcome says what it lacks and names `kanso cert plan ID
+--replan`. Only the paper stage's part is held to — a cert-stage complaint, such as a search
+correction the lineage has outgrown, does not stop a version already deployed — and a version
+already `promotable` stays so, because a pass marks and never unmarks. `cert plan` and `cert
+run` refuse such a plan too (exit 3), as they refuse any plan this toolbox can no longer run.
+
+The judgements at the forward window are counted nowhere: a lineage that fails it, certifies a
+sibling and deploys again looks at the same forward weeks again with no bar raised
+(`docs/backlog.md` row 330), and a `kanso replay` of forward data read back into research is a
+look nothing sees (row 331).
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

@@ -1325,6 +1325,23 @@ def test_the_pages_state_the_band_a_paper_window_is_judged_by_and_its_coverage()
         assert f"(`{name}`" in certification, name
 
 
+def test_the_pages_state_the_forward_check_and_every_key_its_evidence_records() -> None:
+    """The forward check fails until it can judge, never skips, and the monitoring section
+    names every key its evidence carries, from the gate's own output."""
+    from kanso.criteria.gates.forward_holdout import gate
+    from tests.monitor.builders import gate_context, stage_record
+
+    promotion = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "The forward window is an extra check, never a replacement." in promotion
+    assert "Before that the gate **fails** — it does not skip" in promotion
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    evidence = gate.evaluate(
+        gate_context(params={"resolve": 1.0, "min_fraction": 0.0}, record=stage_record())
+    ).evidence
+    for key in set(evidence) - {"objective", "expected", "resolve", "min_fraction"}:
+        assert f"`{key}`" in monitoring, key
+
+
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
     """The engine's top-of-book venue ignored a quote or a print stamped before its book's
     last update while the sleeve was handed it; the page says the venue now applies it, and

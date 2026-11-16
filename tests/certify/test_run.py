@@ -111,9 +111,16 @@ TAIL_GATES: list[dict[str, Any]] = [
         "params": {"min_duration": "30d", "horizon_mult": 10.0},
         "rationale": "forward evidence",
     },
+    {
+        "id": "forward_holdout",
+        "stage": "paper",
+        "params": {"resolve": 1.0, "min_fraction": 0.0},
+        "rationale": "the forward window, once it resolves the certified value",
+    },
     {"id": "live_drift", "stage": "live", "params": {}, "rationale": "the expectation holds"},
 ]
-"""A plan reaches every stage, so every plan here ends with these two."""
+"""A plan reaches every stage and carries the required paper gate, so every plan here ends
+with these three."""
 
 
 # --- building a workspace that has something to certify -----------------------

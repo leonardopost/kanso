@@ -441,6 +441,31 @@ def plan_complaints(
     return complaints
 
 
+def stage_shortfall(stage: str, included: Sequence[Any], hyp: Hypothesis, folds: int) -> list[str]:
+    """How a plan's gates fall short of the ones the toolbox requires at one stage: each such
+    gate it lacks, and each it names without every parameter it declares or outside a range.
+
+    The part of `plan_complaints` a stage holds a pinned plan to. The monitor reads a plan
+    nothing has checked against this toolbox since it was pinned, and judges a deployed
+    version by its own stage's gates alone, so a complaint about another stage — a search
+    correction the lineage has since outgrown — is not one that should stop it.
+    """
+    named = {gate.id: gate for gate in included if gate.stage == stage}
+    shortfall: list[str] = []
+    for item in plannable().values():
+        if item.stage != stage or not item.required:
+            continue
+        gate = named.get(item.id)
+        if gate is None:
+            shortfall.append(f"lacks {item.id}")
+            continue
+        shortfall.extend(
+            f"names {item.id}, but {problem}"
+            for problem in check_params(item, gate.params, hyp, folds)
+        )
+    return shortfall
+
+
 def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, folds: int) -> None:
     """Refuse a certification plan that breaks a structural invariant of the toolbox.
 

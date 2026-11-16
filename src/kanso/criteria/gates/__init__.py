@@ -20,9 +20,9 @@ A gate whose test is more than arithmetic on the run in hand lives in a module o
 beside this one, because it needs machinery the rest do not: `param_plateau` re-runs the
 subject once per perturbation and so reads the re-run the certification runner hands it,
 `parity_replay` compares two code paths' order intents, which is a replay's record rather
-than a run's, and the four paper and live gates — `paper_forward`, `live_drift`,
-`daily_loss_kill` and `fill_quality_drift` — read the stage record the monitor assembles,
-because a run says nothing about the deployment that produced it.
+than a run's, and the five paper and live gates — `paper_forward`, `forward_holdout`,
+`live_drift`, `daily_loss_kill` and `fill_quality_drift` — read the stage record the monitor
+assembles, because a run says nothing about the deployment that produced it.
 
 Nothing is declared here and left unimplemented: every gate in the library resolves.
 """

@@ -71,13 +71,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from math import isfinite, sqrt
-from typing import TYPE_CHECKING, Any, Final, cast
+from math import ceil, isfinite, sqrt
+from typing import TYPE_CHECKING, Any, Final, TypeGuard, cast
 
 from kanso.certify.looks import looks as looks_at
 from kanso.certify.looks import subject_pin, window_of
-from kanso.certify.power import power, window_params
+from kanso.certify.power import power, window_days, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
 from kanso.data.manifest import manifests
@@ -96,7 +97,9 @@ from kanso.schemas import (
     PlannedGate,
     Power,
     Span,
+    Windows,
     load_yaml,
+    parse_duration,
     parse_yaml,
     render_duration,
     write_yaml,
@@ -111,10 +114,12 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "PLAN_FILE",
+    "Forward",
     "SAMPLING_FLOOR",
     "availability",
     "certificates_dir",
     "complaints_about",
+    "forward_note",
     "paper_window_note",
     "plan",
     "plan_file",
@@ -135,6 +140,12 @@ PLANNED: Final = "planned"
 
 DAY_S: Final = 86_400.0
 """Seconds in a day; the windows are dated, so a window is a whole number of these."""
+
+FORWARD_GATE: Final = "forward_holdout"
+"""The paper gate that judges the forward window, whose wait `forward_note` states."""
+
+YEAR_DAYS: Final = 365.0
+"""The forward window `forward_note` states the error after: a calendar year."""
 
 SAMPLING_FLOOR: Final = 0.1
 """The share of the certification window a paper window is warned for falling under.
@@ -478,23 +489,104 @@ def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
     planner, which plans blind to every result. `None` while the hypothesis has no best card,
     or when the best card's error is zero (`kanso.certify.power`).
     """
-    best, _ = records.best_of(store, pinned.hyp_id)
-    if best is None:
+    measured = _best_measured(store, pinned.hyp_id)
+    if measured is None:
         return None
-    card = next(
-        c for c in reversed(records.cards_of(store, pinned.hyp_id)) if c.strategy_sha == best
-    )
-    run = next(run for run in records.runs_of(store, pinned.hyp_id) if run.run_id == card.run_id)
-    windows = parse_yaml(
-        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), f"{pinned.hyp_id} pin"
-    ).windows
+    metric, metric_se, windows = measured
     return power(
-        card.metric,
-        card.metric_se,
+        metric,
+        metric_se,
         (windows.research.start, windows.research.end),
         (windows.certification.start, windows.certification.end),
         window_params(pinned),
     )
+
+
+def _best_measured(store: StateStore, hyp_id: str) -> tuple[float, float, Windows] | None:
+    """The best card's metric and error, and the windows of the file its run pinned; `None`
+    while the hypothesis has no best card."""
+    best, _ = records.best_of(store, hyp_id)
+    if best is None:
+        return None
+    card = next(c for c in reversed(records.cards_of(store, hyp_id)) if c.strategy_sha == best)
+    run = next(run for run in records.runs_of(store, hyp_id) if run.run_id == card.run_id)
+    windows = parse_yaml(
+        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), f"{hyp_id} pin"
+    ).windows
+    return card.metric, card.metric_se, windows
+
+
+# -- when the forward window first judges -------------------------------------
+
+
+@dataclass(frozen=True)
+class Forward:
+    """When `forward_holdout` first judges at the plan's `resolve`, from research's numbers.
+
+    `periods_to_judge` counts `[research] return_period` periods of the calendar, `None` for a
+    research estimate at or below zero, which no forward window judges; `se_after_one_year` is
+    the forward error after a calendar year of it, in the objective's units.
+    """
+
+    resolve: float
+    period: str
+    days_to_judge: float | None
+    periods_to_judge: int | None
+    se_after_one_year: float
+
+    def payload(self) -> dict[str, object]:
+        """The note as one JSON object."""
+        return {
+            "resolve": self.resolve,
+            "period": self.period,
+            "days_to_judge": self.days_to_judge,
+            "periods_to_judge": self.periods_to_judge,
+            "se_after_one_year": self.se_after_one_year,
+        }
+
+
+def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) -> Forward | None:
+    """How long the forward window runs before `forward_holdout` first judges, and its error
+    after a year, stated from the best card's metric and error as `power_of` states the
+    certification window's.
+
+    The forward error after `D` days is `se × √(R / D)` over a research window of `R` days —
+    periods and trades arrive at research's rate — and the gate first judges once the value
+    stands `resolve` of them clear of zero, at `D = R × (resolve × se / metric)²`. Stated from
+    research, which selection inflated, so the wait it states is the shortest: composition's
+    certified value, which the gate reads, is usually smaller, and the wait grows as the
+    square of the ratio. Never shown to the planner, which chose `resolve` blind to it. `None`
+    while the hypothesis has no best card, when its error is zero, or when the plan sets no
+    `resolve` for `forward_holdout`.
+    """
+    measured = _best_measured(store, pinned.hyp_id)
+    resolve = next(
+        (
+            gate.params.get("resolve")
+            for gate in pinned.stage_gates("paper")
+            if gate.id == FORWARD_GATE
+        ),
+        None,
+    )
+    if measured is None or measured[1] <= 0 or not _number(resolve):
+        return None
+    metric, metric_se, windows = measured
+    research = float(window_days((windows.research.start, windows.research.end)))
+    period = ws.config.research.return_period
+    days = None if metric <= 0 else research * (float(resolve) * metric_se / metric) ** 2
+    period_days = parse_duration(period, "return_period").total_seconds() / DAY_S
+    return Forward(
+        resolve=float(resolve),
+        period=period,
+        days_to_judge=days,
+        periods_to_judge=None if days is None else ceil(days / period_days),
+        se_after_one_year=metric_se * sqrt(research / YEAR_DAYS),
+    )
+
+
+def _number(value: object) -> TypeGuard[float]:
+    """Whether a parameter is a number."""
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 # -- the paper window a plan implies ------------------------------------------

@@ -14,6 +14,15 @@ has to be woken up to apply is not a rule:
   rather than moving one version off it, and demoting a version into a halted stage would
   change nothing about the money while making the two mechanisms race each other.
 
+**A paper version is judged only under a plan that carries every required paper gate.**
+The pinned plan is read as it was written, and nothing re-checks it against the toolbox
+between a `cert run` and a pass, so a plan pinned before a required paper gate existed —
+`forward_holdout` — would otherwise make a version `promotable` without it. Such a plan, or
+one naming that gate without every parameter, judges nothing and marks nothing; its outcome
+says what it lacks and names the replan (`kanso.criteria.library.stage_shortfall`). Only the
+paper stage's part of the plan is held to: a deployed version is no business of a cert-stage
+complaint, such as a search correction its lineage has outgrown since it was certified.
+
 A version is promoted only when at least one paper gate actually judged. A gate that could not
 reach its context passes and says so, which is right for a certificate — the verdict is the
 conjunction of the tests that ran — but a version whose every gate skipped has been tested by
@@ -46,6 +55,7 @@ from typing import TYPE_CHECKING, Final
 
 from kanso.certify.plan import read_plan
 from kanso.criteria import GateContext, gates
+from kanso.criteria.library import stage_shortfall
 from kanso.criteria.run import day_of
 from kanso.errors import KansoError
 from kanso.inbox import escalate
@@ -344,6 +354,15 @@ def _judge(
     planned = [] if plan is None else [gate for gate in plan.gates if gate.stage == stage]
     if plan is None or not planned:
         return _nothing(stage, deployment, f"{hyp.id} has no plan naming a {stage} gate")
+    short = (
+        [] if stage != PAPER else stage_shortfall(stage, plan.gates, hyp, ws.config.research.folds)
+    )
+    if short:
+        return _nothing(
+            stage,
+            deployment,
+            f"its plan {'; '.join(short)}; run `kanso cert plan {hyp.id} --replan`",
+        )
     portfolio = files.read(ws)
     record = _record(ws, store, portfolio, stage, held, plan, hyp)
     registry = gates()

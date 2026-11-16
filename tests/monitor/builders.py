@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from kanso.criteria import GateContext
+from kanso.criteria.objectives import wf_sharpe_net
 from kanso.criteria.run import NS_PER_DAY, CardRun, Fill, Trade, midnight_ns
 from kanso.monitor.stage import StageRecord
 from kanso.nautilus.node import Book, Realised
@@ -108,6 +109,12 @@ PLAN: dict[str, Any] = {
             "rationale": "a week of paper, and five horizons",
         },
         {
+            "id": "forward_holdout",
+            "stage": "paper",
+            "params": {"resolve": 1.0, "min_fraction": 0.0},
+            "rationale": "the forward window, once it resolves the certified value",
+        },
+        {
             "id": "live_drift",
             "stage": "live",
             "params": {},
@@ -177,6 +184,18 @@ def flat_run(days: int = DAYS, step: float = 100.0, start: date = START) -> Card
     return run_over(tuple([step] * days), start=start)
 
 
+def rising_run(days: int = DAYS, start: date = START) -> CardRun:
+    """A run that gains every day, by 150 and 50 in turn: a Sharpe far above zero, which a
+    version certified at that value both stays inside the band of and holds on the forward
+    window."""
+    return run_over(tuple(150.0 if index % 2 == 0 else 50.0 for index in range(days)), start=start)
+
+
+RISING: float = wf_sharpe_net.compute(rising_run(), 4)[0]
+"""What the default `rising_run` scores over four folds: the value a version certified as
+behaving like it is composed at."""
+
+
 def fill_at(day: date, qty: float = 100.0, px: float = 10.0) -> Fill:
     """One execution at noon on a day."""
     return Fill(
@@ -194,11 +213,12 @@ def version(
     number: int = 1,
     state: str = "paper",
     value: float = 0.0,
-    se: float = SE,
+    se: float | None = SE,
     objective_id: str = "wf_sharpe_net",
 ) -> StrategyVersion:
     """One composed version of the sleeve, with the value and error its paper and live gates
-    strike their band from; the bootstrap's band is the value ± a half."""
+    strike their band from; the bootstrap's band is the value ± a half. An error of `None` is
+    an expectation composed before kanso recorded one."""
     return StrategyVersion.model_validate(
         {
             "version": number,
@@ -371,6 +391,7 @@ def deploy(
     stage: str = "paper",
     state: str = "paper",
     value: float = 0.0,
+    se: float = SE,
     run: CardRun | None = None,
     positions: tuple[Book, ...] = (),
     **portfolio_changes: Any,
@@ -379,7 +400,7 @@ def deploy(
     hyp = hypothesis()
     pin_hypothesis(store, hyp)
     write_plan(ws, plan())
-    write_strategy(ws, store, version(state=state, value=value))
+    write_strategy(ws, store, version(state=state, value=value, se=se))
     write_book(store, stage, run=run or flat_run(), positions=positions)
     placed = ((STRATEGY_ID, 1),)
     changes: dict[str, Any] = {("paper" if stage == "paper" else "live"): placed}

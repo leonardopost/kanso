@@ -171,6 +171,12 @@ PLAN: dict[str, Any] = {
             "rationale": "a plan reaches the paper stage",
         },
         {
+            "id": "forward_holdout",
+            "stage": "paper",
+            "params": pairs({"resolve": 1.0, "min_fraction": 0.0}),
+            "rationale": "required; the forward window, once it resolves the certified value",
+        },
+        {
             "id": "live_drift",
             "stage": "live",
             "params": pairs(),
