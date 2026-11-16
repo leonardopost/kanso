@@ -653,7 +653,7 @@ def test_a_certificate_recorded_before_looks_were_counted_reads_back_with_no_hol
         conn.commit()
     monkeypatch.undo()
     with StateStore(db_path) as store:
-        assert store.migrate() == ["0018_certificate_counts_its_looks.sql"]
+        assert store.migrate() == [m.name for m in migrations()[17:]]
         (held,) = certificate.of(store, "demo_mr")
         assert held.holdout is None
         found = looks(store, "demo_mr", (date(2024, 1, 1), date(2024, 12, 31)))
