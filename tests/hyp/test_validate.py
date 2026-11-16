@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from hashlib import sha256
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from kanso.config import CONFIG_NAME, load_config
 from kanso.data.instruments import resolve_universe
 from kanso.errors import Exit, KansoError, ValidationError
 from kanso.hyp.validate import venue_models
+from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.hyp.conftest import (
     DEMO_ENTRY,
@@ -70,6 +72,134 @@ def test_a_registered_parent_is_admissible(ws: Workspace) -> None:
         hyp.add(ws, store, write_hypothesis(ws, {**DOCUMENT, "id": "demo_parent"}))
 
     assert accepted(ws, document(derived_from=["demo_parent"])).derived_from == ["demo_parent"]
+
+
+# -- prior_trials --------------------------------------------------------------
+
+GRID = b"# pre-registered: x{1.25,1.75,2.25} x n{10,14,20} x 3 exits\n"
+"""Evidence of an offline grid, as an operator copies it into the workspace."""
+
+
+def evidence(ws: Workspace, name: str = "evidence/grid.md", count: int = 27) -> dict[str, Any]:
+    """Write `GRID` at `name` under the workspace and return the block that states it."""
+    path = ws.root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(GRID)
+    return {"count": count, "source": name, "sha256": sha256(GRID).hexdigest()}
+
+
+def register(ws: Workspace, doc: dict[str, Any]) -> None:
+    """Register a document, as `kanso hyp add` does."""
+    with StateStore(ws.path("state.db")) as store:
+        store.migrate()
+        hyp.add(ws, store, write_hypothesis(ws, doc))
+
+
+def test_a_grid_stated_with_its_evidence_in_the_workspace_is_admissible(ws: Workspace) -> None:
+    block = evidence(ws)
+
+    parsed = accepted(ws, document(prior_trials=block))
+
+    assert parsed.prior_trials is not None
+    assert parsed.prior_trials.model_dump() == block
+
+
+def test_a_grid_whose_evidence_resolves_outside_the_workspace_is_refused(ws: Workspace) -> None:
+    (ws.root.parent / "grid.md").write_bytes(GRID)
+    block = {"count": 27, "source": "../grid.md", "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == "prior_trials.source: ../grid.md is outside the workspace"
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_grid_whose_evidence_is_named_by_an_absolute_path_is_refused(ws: Workspace) -> None:
+    """The pin names the file for every host the workspace is checked out on, so the path is
+    the workspace's own, even where the absolute one lands inside it."""
+    block = evidence(ws)
+    absolute = str(ws.root.resolve() / block["source"])
+
+    failure = refused(ws, document(prior_trials={**block, "source": absolute}))
+
+    assert failure.message.startswith(
+        f"prior_trials.source: {absolute} is not named relative to the workspace root"
+    )
+    assert "name it from there" in (failure.remedy or "")
+
+
+def test_a_grid_whose_evidence_is_not_there_is_refused(ws: Workspace) -> None:
+    block = {"count": 9, "source": "evidence/missing.md", "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == (
+        "prior_trials.source: evidence/missing.md does not exist in the workspace"
+    )
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_grid_whose_evidence_hashes_otherwise_is_refused(ws: Workspace) -> None:
+    block = evidence(ws)
+    (ws.root / block["source"]).write_bytes(GRID + b"edited after the count was stated\n")
+    held = sha256((ws.root / block["source"]).read_bytes()).hexdigest()
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == (
+        f"prior_trials.sha256: the bytes of evidence/grid.md hash to {held}, not the "
+        f"{block['sha256']} the count was stated with"
+    )
+    assert "shasum -a 256" in (failure.remedy or "")
+
+
+def test_a_grid_its_parent_already_states_is_refused(ws: Workspace) -> None:
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
+
+    failure = refused(ws, document(derived_from=["demo_parent"], prior_trials=block))
+
+    assert failure.message == (
+        "prior_trials: repeats demo_parent's block, whose grid derived_from already counts"
+    )
+    assert "drop prior_trials" in (failure.remedy or "")
+
+
+def test_a_grid_an_ancestor_further_back_states_is_refused(ws: Workspace) -> None:
+    """The family is transitive, so the grid a grandparent states is already counted."""
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_root", "prior_trials": block})
+    register(ws, {**DOCUMENT, "id": "demo_parent", "derived_from": ["demo_root"]})
+
+    failure = refused(ws, document(derived_from=["demo_parent"], prior_trials=block))
+
+    assert failure.message.startswith("prior_trials: repeats demo_root's block")
+
+
+def test_a_grid_of_its_own_beside_its_parent_s_is_admissible(ws: Workspace) -> None:
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": evidence(ws)})
+    own = evidence(ws, "evidence/own-grid.md", count=9)
+    (ws.root / own["source"]).write_bytes(b"# another grid\n")
+    own["sha256"] = sha256(b"# another grid\n").hexdigest()
+
+    parsed = accepted(ws, document(derived_from=["demo_parent"], prior_trials=own))
+
+    assert parsed.prior_trials is not None
+    assert parsed.prior_trials.count == 9
+
+
+def test_a_hypothesis_whose_parent_derives_from_it_is_not_refused_its_own_grid(
+    ws: Workspace,
+) -> None:
+    """A re-pin closing a cycle walks back to the file being validated, whose own newest
+    registration states its block: that is the same grid, not an ancestor's."""
+    block = evidence(ws)
+    register(ws, document(prior_trials=block))
+    register(ws, {**DOCUMENT, "id": "demo_parent", "derived_from": ["demo_mr"]})
+
+    parsed = accepted(ws, document(derived_from=["demo_parent"], prior_trials=block))
+
+    assert parsed.prior_trials is not None
 
 
 def test_a_classified_sleeve_is_admissible(ws: Workspace) -> None:

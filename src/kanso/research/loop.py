@@ -789,6 +789,7 @@ def _context(
     params: Mapping[str, Any] | None = None,
     benchmark_run: CardRun | None = None,
     trials: int = 1,
+    prior_trials: int = 0,
 ) -> GateContext:
     return GateContext(
         hyp=setup.hyp,
@@ -805,6 +806,7 @@ def _context(
         lane_dir=directory,
         pinned={HYPOTHESIS_FILE: run.hypothesis_sha, PROGRAM_FILE: run.program_sha},
         trials=trials,
+        prior_trials=prior_trials,
     )
 
 
@@ -847,11 +849,13 @@ def _constraints(
     directory: Path,
     benchmark_run: CardRun | None = None,
     trials: int,
+    prior_trials: int,
 ) -> list[GateResult]:
     """Every card-stage gate the classification chose, apart from the one already run.
 
     `trials` is the search this card is one draw of: the hypothesis's cards that ran to a
-    result and traded before it, and this one.
+    result and traded before it, this one, and the `prior_trials` its family declares tried
+    outside kanso (`kanso.research.records.prior_trials`).
     """
     registry = gates()
     results: list[GateResult] = []
@@ -868,6 +872,7 @@ def _constraints(
             params=ref.params,
             benchmark_run=benchmark_run,
             trials=trials,
+            prior_trials=prior_trials,
         )
         results.append(registry[ref.id].evaluate(ctx))
     return results
@@ -1100,6 +1105,7 @@ def _judge(
             directory=directory,
             tags=tags,
         )
+    prior = records.prior_trials(store, run.hyp_id)
     constraints = _constraints(
         setup,
         run,
@@ -1108,7 +1114,8 @@ def _judge(
         strategy_sha=strategy_sha,
         directory=directory,
         benchmark_run=benchmark_run,
-        trials=records.candidates(store, run.hyp_id) + 1,
+        trials=records.candidates(store, run.hyp_id) + 1 + prior,
+        prior_trials=prior,
     )
     measured = _measure(setup, result.run, host_run, benchmark_run)
     metric, se = measured.compute()
@@ -1701,7 +1708,8 @@ def run_batch(
     setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
     directory = ws.root / run.dir
     frozen = run
-    margin = records.candidates(store, hyp_id) + len(proposals)
+    prior = records.prior_trials(store, hyp_id)
+    margin = records.candidates(store, hyp_id) + len(proposals) + prior
     cap = mem_cap(ws, run, slots=slots)
     budget = frozen.card_budget_s * max(1, slots)
     prepared: list[tuple[str, bytes, Sequence[Tag], str, GateResult]] = []
@@ -1800,6 +1808,7 @@ def run_batch(
             directory=directory,
             benchmark_run=benchmark_run,
             trials=margin,
+            prior_trials=prior,
         )
         measured = _measure(setup, result.run, host_run, benchmark_run)
         metric, se = measured.compute()

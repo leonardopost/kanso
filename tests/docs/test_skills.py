@@ -50,6 +50,19 @@ def test_the_hypothesis_skill_writes_a_session_the_gate_accepts() -> None:
     assert check_params(catalogue()["trading_hours"], params, make_hyp(), 4) == []
 
 
+def test_the_hypothesis_skill_states_a_grid_in_the_keys_the_schema_reads() -> None:
+    """The block is copied into hypotheses as written, so its keys are the schema's, and the
+    count is the operator's, never the agent's."""
+    from kanso.schemas import PriorTrials
+
+    text = skill(PACKAGED, "kanso-hypothesis")
+    found = re.search(r"`prior_trials: \{(.*?)\}`", text)
+    assert found is not None
+    keys = [part.split(":")[0].strip() for part in found.group(1).split(",")]
+    assert keys == list(PriorTrials.model_fields)
+    assert "take N from the operator, never from your own reading of the file" in text
+
+
 def test_the_promote_skill_names_the_one_cost_a_broker_does_not_supply() -> None:
     text = skill(PACKAGED, "kanso-promote")
     assert "must be `fixed_bps` on the hypothesis or under `venues.<MIC>.costs`" in text

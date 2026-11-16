@@ -19,6 +19,7 @@ import pytest
 import kanso
 from kanso.cli import doctor
 from kanso.criteria import SCOPED_FILES
+from kanso.criteria.gates import search_margin
 from kanso.criteria.integrity import clashes
 from kanso.criteria.objectives import wf_sharpe_net
 from kanso.data import instruments, snapshot
@@ -28,7 +29,7 @@ from kanso.hyp import show
 from kanso.nautilus import backtest
 from kanso.research import lanes, loop, passages, records, scheduler
 from kanso.research.results import results_file, results_tsv
-from kanso.schemas import Hypothesis, InstrumentsFile, Resolved, RunRecord, write_yaml
+from kanso.schemas import Card, Hypothesis, InstrumentsFile, Resolved, RunRecord, write_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace, find
 
@@ -724,6 +725,43 @@ def test_a_best_that_kept_no_measurement_is_compared_on_the_card_s_own_error_and
         "unpaired": loop.UNMEASURED,
     }
     assert records.best_of(store, hyp_id) == (best.strategy_sha, best.metric)
+
+
+def edge_of(card: Card) -> dict[str, object]:
+    """The `edge_per_trade` evidence a card carries."""
+    (gate,) = [gate for gate in card.gate_results if gate.id == "edge_per_trade"]
+    return dict(gate.evidence)
+
+
+def test_a_declared_grid_is_part_of_the_search_every_card_s_margin_is_struck_for(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A card is one draw of the cards before it, itself and the settings its family declared
+    tried outside kanso; a turn's cards are each one draw of every proposal of the turn, and
+    the grid, beside the cards before it."""
+    grid = b"# pre-registered: 40 settings\n"
+    (ws.root / "evidence").mkdir()
+    (ws.root / "evidence" / "grid.md").write_bytes(grid)
+    declared = {"count": 40, "source": "evidence/grid.md", "sha256": sha256(grid).hexdigest()}
+    hyp_id = classify(ws, store, {**PAIRED, "prior_trials": declared})
+    run = loop.begin(ws, store, hyp_id)
+    edit(ws, run, REVERTING)
+    drawn = records.candidates(store, hyp_id)
+
+    one = edge_of(loop.card(ws, store, hyp_id, "the trough rule"))
+
+    assert (one["trials"], one["prior_trials"]) == (drawn + 1 + 40, 40)
+    assert one["expected_maximum"] == search_margin(drawn + 1 + 40)
+    drawn = records.candidates(store, hyp_id)
+    turn = loop.run_batch(
+        ws, store, hyp_id, [("weak", WEAK, ["refactor"]), ("larger", LARGER, ["refactor"])], slots=2
+    )
+    assert [(edge_of(card)["trials"], edge_of(card)["prior_trials"]) for card in turn] == [
+        (drawn + 2 + 40, 40)
+    ] * 2
+    assert all(card.n_trials <= records.n_trials(store, hyp_id) for card in turn), (
+        "a card's n_trials stays kanso's own cards"
+    )
 
 
 def test_a_hypothesis_held_under_a_day_signs_by_the_hour_and_the_same_bytes_still_repeat(

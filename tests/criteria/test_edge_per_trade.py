@@ -165,6 +165,23 @@ def test_a_k_se_above_the_search_s_expected_maximum_stands() -> None:
     assert not result.passed
 
 
+def test_a_declared_grid_is_part_of_the_search_and_the_evidence_says_how_much() -> None:
+    """`trials` is the cards and the settings the family declared tried outside kanso, so
+    the margin is struck on the total exactly as on as many cards; `prior_trials` says how
+    many of it no card drew. Twenty-three cards pass as one of fifty when the other
+    twenty-seven are a grid, as they would as cards, and fail as one of five hundred."""
+    carded = judged(SEARCHED, trials=50, min_bps=0.0, k_se=1.0)
+    params = {"min_bps": 0.0, "k_se": 1.0}
+    gridded = edge_per_trade.evaluate(context(SEARCHED, params=params, trials=50, prior_trials=27))
+    wider = edge_per_trade.evaluate(context(SEARCHED, params=params, trials=500, prior_trials=27))
+
+    assert carded.evidence["prior_trials"] == 0
+    assert gridded.evidence["prior_trials"] == wider.evidence["prior_trials"] == 27
+    assert {**gridded.evidence, "prior_trials": 0} == carded.evidence
+    assert gridded.passed and not wider.passed
+    assert wider.evidence["expected_maximum"] == search_margin(500)
+
+
 def _cauchy(u: float) -> float:
     return tan(pi * (u - 0.5))
 

@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 from hypothesis import given
 
 from kanso.criteria import objectives
@@ -17,7 +18,7 @@ from kanso.criteria.objectives import difference, wf_contribution_bps
 from kanso.criteria.run import CardRun, Held, Trade, midnight_ns
 from kanso.errors import PreconditionError
 from kanso.research import loop, records
-from kanso.schemas import Card, Costs, ObjectiveRef, RunRecord, resolve_venue_model
+from kanso.schemas import Card, Costs, ObjectiveRef, PriorTrials, RunRecord, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.schemas import strategies as gen
@@ -327,6 +328,42 @@ def test_a_family_is_walked_once_whatever_the_files_name(
     assert records._derived_from(store, "0" * 64) == ()
     assert records._derived_from(store, store.put_blob(b"id: x\n")) == ()
     assert records._derived_from(store, store.put_blob(b"derived_from: demo_x\n")) == ()
+    assert records._derived_from(store, store.put_blob(b"- a list, not a file\n")) == ()
+
+
+def a_grid(
+    count: int, source: str = "evidence/grid.md", digest: str = "3f" * 32, *parents: str
+) -> bytes:
+    """A pinned file stating an offline grid of `count` settings, deriving from `parents`."""
+    block = {"count": count, "source": source, "sha256": digest}
+    return yaml.safe_dump({"derived_from": list(parents), "prior_trials": block}).encode()
+
+
+def test_a_family_s_prior_trials_are_the_sum_of_its_grids_each_counted_once(
+    store: StateStore,
+) -> None:
+    """Each member's newest registration states its own grid; the family adds them, a grid
+    two members state — the same source and digest — once at the larger count, and a member
+    the store does not know states nothing, as it counts no card."""
+    a_hypothesis(store, "demo_root", a_grid(27))
+    a_hypothesis(store, "demo_parent", a_grid(9, "evidence/parent.md", "4e" * 32, "demo_root"))
+    a_hypothesis(store, "demo_child", a_grid(27, "evidence/grid.md", "3f" * 32, "demo_parent"))
+    a_hypothesis(store, "demo_wider", a_grid(30, "evidence/grid.md", "3f" * 32, "demo_root"))
+    a_hypothesis(store, "demo_draft", b"derived_from: [demo_root, demo_unregistered]\n")
+    a_hypothesis(store, "demo_older", b"id: demo_older\n", b"prior_trials: null\n")
+
+    assert records.prior_trials(store, "demo_root") == 27
+    assert records.prior_trials(store, "demo_parent") == 36
+    assert records.prior_trials(store, "demo_child") == 36, "the root's grid, repeated, once"
+    assert records.prior_trials(store, "demo_wider") == 30, "one grid, at the larger count"
+    assert records.prior_trials(store, "demo_draft") == 27, "inherited through derived_from"
+    assert records.prior_trials(store, "demo_older") == 0
+    assert records.prior_trials(store, "nobody_here") == 0
+    assert records.declared_prior(store, "demo_parent") == PriorTrials(
+        count=9, source="evidence/parent.md", sha256="4e" * 32
+    )
+    assert records.declared_prior(store, "demo_draft") is None
+    assert records.declared_prior(store, "nobody_here") is None
 
 
 def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(

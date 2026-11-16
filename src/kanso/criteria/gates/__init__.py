@@ -816,6 +816,7 @@ class _DeflatedSharpe:
                 "standard_error": error / scale,
                 "expected_maximum": expected,
                 "trials": searched,
+                "prior_trials": ctx.prior_trials,
                 "scored_trials": len(metrics),
             },
         )
@@ -862,7 +863,8 @@ def _searched(ctx: GateContext, metrics: Sequence[float]) -> int:
     from a per-trade edge to a contribution after three hundred cards: its first certificate
     was deflated by one trial and so skipped, and two cards later by the expected maximum of
     two draws rather than of three hundred, seven to thirteen basis points a day of selection
-    left unpriced (`docs/backlog.md` row 173). `trials` is what certification counts, and 1
+    left unpriced (`docs/backlog.md` row 173). `trials` is what certification counts — those
+    cards and the settings the family declares tried outside kanso, `prior_trials` — and 1
     where nothing did, so the set's own count is the floor.
     """
     return max(ctx.trials, len(metrics))
@@ -952,6 +954,7 @@ def _deflated_mean(
             "expected_maximum_bps": expected,
             "trial_spread_bps": sqrt(spread),
             "trials": searched,
+            "prior_trials": ctx.prior_trials,
             "scored_trials": len(metrics),
             counted: count_of,
         },
@@ -1087,7 +1090,9 @@ class _EdgePerTrade:
     to the search's length. So `normal_margin` is never below the expected maximum of `trials`
     standard normals: 0 errors on one card, 0.52 at 2 trials, 2.28 at 50 and 3.05 at 500.
     `trials` is this card and every card of the hypothesis before it that ran to a result and
-    traded, under any objective (`GateContext.trials`). Each card is held to the search as it
+    traded, under any objective, and the settings its family declares tried outside kanso in
+    the grids that chose its seeds (`GateContext.trials`, the evidence's `prior_trials` saying
+    how many of them were declared). Each card is held to the search as it
     stood when it ran, so the expected count of zero-edge cards that pass grows with the
     logarithm of the search rather than with its length: over 500 cards, about 3.3 at `k_se`
     1 rather than 79, 2.3 at `k_se` 2 rather than 11, and 0.67 at `k_se` 3 either way. That
@@ -1150,6 +1155,7 @@ class _EdgePerTrade:
                 "se": se,
                 "k_se": k_se,
                 "trials": ctx.trials,
+                "prior_trials": ctx.prior_trials,
                 "expected_maximum": searched,
                 "normal_margin": normal,
                 "margin": margin,

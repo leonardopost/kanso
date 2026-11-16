@@ -80,14 +80,18 @@ from the second card takes its expected maximum over every card of the hypothesi
 that ran and traded, under any objective, and its spread from the cards scored under the
 subject's own (`kanso.criteria.gates._searched`): a hypothesis re-pinned to another
 objective carries across the strategy the earlier search selected, and it is that search
-the certificate prices. Two cases are refused before anything runs, because each would
-otherwise be a certificate whose correction judged nothing and so passed. One is a subject
-behind two or more such cards with fewer than two scored in its objective's units — the
-carried strategy certified as the first card under its new objective — whose spread
-cannot be read (`unpriced`). The other is a subject scored under an objective whose
-correction the pinned plan does not carry, with its threshold, once the search has two
-cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
-objective the hypothesis has now.
+the certificate prices. The settings the family declares tried outside kanso in the grids
+that chose its seeds (`kanso.research.records.prior_trials`) are draws of the same search,
+so they join the cards in every count here — the draws, the count of two from which a plan
+carries the correction, and the two refusals below — and in no spread, and the
+certificate's `n_trials` stays kanso's cards. Two cases are refused before anything runs,
+because each would otherwise be a certificate whose correction judged nothing and so
+passed. One is a subject behind two or more such draws with fewer than two cards scored in
+its objective's units — the carried strategy certified as the first card under its new
+objective, or the first card behind a declared grid — whose spread cannot be read
+(`unpriced`). The other is a subject scored under an objective whose correction the pinned
+plan does not carry, with its threshold, once the search has two draws: `cert run --sha` of
+a card from before the re-pin, whose plan was made for the objective the hypothesis has now.
 
 **Every certificate is a look at its window, and records which.** The certificates the
 subject's lineage has already made at a certification window intersecting the subject's
@@ -464,7 +468,7 @@ def _certify(
     plan = plan_for(ws, store, hyp_id, lane=lane, sha=subject.strategy_sha)
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
-    _refuse_uncorrected(plan, subject, n_trials, registration)
+    _refuse_uncorrected(plan, subject, n_trials + records.prior_trials(store, hyp_id), registration)
     reason = unpriced(store, hyp_id, subject.objective_id, n_trials)
     if reason is not None:
         raise PreconditionError(
@@ -542,25 +546,30 @@ def show(ws: Workspace, store: StateStore, hyp_id: str) -> Certificate | None:
 def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -> str | None:
     """Why the search behind a card scored under `objective_id` cannot be priced, or `None`.
 
-    The search is priced from `SEARCH_TRIALS` cards on, by the deflation gate the toolbox
-    says `deflates` the objective: over every card of the family that ran and traded, with
-    the spread of those scored in the objective's units. A family with two such cards and
-    fewer than two of them in those units has a search behind it and no spread to price it
-    by, and a deflation that cannot read its spread skips, which passes — the route a
-    strategy carried across a re-pin to another objective took to an uncorrected
-    certificate as the first card scored under its new one (`docs/backlog.md` row 173).
+    The search is priced from `SEARCH_TRIALS` trials on, by the deflation gate the toolbox
+    says `deflates` the objective: over every card of the family that ran and traded and the
+    settings the family declares tried outside kanso (`records.prior_trials`), with the
+    spread of the cards scored in the objective's units. A search of two such draws with
+    fewer than two cards in those units has no spread to price it by, and a deflation that
+    cannot read its spread skips, which passes — the route a strategy carried across a re-pin
+    to another objective took to an uncorrected certificate as the first card scored under
+    its new one (`docs/backlog.md` row 173), and the route a declared grid would take on the
+    first card of its hypothesis. `n_trials` is kanso's count of the family's cards; the
+    declared settings are added to it here.
     """
     gate = deflation_gate(objective_id)
-    if n_trials < SEARCH_TRIALS or gate is None:
+    prior = records.prior_trials(store, hyp_id)
+    if n_trials + prior < SEARCH_TRIALS or gate is None:
         return None
     searched = records.candidates(store, hyp_id)
     scored = len(records.trial_metrics(store, hyp_id, objective_id))
-    if searched < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
+    if searched + prior < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
         return None
+    beside = f", beside {prior} settings its family declares tried outside kanso,"
     return (
-        f"{hyp_id} has {searched} cards that ran and traded behind it and {scored} of them "
-        f"scored under {objective_id}, so {gate} cannot read the spread of the search that "
-        f"selected this card: it prices the search from two cards in its units"
+        f"{hyp_id} has {searched} cards that ran and traded behind it{beside if prior else ''} "
+        f"and {scored} of them scored under {objective_id}, so {gate} cannot read the spread of "
+        "the search that selected this card: it prices the search from two cards in its units"
     )
 
 
@@ -780,6 +789,7 @@ def _deflation(
     context `_judge` builds for it, with the research run in the run's place."""
     objective = cast("ObjectiveRef", hyp.objective).id
     research = hyp.windows.research
+    prior = records.prior_trials(store, hyp.id)
     context = GateContext(
         hyp=hyp,
         construct=cast("ConstructRef", hyp.construct).id,
@@ -796,7 +806,8 @@ def _deflation(
         benchmark_run=researched.benchmark,
         benchmark_research_run=researched.benchmark,
         trial_metrics=records.trial_metrics(store, hyp.id, objective),
-        trials=max(records.candidates(store, hyp.id), 1),
+        trials=max(records.candidates(store, hyp.id) + prior, 1),
+        prior_trials=prior,
     )
     result = gates()[planned.id].evaluate(context)
     judged = result.skipped is None
@@ -1440,7 +1451,8 @@ def _judge(
     )
     stated = power(*researched, subject.research, subject.certification, window_params(plan))
     metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
-    searched = records.candidates(store, subject.hyp.id)
+    prior = records.prior_trials(store, subject.hyp.id)
+    searched = records.candidates(store, subject.hyp.id) + prior
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
     parameters = _tunable(subject)
@@ -1484,6 +1496,7 @@ def _judge(
             benchmark_research_run=measured.benchmark_research,
             trial_metrics=metrics,
             trials=max(searched, 1),
+            prior_trials=prior,
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,

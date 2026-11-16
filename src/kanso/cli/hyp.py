@@ -28,9 +28,10 @@ from kanso import hyp
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
 from kanso.hyp import Registration
+from kanso.research import records
 from kanso.research.explore import explore
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import Hypothesis
+from kanso.schemas import Hypothesis, PriorTrials
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -144,7 +145,10 @@ def _warnings(warnings: tuple[str, ...]) -> tuple[str, ...]:
 def _show(ws: Workspace, hyp_id: str | None) -> Report:
     with store(ws) as opened:
         found = hyp.show(ws, opened, hyp_id)
+        listed = [found] if isinstance(found, Registration) else found
+        declared = {item.hyp_id: records.declared_prior(opened, item.hyp_id) for item in listed}
     if isinstance(found, Registration):
+        prior = declared[found.hyp_id]
         lines = [
             field("hypothesis", found.hyp_id),
             field("status", found.status),
@@ -152,11 +156,14 @@ def _show(ws: Workspace, hyp_id: str | None) -> Report:
             field("pinned", "yes" if found.pinned else "no (the workspace file has moved)"),
             field("construct", found.construct or "unclassified"),
             field("objective", found.objective or "unclassified"),
+            *_prior_lines(prior),
             field("best", _best(found)),
             field("run", found.active_run or "none active"),
         ]
-        return Report(data=found.payload(), lines=tuple(lines))
-    data: dict[str, Any] = {"hypotheses": [item.payload() for item in found]}
+        return Report(data={**found.payload(), **_prior(prior)}, lines=tuple(lines))
+    data: dict[str, Any] = {
+        "hypotheses": [{**item.payload(), **_prior(declared[item.hyp_id])} for item in found]
+    }
     rows = [
         field(item.hyp_id, f"{item.status} · {item.construct or 'unclassified'} · {_best(item)}")
         for item in found
@@ -233,7 +240,21 @@ def _summary(hypothesis: Hypothesis, path: Path) -> dict[str, Any]:
         "construct": None if hypothesis.construct is None else hypothesis.construct.id,
         "objective": None if hypothesis.objective is None else hypothesis.objective.id,
         "constraints": [item.id for item in hypothesis.constraints or []],
+        **_prior(hypothesis.prior_trials),
     }
+
+
+def _prior(declared: PriorTrials | None) -> dict[str, Any]:
+    """The `prior_trials` a file states, as its JSON carries it: the block, or `null`."""
+    return {"prior_trials": None if declared is None else declared.model_dump(mode="json")}
+
+
+def _prior_lines(declared: PriorTrials | None) -> tuple[str, ...]:
+    """One `prior_trials` line where a file states the grid that chose its seed."""
+    if declared is None:
+        return ()
+    stated = f"{declared.count} · {declared.source} · {declared.sha256[:7]}"
+    return (field("prior_trials", stated),)
 
 
 def _summary_lines(hypothesis: Hypothesis, path: Path, verdict: str) -> tuple[str, ...]:
@@ -245,4 +266,5 @@ def _summary_lines(hypothesis: Hypothesis, path: Path, verdict: str) -> tuple[st
         indent(f"research      {windows.research.start}..{windows.research.end}"),
         indent(f"certification {windows.certification.start}..{windows.certification.end}"),
         indent(f"forward       {windows.forward.start}.."),
+        *_prior_lines(hypothesis.prior_trials),
     )

@@ -313,6 +313,58 @@ def test_show_of_one_reports_its_pins_and_its_best(runner: CliRunner, registered
     assert "classified" in result.stdout
     assert "no keep yet" in result.stdout
     assert "none active" in result.stdout
+    assert "prior_trials" not in result.stdout, "a file that states no grid prints no line"
+
+
+def test_validate_add_and_show_carry_the_grid_a_file_declares(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The count, the evidence and its digest, in the JSON and on one line; a file stating
+    none carries `null` and no line."""
+    from hashlib import sha256
+
+    grid = b"# pre-registered: 27 settings\n"
+    (loaded / "evidence").mkdir()
+    (loaded / "evidence" / "grid.md").write_bytes(grid)
+    digest = sha256(grid).hexdigest()
+    block = {"count": 27, "source": "evidence/grid.md", "sha256": digest}
+    line = f"27 · evidence/grid.md · {digest[:7]}"
+    plain = write_hypothesis(loaded, id="demo_plain")
+    path = write_hypothesis(loaded, prior_trials=block)
+
+    checked = at(runner, loaded, "hyp", "validate", path, "--json")
+    said = at(runner, loaded, "hyp", "validate", path)
+    added = at(runner, loaded, "hyp", "add", path, "--json")
+    assert at(runner, loaded, "hyp", "add", plain).exit_code == Exit.OK
+    one = at(runner, loaded, "hyp", "show", HYP_ID, "--json")
+    shown = at(runner, loaded, "hyp", "show", HYP_ID)
+    listed = at(runner, loaded, "hyp", "show", "--json")
+
+    assert (checked.exit_code, said.exit_code, added.exit_code) == (Exit.OK,) * 3
+    assert payload(checked)["prior_trials"] == payload(added)["prior_trials"] == block
+    assert "prior_trials" in said.stdout and line in said.stdout
+    assert payload(one)["prior_trials"] == block
+    assert "prior_trials" in shown.stdout and line in shown.stdout
+    assert {entry["id"]: entry["prior_trials"] for entry in payload(listed)["hypotheses"]} == {
+        HYP_ID: block,
+        "demo_plain": None,
+    }
+
+
+def test_validate_refuses_a_grid_whose_evidence_hashes_otherwise(
+    runner: CliRunner, loaded: Path
+) -> None:
+    (loaded / "evidence").mkdir()
+    (loaded / "evidence" / "grid.md").write_bytes(b"# edited after the count was stated\n")
+    path = write_hypothesis(
+        loaded, prior_trials={"count": 27, "source": "evidence/grid.md", "sha256": "3f" * 32}
+    )
+
+    result = at(runner, loaded, "hyp", "validate", path, "--json")
+
+    assert result.exit_code == Exit.VALIDATION
+    assert payload(result)["error"].startswith("prior_trials.sha256: the bytes of evidence/grid.md")
+    assert "shasum -a 256" in payload(result)["remedy"]
 
 
 def test_show_of_an_unregistered_id_is_a_precondition_failure(

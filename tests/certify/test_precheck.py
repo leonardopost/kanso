@@ -35,7 +35,7 @@ from kanso.research.records import Measurement
 from kanso.schemas import ObjectiveRef
 from kanso.state import StateStore
 from kanso.workspace import Workspace
-from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, a_manifest, write_plan
+from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, a_grid, a_manifest, write_plan
 from tests.criteria.builders import build_run
 from tests.research.conftest import DOCUMENT, FLAT, HYP_ID, RESEARCH, REVERTING, classify
 
@@ -112,6 +112,24 @@ def test_a_search_whose_trials_barely_differ_passes(ws: Workspace, store: StateS
 
     assert (checked.judged, checked.passed, checked.spared) == (True, True, False)
     assert checked.evidence["dsr"] >= checked.evidence["min_dsr"]
+
+
+def test_a_declared_grid_is_among_the_draws_the_precheck_deflates_by(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The stall's correction counts the search the certificate's would: the cards that ran
+    and traded and the settings the family declared, from the same spread."""
+    sha = best_with(ws, store, *WIDE)
+    alone = precheck(ws, store, HYP_ID, sha, plan_of(ws))
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 40)}, REVERTING)
+
+    checked = precheck(ws, store, HYP_ID, sha, plan_of(ws))
+
+    assert (alone.evidence["trials"], alone.evidence["prior_trials"]) == (5, 0)
+    assert (checked.evidence["trials"], checked.evidence["prior_trials"]) == (45, 40)
+    assert checked.evidence["scored_trials"] == alone.evidence["scored_trials"] == 5
+    assert checked.evidence["expected_maximum"] > alone.evidence["expected_maximum"]
+    assert checked.evidence["dsr"] < alone.evidence["dsr"]
 
 
 @pytest.mark.parametrize(

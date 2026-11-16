@@ -9,9 +9,9 @@ import pytest
 from hypothesis import given
 
 from kanso.errors import Exit, ValidationError
-from kanso.schemas import Hypothesis, PeriodTarget, embargo, embargo_days
+from kanso.schemas import Hypothesis, PeriodTarget, PriorTrials, embargo, embargo_days
 from kanso.schemas.hypothesis import WEEKDAYS
-from tests.schemas.strategies import hypotheses, period_targets
+from tests.schemas.strategies import hypotheses, period_targets, prior_trials
 
 BASE: dict[str, Any] = {
     "schema": 1,
@@ -264,6 +264,42 @@ def test_derived_from_names_other_hypotheses_once_each() -> None:
         build(derived_from=[build().id])
     with pytest.raises(ValidationError, match="derived_from"):
         build(derived_from=["Not-An-Id"])
+
+
+GRID: dict[str, Any] = {"count": 27, "source": "evidence/grid.md", "sha256": "3f" * 32}
+"""An offline grid of 27 settings and the evidence it is stated from."""
+
+
+def test_prior_trials_is_optional_and_reads_back_as_stated() -> None:
+    assert build().prior_trials is None
+    stated = build(prior_trials=GRID).prior_trials
+    assert stated is not None
+    assert stated.model_dump() == GRID
+
+
+@pytest.mark.parametrize(
+    ("block", "field"),
+    [
+        ({**GRID, "count": 0}, "prior_trials.count"),
+        ({**GRID, "count": -27}, "prior_trials.count"),
+        ({**GRID, "source": ""}, "prior_trials.source"),
+        ({**GRID, "sha256": "3F" * 32}, "prior_trials.sha256"),
+        ({**GRID, "sha256": "3f5c"}, "prior_trials.sha256"),
+        ({"count": 27, "source": "evidence/grid.md"}, "prior_trials.sha256"),
+        ({**GRID, "settings": 27}, "prior_trials.settings"),
+    ],
+)
+def test_a_grid_is_a_count_of_one_or_more_with_its_evidence_and_nothing_else(
+    block: dict[str, Any], field: str
+) -> None:
+    with pytest.raises(ValidationError, match=field.replace(".", r"\.")):
+        build(prior_trials=block)
+
+
+@given(prior_trials())
+def test_prior_trials_round_trips(grid: PriorTrials) -> None:
+    assert PriorTrials.model_validate(grid.model_dump(mode="json")) == grid
+    assert build(prior_trials=grid.model_dump(mode="json")).prior_trials == grid
 
 
 @pytest.mark.parametrize("bad", ["ab", "Demo", "demo-mr", "d" * 41, ""])

@@ -24,7 +24,8 @@ Plan validation enforces the structural invariants and nothing else. Every gate 
 runs at the stage the toolbox says it runs at, and carries values inside its ranges; every
 gate the toolbox marks required is present and none of them is excluded; the plan reaches
 all three stages; and once the hypothesis's `n_trials` — every card it has, the count a
-certificate is stamped with — reaches `SEARCH_TRIALS`, the plan includes the gate that
+certificate is stamped with — and the `prior_trials` its family declares tried outside kanso
+together reach `SEARCH_TRIALS`, the plan includes the gate that
 `deflates` its objective, with its threshold set — a result selected from a search is
 priced for the search, and that is a structural fact about selection, not a judgement
 about this hypothesis. Which of the remaining gates to include, and with which values —
@@ -342,8 +343,9 @@ def plan_complaints(
     All of them at once, because the planner is allowed one retry: a plan corrected one
     complaint at a time would cost a call per mistake.
 
-    `n_trials` is the hypothesis's count of cards, every one of every run, the count a
-    certificate is stamped with. From `SEARCH_TRIALS` on, the gate that `deflates` the
+    `n_trials` is the hypothesis's count of cards, every one of every run — the count a
+    certificate is stamped with — and the `prior_trials` its family declares tried outside
+    kanso, added by the caller. From `SEARCH_TRIALS` on, the gate that `deflates` the
     hypothesis's objective is held to more than a required gate is — present, not excluded,
     and with every parameter it declares set — because the result a certificate judges is
     then the best of a search, nothing else in a plan prices one, and a deflation gate with
@@ -401,7 +403,8 @@ def plan_complaints(
     correction = required_deflation(hyp, n_trials)
     searched = (
         f"is the search correction for {hyp.objective.id}, and a plan includes it once "
-        f"n_trials, every card of the hypothesis, reaches {SEARCH_TRIALS} (it is {n_trials})"
+        "n_trials, every card of the hypothesis, and the prior_trials its family declares "
+        f"reach {SEARCH_TRIALS} together (they are {n_trials})"
         if correction is not None and hyp.objective is not None
         else ""
     )
@@ -446,9 +449,10 @@ def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, 
 
     The raising form of `plan_complaints`, which is the one rule set: two validators that
     had to agree would eventually not. The search it is checked against is the one the plan
-    records it was made behind, `inputs.n_trials`.
+    records it was made behind, `inputs.n_trials` and `inputs.prior_trials` together.
     """
     model = plan if isinstance(plan, CertificationPlan) else CertificationPlan.model_validate(plan)
-    problems = plan_complaints(model.gates, model.excluded, hyp, folds, model.inputs.n_trials)
+    searched = model.inputs.n_trials + model.inputs.prior_trials
+    problems = plan_complaints(model.gates, model.excluded, hyp, folds, searched)
     if problems:
         raise ValidationError("; ".join(problems))

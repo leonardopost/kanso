@@ -1190,7 +1190,8 @@ tag, its keeps and their scores, its stalls, and each certificate's verdict with
 the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
 judged on the ladder: an id nothing holds, a file that parses with that id and no
 classification, naming the parent in `derived_from` so the parent's cards are the
-candidate's trials too, a strategy the static alignment checks accept against it and whose
+candidate's trials too — and its declared grid, so the candidate states no `prior_trials` of
+its own — a strategy the static alignment checks accept against it and whose
 bytes the workspace has never stored, and windows that neither research past the end of the
 parent's research window nor certify before the start of its certification window. Nor may
 the candidate certify inside its own embargo counted from the last day the *parent*
@@ -1233,8 +1234,22 @@ was asked before the signature, so it would have been kept had it beaten the bes
 another candidate held the same book makes it a correlated trial rather than no trial, and
 how much less than one a correlated trial is worth is open on the same terms as the
 hill-climbing path it sits on (`docs/backlog.md` row 59). The gate reports the candidates as
-`trials`, at or below the certificate's `n_trials`, and the trials its spread was read from
-as `scored_trials`.
+`trials`, at or below the certificate's `n_trials` until a grid is declared, and the trials
+its spread was read from as `scored_trials`.
+
+A seed chosen as the best of a grid run outside kanso was chosen from draws no card made, and
+`prior_trials` in `hypothesis.yaml` states how many, with the evidence (`docs/workspace.md`,
+`hypotheses/<id>/`). Every count by which kanso prices a search adds the settings the
+hypothesis's family declares — summed over the hypotheses `n_trials` counts, a grid two of
+them state counted once — to the cards it counts: the trials `edge_per_trade` holds a card's
+margin to, the candidates a deflation's expected maximum is taken over, the count of two
+from which a plan must carry its search correction, and the refusal of a search with no
+spread to read. It is a count with no units, so it widens the draws and never the spread: a
+deflation still reads its spread from the trials and is still refused until two of them
+exist. `n_trials` stays kanso's cards, since a card and a certificate are stamped with it
+and the certificate's filename carries it; each gate's evidence carries `trials`, the whole
+count, and `prior_trials`, the declared part of it, and a plan records `inputs.n_trials` and
+`inputs.prior_trials` apart.
 
 ## What a card must satisfy
 
@@ -2451,21 +2466,22 @@ exits 2.
 **A search is corrected for, from its second card.** Every objective has exactly one
 deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
 Sharpes, `deflated_contribution` for the contributions, `deflated_edge` for the per-trade
-edges — and once the hypothesis's `n_trials`, every card it has, reaches two, a plan
-includes it with its threshold set: the subject a certificate judges is then the best of a
+edges — and once the hypothesis's `n_trials`, every card it has, and the `prior_trials` its
+family declares tried outside kanso reach two together, a plan includes it with its
+threshold set: the subject a certificate judges is then the best of a
 search, and nothing else in a plan prices that. A deflation gate named without its threshold
 would skip, and a skip passes, so a bare one is refused like a missing one. The planner is
 told so in the invariants and sent back when it forgets; how high the gate's bar sits is
 still its answer, from a range whose floor is 0.9 — at 0.5, where the three ranges used to
 start, a best with no edge passed `deflated_edge` and `deflated_contribution` 45 to 56
 percent of the time at 2, 50 and 500 trials, so a plan could satisfy the rule and price
-almost nothing. A plan pinned before the second card, under a threshold below the floor, or
-by a kanso that did not hold it to this, is refused where it is read — by `cert plan` and by
+almost nothing. A plan pinned before the second card or before a grid was declared, under a
+threshold below the floor, or by a kanso that did not hold it to this, is refused where it is read — by `cert plan` and by
 `cert run` — with the way out:
 
 ```
 $ kanso cert run demo_mr
-error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan includes it once n_trials, every card of the hypothesis, reaches 2 (it is 4)
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan includes it once n_trials, every card of the hypothesis, and the prior_trials its family declares reach 2 together (they are 4)
 remedy: run `kanso cert plan demo_mr --replan` to plan again
 ```
 
@@ -2475,7 +2491,10 @@ maximum over the candidates, under every objective, and its spread from the tria
 above. While fewer than two cards are candidates at all it skips, which passes — nothing has
 yet been chosen over anything. A subject behind two candidates or more with fewer than two
 trials of its objective is refused before anything runs (exit 2): that search has a spread
-nobody can read, and a deflation that cannot read it skips. It is where a re-pin to another
+nobody can read, and a deflation that cannot read it skips. A grid the family declares
+(`prior_trials`, *Card* above) joins the cards in the requirement and the candidates in the
+gate and in this refusal, and never the trials, so the first card behind one is refused here
+until a second is scored. It is where a re-pin to another
 objective used to lead — the strategy the earlier search selected, carried across in the
 workspace `strategy.py`, became the next run's baseline and its best, and was certified with
 its correction skipping while the certificate was stamped with hundreds of cards:
