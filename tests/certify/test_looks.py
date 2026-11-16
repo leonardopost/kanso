@@ -26,6 +26,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from kanso.certify import certificate, run
+from kanso.certify import looks as looks_module
 from kanso.certify.looks import Look, certification_window, looks, read_no_window
 from kanso.certify.run import certify, certify_at_stall, precheck
 from kanso.cli import status
@@ -381,7 +382,8 @@ def test_status_reads_each_registered_file_once_however_many_hypotheses_it_lists
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One lineage of six, each certified once: the lineage graph and every pinned window are
-    read once for the whole screen, not once for each row that asks."""
+    read once for the whole screen, not once for each row that asks, and so is every
+    certificate's gates — the six members share a window, so the lineage is counted once."""
     classify(ws, store, DOCUMENT)
     members = [HYP_ID]
     for n in range(5):
@@ -396,10 +398,19 @@ def test_status_reads_each_registered_file_once_however_many_hypotheses_it_lists
         return load(text)
 
     monkeypatch.setattr(yaml, "safe_load", counted)
+    judged: list[object] = []
+    unread = looks_module.read_no_window
+
+    def judging(evidence: Any) -> bool:
+        judged.append(evidence)
+        return unread(evidence)
+
+    monkeypatch.setattr(looks_module, "read_no_window", judging)
 
     rows = status._hypotheses(store)
 
     assert {row["holdout_looks"] for row in rows} == {len(members)}
+    assert len(judged) == len(members), "each certificate's gates once for the whole screen"
     pins = {
         store.get_blob(str(row[0]))
         for row in store.connection.execute("SELECT hypothesis_sha FROM hypotheses").fetchall()

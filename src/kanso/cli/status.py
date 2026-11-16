@@ -147,7 +147,8 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
     """Every registered hypothesis with its status, its best metric, its card count, its
     newest stall — whether it certified, and the search correction that decided it — and how
     many looks its lineage has taken at its certification window, counted over a lineage
-    graph and pinned windows read once for every row."""
+    graph and pinned windows read once for every row, and once for each lineage and window
+    rather than once for each member that shares them."""
     rows = opened.connection.execute(
         "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric, h.hypothesis_sha,"
         " h.consecutive_cert_failures AS cert_failures,"
@@ -156,6 +157,7 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
     ).fetchall()
     linked = records.links(opened)
     pinned: dict[object, Window | None] = {}
+    counted: dict[tuple[frozenset[str], Window], int] = {}
     return [
         {
             "id": str(row["hyp_id"]),
@@ -166,7 +168,7 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
             "cert_failures": int(row["cert_failures"]),
             "last_stall": scheduler.last_stall(opened, str(row["hyp_id"])),
             "holdout_looks": _holdout_looks(
-                opened, str(row["hyp_id"]), row["hypothesis_sha"], linked, pinned
+                opened, str(row["hyp_id"]), row["hypothesis_sha"], linked, pinned, counted
             ),
         }
         for row in rows
@@ -179,14 +181,22 @@ def _holdout_looks(
     pin: object,
     linked: Mapping[str, Set[str]],
     pinned: dict[object, Window | None],
+    counted: dict[tuple[frozenset[str], Window], int],
 ) -> int | None:
     """The certificates this hypothesis's lineage has made at a window intersecting the
     certification window its file is pinned to (`kanso.certify.looks`); `None` for a
-    hypothesis with no pinned file that declares one that reads."""
+    hypothesis with no pinned file that declares one that reads.
+
+    The count is the lineage's, whichever member asks, so a member whose window another has
+    already asked about takes the count from `counted` rather than reading every
+    certificate of the lineage again."""
     window = window_of(opened, pin, pinned)
     if window is None:
         return None
-    return len(looks_at(opened, hyp_id, window, linked=linked, pinned=pinned).prior)
+    key = (frozenset(records.lineage(opened, hyp_id, linked)), window)
+    if key not in counted:
+        counted[key] = len(looks_at(opened, hyp_id, window, linked=linked, pinned=pinned).prior)
+    return counted[key]
 
 
 def _baseline_failed(opened: StateStore) -> list[dict[str, Any]]:
