@@ -318,9 +318,9 @@ def test_the_timing_reader_holds_a_read_and_a_chunk_of_the_window_and_what_it_fo
     """`entry_timing`'s reader reads the certification window once more for every contribution
     and every Sharpe a plan certifies: it holds one read and one chunk of the window while it
     reads, as a run does, and a reading per key per session once it has, never the window.
-    Measured on 2026-11-16 (nautilus_trader 1.231.0) at reads of 500 points and chunks of 250,
+    Measured on 2026-11-17 (nautilus_trader 1.231.0) at reads of 500 points and chunks of 250,
     a quarter of the caps the runs here are cut at, it peaked at 0.13 of the window held whole
-    and kept 0.003 of it."""
+    and kept 0.005 to 0.006 of it, over three runs."""
     held = window_held(ws)
     classify(ws, store, DOC, SOURCE)
     a_card(ws, store, SOURCE, hyp_id=HYP_ID, document=DOC)
