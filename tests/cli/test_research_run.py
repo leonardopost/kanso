@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from kanso.certify import certificate
+from kanso.certify.plan import read_plan
+from kanso.certify.run import precheck
 from kanso.errors import Exit
 from kanso.hyp import set_status, show
 from kanso.models import spend
@@ -254,6 +257,33 @@ def test_a_spared_stall_reports_no_certificate_an_earlier_pin_made(
         assert "certification spared · deflated_edge " in second.stdout
         assert "certified" not in second.stdout
         assert f"kanso cert show {HYP_ID}" not in second.stdout
+
+
+def test_a_stall_s_correction_is_the_certificate_s_own_to_the_last_bit(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """On a per-trade edge, corrected by `deflated_edge`: the lane's reading of the card the
+    loop measured, the child's on the research window it ran again, and the certificate's
+    correction are one number, bit for bit."""
+    mocked.tuned(mocked_ws, stall_k=1)
+
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+
+    ws = find(mocked_ws)
+    with StateStore(ws.path("state.db")) as opened:
+        made = certificate.latest(opened, HYP_ID)
+        pinned = read_plan(ws, HYP_ID)
+        assert made is not None and pinned is not None
+        lane = precheck(ws, opened, HYP_ID, outcome["best_sha"], pinned)
+    (deflation,) = [gate for gate in made.gates if gate.id == "deflated_edge"]
+    child = outcome["stall"]["precheck"]
+    assert lane.judged and child["judged"] and deflation.skipped is None
+    assert (lane.measured, child["measured"]) == (False, True)
+    assert dict(lane.evidence) == child["evidence"] == dict(deflation.evidence)
+    assert {"probability", "expected_maximum_bps", "trials", "scored_trials"} <= set(
+        deflation.evidence
+    )
+    assert lane.passed is child["pass"] is deflation.passed is True
 
 
 def test_a_stall_that_wrote_nothing_reports_no_earlier_stall_as_its_own(
