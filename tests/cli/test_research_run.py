@@ -264,9 +264,7 @@ def test_a_stall_s_correction_is_the_certificate_s_own_to_the_last_bit(
 ) -> None:
     """On a per-trade edge, corrected by `deflated_edge`: the lane's reading of the card the
     loop measured, the child's on the research window it ran again, and the certificate's
-    correction are one number, bit for bit. The lane is read after the certificate was
-    written, which is then a look of the lineage at the window, so it reads the next look's
-    level; the child read the certificate's own."""
+    correction are one number, bit for bit."""
     mocked.tuned(mocked_ws, stall_k=1)
 
     outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
@@ -281,13 +279,7 @@ def test_a_stall_s_correction_is_the_certificate_s_own_to_the_last_bit(
     child = outcome["stall"]["precheck"]
     assert lane.judged and child["judged"] and deflation.skipped is None
     assert (lane.measured, child["measured"]) == (False, True)
-    assert child["evidence"] == dict(deflation.evidence)
-    looked = ("looks", "required_probability")
-    assert {key: value for key, value in lane.evidence.items() if key not in looked} == {
-        key: value for key, value in deflation.evidence.items() if key not in looked
-    }
-    assert made.holdout is not None and made.holdout.look == deflation.evidence["looks"] == 1
-    assert lane.evidence["looks"] == 2, "the certificate the stall wrote is a look"
+    assert dict(lane.evidence) == child["evidence"] == dict(deflation.evidence)
     assert {"probability", "expected_maximum_bps", "trials", "scored_trials"} <= set(
         deflation.evidence
     )

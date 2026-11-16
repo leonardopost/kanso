@@ -468,8 +468,9 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """How many certificates the lineage made at the certification window is a dynamic
-    input, beside the trial count; the rule the gate applies to it is an invariant, stated
-    with the bound it keeps — the threshold is the first look's level, not the lineage's."""
+    input, beside the trial count; what the threshold bounds across them is an invariant,
+    stated as the fact it is — no rule moves the threshold with the count, which stays the
+    planner's to weigh."""
     pin = show(ws, store, HYP_ID).hypothesis_sha
     store.connection.execute(
         "INSERT INTO certificates (hyp_id, hypothesis_sha, strategy_sha, plan_version,"
@@ -486,12 +487,12 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
     assert written.inputs.looks == 1
     assert '"looks": 1' in seen[0].user
     assert (
-        "looks is how many certificates this hypothesis's lineage has already made at its "
-        "certification window, so the next is look L = looks + 1: at look L of this "
-        "hypothesis's lineage at its certification window deflated_edge requires "
-        "1 − (1 − threshold) / L, so the threshold you set is the first look's level and the "
-        "lineage's chance of a false pass over L looks is at most "
-        "(1 − threshold) × (1 + 1/2 + … + 1/L)"
+        "looks is how many certificates this hypothesis's lineage — every registered "
+        "hypothesis joined to it by derived_from, either way — has already made that read a "
+        "window sharing a day with its certification window, one struck on a snapshot that "
+        "could not support a claim reading none, so the next is look L = looks + 1: "
+        "deflated_edge is held to the threshold you set at every look, so the lineage's chance "
+        "of a false pass over L looks at that window is at most L × (1 − threshold)"
     ) in seen[0].system
 
 

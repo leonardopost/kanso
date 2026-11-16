@@ -4,8 +4,8 @@
 -- read a certificate back from, column by column, as the document it was written from. A
 -- certificate now carries `holdout` -- the certification window it read, the lineage of
 -- hypotheses joined to its own by `derived_from`, and which look of that lineage at that
--- window it was, the count its deflation's level was split across -- and a row without it
--- would read back a certificate that recorded none when its file recorded one. The column
+-- window it was, counted when it was written -- and a row without it would read back a
+-- certificate that recorded none when its file recorded one. The column
 -- holds the record as JSON; a row written before this migration holds NULL, which reads back
 -- as a certificate that recorded none, which is what it was. The count itself is struck from
 -- the rows each time it is asked for, so a certificate written before this migration is a

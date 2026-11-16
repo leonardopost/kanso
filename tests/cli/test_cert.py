@@ -599,10 +599,9 @@ def recertified(root: Path, **changes: Any) -> None:
 def test_a_certificate_says_which_look_at_its_window_it_was(
     runner: CliRunner, researched: Path
 ) -> None:
-    """`run` records and prints the look — the first of the demo's lineage of one, whose
-    search correction skipped on one trial and so was held to nothing — and `show` prints the
-    level the correction was held to at a later look where it judged."""
-    from kanso.schemas import EvaluatedGate, Holdout
+    """`run` records and prints the look — the first of the demo's lineage of one — and
+    `show` prints a later one as it was recorded."""
+    from kanso.schemas import Holdout
 
     printed = at(runner, researched, "cert", "run", HYP_ID).stdout
     made = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
@@ -617,30 +616,14 @@ def test_a_certificate_says_which_look_at_its_window_it_was(
     assert window[0] <= window[1]
     assert f"hold-out   look 1 of {window[0]}..{window[1]} by {HYP_ID}" in printed.splitlines()
 
-    judged = EvaluatedGate.model_validate(
-        {
-            "id": "deflated_edge",
-            "stage": "cert",
-            "params": {"min_probability": 0.9},
-            "evidence": {
-                "probability": 0.99,
-                "min_probability": 0.9,
-                "looks": 2,
-                "required_probability": 0.95,
-            },
-            "pass": True,
-        }
-    )
-    held = Holdout.model_validate({**made["holdout"], "look": 2})
-    gates = [judged if gate["id"] == judged.id else gate for gate in made["gates"]]
-    recertified(researched, holdout=held, gates=[EvaluatedGate.model_validate(g) for g in gates])
+    recertified(researched, holdout=Holdout.model_validate({**made["holdout"], "look": 2}))
 
     again = at(runner, researched, "cert", "show", HYP_ID)
     recorded = payload(at(runner, researched, "cert", "show", HYP_ID, "--json"))
 
     assert recorded["holdout"]["look"] == 2
-    expected = f"look 2 of {window[0]}..{window[1]} by {HYP_ID} · deflation held to 0.95"
-    assert f"hold-out   {expected}" in again.stdout.splitlines()
+    expected = f"hold-out   look 2 of {window[0]}..{window[1]} by {HYP_ID}"
+    assert expected in again.stdout.splitlines()
 
 
 def test_a_certificate_that_recorded_no_look_prints_no_hold_out_line(

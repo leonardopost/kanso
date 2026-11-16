@@ -22,8 +22,8 @@ band. The plan is the planner's and the windows are the operator's; the command 
 the pair costs and pins the plan either way.
 
 `run` and `show` say which look at its certification window a certificate was on a `hold-out`
-line — the count over the hypothesis's lineage, and the level its search correction was held
-to there — and `plan` records the looks taken before it in its inputs (`kanso.certify.looks`).
+line — the count over the hypothesis's lineage, which judges nothing — and `plan` records the
+looks taken before it in its inputs (`kanso.certify.looks`).
 
 `plan`, `run` and `show` each state the certification's power on a `power` line: the edge
 the certification window resolves at eighty percent, and how likely `embargoed_window` is
@@ -258,26 +258,18 @@ def _stops_line(made: Certificate) -> list[str]:
 
 
 def _holdout_line(made: Certificate) -> list[str]:
-    """`look 4 of 2024-02-19..2026-11-13 by smr_daily_ext · deflation held to 0.9875`: which
-    look of its lineage at its certification window the certificate was, and the level its
-    search correction was held to there, when the certificate records both."""
+    """`look 2 of 2025-01-06..2025-05-30 by demo_mr, demo_child`: which look of its lineage at
+    its certification window the certificate was, when it records one."""
     held = made.holdout
     if held is None:
         return []
-    line = (
-        f"look {held.look} of {held.window_start}..{held.window_end} by {', '.join(held.lineage)}"
-    )
-    required = next(
-        (
-            gate.evidence["required_probability"]
-            for gate in made.gates
-            if gate.skipped is None and "required_probability" in gate.evidence
-        ),
-        None,
-    )
-    if isinstance(required, float):
-        line += f" · deflation held to {required:.4g}"
-    return [field("hold-out", line)]
+    return [
+        field(
+            "hold-out",
+            f"look {held.look} of {held.window_start}..{held.window_end} "
+            f"by {', '.join(held.lineage)}",
+        )
+    ]
 
 
 def _power(stated: Power) -> str:

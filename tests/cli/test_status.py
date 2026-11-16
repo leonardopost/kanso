@@ -139,26 +139,29 @@ def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
     assert unpinned["holdout_looks"] is None
 
 
-def test_a_stall_spared_at_a_later_look_says_the_level_it_was_held_to() -> None:
-    """Past the first look the correction is held to its split level, and the line says so;
-    a precheck recorded before looks were counted reads against the threshold it holds."""
-    from kanso.cli.research import spared_by
+def test_a_hypothesis_whose_window_is_written_as_midnight_timestamps_is_listed(
+    runner: CliRunner, loaded: Path
+) -> None:
+    """The schema admits a day written as a timestamp at midnight, and `hyp add` pins the file
+    as written; the screen reads its window as the schema did rather than refuse to draw."""
+    from datetime import datetime
 
-    spared = {
-        "gate": "deflated_contribution",
-        "judged": True,
-        "pass": False,
-        "evidence": {
-            "probability": 0.97,
-            "min_probability": 0.95,
-            "looks": 3,
-            "required_probability": 0.98333,
-        },
+    from .conftest import CERTIFICATION, HYPOTHESIS, write_hypothesis
+
+    stamped = {
+        "start": f"{CERTIFICATION[0].isoformat()}T00:00:00Z",
+        "end": datetime(CERTIFICATION[1].year, CERTIFICATION[1].month, CERTIFICATION[1].day),
     }
-    earlier = {**spared, "evidence": {"probability": 0.9, "min_probability": 0.95}}
+    path = write_hypothesis(loaded, windows={**HYPOTHESIS["windows"], "certification": stamped})
+    assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
+    assert "00:00:00" in path.read_text(encoding="utf-8")
 
-    assert spared_by(spared) == "deflated_contribution 0.970 < 0.983 at look 3"
-    assert spared_by(earlier) == "deflated_contribution 0.900 < 0.950"
+    result = at(runner, loaded, "status", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    (entry,) = payload(result)["hypotheses"]
+    assert entry["holdout_looks"] == 0
+    assert at(runner, loaded, "status").exit_code == Exit.OK
 
 
 def test_today_s_spend_is_what_the_ledger_holds_broken_out_by_lane(

@@ -36,9 +36,10 @@ objective, with its threshold set: the subject a certificate judges is then the 
 search, and nothing else in a plan prices that. The planner is told so in the invariants
 and refused when it forgets, through the same check as any other complaint; how high that
 gate's bar sits is still its answer. It is also told how many looks the hypothesis's lineage
-has already taken at its certification window (`looks`, `kanso.certify.looks`) and the rule
-the gate applies to them — at look L its threshold's complement is divided by L — so the
-level it chooses is the first look's, and it may choose a stricter one at a replan.
+has already taken at its certification window (`looks`, `kanso.certify.looks`), and that the
+threshold it sets holds at every look, so a lineage's chance of a false pass across `L` looks
+is up to `L` times the threshold's complement: the count judges nothing, and whether it moves
+the threshold, at a plan or a replan, is the planner's answer like the threshold itself.
 
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
@@ -339,10 +340,10 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
 
     The search correction is stated as a rule over `n_trials` rather than folded into
     `required_gates`: the gate it names follows from the hypothesis, which is the cached
-    prefix, and whether it is required follows from the trial count, which is not. How its
-    threshold is split across the lineage's looks at the certification window is stated the
-    same way, as a rule over `looks`, and with the bound it keeps: the threshold is the first
-    look's level, not the lineage's across every look.
+    prefix, and whether it is required follows from the trial count, which is not. What its
+    threshold bounds across the lineage's looks at the certification window is stated the
+    same way, over `looks`: a fact for the planner to weigh, since no rule moves the
+    threshold with the count.
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
@@ -354,12 +355,12 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             f"not be excluded: it is the search correction for this hypothesis's objective, "
             f"{hyp.objective.id}; set its threshold, whose value is yours to choose inside "
             "its range",
-            f"looks is how many certificates this hypothesis's lineage has already made at its "
-            f"certification window, so the next is look L = looks + 1: at look L of this "
-            f"hypothesis's lineage at its certification window {gate} requires "
-            "1 − (1 − threshold) / L, so the threshold you set is the first look's level and "
-            "the lineage's chance of a false pass over L looks is at most "
-            "(1 − threshold) × (1 + 1/2 + … + 1/L)",
+            "looks is how many certificates this hypothesis's lineage — every registered "
+            "hypothesis joined to it by derived_from, either way — has already made that read "
+            "a window sharing a day with its certification window, one struck on a snapshot "
+            "that could not support a claim reading none, so the next is look L = looks + 1: "
+            f"{gate} is held to the threshold you set at every look, so the lineage's chance of "
+            "a false pass over L looks at that window is at most L × (1 − threshold)",
         ]
     )
     return {

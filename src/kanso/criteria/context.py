@@ -82,12 +82,6 @@ class GateContext:
       expected maximum over this many draws and their spread from `trial_metrics`, since
       a count has no units to keep apart and a spread does. It is 1 — no search — wherever
       no caller counts one;
-    * `looks` is which look at its certification window this judgement is, counted over the
-      hypothesis's lineage (`kanso.certify.looks`): the certificates its lineage already made
-      there, plus this one. A deflation holds its probability to the planner's threshold at
-      the first and splits the threshold's complement across the looks after it
-      (`kanso.criteria.gates.look_level`). It is 1 wherever no caller counts one — a card, a
-      paper or live stage — which is a deflation judged as it always was;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented
@@ -128,7 +122,6 @@ class GateContext:
     benchmark_research_run: CardRun | None = None
     trial_metrics: Sequence[float] = ()
     trials: int = 1
-    looks: int = 1
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     datasets: Sequence[DatasetFacts] = ()

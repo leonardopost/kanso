@@ -71,9 +71,9 @@ class PlanInputs(KansoModel):
     data_availability: DataAvailability
     n_trials: int = Field(ge=0)
     looks: int = Field(default=0, ge=0)
-    """How many certificates the hypothesis's lineage had already made at its certification
-    window when the plan was made (`kanso.certify.looks`), so the next is look `looks + 1`;
-    0 on a plan made before kanso counted them."""
+    """How many certificates the hypothesis's lineage had already made that read its
+    certification window when the plan was made (`kanso.certify.looks`), so the next is look
+    `looks + 1`; 0 on a plan made before kanso counted them."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]
@@ -273,7 +273,8 @@ class Holdout(KansoModel):
     `lineage` the hypotheses joined to its own by `derived_from` when it was made
     (`kanso.research.records.lineage`), its own first. `look` is one more than the
     certificates of that lineage already made on a window intersecting this one that read a
-    window at all (`kanso.certify.looks`): the count the deflation's level was split across.
+    window at all (`kanso.certify.looks`), counted when this one was written. It is shown and
+    judges nothing: the certificate's gates were held to the thresholds its plan pins.
     """
 
     window_start: date

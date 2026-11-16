@@ -2739,8 +2739,8 @@ the `net_per_trade` of its window: `net_per_trade_bp`, `net_se_session`, `net_t`
 window that closed no trade (`docs/concepts.md`, *Certification*); under a
 `period_target`, the `period_stops` that same run recorded (`docs/concepts.md`, Card); and
 `holdout` — `window_start`, `window_end`, `look` and `lineage` — which look of the
-hypothesis's lineage at its certification window it was, the count its deflation gate's
-threshold was split across (`docs/concepts.md`, *Hold-out looks*), or `null` on a certificate
+hypothesis's lineage at its certification window it was, counted when it was written and
+judging nothing (`docs/concepts.md`, *Hold-out looks*), or `null` on a certificate
 written before kanso counted looks and on one struck on a snapshot that cannot support a
 claim, which read no window. The count is struck from `state.db` each time, so a certificate
 file moved or deleted does not move it. A certificate whose

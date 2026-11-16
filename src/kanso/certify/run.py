@@ -89,14 +89,15 @@ correction the pinned plan does not carry, with its threshold, once the search h
 cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
 objective the hypothesis has now.
 
-**Every certificate is a look at its window, and the correction's level is split across
-them.** The certificates the subject's lineage has already made at a certification window
-intersecting the subject's (`kanso.certify.looks`) are counted before anything runs, and the
-certificate is look one more than they: its search correction — and a stall's precheck of it,
-in the lane and in the child — is held to the planner's threshold at the first look and to
-`1 − (1 − threshold) / L` at look `L` (`kanso.criteria.gates.look_level`), and the
-certificate records the window, the look and the lineage (`holdout`). One struck on a snapshot
-that cannot support a claim read no window and records none.
+**Every certificate is a look at its window, and records which.** The certificates the
+subject's lineage has already made at a certification window intersecting the subject's
+(`kanso.certify.looks`) are counted when the certificate is written, under the write lock its
+row is written under, so two certifications of one lineage judged at once are two looks in
+the order they were written; the certificate records the window, its look — one more than
+those — and the lineage (`holdout`). The count is shown and judges nothing: every gate,
+the search correction included, is held to the threshold the plan pins at any look, a stall's
+precheck as well. One struck on a snapshot that cannot support a claim read no window and
+records none.
 
 The verdict moves the hypothesis and never ends it: a pass certifies it, a fail returns it
 to research with the ids of its failing gates recorded where the proposer reads them, and
@@ -477,11 +478,10 @@ def _certify(
         plan_version=plan.plan_version,
         nautilus_version=engine,
     )
-    looked = looks_at(store, hyp_id, subject.certification)
 
     def spare(researched: _Researched) -> Precheck:
         """The stall's correction on the research run just made; a candidate if it holds."""
-        checked = _corrected(store, plan, subject, researched, looked.look)
+        checked = _corrected(store, plan, subject, researched)
         if not checked.spared:
             _candidate(store, registration)
             store.event(CERTIFIABLE_EVENT, hyp_id, {"strategy_sha": subject.strategy_sha})
@@ -489,32 +489,36 @@ def _certify(
 
     if not at_stall:
         _candidate(store, registration)
-    judged, checked = _judge(ws, store, plan, subject, looked.look, spare if at_stall else None)
+    judged, checked = _judge(ws, store, plan, subject, spare if at_stall else None)
     if judged is None:
         return None, checked
     evaluated, objective, stated, struck, stops = judged
     read = not read_no_window(gate.evidence for gate in evaluated)
-    made = Certificate(
-        hyp_id=hyp_id,
-        strategy_sha=subject.strategy_sha,
-        hypothesis_sha=subject.hypothesis_sha,
-        nautilus_version=engine,
-        venue_model=subject.venue_model,
-        snapshot_id=subject.snapshot_id,
-        criteria_version=criteria_version(),
-        plan_version=plan.plan_version,
-        construct=subject.construct,
-        objective=objective,
-        gates=evaluated,
-        n_trials=n_trials,
-        verdict=_verdict(evaluated),
-        created_at=datetime.now(tz=UTC),
-        power=stated,
-        net_per_trade=struck,
-        period_stops=stops,
-        holdout=looked.holdout() if read else None,
-    )
-    certificate.write(ws, store, made, subject.source)
+    # The look is counted under the write lock the row is written under, so a certificate of
+    # the lineage written while this one was judged — a sibling's lane, a `cert run` by hand —
+    # is counted before it, and the next one to write counts this one.
+    with store.transaction():
+        made = Certificate(
+            hyp_id=hyp_id,
+            strategy_sha=subject.strategy_sha,
+            hypothesis_sha=subject.hypothesis_sha,
+            nautilus_version=engine,
+            venue_model=subject.venue_model,
+            snapshot_id=subject.snapshot_id,
+            criteria_version=criteria_version(),
+            plan_version=plan.plan_version,
+            construct=subject.construct,
+            objective=objective,
+            gates=evaluated,
+            n_trials=n_trials,
+            verdict=_verdict(evaluated),
+            created_at=datetime.now(tz=UTC),
+            power=stated,
+            net_per_trade=struck,
+            period_stops=stops,
+            holdout=looks_at(store, hyp_id, subject.certification).holdout() if read else None,
+        )
+        certificate.write(ws, store, made, subject.source)
     _apply(ws, store, made)
     return made, checked
 
@@ -626,8 +630,7 @@ def precheck(
     certification would not make. Where it does judge, the gate is evaluated by its own
     `evaluate` on the context certification would build for it (`_judge`), the measurement's
     run in both `run` and `research_run` and the host and benchmark it was differenced
-    against beside it, with the trials certification counts and the look at its certification
-    window a certificate of it would be (`kanso.certify.looks`): one arithmetic, so what this
+    against beside it, with the trials certification counts: one arithmetic, so what this
     judges is what the certificate's correction would judge from the same run.
 
     The same run is what certification makes only where nothing moved since the card was
@@ -701,7 +704,6 @@ def precheck(
         # Certification fails every gate on this snapshot without judging the correction,
         # and that failing certificate is how such a snapshot reaches the operator.
         return _unsupported(hyp.objective.id, snapshot, blocked)
-    window = hyp.windows.certification
     return _deflation(
         store,
         planned,
@@ -710,20 +712,14 @@ def precheck(
         run.snapshot_id,
         _Researched(measured.run, measured.host, measured.benchmark),
         measured.folds,
-        looks_at(store, hyp_id, (window.start, window.end)).look,
         measured=False,
     )
 
 
 def _corrected(
-    store: StateStore,
-    plan: CertificationPlan,
-    subject: Subject,
-    researched: _Researched,
-    looks: int,
+    store: StateStore, plan: CertificationPlan, subject: Subject, researched: _Researched
 ) -> Precheck:
-    """The correction `plan` pins, judged on the research run certification has just made, at
-    the look the certificate it would write is."""
+    """The correction `plan` pins, judged on the research run certification has just made."""
     planned = _correction(plan, subject.hyp, measured=True)
     if isinstance(planned, Precheck):
         return planned
@@ -735,7 +731,6 @@ def _corrected(
         subject.snapshot_id,
         researched,
         subject.folds,
-        looks,
         measured=True,
     )
 
@@ -774,13 +769,11 @@ def _deflation(
     snapshot_id: str,
     researched: _Researched,
     folds: int,
-    looks: int,
     *,
     measured: bool,
 ) -> Precheck:
     """One correction's verdict on one research run, by the gate's own `evaluate` on the
-    context `_judge` builds for it, with the research run in the run's place, at the look of
-    the lineage at its certification window that a certificate of it would be."""
+    context `_judge` builds for it, with the research run in the run's place."""
     objective = cast("ObjectiveRef", hyp.objective).id
     research = hyp.windows.research
     context = GateContext(
@@ -800,7 +793,6 @@ def _deflation(
         benchmark_research_run=researched.benchmark,
         trial_metrics=records.trial_metrics(store, hyp.id, objective),
         trials=max(records.candidates(store, hyp.id), 1),
-        looks=looks,
     )
     result = gates()[planned.id].evaluate(context)
     judged = result.skipped is None
@@ -1397,7 +1389,6 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-    looks: int,
     spare: Callable[[_Researched], Precheck] | None = None,
 ) -> tuple[_Judged | None, Precheck | None]:
     """Evaluate the plan's certification gates, measure the objective they judged, state
@@ -1489,7 +1480,6 @@ def _judge(
             benchmark_research_run=measured.benchmark_research,
             trial_metrics=metrics,
             trials=max(searched, 1),
-            looks=looks,
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,

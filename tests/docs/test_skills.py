@@ -104,17 +104,17 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     assert "`dsr` against `min_dsr` under `deflated_sharpe`" in text
 
 
-def test_the_certify_skill_says_every_certificate_is_a_look_and_what_the_split_bounds() -> None:
+def test_the_certify_skill_says_every_certificate_is_a_look_and_that_it_moves_no_bar() -> None:
     """An agent reporting a certificate reads this file; told nothing of the looks, it would
-    report a later look's failing deflation as a weaker idea, or a pass at a later look as
-    clearing the planner's threshold alone — or re-pin to start the count again."""
+    report a pass at a later look as a first look's, or re-plan to make a later look pass."""
     text = skill(PACKAGED, "kanso-certify")
     assert "Every certificate is a **look** at its certification window" in text
-    assert "At look `L` the deflation gate requires `1 − (1 − threshold) / L`" in text
-    assert "the planner's threshold is the first look's level" in text
-    assert "`(1 − threshold) × (1 + 1/2 + … + 1/L)`, not by the threshold" in text
+    assert "The count judges nothing" in text
+    assert "held to the threshold the plan pins at every look" in text
+    assert "up to `L × (1 − threshold)`, not the threshold" in text
     assert "`hypotheses[].holdout_looks`" in text and "the `hold-out` line" in text
-    assert "never re-plan or re-pin to reset the count" in text
+    assert "A replan or a re-pin does not reset the count" in text
+    assert "never re-plan to make a later look pass" in text
     assert "(`inputs.looks`)" in text
 
 

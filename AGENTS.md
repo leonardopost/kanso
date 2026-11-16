@@ -107,15 +107,13 @@ or names it without its threshold, is refused — by the planner's own check, an
 the way out. Whether a search is corrected for is not a decision; how high the bar sits is,
 and stays the model's. `criteria/library.py` holds the rule and
 `tests/criteria/test_library.py` fails when an objective has no gate or a plan escapes it.
-Nor is how the bar rises as a lineage looks again at its hold-out: at the `L`-th certificate
+That includes how high it sits at a lineage's later look at its hold-out: every certificate
 of a hypothesis's lineage — every registered hypothesis joined to it by `derived_from` — at a
-certification window sharing a day with its own, the deflation gate requires
-`1 − (1 − threshold) / L` (`criteria/gates/__init__.py` `look_level`, counted by
-`certify/looks.py`). The threshold stays the planner's and is the first look's level; the
-lineage's chance of a false pass over `L` looks is bounded by its complement times
-`1 + 1/2 + … + 1/L`, not by the threshold, and the docs and the planner's invariants say so.
-`tests/criteria/test_deflation_looks.py` fails when the first look is judged otherwise than
-it always was.
+certification window sharing a day with its own is a look, counted by `certify/looks.py`,
+recorded on the certificate and shown to the planner beside `n_trials` with what its
+threshold bounds across `L` looks — a false pass up to `L × (1 − threshold)`, not the
+threshold — and the gate holds the threshold the plan pins at every look.
+`tests/certify/test_looks.py` fails when the count moves a verdict.
 The objective itself is the classifying model's to name, from the set the toolbox's
 `applies` admits; the predicate bounds the set and picks nothing in it. Another invariant is
 that a contribution, which rewards trading less once every trade loses, is scored only
