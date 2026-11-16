@@ -26,15 +26,17 @@ environment. It certifies as `kanso cert run` does, by the one function, with th
 difference a stall makes (`kanso.certify.run.certify_at_stall`): the research window is run
 first and the plan's search correction judged on it, and a correction that refuses the
 subject there spares the stall — the certification window is never read and no certificate
-is written. It writes the certificate and every event itself, and reports the certificate,
-or that none was made, beside that precheck — or the refusal — to the lane, which raises a
-refusal as the same kind of error with the same remedy. The certificate it reports carries
-the certification window's net per trade, struck from the run its gates judged
-(`kanso.certify.run.net_per_trade`) — the number a book ranks its members by, which nothing
-ever recomputes by running the window again. A fault that is not a refusal comes back as one
-naming what raised, so a lane records it and goes on rather than dying of it. No wall time is
-imposed: how many engine runs a certification makes is its plan's choice — the gates, and the
-parameters a perturbation moves — so no multiple of a card's budget bounds it.
+is written. On a snapshot that cannot support a claim it runs neither window, as `cert run`
+does, and its precheck judges nothing and says why. It writes the certificate and every
+event itself, and reports the certificate, or that none was made, beside that precheck — or
+the refusal — to the lane, which raises a refusal as the same kind of error with the same
+remedy. The certificate it reports carries the certification window's net per trade, struck
+from the run its gates judged (`kanso.certify.run.net_per_trade`) — the number a book ranks
+its members by, which nothing ever recomputes by running the window again. A fault that is
+not a refusal comes back as one naming what raised, so a lane records it and goes on rather
+than dying of it. No wall time is imposed: how many engine runs a certification makes is its
+plan's choice — the gates, and the parameters a perturbation moves — so no multiple of a
+card's budget bounds it.
 
 A child killed over the share is refused, naming what it reached and the two ways to give
 it more: a larger `[env] mem_per_lane_gb`, which plans the lanes around what certification
@@ -94,12 +96,12 @@ _REFUSALS: Final[dict[Exit, Callable[[str, str | None], KansoError]]] = {
 @dataclass(frozen=True)
 class Certified:
     """The certificate a child made — `None` when the search correction spared the stall —
-    the correction as it judged it on the research window it ran (`None` where it ran
-    nothing), and what that cost: the child's peak resident memory in gibibytes and its
-    wall time in seconds."""
+    the correction as it judged it on the research window it ran, or why it judged nothing
+    (`kanso.certify.run.certify_at_stall`), and what that cost: the child's peak resident
+    memory in gibibytes and its wall time in seconds."""
 
     certificate: Certificate | None
-    precheck: Precheck | None
+    precheck: Precheck
     peak_mem_gb: float
     wall_s: float
 
@@ -158,10 +160,10 @@ def certify_in_child(
         )
     if not answer["ok"]:
         raise _refusal(answer)
-    made, checked = answer["certificate"], answer["precheck"]
+    made = answer["certificate"]
     return Certified(
         None if made is None else Certificate.model_validate(made),
-        None if checked is None else read_precheck(cast("dict[str, object]", checked)),
+        read_precheck(cast("dict[str, object]", answer["precheck"])),
         peak_gb,
         wall_s,
     )
@@ -186,7 +188,7 @@ def main(argv: Sequence[str]) -> int:
         answer = {
             "ok": True,
             "certificate": None if made is None else made.model_dump(mode="json", by_alias=True),
-            "precheck": None if checked is None else checked.payload(),
+            "precheck": checked.payload(),
         }
     except KansoError as refused:
         answer = {

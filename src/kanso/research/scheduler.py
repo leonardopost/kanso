@@ -419,9 +419,10 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     window first and judges the correction again on that run, before it reads the
     certification window, and spares the stall itself when it refuses
     (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its reading
-    is the one a certificate agrees with. The `stalled` event records the lane's precheck
-    where no child was started and the child's wherever one was. A correction that judged
-    nothing spares nothing.
+    is the one a certificate agrees with. On a snapshot that cannot support a claim the child
+    runs no window at all and writes its failing certificate, and its precheck judges nothing
+    and says why. The `stalled` event records the lane's precheck where no child was started
+    and the child's wherever one was. A correction that judged nothing spares nothing.
 
     The verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
     fail returns it to research, and either way it is requeued at −1, because the queue is
@@ -489,7 +490,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     cost: dict[str, object] = {}
     if certifiable:
         made = certify_in_child(ws, store, hyp_id, sha=cast("str", best), lane=lane)
-        checked = checked if made.precheck is None else made.precheck
+        checked = made.precheck
         certifiable = made.certificate is not None
         verdict = None if made.certificate is None else made.certificate.verdict
         cost = {

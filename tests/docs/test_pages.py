@@ -298,8 +298,14 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     assert "carries `stall`" in research_run and "`certification` line" in research_run
     assert "never read back from an earlier stall's event" in research_run
     assert "which a spared stall leaves newest, is not this run's outcome" in research_run
-    assert "so every stall that certified records `measured: true`" in cli
+    assert "under the pin the stall judged them by, the pinned plan" in research_run
+    # The child runs no window on a snapshot that cannot support a claim, so the one stall
+    # that certifies without `measured: true` is named wherever the rule is stated.
+    exception = "but one on a snapshot that cannot support a claim"
+    assert f"so every stall that certified records `measured: true` {exception}" in cli
+    assert f"`measured` is `true` on every stall that certified {exception}" in changelog
     assert "the child's wherever one was, judged or not" in cli
+    assert "`dsr` and `min_dsr` under `deflated_sharpe`" in cli
     status = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso status`")
     )

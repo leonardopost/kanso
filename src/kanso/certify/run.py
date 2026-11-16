@@ -328,12 +328,15 @@ class Precheck:
     is read: the gate the pinned plan corrects the subject's objective with, whether it judged,
     whether it passed, and its evidence — or why it judged nothing.
 
-    `passed` is `None` where nothing was judged. `measured` says where it was judged, which is
-    whether the research window was run for it, and every precheck states it: `False` in the
-    lane, which runs nothing and reads the measurement the subject card kept where it can;
-    `True` in the certification child, on the research window it has just run, exactly as the
-    certificate's own correction reads it. The child judges at every stall it is started for,
-    so a stall that certifies always records `True`, whatever the lane read before it.
+    `passed` is `None` where nothing was judged. `measured` says whether the research window
+    was run for it, and every precheck states it: `False` in the lane, which runs nothing and
+    reads the measurement the subject card kept where it can; `True` in the certification
+    child, on the research window it has just run, exactly as the certificate's own correction
+    reads it. The child runs that window at every stall it is started for but one on a
+    snapshot that cannot support a claim, where certification runs no window at all: its
+    precheck there judges nothing, carries the snapshot's reasons as its evidence, and is
+    `False`. A stall that certifies records the child's precheck, so it records `True` unless
+    its certificate failed on such a snapshot.
     """
 
     gate: str | None
@@ -401,7 +404,7 @@ def certify(
 
 def certify_at_stall(
     ws: Workspace, store: StateStore, hyp_id: str, *, sha: str, lane: str = DEFAULT_LANE
-) -> tuple[Certificate | None, Precheck | None]:
+) -> tuple[Certificate | None, Precheck]:
     """Certify the bytes a stall left as the best, unless their search correction refuses
     them on research data.
 
@@ -410,13 +413,19 @@ def certify_at_stall(
     window is read (`precheck`, from the run certification has just made). A refusal returns
     no certificate beside the precheck that refused: the certification window was not read,
     nothing was written but the plan `certify` pins where none is pinned, and the hypothesis's
-    status is as it was. Otherwise the hypothesis
-    becomes a candidate there, recorded by a `certifiable` event, and certification goes on
-    exactly as `certify` makes it. The precheck comes back either way — `None` only where
-    certification runs nothing, a snapshot that cannot support a claim, whose failing
-    certificate is written without a run of either window.
+    status is as it was. Otherwise the hypothesis becomes a candidate there, recorded by a
+    `certifiable` event, and certification goes on exactly as `certify` makes it.
+
+    On a snapshot that cannot support a claim certification runs no window at all, at a stall
+    as by hand: its failing certificate is written with no move to candidate and no
+    `certifiable` event, beside a precheck that judged nothing, `measured` `False`, its
+    evidence the snapshot's reasons — the same the certificate's gates fail on. A precheck
+    comes back from every stall, so what a stall records is always what its certification
+    decided.
     """
-    return _certify(ws, store, hyp_id, sha, lane, at_stall=True)
+    made, checked = _certify(ws, store, hyp_id, sha, lane, at_stall=True)
+    assert checked is not None  # a stall's judging always says what it judged, or why not
+    return made, checked
 
 
 _Judged = tuple[
@@ -1306,7 +1315,9 @@ def _judge(
 
     `spare`, at a stall, is asked about the research window's runs before the certification
     window is read; a precheck it returns that refused the subject ends the judging there,
-    with nothing judged. The precheck it returned comes back beside what was judged."""
+    with nothing judged. The precheck it returned comes back beside what was judged — at a
+    stall on a snapshot that cannot support a claim, which runs neither window, one that
+    judged nothing and says why (`_unsupported`)."""
     planned = plan.stage_gates(CERT_STAGE)
     if not planned:  # pragma: no cover - the planner refuses a plan that reaches no stage
         raise PreconditionError(
@@ -1323,7 +1334,7 @@ def _judge(
             None,
             None,
             None,
-        ), None
+        ), None if spare is None else _unsupported(subject, snapshot, blocked)
     first = _research(subject)
     checked = None if spare is None else spare(first)
     if checked is not None and checked.spared:
@@ -1480,6 +1491,21 @@ def _blocked(planned: PlannedGate, snapshot: Snapshot, reasons: Sequence[str]) -
             "evidence": {"snapshot_id": snapshot.snapshot_id, "inadmissible": list(reasons)},
             "pass": False,
         }
+    )
+
+
+def _unsupported(subject: Subject, snapshot: Snapshot, reasons: Sequence[str]) -> Precheck:
+    """A stall's precheck on a snapshot that cannot support a claim: certification runs no
+    window there, so the child judges no correction and says why, with the evidence the
+    certificate's own gates fail on (`_blocked`)."""
+    return Precheck(
+        deflation_gate(subject.objective_id),
+        judged=False,
+        passed=None,
+        evidence={"snapshot_id": snapshot.snapshot_id, "inadmissible": list(reasons)},
+        reason=f"snapshot {snapshot.snapshot_id[:12]} cannot support a claim, so certification "
+        f"ran no window and judged no correction: {'; '.join(reasons)}",
+        measured=False,
     )
 
 

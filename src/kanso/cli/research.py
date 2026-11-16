@@ -43,6 +43,7 @@ import typer
 from kanso import research
 from kanso.certify import certificate
 from kanso.certify.plan import read_plan
+from kanso.certify.run import pinned_sha
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent, stopped
 from kanso.criteria import criteria_version
@@ -405,19 +406,24 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
 
 def _standing(ws: Workspace, opened: StateStore, hyp_id: str, sha: str) -> Certificate | None:
     """The certificate a stall's best stands under once the stall is decided: the hypothesis's
-    newest, when it is of those bytes under the pinned plan and the installed engine — the
-    one the stall made, or the one it found and so did not make again.
+    newest, when it is of those bytes under the pin the stall judged them by, the pinned plan
+    and the installed engine — the one the stall made, or the one it found and so did not
+    make again, by the predicate it found it with (`kanso.certify.certificate.judged`).
 
     Any other is not this run's outcome. A rewound `best` leaves another subject's
-    certificate newest, and a stall its search correction spared leaves one under a plan or
-    an engine since replaced, which certified the bytes under a bar the stall no longer
-    judges by; reporting either as what this run came to would be a lie."""
+    certificate newest, and a stall its search correction spared leaves one under a
+    `hypothesis.yaml`, a plan or an engine since replaced, which certified the bytes under a
+    question or a bar the stall no longer judges by; reporting either as what this run came
+    to would be a lie."""
     newest = certificate.latest(opened, hyp_id)
     pinned = read_plan(ws, hyp_id)
     if newest is None or pinned is None:
         return None
-    standing = (newest.strategy_sha, newest.plan_version, newest.nautilus_version)
-    return newest if standing == (sha, pinned.plan_version, engine_version()) else None
+    pin = pinned_sha(opened, hyp_id, sha)
+    # A certificate recorded before certificates carried their pin matches any, as `judged`.
+    under = newest.hypothesis_sha or pin
+    standing = (newest.strategy_sha, under, newest.plan_version, newest.nautilus_version)
+    return newest if standing == (sha, pin, pinned.plan_version, engine_version()) else None
 
 
 def _start(ws: Workspace) -> Report:

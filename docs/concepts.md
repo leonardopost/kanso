@@ -2504,7 +2504,9 @@ another `[research] folds`, `return_period` or capital, or another criteria vers
 that kept no measurement, is no reading of the arithmetic certification would use: the lane
 judges nothing. Whatever the lane read, the certification child it starts runs the research
 window first and judges the correction again on it before it reads the certification
-window. A refusal in either place spares
+window — on a snapshot that cannot support a claim it runs neither window, and the failing
+certificate it writes is recorded beside a precheck that judged nothing and says why. A
+refusal in either place spares
 the stall — no certification window read, no certificate, no failure counted toward
 `n_fail`, the hypothesis back in the queue at −1 — and the `stalled` event records the
 precheck (`docs/cli.md`). A correction that judged nothing spares nothing: a plan carries

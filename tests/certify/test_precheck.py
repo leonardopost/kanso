@@ -344,7 +344,8 @@ def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_runs_no_window(
 ) -> None:
     """Such a snapshot fails every gate before anything runs, at a stall as by hand, so there
     is no research run to judge the correction on and no window about to be read: the failing
-    certificate is written with no precheck, no `certifiable` and no move to candidate."""
+    certificate is written with no `certifiable` and no move to candidate, beside a precheck
+    that judged nothing, ran nothing and says why — the reasons the certificate fails on."""
     a_manifest(ws, publication="unknown")
     snapshots.freeze(ws)
     hyp_id = classify(ws, store, DOCUMENT, REVERTING)
@@ -358,7 +359,11 @@ def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_runs_no_window(
     monkeypatch.setattr(backtest, "window_chunks", unrun)
     made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
 
-    assert checked is None
     assert made is not None and made.verdict == "fail"
+    assert (checked.gate, checked.judged, checked.passed) == ("deflated_sharpe", False, None)
+    assert checked.measured is False, "no window was run for it"
+    assert checked.reason is not None and "cannot support a claim" in checked.reason
+    assert all(gate.evidence == checked.evidence for gate in made.gates)
+    assert checked.evidence["inadmissible"]
     assert store.events(kind=scheduler.CERTIFIABLE) == []
     assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]

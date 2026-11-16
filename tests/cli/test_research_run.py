@@ -23,7 +23,7 @@ from kanso.state import StateStore
 from kanso.workspace import find
 
 from . import mocked
-from .conftest import DRAFT, HYP_ID, at, lane, payload, write_hypothesis
+from .conftest import DRAFT, HYP_ID, HYPOTHESIS, at, lane, payload, write_hypothesis
 
 
 def ledger_calls(root: Path) -> int:
@@ -210,6 +210,40 @@ def test_a_spared_stall_reports_no_certificate_an_earlier_plan_made(
     assert second.exit_code == Exit.OK, second.stdout
     newest = payload(at(runner, mocked_ws, "cert", "show", HYP_ID, "--json"))
     assert newest["plan_version"] == 1, "the first plan's certificate is still the newest"
+    if as_json:
+        outcome = payload(second)
+        assert outcome["best_sha"] == first["best_sha"], "the same bytes stalled again"
+        assert outcome["stall"]["certifiable"] is False
+        assert outcome["stall"]["precheck"]["pass"] is False
+        assert outcome["certificate"] is None
+    else:
+        assert "certification spared · deflated_edge " in second.stdout
+        assert "certified" not in second.stdout
+        assert f"kanso cert show {HYP_ID}" not in second.stdout
+
+
+@pytest.mark.parametrize("as_json", [True, False])
+def test_a_spared_stall_reports_no_certificate_an_earlier_pin_made(
+    runner: CliRunner, mocked_ws: Path, as_json: bool
+) -> None:
+    """The best was certified under the first `hypothesis.yaml`; the operator re-pins an edited
+    one, the same bytes are carded under it, the search is priced wider, and the next stall on
+    them is spared. The first pin's certificate is still the newest, of the same bytes under the
+    same plan and engine, but the stall judged them uncertified under the pin it judged by
+    (`certificate.judged`), so it is not what this run came to."""
+    mocked.tuned(mocked_ws, stall_k=1)
+    first = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+    assert first["certificate"] is not None and first["stall"]["certifiable"] is True
+    edited = write_hypothesis(mocked_ws, mocked.SEED, thesis=f"{HYPOTHESIS['thesis']} Edited.")
+    added = at(runner, mocked_ws, "hyp", "add", str(edited), "--json")
+    assert added.exit_code == Exit.OK, added.stdout
+    searched_wide(mocked_ws)
+
+    second = at(runner, mocked_ws, "research", "run", HYP_ID, *(("--json",) if as_json else ()))
+
+    assert second.exit_code == Exit.OK, second.stdout
+    newest = payload(at(runner, mocked_ws, "cert", "show", HYP_ID, "--json"))
+    assert newest["plan_version"] == 1, "the first pin's certificate is still the newest"
     if as_json:
         outcome = payload(second)
         assert outcome["best_sha"] == first["best_sha"], "the same bytes stalled again"

@@ -14,8 +14,11 @@ from typing import Any
 import pytest
 
 from kanso import hyp
+from kanso.certify import certificate as certificates
 from kanso.certify import child
 from kanso.certify.plan import read_plan
+from kanso.certify.run import precheck
+from kanso.data import snapshot as snapshots
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
@@ -26,7 +29,7 @@ from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
 from tests.certify.test_precheck import TIGHT, WIDE, measurement, searched
-from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, write_plan
+from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, a_manifest, write_plan
 
 from .conftest import (
     ATTACHED_HOST,
@@ -525,6 +528,40 @@ def test_a_stall_the_child_refuses_on_research_data_is_spared_by_the_child(
     assert stall.precheck is not None and stall.precheck["measured"] is True
     (stalled,) = store.events(kind=scheduler.STALLED)
     assert float(str(stalled.detail["cert_wall_s"])) > 0, "the child ran the research window"
+
+
+@pytest.mark.parametrize("kept", [True, False], ids=["lane-passed", "lane-unjudged"])
+def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_records_the_child_s_precheck(
+    ws: Workspace, store: StateStore, kept: bool
+) -> None:
+    """The child runs no window on such a snapshot and writes its failing certificate, so its
+    precheck judged nothing, ran nothing and says why — and that is what the stall records,
+    never the lane's reading of the card, which would set a passing correction or a reason
+    about the card beside a certificate whose correction failed on the snapshot."""
+    a_manifest(ws, publication="unknown")
+    snapshots.freeze(ws)
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store) if kept else None)
+    searched(ws, store, *TIGHT)
+    lane = precheck(ws, store, hyp_id, sha, write_plan(ws, gates=[*CERT_GATES, SEARCHED]))
+    assert (lane.judged, lane.passed) == ((True, True) if kept else (False, None))
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert (stall.certifiable, stall.verdict) == (True, "fail")
+    assert stall.precheck is not None
+    assert (stall.precheck["judged"], stall.precheck["pass"]) == (False, None)
+    assert stall.precheck["measured"] is False, "the child ran no window for it"
+    assert "cannot support a claim" in str(stall.precheck["reason"])
+    made = certificates.latest(store, hyp_id)
+    assert made is not None and made.verdict == "fail"
+    (deflation,) = [gate for gate in made.gates if gate.id == SEARCHED["id"]]
+    assert stall.precheck["evidence"] == deflation.evidence, "the certificate's own reasons"
+    (stalled,) = store.events(kind=scheduler.STALLED)
+    assert stalled.detail["precheck"] == stall.precheck
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
+    assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
 
 
 def test_a_stall_with_no_plan_plans_in_the_lane_before_its_precheck(
