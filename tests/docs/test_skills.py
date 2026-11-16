@@ -69,10 +69,23 @@ def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
     tells an agent a plan one card behind a grid needs no correction."""
     text = skill(PACKAGED, "kanso-certify")
     assert "and the `prior_trials` its family declares tried outside kanso" in text
-    assert "from the second draw: the second card, or the first behind a declared grid" in text
+    assert (
+        "from the second draw: the second card, the first behind a declared grid, or none yet "
+        "behind a grid of two settings or more"
+    ) in text
     assert "or the first card behind a declared grid" in text
     assert "can exceed the certificate's `n_trials`, which counts cards alone" in text
     assert "every card it has, reaches two" not in text
+
+
+def test_the_classify_skill_deflates_a_re_pin_over_a_declared_grid_too() -> None:
+    """After a re-pin to another objective certification deflates over the cards behind it and
+    the settings of its family's declared grid, as `kanso.certify.run` counts them."""
+    text = skill(PACKAGED, "kanso-classify")
+    assert (
+        "deflates by every card behind it and every setting of a grid its family declares in "
+        "`prior_trials`"
+    ) in text
 
 
 def test_the_promote_skill_names_the_one_cost_a_broker_does_not_supply() -> None:
