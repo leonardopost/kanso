@@ -1386,6 +1386,7 @@ def test_the_pages_say_which_objectives_the_forward_check_drops_an_earlier_trade
     for name, text in texts.items():
         assert "per-trade objective" in text, name
         assert "returns objective" in text, name
+        assert "closed inside a period not counted" in text, name
     for unscoped in (
         "nor with a trade that opened before it or a period",
         "A trade opened before that midnight is not counted",
@@ -1393,6 +1394,32 @@ def test_the_pages_say_which_objectives_the_forward_check_drops_an_earlier_trade
         "A trade opened before it is not counted, wherever it closed.",
     ):
         assert all(unscoped not in text for text in texts.values()), unscoped
+
+
+def test_the_pages_state_no_forward_wait_and_no_fresh_memory_the_code_does_not_keep() -> None:
+    """A best at or below zero is one research's estimate states no forward wait from, not one
+    no window judges: the gate judges the certified value. An open run keeps the pins it began
+    under across an upgrade, so the proposer's memory starts afresh only at each hypothesis's
+    next run. `cert run` refuses a plan short of either paper gate, and the monitor's outcome is
+    quoted as it prints it."""
+    from kanso.certify.plan import Forward
+
+    cli = page("cli.md")
+    skill = (ROOT / "src/kanso/skills/kanso-certify/SKILL.md").read_text(encoding="utf-8")
+    for name, text in {"cli": cli, "skill": skill, "Forward": str(Forward.__doc__)}.items():
+        stated = prose(text)
+        assert "no forward window judges" not in stated, name
+        assert "which it never judges" not in stated, name
+        assert "at or too near zero to state a wait from" in stated, name
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = next(line for line in changelog.splitlines() if "before it is promotable.**" in line)
+    assert "start afresh from the upgrade" not in entry
+    assert "from each hypothesis's first run begun after the upgrade" in entry
+    assert "a run left open across the upgrade keeps its pins and its window" in entry
+    run_row = next(line for line in cli.splitlines() if line.startswith("| `kanso cert run"))
+    assert "`paper_forward` and `forward_holdout`, each with both its parameters" in run_row
+    monitoring = prose(section(cli, "Monitoring"))
+    assert "``its plan lacks forward_holdout; run `kanso cert plan ID --replan` ``" in monitoring
 
 
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:

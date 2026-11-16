@@ -216,6 +216,7 @@ def test_a_plan_naming_paper_forward_without_a_parameter_marks_nothing(
 
     assert str(judged.skipped).startswith("its plan names paper_forward, but ")
     assert str(judged.skipped).endswith("; run `kanso cert plan demo_mr --replan`")
+    assert "yours" not in str(judged.skipped), "the values are the planner's, not the reader's"
     assert judged.gates == () and judged.actions == ()
     assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
     assert inbox.unread(store) == []

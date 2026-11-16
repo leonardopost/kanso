@@ -20,7 +20,8 @@ holds, the periods it needs and its forward error in the evidence. It does not s
 skip passes and the version would become `promotable` on `paper_forward` alone. A window too
 thin to strike a band — no fold that scores, or a Sharpe's fold under four periods — has not
 judged either, and a certified value at or below zero is one no window judges, as is one
-certified with an error of zero, which states no dispersion to resolve it against.
+certified with an error of zero, which states no dispersion to resolve it against, and one no
+count of periods a float holds resolves (`kanso.criteria.band.to_resolve`).
 
 **Once judged it passes when `realised > max(0, min_fraction × expected)`.**
 
@@ -38,7 +39,8 @@ errors clear — and never fewer than one a fold, a Sharpe's four a fold, since 
 fewer is cut into folds shorter than a period, one of which can strike a band alone. A window
 filled evenly judges at this count; a Sharpe's fold weighs its exact small-sample variance,
 heavier than `1/m` — twice it at five periods — so a Sharpe's window judges about two or three
-periods a fold after it; `None` for a certified value at or below zero or an error of zero.
+periods a fold after it; `None` for a certified value at or below zero or an error of zero,
+or one no count of periods a float holds resolves.
 
 **Only the forward window counts.** A stage resumes at its clock's day, or at the earliest
 forward start of what it holds, so a version can join a stage whose clock is before its own
@@ -47,13 +49,16 @@ forward start of what it holds, so a version can join a stage whose clock is bef
 belongs to the span holding its end, so where the run opened before that midnight a period
 that may have opened before it is not counted either: under a return period that divides a
 day none can, since every window is cut from a midnight, and under any other — a week — the
-first period that ends less than a period after it is dropped, whether or not it straddled.
-A per-trade objective counts no trade opened before it, wherever the trade closed, its days
-inside the window with it; a returns objective — a contribution, a Sharpe — counts every period
-from it on, so what a position opened before it made after it is counted, a period's return
-being the book's and not any one trade's. The run is every window the version has closed on
-the stage since it first joined, joined into one (`kanso.monitor.realised`): a redeploy adds a
-window and restarts nothing, here as for `paper_forward`.
+first period that ends less than a period after it is dropped, whether or not it straddled,
+and the window is read from the instant after that period's end. A per-trade objective counts
+no trade opened before that midnight, wherever the trade closed, its days inside the window
+with it, and, since a trade belongs to the period holding its close, no trade closed inside a
+period not counted, wherever it opened; a returns objective — a contribution, a Sharpe —
+counts every period from it on, so what a position opened before it made after it is counted,
+a period's return being the book's and not any one trade's. The run is every window the
+version has closed on the stage since it first joined, joined into one
+(`kanso.monitor.realised`): a redeploy adds a window and restarts nothing, here as for
+`paper_forward`.
 
 It skips, saying so, where `paper_forward` does: no parameters chosen, no stage record, no
 expectation, no objective, or an expectation that records no error or period count.
@@ -68,7 +73,7 @@ from statistics import NormalDist
 from typing import ClassVar, Final
 
 from kanso.certify.power import RESOLVES
-from kanso.criteria.band import SHARPE_FOLD, dispersion, prediction
+from kanso.criteria.band import SHARPE_FOLD, dispersion, prediction, to_resolve
 from kanso.criteria.context import Gate, GateContext, number, skipped, verdict
 from kanso.criteria.objectives import REGISTRY
 from kanso.criteria.run import NS_PER_DAY, CardRun, midnight_ns
@@ -155,28 +160,35 @@ class _ForwardHoldout:
 
 
 def _forward(run: CardRun | None, start: date) -> CardRun | None:
-    """`run` from midnight of `start` on, or `None` when it holds nothing after it: no period
-    that may have opened before that midnight, and no trade that did — which only a per-trade
-    objective reads; a returns objective reads the periods, whatever was open across them."""
+    """`run` from midnight of `start` on, or `None` when it holds no period after it: no period
+    that may have opened before that midnight, and no trade that opened before it or closed
+    inside a period not counted — which only a per-trade objective reads; a returns objective
+    reads the periods, whatever was open across them.
+
+    A period that ends at least a period less a nanosecond after the midnight opened at or
+    after it, whatever the run's cut, since it holds no point a period or more before its end. One
+    that ends sooner is dropped under a return period that does not divide a day, and the run
+    is then read from the instant after the last one dropped: a trade belongs to the first
+    period ending at or after its close, as `kanso.criteria.objectives` assigns it."""
     if run is None:
         return None
     opens, closes = run.bounds
     cut = midnight_ns(start)
-    since = opens if cut <= opens else cut
-    if since > opens and NS_PER_DAY % run.period_ns:
+    since = first = max(cut, opens)
+    if first > opens and NS_PER_DAY % run.period_ns:
         since += run.period_ns - 1
+        first = max([first, *(end + 1 for end in run.period_ends_ns if end < since)])
     if since >= closes:
         return None
-    kept = run.between(since, closes)
+    kept = run.between(first, closes)
     return replace(kept, trades=tuple(trade for trade in kept.trades if trade.opened_ns >= cut))
 
 
 def _required(value: float, se: float, periods: float, resolve: float, fewest: int) -> int | None:
-    """The fewest periods the gate judges on; `None` for a certified value at or below zero,
-    or an error of zero, which no window judges."""
-    if value <= 0 or se <= 0:
-        return None
-    return max(ceil(periods * (resolve * se / value) ** 2), fewest)
+    """The fewest periods the gate judges on; `None` where no count of periods resolves the
+    certified value (`to_resolve`), which no window judges."""
+    needed = to_resolve(value, se, periods, resolve)
+    return None if needed is None else max(ceil(needed), fewest)
 
 
 def _power(expected: float, bar: float, se_fwd: float | None) -> dict[str, float | None]:

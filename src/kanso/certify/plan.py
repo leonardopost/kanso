@@ -80,7 +80,7 @@ from kanso.certify.looks import looks as looks_at
 from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_days, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
-from kanso.criteria.band import SHARPE_FOLD
+from kanso.criteria.band import SHARPE_FOLD, to_resolve
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
 from kanso.criteria.objectives import REGISTRY
 from kanso.data.manifest import manifests
@@ -528,9 +528,12 @@ def _best_measured(store: StateStore, hyp_id: str) -> tuple[float, float, Hypoth
 class Forward:
     """When `forward_holdout` first judges at the plan's `resolve`, from research's numbers.
 
-    `periods_to_judge` counts `[research] return_period` periods of the calendar, `None` for a
-    research estimate at or below zero, which no forward window judges; `se_after_one_year` is
-    the forward error after a calendar year of it, in the objective's units.
+    `periods_to_judge` counts `[research] return_period` periods of the calendar, `None` each
+    with `days_to_judge` for a research estimate at or too near zero to state a wait from
+    (`kanso.criteria.band.to_resolve`) — the gate judges the certified value,
+    so a version certified above zero from such a best is judged all the same;
+    `se_after_one_year` is the forward error after a calendar year of it, in the objective's
+    units.
     """
 
     resolve: float
@@ -586,7 +589,7 @@ def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) ->
     objective = None if hyp.objective is None else REGISTRY.get(hyp.objective.id)
     sharpe = objective is not None and objective.statistic == "sharpe"
     fewest = (SHARPE_FOLD if sharpe else 1) * ws.config.research.folds
-    days = None if metric <= 0 else research * (float(resolve) * metric_se / metric) ** 2
+    days = to_resolve(metric, metric_se, research, float(resolve))
     return Forward(
         resolve=float(resolve),
         period=period,

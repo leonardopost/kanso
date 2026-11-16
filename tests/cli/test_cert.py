@@ -214,11 +214,14 @@ def test_the_plan_states_when_the_forward_window_first_judges(
     assert "periods of 1d) at resolve 1" in result.stdout
 
 
-def test_a_best_at_or_below_zero_reads_as_a_forward_window_that_never_judges() -> None:
+def test_a_best_at_or_below_zero_states_no_forward_wait() -> None:
+    """No wait can be stated from research's estimate there, and that is all the line says:
+    the gate judges the certified value, so a version certified above zero from such a best is
+    judged all the same."""
     from kanso.certify.plan import Forward
     from kanso.cli.cert import _forward
 
-    never = Forward(
+    unstated = Forward(
         resolve=1.0,
         period="1d",
         days_to_judge=None,
@@ -226,9 +229,9 @@ def test_a_best_at_or_below_zero_reads_as_a_forward_window_that_never_judges() -
         se_after_one_year=2.5,
     )
 
-    assert _forward(never) == (
-        "forward_holdout never judges at resolve 1: research's estimate is not above zero · "
-        "se 2.5 after a year"
+    assert _forward(unstated) == (
+        "forward_holdout states no wait at resolve 1: research's estimate is at or too near zero "
+        "to state one from, and the gate judges the certified value · se 2.5 after a year"
     )
 
 

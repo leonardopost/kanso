@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from kanso.certify.power import RESOLVES
+from kanso.criteria import catalogue
 from kanso.criteria.band import Z, forward_error, prediction
 from kanso.criteria.gates.forward_holdout import (
     NO_DISPERSION,
@@ -128,6 +129,16 @@ def test_a_sharpe_window_too_thin_for_a_band_has_not_judged() -> None:
     assert result.evidence["resolves"] is result.evidence["pass_at_expected"] is None
 
 
+def test_the_planner_is_told_the_fewest_periods_it_judges_on() -> None:
+    """`meaningful_when` is what the planner reads while it chooses `resolve`; it names the
+    floor the gate holds a window to as well as the ratio."""
+    told = catalogue()["forward_holdout"].meaningful_when
+
+    assert told is not None
+    assert "resolve forward errors span the certified value" in told
+    assert "one period a fold, a Sharpe's four" in told
+
+
 # --- once it resolves ---------------------------------------------------------------------
 
 
@@ -209,6 +220,22 @@ def test_a_certified_error_of_zero_is_never_judged() -> None:
     assert result.evidence["pass_at_zero"] is None
 
 
+@pytest.mark.parametrize(
+    ("value", "se"), [(1e-160, 0.1), (5e-324, 0.1), (float("nan"), 0.1), (1.0, float("inf"))]
+)
+def test_a_value_no_count_of_periods_resolves_is_never_judged(value: float, se: float) -> None:
+    """A certified value so near zero that the periods it needs overflow a float, one that is
+    not a number, or an error without bound: no count of periods resolves it, so the gate
+    fails unjudged, as at an error of zero, rather than raising out of the monitor's pass."""
+    ctx = gate_context(params=PARAMS, record=stage_record(), run=rising_run(), value=1.0)
+    stated = replace(ctx, expectation={**(ctx.expectation or {}), "value": value, "se": se})
+
+    result = gate.evaluate(stated)
+
+    assert not result.passed and result.skipped is None
+    assert result.evidence["judged"] is False and result.evidence["required_periods"] is None
+
+
 # --- only the forward window --------------------------------------------------------------
 
 
@@ -227,19 +254,48 @@ def test_only_the_days_from_the_forward_start_are_read() -> None:
     )
 
 
-def weekly(returns: tuple[float, ...], start: date) -> CardRun:
+WEEK = 7 * NS_PER_DAY
+
+
+def weekly(
+    returns: tuple[float, ...],
+    start: date,
+    *,
+    trades: tuple[Trade, ...] = (),
+    last: int = WEEK - 1,
+) -> CardRun:
     """A `1w` run cut one week after another from the midnight that opens it, each period
-    ending a nanosecond before the next week's midnight."""
-    daily = run_over(returns, start=start)
-    week = 7 * NS_PER_DAY
+    ending `last` nanoseconds after its week opened: a nanosecond before the next week's
+    midnight, or earlier, where the runner ends it at a last point that came earlier."""
+    daily = run_over(returns, start=start, trades=trades)
     return replace(
         daily,
         window=(start, start + timedelta(days=7 * len(returns) - 1)),
         period="1w",
         period_ends_ns=tuple(
-            midnight_ns(start) + (index + 1) * week - 1 for index in range(len(returns))
+            midnight_ns(start) + index * WEEK + last for index in range(len(returns))
         ),
     )
+
+
+def traded(opened: date, closed: date, pnl: float) -> Trade:
+    """A trade of 10,000 notional opened at noon on one day and closed at noon on another,
+    netting `pnl`: `pnl` basis points."""
+    noon = NS_PER_DAY // 2
+    return Trade(
+        midnight_ns(opened) + noon,
+        midnight_ns(closed) + noon,
+        "DEMO.XNAS",
+        100.0,
+        100.0,
+        100.0,
+        pnl,
+        1.0,
+        (),
+    )
+
+
+EDGE = {"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 0.5}}
 
 
 def test_a_week_that_may_have_opened_before_the_forward_start_is_not_counted() -> None:
@@ -253,9 +309,75 @@ def test_a_week_that_may_have_opened_before_the_forward_start_is_not_counted() -
     result = judge(run=run, value=1.0, hyp=forward_from(date(2024, 3, 4)))
 
     assert result.evidence["periods"] == 16
-    assert result.evidence["window"][0] == "2024-03-10", "where a counted period can first end"
+    assert result.evidence["window"][0] == "2024-03-08", "where the first counted week opened"
     assert result.evidence["judged"] is True and result.evidence["realised"] > 0
     assert result.passed
+
+
+def test_a_trade_made_inside_the_first_counted_week_is_counted() -> None:
+    """The stage opened on Monday 2024-02-26 and this version's forward window opens on Monday
+    the 4th, so the week [4th, 11th) opened with the window and is counted, and so, under a
+    per-trade edge, is every trade made inside it, though each closed before the week ended:
+    six that lost there outweigh the winners after them, and the gate reads them."""
+    early = tuple(
+        traded(date(2024, 3, 4 + day), date(2024, 3, 5 + day), -1_000.0) for day in range(6)
+    )
+    later = tuple(
+        traded(
+            date(2024, 3, 11) + timedelta(weeks=n), date(2024, 3, 12) + timedelta(weeks=n), 100.0
+        )
+        for n in range(15)
+    )
+    run = weekly(tuple([10.0] * 17), date(2024, 2, 26), trades=early + later)
+    edge = hypothesis(
+        windows={**DOCUMENT["windows"], "forward": {"start": "2024-03-04"}}, objective=EDGE
+    )
+
+    result = judge(run=run, hyp=edge, value=1.0, se=0.01)
+
+    since = run.between(midnight_ns(date(2024, 3, 4)), run.bounds[1])
+    assert result.evidence["window"][0] == "2024-03-04"
+    assert len(since.trades) == len(early + later)
+    assert result.evidence["realised"] == net_edge_bps.compute(since, 4)[0] < 0
+
+
+def test_a_trade_closed_inside_a_week_not_counted_is_not_counted() -> None:
+    """The runner ends a period at its last point. This stage opened on Wednesday 2024-02-28,
+    so its weeks run Wednesday to Wednesday, each ending at its Tuesday's last point, 20:00
+    here; this version's forward window opens on Monday the 4th. The week [28th, 6th) may have
+    opened before that and is not counted, and a trade belongs to the period holding its close,
+    so a trade opened on the 4th and closed on the 5th, inside that week, is not counted either,
+    though it was made inside the forward window; the two made in the week [6th, 13th) are,
+    and the window opens just after the uncounted week's last point."""
+    eight_pm = 20 * 3_600 * NS_PER_DAY // 86_400
+    uncounted = traded(date(2024, 3, 4), date(2024, 3, 5), 900.0)
+    first = (
+        traded(date(2024, 3, 6), date(2024, 3, 7), -300.0),
+        traded(date(2024, 3, 7), date(2024, 3, 8), -300.0),
+    )
+    later = tuple(
+        traded(
+            date(2024, 3, 13) + timedelta(weeks=n), date(2024, 3, 14) + timedelta(weeks=n), 100.0
+        )
+        for n in range(14)
+    )
+    run = weekly(
+        tuple([10.0] * 17),
+        date(2024, 2, 28),
+        trades=(uncounted, *first, *later),
+        last=6 * NS_PER_DAY + eight_pm,
+    )
+    edge = hypothesis(
+        windows={**DOCUMENT["windows"], "forward": {"start": "2024-03-04"}}, objective=EDGE
+    )
+
+    result = judge(run=run, hyp=edge, value=1.0, se=0.01)
+
+    counted = run.between(midnight_ns(date(2024, 3, 5)) + eight_pm + 1, run.bounds[1])
+    assert uncounted not in counted.trades and all(trade in counted.trades for trade in first)
+    assert result.evidence["periods"] == 16
+    assert result.evidence["window"][0] == "2024-03-05"
+    assert result.evidence["realised"] == net_edge_bps.compute(counted, 4)[0]
 
 
 def test_a_trade_opened_before_the_forward_start_is_not_counted() -> None:

@@ -302,8 +302,9 @@ def _forward(note: Forward) -> str:
     error = f"se {note.se_after_one_year:.4g} after a year"
     if note.days_to_judge is None or note.periods_to_judge is None:
         return (
-            f"forward_holdout never judges at resolve {note.resolve:g}: research's estimate is "
-            f"not above zero · {error}"
+            f"forward_holdout states no wait at resolve {note.resolve:g}: research's estimate is "
+            f"at or too near zero to state one from, and the gate judges the certified value · "
+            f"{error}"
         )
     return (
         f"forward_holdout first judges after about {note.days_to_judge:,.0f} days "

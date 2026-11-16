@@ -282,6 +282,10 @@ def _measured(kind: str, value: ParamValue) -> float:
     return float(value)
 
 
+_YOURS: Final = "; the values are yours, inside their ranges"
+"""Said to the planner beside a parameter a `together` item lacks, and to no one else."""
+
+
 def check_params(
     item: CriteriaItem, params: Mapping[str, ParamValue], hyp: Hypothesis, folds: int
 ) -> list[str]:
@@ -300,7 +304,7 @@ def check_params(
     if item.together:
         problems.extend(
             f"{name}: is not set, and {item.id} judges nothing without every one of "
-            f"{', '.join(item.params)}; the values are yours, inside their ranges"
+            f"{', '.join(item.params)}{_YOURS}"
             for name in item.params
             if name not in params
         )
@@ -448,7 +452,9 @@ def stage_shortfall(stage: str, included: Sequence[Any], hyp: Hypothesis, folds:
     The part of `plan_complaints` a stage holds a pinned plan to. The monitor reads a plan
     nothing has checked against this toolbox since it was pinned, and judges a deployed
     version by its own stage's gates alone, so a complaint about another stage — a search
-    correction the lineage has since outgrown — is not one that should stop it.
+    correction the lineage has since outgrown — is not one that should stop it. What it says
+    is read by whoever reads the monitor's outcome, so it leaves out what `check_params` tells
+    the planner about whose values they are.
     """
     named = {gate.id: gate for gate in included if gate.stage == stage}
     shortfall: list[str] = []
@@ -460,7 +466,7 @@ def stage_shortfall(stage: str, included: Sequence[Any], hyp: Hypothesis, folds:
             shortfall.append(f"lacks {item.id}")
             continue
         shortfall.extend(
-            f"names {item.id}, but {problem}"
+            f"names {item.id}, but {problem.removesuffix(_YOURS)}"
             for problem in check_params(item, gate.params, hyp, folds)
         )
     return shortfall

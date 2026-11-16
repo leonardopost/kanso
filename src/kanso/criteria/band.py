@@ -69,14 +69,23 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from math import fsum, sqrt
+from math import fsum, isfinite, sqrt
 from statistics import NormalDist
 from typing import Final
 
 from kanso.criteria.objectives import Objective
 from kanso.criteria.run import CardRun
 
-__all__ = ["COVERAGE", "SHARPE_FOLD", "Z", "Band", "dispersion", "forward_error", "prediction"]
+__all__ = [
+    "COVERAGE",
+    "SHARPE_FOLD",
+    "Z",
+    "Band",
+    "dispersion",
+    "forward_error",
+    "prediction",
+    "to_resolve",
+]
 
 COVERAGE: Final = 0.90
 """The band's nominal coverage: how often a version that is what was certified lands inside."""
@@ -169,6 +178,22 @@ def forward_error(
     Sharpe below `SHARPE_FOLD` has no variance, which `prediction` refuses before asking.
     """
     return se * sqrt(_window_ratio(objective, periods, held, folds))
+
+
+def to_resolve(value: float, se: float, over: float, resolve: float) -> float | None:
+    """How much of what `over` counts a mean must be read over to stand `resolve` errors
+    clear of zero, when over `over` it stood `value / se` errors clear: `over × (resolve × se /
+    value)²` — the periods `forward_holdout` judges on, and the days `cert plan` states it
+    waits. `None` where no length does — a value at or below zero or not a number, an error
+    of zero — or where the length is past what a float holds, an error without bound included.
+    """
+    if not value > 0 or not se > 0:
+        return None
+    try:
+        needed = over * (resolve * se / value) ** 2
+    except OverflowError:
+        return None
+    return needed if isfinite(needed) else None
 
 
 def _window_ratio(objective: Objective, periods: float, held: Sequence[int], folds: int) -> float:

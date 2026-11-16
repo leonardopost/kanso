@@ -348,6 +348,7 @@ def test_paper_forward_is_planned_with_both_its_parameters(
     assert sorted(problem.split(":")[0] for problem in shortfall) == [
         f"names paper_forward, but {name}" for name in missing
     ]
+    assert all("yours" not in problem for problem in shortfall), "the monitor's, not the planner's"
 
 
 def test_a_stage_s_shortfall_is_its_required_gates_alone() -> None:

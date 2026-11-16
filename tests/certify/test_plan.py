@@ -1110,11 +1110,14 @@ def test_the_forward_note_states_the_wait_from_the_best_card(
     }
 
 
-def test_the_forward_note_says_a_best_at_or_below_zero_never_judges(
-    ws: Workspace, store: StateStore
+@pytest.mark.parametrize("metric", [-1.0, 1e-160])
+def test_the_forward_note_states_no_wait_from_a_best_at_or_too_near_zero(
+    ws: Workspace, store: StateStore, metric: float
 ) -> None:
+    """At or below zero no length of window resolves research's estimate, and a hair above it
+    the wait overflows a float: the note states none, and does not raise."""
     pinned_sha = show(ws, store, HYP_ID).hypothesis_sha
-    a_card(store, metric=-1.0, pinned=str(pinned_sha))
+    a_card(store, metric=metric, pinned=str(pinned_sha))
     script(ws, certify_plan=[answer()])
 
     note = forward_note(ws, store, plan(ws, store, HYP_ID))
