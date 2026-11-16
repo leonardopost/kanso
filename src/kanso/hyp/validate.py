@@ -64,9 +64,10 @@ document is parsed. Everything else needs the workspace, and that is this module
   parameters are ones that construct declares with values inside the sets it declares
   them over, its objective applies to this hypothesis and its parameters are inside the
   toolbox's ranges, every constraint is a card-stage gate whose parameters are inside
-  theirs, and every gate the toolbox declares `required_for` its objective is among the
-  card gates — the operator's `required_constraints` or the classifier's `constraints` —
-  with every parameter it declares set. The construct's own parameters are checked by
+  theirs, and every card gate the toolbox declares `required_for` its objective is among
+  the card gates — the operator's `required_constraints` or the classifier's `constraints`
+  — with every parameter it declares set (a cert gate declared `required_for` it is a
+  certification plan's to carry, never a constraint). The construct's own parameters are checked by
   asking the construct, which is the same call the runner makes when it builds the
   harness: a classification this command calls admissible is one the first card of a run
   does not reject. A draft may state its objective alone, which `kanso classify` keeps when

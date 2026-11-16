@@ -599,6 +599,48 @@ def test_entry_timing_is_carried_with_its_threshold_and_never_excluded() -> None
         validate_plan({**outside, "gates": corrected(outside["gates"])}, hyp, FOLDS)
 
 
+WEEKLY: dict[str, Any] = {
+    "period": "week",
+    "opens": "Mon 04:00",
+    "tz": "America/New_York",
+    "target_bp": 1000,
+    "of": "capital",
+}
+DATED: dict[str, Any] = {
+    "spread": "dated",
+    "dated": [
+        {
+            "instrument": "DEMO",
+            "from": "2023-01-01",
+            **{"pre": 9.0, "open": 4.0, "rth": 1.0, "post": 9.0, "n_sessions": 5, "n_open": 25},
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "more", [{"period_target": WEEKLY}, {"costs": DATED}, {"period_target": WEEKLY, "costs": DATED}]
+)
+def test_entry_timing_is_refused_nowhere_a_contribution_is_scored(more: dict[str, Any]) -> None:
+    """The gate is required of a contribution, so a plan carrying it is admitted beside a weekly
+    target, whose cuts its null keeps, and under a dated spread, which it reads at each moved
+    instant: one refused where it is required would leave the hypothesis unplannable."""
+    hyp = make_hyp(
+        horizon="1d",
+        objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        **more,
+    )
+    carried = timed(max_p=0.1)
+    gates = [
+        {**g, "id": "deflated_contribution", "params": {"min_probability": 0.95}}
+        if g["id"] == "deflated_edge"
+        else g
+        for g in carried["gates"]
+    ]
+
+    validate_plan({**carried, "gates": gates}, hyp, FOLDS)
+
+
 def test_a_per_trade_edge_may_leave_entry_timing_out_or_carry_it() -> None:
     """A sub-daily certification window is often tens of sessions, whose few whole-session
     shifts cannot resolve a small p: whether to carry it there is the planner's."""

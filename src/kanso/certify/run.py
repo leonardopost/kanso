@@ -96,7 +96,10 @@ carried strategy certified as the first card under its new objective — whose s
 cannot be read (`unpriced`). The other is a subject scored under an objective whose
 correction the pinned plan does not carry, with its threshold, once the search has two
 cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
-objective the hypothesis has now.
+objective the hypothesis has now. That route is refused too for a subject scored under an
+objective a cert gate guards — `entry_timing` on a contribution or a Sharpe — when the plan
+does not carry the gate with every parameter set, at any number of cards: its certificate
+would credit a drift held as timing.
 
 **Every certificate is a look at its window, and records which.** The certificates the
 subject's lineage has already made at a certification window intersecting the subject's
@@ -146,10 +149,23 @@ from kanso.certify.plan import plan as plan_for
 from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
-from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
+from kanso.criteria import (
+    CardRun,
+    DatasetFacts,
+    GateContext,
+    criteria_version,
+    gates,
+    objectives,
+    plannable,
+)
 from kanso.criteria import catalogue as toolbox
 from kanso.criteria.digest import session_edge
-from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_deflation
+from kanso.criteria.library import (
+    SEARCH_TRIALS,
+    deflation_gate,
+    required_cert_gates,
+    required_deflation,
+)
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
 from kanso.criteria.timing import BAR, PRINT, QUOTE, Fold, PriceKey, SessionPrices
@@ -491,6 +507,7 @@ def _certify(
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
     _refuse_uncorrected(plan, subject, n_trials, registration)
+    _refuse_unguarded(plan, subject, registration)
     reason = unpriced(store, hyp_id, subject.objective_id, n_trials)
     if reason is not None:
         raise PreconditionError(
@@ -861,6 +878,35 @@ def _refuse_uncorrected(
         remedy=f"certify a card scored under {registration.objective}, as the best is: "
         f"`kanso cert run {subject.hyp.id}`",
     )
+
+
+def _refuse_unguarded(
+    plan: CertificationPlan, subject: Subject, registration: Registration
+) -> None:
+    """Refuse a subject whose objective's guarding cert gates the pinned plan does not carry.
+
+    A plan is made for the objective the hypothesis is registered under, and carries every cert
+    gate the toolbox declares `required_for` that one — `entry_timing` on a contribution or a
+    Sharpe — with every parameter set. A card scored under another objective — one researched
+    before a re-pin moved it, named by `--sha` — is judged on its own, so a plan made for one
+    the gate does not guard would certify a contribution or a Sharpe whose timing was never
+    told from its exposure.
+    """
+    offered = plannable()
+    for guard in required_cert_gates(subject.objective_id):
+        planned = next((gate for gate in plan.gates if gate.id == guard), None)
+        if guard not in offered or (
+            planned is not None and all(name in planned.params for name in offered[guard].params)
+        ):
+            continue
+        raise PreconditionError(
+            f"{subject.strategy_sha[:7]} was scored under {subject.objective_id}, and the plan "
+            f"pinned for {subject.hyp.id} carries no {guard} with every parameter set, which "
+            f"every certificate of {subject.objective_id} is judged by, so a drift it held "
+            "would be credited as timing",
+            remedy=f"certify a card scored under {registration.objective}, as the best is: "
+            f"`kanso cert run {subject.hyp.id}`",
+        )
 
 
 # --- resolving the subject ----------------------------------------------------
@@ -1341,11 +1387,17 @@ def _session_prices(subject: Subject, keys: Sequence[PriceKey]) -> SessionPrices
 
     Read as the subject's own run read it (`backtest.window_chunks`), a chunk at a time, each
     chunk folded and let go before the next is read, so this holds a number per key per session
-    and one chunk of the window. A point of a New York date outside the window's — the prefix a
-    warmed subject is fed, the evening before its first date — is folded into no session.
-    A bar is read at its close and a print at its price; a quote keeps its bid and ask. The
-    split schedules are those of the definitions the window was resolved with, which the moved
-    trades are restated by and which nothing a gate is handed carries otherwise.
+    and one chunk of the window. A point of the prefix a warmed subject is fed is folded into no
+    session; the evening before the window's first New York date, which the window delivers, is
+    that date's session (`Fold`). A bar is read at its close and a print at its price; a quote
+    keeps its bid and ask. The split schedules are those of the definitions the window was
+    resolved with, which the moved trades are restated by and which nothing a gate is handed
+    carries otherwise.
+
+    Engine facts this relies on (nautilus_trader 1.231.0): a `Bar` carries its `close` and its
+    `bar_type.instrument_id`, a `TradeTick` its `price` and a `QuoteTick` its `bid_price` and
+    `ask_price`, each a `Price` that `float` reads, and both ticks their `instrument_id`; every
+    point carries `ts_event` as nanoseconds since the epoch.
     """
     from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 

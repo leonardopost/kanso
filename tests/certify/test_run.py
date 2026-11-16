@@ -1779,6 +1779,39 @@ def test_a_failed_window_spares_the_read_and_says_what_it_spared(
     assert len(run.TIMING_SPARED) <= 200
 
 
+def test_a_card_scored_on_a_sharpe_before_a_re_pin_is_not_certified_without_entry_timing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cert run --sha` of a card scored on `wf_sharpe_net` before a re-pin to the Sharpe against
+    a hold: the plan, made for the hold, rightly carries no `entry_timing`, and the card is
+    judged on its own objective, which no certificate is judged on without it."""
+    classify(ws, store, HELD, REVERTING)
+    before = a_card(ws, store, REVERTING)
+    write_plan(ws, gates=REQUIRED_GATES)
+    read = timing_reads(monkeypatch)
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr carries "
+        "no entry_timing with every parameter set, which every certificate of wf_sharpe_net is "
+        "judged by, so a drift it held would be credited as timing"
+    )
+    assert refused.value.remedy == (
+        "certify a card scored under wf_sharpe_vs_hold, as the best is: `kanso cert run demo_mr`"
+    )
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+    assert read == []
+
+    write_plan(ws, gates=CERT_GATES)
+    made = certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert made.objective.id == "wf_sharpe_net"
+    (timing,) = [gate for gate in made.gates if gate.id == "entry_timing"]
+    assert timing.skipped is None and read == [CERTIFICATION]
+
+
 def test_a_plan_that_does_not_name_entry_timing_reads_the_window_no_more(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

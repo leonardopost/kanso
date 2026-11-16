@@ -71,8 +71,8 @@ applied to no fill (`kanso.screen.hurdle`): it strikes a round trip with `fill_c
 resolved venue model, sets it beside a gross move, and books nothing. So is a certificate's
 timing null (`kanso.criteria.timing`): it charges every fill of the subject's trades, moved to
 other sessions, with `fill_cost` on the subject's venue model as the runner charges a fill
-struck at that close — never a maker's, touched only where the quote says so — and books
-nothing either.
+struck at that close — never a maker's, touched where the quote says so and on a venue that
+matches a level-two book always, as the runner counts it — and books nothing either.
 
 **The embargo is code.** A backtest request may name only a window the hypothesis declares,
 and the card path accepts only the research window. A card runs in a child process with no
@@ -131,8 +131,9 @@ beside `edge_per_trade` with both its thresholds set: the gate's library file de
 A third is that an absolute objective's timing is told from its exposure: `entry_timing`, a
 cert gate, is declared `required_for` `wf_contribution_bps` and `wf_sharpe_net`, so every plan
 for a hypothesis scored on one carries it with `max_p` set and never excludes it — refused by
-the planner's own check and again by `cert plan` and `cert run` on a plan already pinned —
-and `max_p` stays the planner's. A cert gate that guards an objective is a plan's to carry and
+the planner's own check, again by `cert plan` and `cert run` on a plan already pinned, and by
+`cert run --sha` of a card scored on one under a plan made for another objective — and `max_p`
+stays the planner's. A cert gate that guards an objective is a plan's to carry and
 never one of a hypothesis's card gates (`required_card_gates` reads the card stage alone).
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,

@@ -18,11 +18,15 @@ with the reason, as any gate without its context.
 
 **A missing price is a failure, never a skip.** A required gate that passes because its input is
 missing is the hole a search correction that skipped once was. So a traded instrument the window
-holds no bar, print or quote of fails the gate naming it; so does a subject none of whose trades
-could be priced at its own instants; and so does a window too short for any offset — a hold
-longer than half the window leaves `D < 1`, stated as `draws: 0`. A window whose smallest
-attainable `p`, `1/(1 + D)`, is above `max_p` cannot pass either, and says so in
-`min_attainable_p`.
+holds no bar, print or quote of fails the gate naming it; so does a subject any of whose trades
+could not be priced at its own instants, counted as `observed_dropped` — a book judged on the
+trades that could be priced would leave the rest's timing untested, the drift a leg held among
+it; and so does a window too short for any offset — a hold longer than half the window leaves
+`D < 1`, stated as `draws: 0`. A window whose smallest attainable `p`, `1/(1 + D)`, is above
+`max_p` cannot pass either, and says so in `min_attainable_p`.
+
+**On a venue that matches a level-two book every fill is struck at the touch.** The runner counts
+it so for a hypothesis that requires `book`, and the null does too, at offset 0 and in every draw.
 """
 
 from __future__ import annotations
@@ -42,6 +46,10 @@ MIN_TRADES: Final = 2
 
 NULL_PERCENTILE: Final = 95.0
 
+LEVELLED: Final = "book"
+"""The data requirement that makes the venue match a level-two book, where the runner counts
+every fill as struck at the touch (`kanso.nautilus.backtest.Marks.struck`)."""
+
 NO_CHOICE: Final = "no max_p was chosen, so no timing was tested"
 ATTACHED: Final = (
     "an attached construct trades its host's book, so its trades cannot be shifted apart from it"
@@ -53,7 +61,12 @@ UNPRICED: Final = (
     "the window holds no bar, print or quote of an instrument the subject traded, so its trades "
     "cannot be placed at other times; a missing price fails, it does not pass"
 )
-UNPLACED: Final = "none of the subject's trades could be priced at its own instants"
+UNPLACED: Final = (
+    "a trade of the subject's could not be priced at its own instants: the series its instrument "
+    "is priced from (its bars where the window holds any, else its prints, else its quotes) holds "
+    "no reading at or before a fill's time on that fill's session, so the rest's timing is not "
+    "the book's; a missing price fails, it does not pass"
+)
 TOO_SHORT: Final = (
     "the longest hold is more than half the window, so no offset moves every trade off its own "
     "original: there is no draw"
@@ -86,26 +99,23 @@ class _EntryTiming:
         missing = sorted({t.instrument_id for t in run.trades} - set(prices.source))
         if missing:
             return verdict(self.id, False, {**reading, "unpriced": missing, "reason": UNPRICED})
+        levelled = LEVELLED in ctx.hyp.data_requirements
         placed = [place(trade, prices) for trade in run.trades]
-        own = draw(placed, prices, run.venue_model, 0)
+        own = draw(placed, prices, run.venue_model, 0, levelled=levelled)
         observed = own.bps_per_trade(run.capital)
-        if observed is None:
-            return verdict(self.id, False, {**reading, "reason": UNPLACED})
+        if own.dropped or observed is None:
+            return verdict(
+                self.id, False, {**reading, "observed_dropped": own.dropped, "reason": UNPLACED}
+            )
         floor, shifts = offsets(placed, len(prices.sessions))
-        reading.update(
-            {
-                "observed_bps_per_trade": observed,
-                "observed_dropped": own.dropped,
-                "min_offset": floor,
-            }
-        )
+        reading.update({"observed_bps_per_trade": observed, "min_offset": floor})
         if not shifts:
             return verdict(
                 self.id,
                 False,
                 {**reading, "draws": 0, "reason": TOO_SHORT},
             )
-        drawn = [draw(placed, prices, run.venue_model, k) for k in shifts]
+        drawn = [draw(placed, prices, run.venue_model, k, levelled=levelled) for k in shifts]
         values = [value for d in drawn if (value := d.bps_per_trade(run.capital)) is not None]
         empty = len(drawn) - len(values)
         above = empty + sum(value >= observed for value in values)

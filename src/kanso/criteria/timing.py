@@ -13,7 +13,9 @@ reproduced bit for bit from its inputs.
 **The null is the whole schedule, circularly shifted by whole sessions.** The sessions are the
 New York dates on which any of the subject's instruments has a price point in the window, in
 order — `S` of them, each the date `kanso.nautilus.clock.session_of` gives a point, so a daily
-bar stamped at the next New York midnight is its own session's. A fill is placed on the session
+bar stamped at the next New York midnight is its own session's, and the evening before the
+window's first date, which a window opening at UTC midnight delivers, is among them where it
+holds a point. A fill is placed on the session
 its price was struck in and at the New York wall-clock time it was struck at (`Fill.price_ts_ns`,
 else `Fill.ts_ns`). Offset `k` moves every fill of every trade to session `(i + k) mod S` at that
 same time of day, so the schedule keeps its spacing, its clustering and the exposure it held at
@@ -21,7 +23,8 @@ once, translated in time. Every offset in `[h, S − h]` is one draw, `h` the lo
 trade's hold in sessions plus one, so no draw overlaps its own original; there are
 `D = S − 2h + 1` of them and no random number is drawn. A trade whose shifted span would cross
 the end of the window is dropped from that draw and counted, and so is one with a leg no price
-is held for on the session it lands on.
+is held for on the session it lands on. At offset 0 the same arithmetic drops a trade whose own
+instants hold no price, which the gate fails rather than judging the rest.
 
 **A moved fill is struck where the market printed, at the size its trade opened at.** Its price
 is the last reading of its instrument at or before the moved instant on that same session — a
@@ -43,7 +46,9 @@ slippage, the commission, its side's sell fees and `slippage_ticks` of its incre
 limit. A moved fill is struck at a bar's close and never rested on a book, so it is never a
 maker's, and whether it was struck at the touch is read off it against its instrument's last
 quote at or before the moved instant, carried from an earlier session as the runner carries one,
-where the window holds quotes: false where it holds none. The subject's own value is the same
+where the window holds quotes: false where it holds none. On a venue that matches a level-two
+book every fill is struck at the touch, as the runner counts every fill there, and charged no
+spread and no slippage in basis points. The subject's own value is the same
 arithmetic at offset 0 — its own instants, repriced and costed alike — so the comparison is like
 for like, and the runner's own figure, struck with the fills' real flags, is kept beside it.
 
@@ -55,7 +60,10 @@ cannot.
 
 The statistic is the mean net profit per trade in basis points of the capital, over the trades a
 draw kept, and `p = (1 + #{draws ≥ observed}) / (1 + D)`. A draw that kept no trade cannot be
-shown to be beaten, so it is counted among those at or above the observed value.
+shown to be beaten, so it is counted among those at or above the observed value. A trade's
+profit is its fills' flows less what `fill_cost` charges them and nothing else: no funding of a
+perpetual, no cash in lieu of a split, at offset 0 as in every draw, so the runner's own figure,
+which carries both, can differ from the subject's value by them.
 """
 
 from __future__ import annotations
@@ -69,7 +77,7 @@ from math import fsum
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Trade
+from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Trade, midnight_ns
 from kanso.nautilus.costs import (
     at_touch,
     dated_half_spread,
@@ -198,11 +206,18 @@ class Fold:
     """`SessionPrices` folded from a window's points one at a time, holding a reading per key per
     session and per stretch between two keys' times, and nothing else of the window.
 
-    A point whose session is not one of the window's dates belongs to no session: a warmup
-    prefix's, and the evening before the window's first New York date, which a window opening at
-    UTC midnight already delivers. Each point lands in the stretch of its session's day that ends
-    at the first key time at or after its own, and the stretch keeps the latest point it was
-    handed, so the readings are right whatever order the points arrive in.
+    The window is the span of instants a run of it delivers, from the UTC midnight its first
+    date opens at to the one after its last, and a point outside it belongs to no session: a
+    warmup prefix's. The evening before the window's first New York date is inside it — a window
+    opening at UTC midnight delivers it, and a daily bar stamped at the first date's New York
+    midnight among it — so it is that date's session, as the run that traded on it had it.
+
+    Each point lands in the stretch of its session that ends at the first key at or after it,
+    and the stretch keeps the latest point it was handed, so the readings are right whatever
+    order the points arrive in. A key ends its stretch at the instant its time of day reads on
+    that session's New York clock (`instant_at`), or at a later key's where that is earlier, so
+    no reading is later than the instant a fill is moved to — on the night the clocks go back,
+    a point of the repeated hour is never read at a key's first pass through it.
     """
 
     def __init__(
@@ -213,6 +228,8 @@ class Fold:
     ) -> None:
         self.window = window
         self.schedules = dict(schedules or {})
+        self._opens = midnight_ns(window[0])
+        self._closes = midnight_ns(window[1]) + DAY_NS
         walls: dict[str, set[int]] = {}
         for instrument, wall in keys:
             walls.setdefault(instrument, set()).add(wall)
@@ -220,13 +237,13 @@ class Fold:
         self._sessions: set[date] = set()
         self._kinds: dict[str, set[str]] = {}
         self._slots: dict[tuple[str, str], dict[date, list[Reading | None]]] = {}
+        self._ends: dict[tuple[str, date], list[int]] = {}
 
     def take(self, kind: str, instrument: str, ts_event: int, bid: float, ask: float) -> None:
         """Fold one point: a bar's close or a print's price as both `bid` and `ask`."""
-        day, wall = wall_of(ts_event)
-        opens, closes = self.window
-        if not opens <= day <= closes:
+        if not self._opens <= ts_event < self._closes:
             return
+        day, _ = wall_of(ts_event)
         self._sessions.add(day)
         self._kinds.setdefault(instrument, set()).add(kind)
         walls = self._walls.get(instrument)
@@ -236,10 +253,22 @@ class Fold:
         slots = days.get(day)
         if slots is None:
             slots = days[day] = [None] * (len(walls) + 1)
-        slot = bisect_left(walls, wall)
+        slot = bisect_left(self._stretches(instrument, day, walls), ts_event)
         held = slots[slot]
         if held is None or ts_event >= held.ts_ns:
             slots[slot] = Reading(ts_event, bid, ask)
+
+    def _stretches(self, instrument: str, day: date, walls: Sequence[int]) -> list[int]:
+        """The instant each of an instrument's keys ends its stretch on a session: its time of
+        day on that session's clock, or a later key's where that is earlier — a time the clocks
+        skip reads past the next one — so the ends never fall."""
+        found = self._ends.get((instrument, day))
+        if found is None:
+            found = [instant_at(day, wall) for wall in walls]
+            for index in range(len(found) - 2, -1, -1):
+                found[index] = min(found[index], found[index + 1])
+            self._ends[(instrument, day)] = found
+        return found
 
     def prices(self) -> SessionPrices:
         """Every key's readings, session by session."""
@@ -450,17 +479,23 @@ class Draw:
 
 
 def draw(
-    placed: Sequence[Placed], prices: SessionPrices, venue_model: Mapping[str, object], k: int
+    placed: Sequence[Placed],
+    prices: SessionPrices,
+    venue_model: Mapping[str, object],
+    k: int,
+    *,
+    levelled: bool = False,
 ) -> Draw:
     """Every placed trade moved `k` sessions on, priced and costed; offset 0 is the subject's own
-    instants, repriced as every draw is."""
+    instants, repriced as every draw is. `levelled` is a venue that matches a level-two book,
+    where the runner counts every fill as struck at the touch, and so does the null."""
     costs = _Costs.of(venue_model)
     total = len(prices.sessions)
     pnl: list[float] = []
     charged: list[tuple[float, ...]] = []
     dropped = 0
     for trade in placed:
-        priced = _priced(trade, prices, costs, k, total)
+        priced = _priced(trade, prices, costs, k, total, levelled=levelled)
         if priced is None:
             dropped += 1
             continue
@@ -471,7 +506,7 @@ def draw(
 
 
 def _priced(
-    trade: Placed, prices: SessionPrices, costs: _Costs, k: int, total: int
+    trade: Placed, prices: SessionPrices, costs: _Costs, k: int, total: int, *, levelled: bool
 ) -> tuple[float, tuple[float, ...]] | None:
     """One trade moved `k` sessions on: its net profit and its fills' costs, or `None` where it
     is dropped — it holds no session, it crosses the window's end, or a leg has no price."""
@@ -520,7 +555,8 @@ def _priced(
                 maker_per_share=costs.maker_per_share,
                 slip=tick_slip(costs.slippage_ticks, leg.tick, px, None, sell=leg.sell),
                 multiplier=leg.multiplier,
-                touched=at_touch(px, sell=leg.sell, quote=None if quote is None else quote.quote),
+                touched=levelled
+                or at_touch(px, sell=leg.sell, quote=None if quote is None else quote.quote),
             )
         )
         flows.append(notional if leg.sell else -notional)
