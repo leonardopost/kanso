@@ -459,17 +459,18 @@ with stays kanso's own cards.
 under `evidence/` say, and commit it with the rest. `kanso hyp validate` and `kanso hyp add`
 read it to check `sha256` against its bytes when the block is new, differing in any key from
 the one the hypothesis's pinned file states, and refuse (exit 3) a source that is absolute,
-resolves outside the workspace, is not a path the host can open or is not there, a digest the
-bytes do not hash to, and a block an ancestor already states, which `derived_from` already
-counts; so does `kanso classify`, which pins the file as it is on disk, for a block written
-in since the pin. Once a pin states the block only the pinned file is read: a re-pin of the
-same block, `kanso classify`'s included, reads nothing of the evidence, and moving or editing
-it refuses nothing. The count is yours, from 1 to a billion: kanso neither derives it nor
-checks it against what the evidence says. It is not scope, so a re-pin that only adds it
-keeps `best`, and the next run's baseline judges the best under the wider margin; a re-pin is
-refused while a run is active, so `kanso research end ID` first. kanso never writes the key;
-the classifying model is shown it with the rest of the file, and a `kanso hyp explore` draft
-that states one is refused on the ladder.
+resolves outside the workspace, climbs out of the root to name a file inside it, is not a path
+the host can open, is not there or is not a file, a digest the bytes do not hash to, and a
+block an ancestor already states, which `derived_from` already counts; so does `kanso
+classify`, which pins the file as it is on disk, for a block written in since the pin. Once a
+pin states the block only the pinned file is read: a re-pin of the same block, `kanso
+classify`'s included, reads nothing of the evidence, and moving or editing it refuses nothing.
+The count is yours, from 1 to a billion: kanso neither derives it nor checks it
+against what the evidence says. It is not scope, so a re-pin that only adds it keeps `best`,
+and the next run's baseline judges the best under the wider margin; a re-pin is refused while
+a run is active, so `kanso research end ID` first. kanso never writes the key; the classifying
+model is shown it with the rest of the file, and a `kanso hyp explore` draft that states one
+is refused on the ladder.
 
 ```yaml
 prior_trials:

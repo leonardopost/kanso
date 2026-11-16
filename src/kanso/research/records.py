@@ -504,8 +504,9 @@ def prior_trials(store: StateStore, hyp_id: str) -> int:
     margin, the deflation gates' draws, the rule from which a plan carries its correction and
     `kanso.certify.run.unpriced` — adds this to the cards it counts. It is a count of draws and
     has no units, like `candidates`, so no spread is read from it. A block two members state —
-    the same `source`, however `./` and `..` spell it, and `sha256`: one grid
-    (`PriorTrials.grid`) — is counted once, at the larger count either states, and a member the
+    the same `source`, however `./` and `..` spell it inside the root (`kanso hyp validate`
+    refuses one that climbs above it), and `sha256`: one grid (`PriorTrials.grid`) — is
+    counted once, at the larger count either states, and a member the
     workspace has not registered states nothing, as it counts no card. A card's and a
     certificate's `n_trials` stay kanso's own cards, so this is never part of a filename.
     """

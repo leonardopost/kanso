@@ -447,7 +447,9 @@ class PriorTrials(KansoModel):
     def grid(self) -> tuple[str, str]:
         """What makes two blocks one grid: the digest of the evidence, and its name with `./`
         and `..` read as a path reads them, so `./evidence/grid.md` and `evidence/grid.md` are
-        one file. The name stays the operator's spelling in `source`."""
+        one file. A name that climbs above the root keeps its `..` here, and `kanso hyp
+        validate` refuses it, so no source admitted keeps one. The name stays the operator's
+        spelling in `source`."""
         return (posixpath.normpath(self.source), self.sha256)
 
 

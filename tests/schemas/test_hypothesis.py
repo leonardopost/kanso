@@ -311,7 +311,10 @@ def test_a_grid_is_never_wider_than_a_margin_can_be_struck_over() -> None:
         build(prior_trials={**GRID, "count": MAX_PRIOR_TRIALS + 1})
 
 
-def test_a_grid_is_known_by_its_evidence_however_its_path_is_spelled() -> None:
+def test_a_grid_is_known_by_its_evidence_however_dot_segments_inside_the_root_spell_it() -> None:
+    """`./` and a `..` that stays inside the root read as a path reads them; a name that climbs
+    above the root is kept as written here and refused by `kanso hyp validate` before a block
+    can be pinned with it."""
     plain = PriorTrials.model_validate(GRID)
     dotted = PriorTrials.model_validate({**GRID, "source": "./evidence/x/../grid.md"})
 

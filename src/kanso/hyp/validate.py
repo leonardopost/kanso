@@ -99,12 +99,14 @@ adapter supplied it.
 
 from __future__ import annotations
 
+import posixpath
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from hashlib import sha256
 from pathlib import Path
+from stat import S_ISREG
 from typing import TYPE_CHECKING, Any, Final
 
 from kanso import ext
@@ -351,9 +353,15 @@ def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
     """The evidence a grid is stated from is a file inside the workspace, named relative to
     its root, whose bytes hash to the digest stated.
 
-    A path that is absolute, resolves outside the root, cannot be named on this host — a NUL
-    in it, a name longer than the filesystem holds — or is not there is refused, and so is a
-    digest its bytes do not hash to.
+    A path that is absolute, resolves outside the root, climbs above the root to name a file
+    inside it, cannot be named on this host — a NUL in it, a name longer than the filesystem
+    holds, a symlink loop — is not there or is not a file is refused, and so is a digest its
+    bytes do not hash to. Refusing the climb is what keeps `./` and `..` from giving one file
+    two keys in `PriorTrials.grid`: inside the root they normalise away, and a climb out by the
+    root's own name and back in would not. Python 3.12's `Path.resolve` raises `RuntimeError`
+    on a symlink loop where 3.13's returns the path, and `is_file` answers some errors as no
+    file on one and raises them on the other, so the path is resolved and then `stat`ed, and
+    every interpreter refuses the same source the same way.
     """
     root = ws.root.resolve()
     named = Path(declared.source)
@@ -364,24 +372,40 @@ def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
             "root, so the pin would name a file only this host holds",
             remedy=place,
         )
-    try:
-        target = (root / named).resolve()
-        present = target.is_file()
-    except (OSError, ValueError) as exc:
+
+    def unopenable(exc: Exception) -> ValidationError:
         reason = getattr(exc, "strerror", None) or str(exc)
-        raise ValidationError(
+        return ValidationError(
             f"prior_trials.source: {declared.source!r} is not a path this host can open: {reason}",
             remedy=place,
-        ) from None
+        )
+
+    try:
+        target = (root / named).resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise unopenable(exc) from None
     if not target.is_relative_to(root):
         raise ValidationError(
             f"prior_trials.source: {declared.source} is outside the workspace", remedy=place
         )
-    if not present:
+    if posixpath.normpath(declared.source).split("/")[0] == "..":
+        raise ValidationError(
+            f"prior_trials.source: {declared.source} leaves the workspace root to name a file "
+            "inside it, so it is not named relative to the root",
+            remedy=f"name it `{target.relative_to(root).as_posix()}`, as the workspace root "
+            "names it",
+        )
+    try:
+        mode = target.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
         raise ValidationError(
             f"prior_trials.source: {declared.source} does not exist in the workspace",
             remedy=place,
-        )
+        ) from None
+    except (OSError, ValueError) as exc:
+        raise unopenable(exc) from None
+    if not S_ISREG(mode):
+        raise ValidationError(f"prior_trials.source: {declared.source} is not a file", remedy=place)
     digest = sha256(read_source(target)).hexdigest()
     if digest != declared.sha256:
         raise ValidationError(

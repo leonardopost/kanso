@@ -250,6 +250,57 @@ def test_a_grid_its_parent_states_under_another_spelling_is_refused(
     assert failure.message.startswith("prior_trials: repeats demo_parent's block")
 
 
+def test_a_grid_named_by_climbing_out_of_the_root_and_back_in_is_refused(ws: Workspace) -> None:
+    """A source is named from the root, so one that leaves it by the root's own name and comes
+    back opens a file inside it under a name no other spelling of that file shares: refused,
+    so every admitted source is one spelling up to `./` and a `..` inside the root, and a
+    child cannot count its parent's grid a second time under it."""
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
+    climbed = f"../{ws.root.resolve().name}/{block['source']}"
+
+    failure = refused(
+        ws, document(derived_from=["demo_parent"], prior_trials={**block, "source": climbed})
+    )
+
+    assert failure.message == (
+        f"prior_trials.source: {climbed} leaves the workspace root to name a file inside it, "
+        "so it is not named relative to the root"
+    )
+    assert failure.remedy == "name it `evidence/grid.md`, as the workspace root names it"
+
+
+@pytest.mark.parametrize("links", [{"loop.md": "loop.md"}, {"a": "b", "b": "a"}])
+def test_a_source_that_is_a_symlink_loop_is_refused_as_inadmissible(
+    ws: Workspace, links: dict[str, str]
+) -> None:
+    """Python 3.12's `resolve` raises `RuntimeError` on a loop where 3.13's hands the path on
+    for `stat` to refuse: either way a path this host cannot open, the operator's to fix
+    (exit 3) and refused alike on every supported interpreter."""
+    (ws.root / "evidence").mkdir()
+    for name, target in links.items():
+        (ws.root / "evidence" / name).symlink_to(target)
+    source = f"evidence/{next(iter(links))}"
+    block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message.startswith(
+        f"prior_trials.source: {source!r} is not a path this host can open: "
+    )
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_source_that_names_a_directory_is_refused_as_not_a_file(ws: Workspace) -> None:
+    evidence(ws)
+    block = {"count": 27, "source": "evidence", "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == "prior_trials.source: evidence is not a file"
+    assert "evidence/" in (failure.remedy or "")
+
+
 def test_a_source_with_a_nul_in_it_is_refused_as_inadmissible(ws: Workspace) -> None:
     """A path the filesystem refuses outright is the operator's file to fix (exit 3), not a
     fault of kanso's (exit 1)."""
@@ -264,14 +315,14 @@ def test_a_source_with_a_nul_in_it_is_refused_as_inadmissible(ws: Workspace) -> 
 
 
 def test_a_source_longer_than_a_name_can_be_is_refused_as_inadmissible(ws: Workspace) -> None:
-    """Python 3.12 and 3.13 raise `ENAMETOOLONG` from `is_file`, which is refused as a path
-    this host cannot open; a pathlib that answers it as no file refuses it as missing."""
+    """`stat` raises `ENAMETOOLONG` on every supported interpreter, where `is_file` answers it
+    as no file on some, so it is refused as a path this host cannot open on all of them."""
     source = "evidence/" + "x" * 5000 + ".md"
     block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
 
     failure = refused(ws, document(prior_trials=block))
 
-    assert failure.message.startswith("prior_trials.source: ")
+    assert failure.message.startswith(f"prior_trials.source: {source!r} is not a path this host")
     assert "evidence/" in (failure.remedy or "")
 
 

@@ -367,8 +367,9 @@ def test_a_family_s_prior_trials_are_the_sum_of_its_grids_each_counted_once(
 
 
 def test_one_grid_spelled_two_ways_is_counted_once(store: StateStore) -> None:
-    """`./` and `..` name the file they would open, so one evidence file is one grid whichever
-    spelling a member pinned."""
+    """`./` and a `..` inside the root name the file they would open, so one evidence file is
+    one grid whichever of those spellings a member pinned; `kanso hyp validate` refuses a
+    source that climbs above the root, so no member pins any other."""
     a_hypothesis(store, "demo_root", a_grid(27))
     a_hypothesis(store, "demo_dotted", a_grid(27, "./evidence/grid.md", "3f" * 32, "demo_root"))
     a_hypothesis(
