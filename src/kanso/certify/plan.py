@@ -81,7 +81,7 @@ from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_days, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
 from kanso.criteria.band import SHARPE_FOLD, to_resolve
-from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
+from kanso.criteria.library import SEARCH_TRIALS, as_pinned, deflation_gate
 from kanso.criteria.objectives import REGISTRY
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
@@ -530,7 +530,8 @@ class Forward:
 
     `periods_to_judge` counts `[research] return_period` periods of the calendar, `None` each
     with `days_to_judge` for a research estimate at or too near zero to state a wait from
-    (`kanso.criteria.band.to_resolve`) — the gate judges the certified value,
+    (`kanso.criteria.band.to_resolve`), in days or in periods shorter than a day, which count
+    more of them — the gate judges the certified value,
     so a version certified above zero from such a best is judged all the same;
     `se_after_one_year` is the forward error after a calendar year of it, in the objective's
     units.
@@ -590,11 +591,14 @@ def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) ->
     sharpe = objective is not None and objective.statistic == "sharpe"
     fewest = (SHARPE_FOLD if sharpe else 1) * ws.config.research.folds
     days = to_resolve(metric, metric_se, research, float(resolve))
+    periods = None if days is None else days / period_days
+    if periods is None or not isfinite(periods):
+        days = periods = None
     return Forward(
         resolve=float(resolve),
         period=period,
         days_to_judge=None if days is None else max(days, fewest * period_days),
-        periods_to_judge=None if days is None else max(ceil(days / period_days), fewest),
+        periods_to_judge=None if periods is None else max(ceil(periods), fewest),
         se_after_one_year=metric_se * sqrt(research / YEAR_DAYS),
     )
 
@@ -652,13 +656,14 @@ def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int, n_t
     """Refuse a pinned plan this version can no longer run, naming the way out.
 
     Checked against the search as it stands, `n_trials` now and not the count the plan was
-    made behind: a plan made before the second card is not a plan for the best of many.
+    made behind: a plan made before the second card is not a plan for the best of many. Its
+    reader did not choose the plan's values, so it is not told they are theirs (`as_pinned`).
     """
     problems = complaints_about(pinned.gates, pinned.excluded, hyp, folds, n_trials)
     if problems:
         raise ValidationError(
             f"the plan pinned for {pinned.hyp_id} is not one this kanso can run: "
-            + "; ".join(problems),
+            + "; ".join(as_pinned(problem) for problem in problems),
             remedy=f"run `kanso cert plan {pinned.hyp_id} --replan` to plan again",
         )
 

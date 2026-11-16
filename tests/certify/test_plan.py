@@ -12,6 +12,7 @@ whose register lists the mock on every tier.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from kanso.certify.plan import (
     read_plan,
 )
 from kanso.criteria import library as lib
+from kanso.criteria.band import to_resolve
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import add, hypothesis_dir, show
@@ -1031,15 +1033,18 @@ def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
 
 
 def test_paper_forward_without_a_parameter_is_retried_and_one_pinned_so_refused(
-    ws: Workspace, store: StateStore
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Half its rule judges nothing and a skip passes, so it would leave the forward check the
-    only paper gate that judged: the planner is sent back, and a plan pinned so is refused."""
+    only paper gate that judged: the planner is sent back, told the values are its own, and a
+    plan pinned so is refused with the replan — its reader is not told they are theirs."""
     half = replacing("paper_forward", params=pairs({"min_duration": "30d"}))
     script(ws, certify_plan=[answer(gates=half), answer()])
+    seen = prompts(monkeypatch)
 
     written = plan(ws, store, HYP_ID)
 
+    assert "the values are yours" in seen[1].user, "the planner chose them"
     (planned,) = [gate for gate in written.gates if gate.id == "paper_forward"]
     assert set(planned.params) == {"min_duration", "horizon_mult"}
     document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
@@ -1050,6 +1055,7 @@ def test_paper_forward_without_a_parameter_is_retried_and_one_pinned_so_refused(
     with pytest.raises(ValidationError) as refused:
         plan(ws, store, HYP_ID)
     assert "gates.paper_forward.horizon_mult: is not set" in refused.value.message
+    assert "yours" not in refused.value.message, "the values are the planner's, not the reader's"
     assert refused.value.remedy == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
 
 
@@ -1123,6 +1129,29 @@ def test_the_forward_note_states_no_wait_from_a_best_at_or_too_near_zero(
     note = forward_note(ws, store, plan(ws, store, HYP_ID))
 
     assert note is not None and note.days_to_judge is None and note.periods_to_judge is None
+    assert note.se_after_one_year > 0
+
+
+@pytest.mark.parametrize(("metric", "period"), [(3e-153, "1h"), (1e-152, "1m")])
+def test_the_forward_note_states_no_wait_its_periods_cannot_count(
+    ws: Workspace, store: StateStore, metric: float, period: str
+) -> None:
+    """A best this near zero waits a number of days a float holds, and a return period shorter
+    than a day counts it in more periods than one does: the note states neither, as it states
+    none for a best nearer zero still, and does not raise."""
+    a_card(store, metric=metric, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=1.0)
+    script(ws, certify_plan=[answer()])
+    pinned = plan(ws, store, HYP_ID)
+    research = ws.config.research.model_copy(update={"return_period": period})
+    sub_day = replace(ws, config=ws.config.model_copy(update={"research": research}))
+
+    note = forward_note(sub_day, store, pinned)
+
+    window = the_hypothesis(ws).windows.research
+    days = float((window.end - window.start).days + 1)
+    assert note is not None and note.period == period
+    assert to_resolve(metric, 1.0, days, note.resolve) is not None, "the days alone are finite"
+    assert (note.days_to_judge, note.periods_to_judge) == (None, None)
     assert note.se_after_one_year > 0
 
 

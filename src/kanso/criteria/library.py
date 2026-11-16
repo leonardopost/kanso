@@ -283,7 +283,16 @@ def _measured(kind: str, value: ParamValue) -> float:
 
 
 _YOURS: Final = "; the values are yours, inside their ranges"
-"""Said to the planner beside a parameter a `together` item lacks, and to no one else."""
+"""Said by `check_params` beside a parameter a `together` item lacks, to whoever chose the
+values — the planner, the classifier, the operator's own `required_constraints` — and left
+off what is said of a plan already pinned (`as_pinned`)."""
+
+
+def as_pinned(problem: str) -> str:
+    """A `check_params` complaint as said of a plan already pinned, without telling its reader
+    the values are theirs: they are the planner's, and the way out is a replan. What the
+    monitor's outcome and `cert plan`'s and `cert run`'s refusal of a pinned plan say."""
+    return problem.removesuffix(_YOURS)
 
 
 def check_params(
@@ -466,7 +475,7 @@ def stage_shortfall(stage: str, included: Sequence[Any], hyp: Hypothesis, folds:
             shortfall.append(f"lacks {item.id}")
             continue
         shortfall.extend(
-            f"names {item.id}, but {problem.removesuffix(_YOURS)}"
+            f"names {item.id}, but {as_pinned(problem)}"
             for problem in check_params(item, gate.params, hyp, folds)
         )
     return shortfall
