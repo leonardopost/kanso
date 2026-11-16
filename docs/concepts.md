@@ -2502,25 +2502,30 @@ best's newest card kept — by the gate's own `evaluate`, on the context certifi
 for it, with that research run in the run's place — running nothing. A card measured under
 another `[research] folds`, `return_period` or capital, or another criteria version, or one
 that kept no measurement, is no reading of the arithmetic certification would use: the lane
-judges nothing, and the certification child runs the research window first and judges the
-correction on it before it reads the certification window. A refusal in either place spares
+judges nothing. Whatever the lane read, the certification child it starts runs the research
+window first and judges the correction again on it before it reads the certification
+window. A refusal in either place spares
 the stall — no certification window read, no certificate, no failure counted toward
 `n_fail`, the hypothesis back in the queue at −1 — and the `stalled` event records the
 precheck (`docs/cli.md`). A correction that judged nothing spares nothing: a plan carries
 none before the second card, and a gate that skips on the research run would skip in the
 certificate too. `cert run` by hand is never spared.
 
-The lane's reading is the certificate's exactly — measured on the demo, the probability, the
-expected maximum and the trial counts agree to the last bit — wherever nothing moved between
-the card and the stall that those guards cannot see. Three things can. A run upgraded
-mid-way to a build that changed how a return is struck is carded by both builds under one
-criteria version, since an edit between two builds of one version moves no criteria digest;
-and certification resolves two inputs afresh instead of reading them off the card — the
-warmup prefix, from the catalog as it stands, which a `kanso data load` adding a printed day
-inside the lookback moves, and an attached construct's budget, from its host's registration
-as it stands. In those cases a stall the lane lets through is judged again by the child on
-the run it makes, which is the certificate's own, and a stall the lane spares is spared on
-the card's reading.
+The lane's reading is the certificate's exactly — measured on the research suite's
+synthetic workspace, a card the loop itself measured, the probability, the expected maximum
+and the trial counts agree to the last bit — wherever nothing moved between the card and the
+stall that those guards cannot see. Several things can, and these are the ones known. A run
+upgraded mid-way to a build that changed how a return is struck is carded by both builds
+under one criteria version, since an edit between two builds of one version moves no
+criteria digest; and a criteria version names no engine, so a patch of the engine within
+the supported range moves a return under the same one. Certification resolves inputs afresh
+instead of reading them off the card — the warmup prefix, from the catalog as it stands,
+which a `kanso data load` adding a printed day inside the lookback moves, and an attached
+construct's budget and grains, from its host's registration as it stands. And the trials
+are counted when each reading is made, so a card another lane records, of a hypothesis this
+one derives from, between the lane's reading and the child's moves the search they price. In those cases a stall the
+lane lets through is judged again by the child on the run it makes, which is the
+certificate's own, and a stall the lane spares is spared on the card's reading.
 
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.

@@ -109,7 +109,7 @@ from __future__ import annotations
 
 import gc
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from math import inf
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -328,10 +328,12 @@ class Precheck:
     is read: the gate the pinned plan corrects the subject's objective with, whether it judged,
     whether it passed, and its evidence — or why it judged nothing.
 
-    `passed` is `None` where nothing was judged. `measured` says whose research run was read:
-    `False`, the run the subject card kept, read in the lane and running nothing; `True`, the
-    research window run again by the certification child, exactly as the certificate's own
-    correction reads it.
+    `passed` is `None` where nothing was judged. `measured` says where it was judged, which is
+    whether the research window was run for it, and every precheck states it: `False` in the
+    lane, which runs nothing and reads the measurement the subject card kept where it can;
+    `True` in the certification child, on the research window it has just run, exactly as the
+    certificate's own correction reads it. The child judges at every stall it is started for,
+    so a stall that certifies always records `True`, whatever the lane read before it.
     """
 
     gate: str | None
@@ -339,7 +341,7 @@ class Precheck:
     passed: bool | None
     evidence: Mapping[str, object]
     reason: str | None = None
-    measured: bool = False
+    measured: bool = field(kw_only=True)
 
     @property
     def spared(self) -> bool:
@@ -407,7 +409,8 @@ def certify_at_stall(
     correction for the subject's objective judged on that run before the certification
     window is read (`precheck`, from the run certification has just made). A refusal returns
     no certificate beside the precheck that refused: the certification window was not read,
-    nothing was written and the hypothesis's status is as it was. Otherwise the hypothesis
+    nothing was written but the plan `certify` pins where none is pinned, and the hypothesis's
+    status is as it was. Otherwise the hypothesis
     becomes a candidate there, recorded by a `certifiable` event, and certification goes on
     exactly as `certify` makes it. The precheck comes back either way — `None` only where
     certification runs nothing, a snapshot that cannot support a claim, whose failing
@@ -545,12 +548,17 @@ def precheck(
 
     The same run is what certification makes only where nothing moved since the card was
     measured that the guards cannot see. A run upgraded mid-way to a build that changed a
-    return is carded by both builds under one criteria version; and certification resolves
-    two inputs afresh rather than reading them off the card — the warmup prefix, from the
-    catalog as it stands, which a `kanso data load` adding a printed day inside the lookback
-    moves, and an attached construct's budget, from its host's registration as it stands. In
-    those cases the certification child's own precheck, on the run it makes, is the one the
-    certificate agrees with (`certify_at_stall`).
+    return is carded by both builds under one criteria version, which names no engine either,
+    so an engine patch moves a return under it too; certification resolves inputs afresh
+    rather than reading them off the card — the warmup prefix, from the catalog as it stands,
+    which a `kanso data load` adding a printed day inside the lookback moves, and an attached
+    construct's budget and grains, from its host's registration as it stands; and the trials
+    are counted when each reading is made. In those cases the certification child's own
+    precheck, on the run it makes, is the one the certificate agrees with
+    (`certify_at_stall`).
+
+    A card whose run pinned a file without a construct or an objective has no correction to
+    name, and judges nothing: certification refuses that subject itself, with its remedy.
     """
     cards = [card for card in records.cards_of(store, hyp_id) if card.strategy_sha == sha]
     card = cards[-1]
@@ -558,7 +566,20 @@ def precheck(
     hyp = parse_yaml(
         Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), HYPOTHESIS_FILE
     )
-    planned = _correction(plan, hyp)
+    if hyp.construct is None or hyp.objective is None:
+        # Certification refuses this subject outright (`_subject`), with its remedy; there
+        # is no objective to name a correction by, so the lane judges nothing and leaves
+        # the refusal to it.
+        return Precheck(
+            None,
+            judged=False,
+            passed=None,
+            evidence={},
+            reason=f"the newest card of {sha[:7]} was researched without a construct or an "
+            "objective, so there is no search correction to judge it by",
+            measured=False,
+        )
+    planned = _correction(plan, hyp, measured=False)
     if isinstance(planned, Precheck):
         return planned
     measured = records.measurement_of(store, card)
@@ -569,10 +590,11 @@ def precheck(
             passed=None,
             evidence={},
             reason=f"the newest card of {sha[:7]} kept no measurement to judge it from",
+            measured=False,
         )
     research = ws.config.research
     expected = (
-        ("objective", measured.objective.id, cast("ObjectiveRef", hyp.objective).id),
+        ("objective", measured.objective.id, hyp.objective.id),
         ("folds", measured.folds, research.folds),
         ("return_period", measured.run.period, research.return_period),
         ("capital", measured.run.capital, hyp.capital or research.capital),
@@ -587,6 +609,7 @@ def precheck(
                 evidence={},
                 reason=f"the newest card of {sha[:7]} was measured under {name} {was}, and "
                 f"certification would measure it under {now}",
+                measured=False,
             )
     return _deflation(
         store,
@@ -604,7 +627,7 @@ def _corrected(
     store: StateStore, plan: CertificationPlan, subject: Subject, researched: _Researched
 ) -> Precheck:
     """The correction `plan` pins, judged on the research run certification has just made."""
-    planned = _correction(plan, subject.hyp)
+    planned = _correction(plan, subject.hyp, measured=True)
     if isinstance(planned, Precheck):
         return planned
     return _deflation(
@@ -619,9 +642,12 @@ def _corrected(
     )
 
 
-def _correction(plan: CertificationPlan, hyp: Hypothesis) -> PlannedGate | Precheck:
+def _correction(
+    plan: CertificationPlan, hyp: Hypothesis, *, measured: bool
+) -> PlannedGate | Precheck:
     """The cert gate `plan` corrects the search with for the objective `hyp` pins, or the
-    precheck that judges nothing because the plan carries none.
+    precheck that judges nothing because the plan carries none — `measured` where the child,
+    which has run the research window, finds that.
 
     A plan carries it from the search's second card, so one without it has no search to
     price; one made for another objective is refused by certification itself.
@@ -638,6 +664,7 @@ def _correction(plan: CertificationPlan, hyp: Hypothesis) -> PlannedGate | Prech
         evidence={},
         reason=f"plan version {plan.plan_version} carries no {gate}, the search correction for "
         f"{objective}: a plan carries it once the search has {SEARCH_TRIALS} cards",
+        measured=measured,
     )
 
 

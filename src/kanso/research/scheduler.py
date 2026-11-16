@@ -127,7 +127,8 @@ RESEED: Final = "reseed"
 """The events a stall and a host's new version append beside the passages
 `research/passages.py` defines — `QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under
 the hypothesis id as subject. `CERTIFIABLE` is the stall's certification child's, appended once
-the search correction has passed on research data and the certification window is next."""
+the search correction has not refused the best on research data — it passed, or it judged
+nothing — and the certification window is next."""
 
 
 @dataclass(frozen=True)
@@ -158,8 +159,8 @@ class Stall:
     """The sha the next run was told to start from, when this stall decided one."""
     precheck: dict[str, object] | None = None
     """The best's search correction as judged on research data before any certification
-    window was read (`kanso.certify.run.Precheck.payload`); `None` where nothing was worth
-    certifying before it."""
+    window was read (`kanso.certify.run.Precheck.payload`) — the certification child's
+    wherever one was started; `None` where nothing was worth certifying before it."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -414,11 +415,13 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     running nothing. A refusal spares the stall: no child is started, no certification window
     is read, the hypothesis stays where it was and goes back to the queue at −1. A
     measurement struck under another `[research]` reading or criteria version, or none at
-    all, judges nothing here, and the child judges the correction on the research window it
-    runs first, before it reads the certification window, and spares the stall itself when
-    it refuses (`kanso.certify.run.certify_at_stall`). The `stalled` event records the
-    precheck either way, the child's where it judged one. A correction that judged nothing
-    spares nothing.
+    all, judges nothing here. Whatever the lane read, a child it starts runs the research
+    window first and judges the correction again on that run, before it reads the
+    certification window, and spares the stall itself when it refuses
+    (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its reading
+    is the one a certificate agrees with. The `stalled` event records the lane's precheck
+    where no child was started and the child's wherever one was. A correction that judged
+    nothing spares nothing.
 
     The verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
     fail returns it to research, and either way it is requeued at −1, because the queue is
@@ -518,10 +521,12 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
 
 
 def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
-    """The newest stall of a hypothesis as `kanso status` and `research run` show it: when,
-    on which best, whether a certification followed, its verdict and the precheck that
-    decided it — `None` before the first stall, and a `precheck` of `None` on a stall
-    recorded before stalls judged one."""
+    """The newest stall of a hypothesis as `kanso status` shows it: when, on which best,
+    whether a certification followed, its verdict and the precheck that decided it — `None`
+    before the first stall. A `precheck` of `None` is a stall that had nothing worth
+    certifying — a best at or below zero, one already certified under the pinned plan and
+    the installed engine, a search not yet priceable — or one recorded before stalls judged
+    one."""
     row = store.connection.execute(
         "SELECT ts, detail FROM events WHERE kind = ? AND subject = ?"
         " ORDER BY event_id DESC LIMIT 1",

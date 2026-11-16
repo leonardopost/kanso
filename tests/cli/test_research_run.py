@@ -11,12 +11,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
-from kanso.hyp import show
+from kanso.hyp import set_status, show
 from kanso.models import spend
-from kanso.research import records
+from kanso.research import records, scheduler
 from kanso.schemas import Card, RunRecord, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
@@ -187,6 +188,63 @@ def test_a_stall_its_search_correction_refuses_is_spared_and_says_so(
     assert "on research data, so the window was not read" in result.stdout
     assert "certified" not in result.stdout
     assert payload(at(runner, mocked_ws, "cert", "show", HYP_ID, "--json"))["certificate"] is None
+
+
+@pytest.mark.parametrize("as_json", [True, False])
+def test_a_spared_stall_reports_no_certificate_an_earlier_plan_made(
+    runner: CliRunner, mocked_ws: Path, as_json: bool
+) -> None:
+    """The best was certified under the first plan; after a replan its search is priced wider,
+    and the next stall on the same bytes is spared. The first plan's certificate is still the
+    hypothesis's newest, but it is not what this run came to: under the plan the stall judged
+    by, the best stands uncertified."""
+    mocked.tuned(mocked_ws, stall_k=1)
+    first = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+    assert first["certificate"] is not None and first["stall"]["certifiable"] is True
+    replanned = at(runner, mocked_ws, "cert", "plan", HYP_ID, "--replan", "--json")
+    assert replanned.exit_code == Exit.OK, replanned.stdout
+    searched_wide(mocked_ws)
+
+    second = at(runner, mocked_ws, "research", "run", HYP_ID, *(("--json",) if as_json else ()))
+
+    assert second.exit_code == Exit.OK, second.stdout
+    newest = payload(at(runner, mocked_ws, "cert", "show", HYP_ID, "--json"))
+    assert newest["plan_version"] == 1, "the first plan's certificate is still the newest"
+    if as_json:
+        outcome = payload(second)
+        assert outcome["best_sha"] == first["best_sha"], "the same bytes stalled again"
+        assert outcome["stall"]["certifiable"] is False
+        assert outcome["stall"]["precheck"]["pass"] is False
+        assert outcome["certificate"] is None
+    else:
+        assert "certification spared · deflated_edge " in second.stdout
+        assert "certified" not in second.stdout
+        assert f"kanso cert show {HYP_ID}" not in second.stdout
+
+
+def test_a_stall_that_wrote_nothing_reports_no_earlier_stall_as_its_own(
+    runner: CliRunner, mocked_ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retire that lands as the run ends leaves the stall nothing to decide and nothing to
+    record; the hypothesis's newest `stalled` event is then an earlier run's, and what this
+    invocation reports is its own stall, which certified nothing and judged nothing."""
+    searched_wide(mocked_ws)
+    mocked.tuned(mocked_ws, stall_k=1)
+    first = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+    assert first["stall"]["precheck"]["pass"] is False, "the first stall was spared"
+    held = scheduler.hold
+
+    def retired_as_it_ends(store: StateStore, hyp_id: str, lane: str) -> None:
+        held(store, hyp_id, lane)
+        set_status(store, hyp_id, "retired")
+
+    monkeypatch.setattr(scheduler, "hold", retired_as_it_ends)
+
+    second = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+
+    assert second["ended"] is True
+    assert second["stall"] == {"certifiable": False, "precheck": None}
+    assert second["certificate"] is None
 
 
 def test_a_stall_points_at_the_certificate_it_produced(runner: CliRunner, mocked_ws: Path) -> None:

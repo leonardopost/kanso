@@ -27,6 +27,7 @@ from kanso.certify import certificate
 from kanso.certify.run import Precheck, certify, certify_at_stall, precheck, read_precheck
 from kanso.criteria import criteria_version
 from kanso.data import snapshot as snapshots
+from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.nautilus import backtest
 from kanso.research import loop, records, scheduler
@@ -196,12 +197,46 @@ def test_a_correction_that_skips_on_research_data_spares_nothing(
     assert checked.reason == "fewer than two trials, so the trial spread is unknown"
 
 
+@pytest.mark.parametrize("missing", ["objective", "construct"])
+def test_a_best_pinned_to_an_unclassified_file_is_left_to_certification_to_refuse(
+    ws: Workspace, store: StateStore, missing: str
+) -> None:
+    """A card whose run pinned a file without a construct or an objective names no correction,
+    so the lane judges nothing, raising nothing of its own, and the stall's certification
+    refuses the subject as `cert run` does — a refusal with its remedy, which a daemon lane
+    records and goes on from, never a fault that ends the lane."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    pinned = {name: value for name, value in DOCUMENT.items() if name != missing}
+    sha = a_card(ws, store, REVERTING, document=pinned, measured_sha=measurement(ws, store))
+    searched(ws, store, *WIDE)
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    checked = precheck(ws, store, hyp_id, sha, plan)
+
+    assert (checked.gate, checked.judged, checked.spared, checked.measured) == (
+        None,
+        False,
+        False,
+        False,
+    )
+    assert checked.reason == (
+        f"the newest card of {sha[:7]} was researched without a construct or an objective, so "
+        "there is no search correction to judge it by"
+    )
+    with pytest.raises(PreconditionError, match="without a construct or an objective") as refused:
+        scheduler.on_stall(ws, store, hyp_id)
+    assert refused.value.remedy == f"run `kanso classify {hyp_id}` and research it again"
+
+
 @pytest.mark.parametrize(
     "checked",
     [
-        Precheck("deflated_edge", True, False, {"probability": 0.25, "trials": 3}),
+        Precheck("deflated_edge", True, False, {"probability": 0.25, "trials": 3}, measured=False),
         Precheck("deflated_sharpe", True, True, {"dsr": 0.99}, measured=True),
-        Precheck("deflated_contribution", False, None, {}, "the card kept no measurement"),
+        Precheck(
+            "deflated_contribution", False, None, {}, "the card kept no measurement", measured=False
+        ),
         Precheck(None, False, None, {}, "no gate", measured=True),
     ],
 )
@@ -214,6 +249,25 @@ def test_a_precheck_reads_back_from_what_it_records(checked: Precheck) -> None:
 
 
 # --- in the certification child, from the research run it makes ---------------
+
+
+def test_the_child_s_precheck_says_it_ran_the_research_window_whatever_it_found(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`measured` says where a precheck was judged: the lane runs nothing, and the child has
+    run the research window before it reads the plan, so its precheck says so even where the
+    plan carries no correction to judge."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    plan = write_plan(ws)
+
+    lane = precheck(ws, store, hyp_id, sha, plan)
+    made, child = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is not None and child is not None
+    assert (lane.judged, lane.measured) == (False, False)
+    assert (child.judged, child.measured) == (False, True)
+    assert child.reason == lane.reason
 
 
 def test_the_precheck_is_the_certificate_s_own_correction_to_the_last_bit(

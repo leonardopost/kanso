@@ -39,7 +39,7 @@ parameters a perturbation moves — so no multiple of a card's budget bounds it.
 A child killed over the share is refused, naming what it reached and the two ways to give
 it more: a larger `[env] mem_per_lane_gb`, which plans the lanes around what certification
 actually costs, or `kanso cert run` by hand, which certifies in the operator's own process
-with nothing but the host to bound it.
+with nothing but the host to bound it — and, being the operator's own act, is never spared.
 """
 
 from __future__ import annotations
@@ -140,15 +140,16 @@ def certify_in_child(
     if breach == backtest.INTERRUPTED:
         raise PreconditionError(
             f"the certification of {hyp_id} was interrupted: the lane running it was told to stop",
-            remedy="start the daemon again; the hypothesis goes back in the queue and is "
-            "certified at its next stall",
+            remedy="start the daemon again; the hypothesis goes back in the queue and its "
+            "best is certified at its next stall, unless its search correction spares it",
         )
     if breach is not None:  # no wall time is imposed, so only the memory share is breached
         raise PreconditionError(
             f"certifying {sha[:7]} of {hyp_id} needed more than the {cap:.2f} GB a card of its "
             f"run may hold, so it was killed at {peak_gb:.2f} GB",
             remedy="declare a larger `[env] mem_per_lane_gb` in kanso.toml and run `kanso env "
-            f"detect`, or certify it by hand with `kanso cert run {hyp_id}`",
+            f"detect`, or certify it by hand with `kanso cert run {hyp_id}`, which reads the "
+            "certification window whatever its search correction says",
         )
     if answer is None:
         raise PreconditionError(

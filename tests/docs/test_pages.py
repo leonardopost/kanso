@@ -290,18 +290,24 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     assert "**A stall certifies only a best whose correction passes on research data.**" in (
         concepts
     )
-    for key in Precheck("deflated_edge", False, None, {}, "why").payload():
+    for key in Precheck("deflated_edge", False, None, {}, "why", measured=False).payload():
         assert f"`{key}`" in cli, key
     research_run = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
     )
     assert "carries `stall`" in research_run and "`certification` line" in research_run
+    assert "never read back from an earlier stall's event" in research_run
+    assert "which a spared stall leaves newest, is not this run's outcome" in research_run
+    assert "so every stall that certified records `measured: true`" in cli
+    assert "the child's wherever one was, judged or not" in cli
     status = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso status`")
     )
     assert "`last_stall`" in status and "stall spared:" in status
     assert "`cert run` by hand is never spared" in concepts
-    assert "measured on the demo, the probability, the expected maximum and the trial" in (concepts)
+    assert "measured on the research suite's synthetic workspace, a card the loop itself" in (
+        concepts
+    )
 
 
 def test_the_cli_page_states_both_sides_of_the_paper_gate() -> None:

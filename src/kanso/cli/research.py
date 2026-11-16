@@ -18,8 +18,9 @@ active runs and their lane directories stay exactly where they are, and the next
 picks them up before it takes anything new — so stopping is a cheap act rather than a
 decision.
 
-A run that stalls with a keep nothing has certified certifies it before it returns, so
-`run` reports the certificate that stall produced and points at it.
+A run that stalls with a keep nothing has certified certifies it before it returns, unless
+its search correction refuses it on research data, so `run` reports what that stall decided:
+the certificate the best stands under, pointing at it, or the correction that spared it.
 
 `show` prints what is in state: a card's stored `strategy.py`, the unified diff between
 two of them, or — under `--measured` — what the newest card of those bytes that kept a
@@ -41,13 +42,15 @@ import typer
 
 from kanso import research
 from kanso.certify import certificate
+from kanso.certify.plan import read_plan
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent, stopped
 from kanso.criteria import criteria_version
+from kanso.env.envelope import engine_version
 from kanso.errors import PreconditionError, ValidationError
-from kanso.research import daemon, records, scheduler
+from kanso.research import daemon, records
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import Card, CardDigest, GateResult
+from kanso.schemas import Card, CardDigest, Certificate, GateResult
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -342,15 +345,15 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
     with store(ws) as opened:
         outcome = research.drive(ws, opened, hyp_id, cards=cards, lane=DEFAULT_LANE)
         trials = records.n_trials(opened, hyp_id)
-        # A run that stalls on a keep nothing has certified certifies it before it
-        # returns, so the certificate of the best is part of what this invocation did.
-        # One of another subject is not: a rewound `best` leaves an older certificate
-        # newest, and reporting that as this run's outcome would be a lie.
-        newest = certificate.latest(opened, hyp_id) if outcome.ended else None
-        # The stall this invocation ended on wrote the hypothesis's newest `stalled` event:
-        # whether it went on to certify, and the search correction that decided it.
-        stall = scheduler.last_stall(opened, hyp_id) if outcome.ended else None
-    certified = newest if newest is not None and newest.strategy_sha == outcome.best_sha else None
+        # What the stall this invocation ended on decided is what `on_stall` returned, never
+        # the store's newest `stalled` event, which is another stall's when this one wrote
+        # none (a retire that landed before it).
+        stall = outcome.stall
+        certified = (
+            None
+            if stall is None or stall.best_sha is None
+            else _standing(ws, opened, hyp_id, stall.best_sha)
+        )
     data: dict[str, Any] = {
         **outcome.payload(),
         "n_trials": trials,
@@ -359,7 +362,7 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         else {"sha7": certified.sha7, "verdict": certified.verdict},
         "stall": None
         if stall is None
-        else {"certifiable": stall["certifiable"], "precheck": stall["precheck"]},
+        else {"certifiable": stall.certifiable, "precheck": stall.precheck},
     }
     best = (
         "none yet"
@@ -380,7 +383,7 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
     ]
     if certified is not None:
         lines.append(field("certified", f"{certified.sha7} · {certified.verdict}"))
-    spared = None if stall is None else spared_by(stall["precheck"])
+    spared = None if stall is None else spared_by(stall.precheck)
     if spared is not None:
         lines.append(
             field(
@@ -398,6 +401,23 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         )
     )
     return Report(data=data, lines=tuple(lines))
+
+
+def _standing(ws: Workspace, opened: StateStore, hyp_id: str, sha: str) -> Certificate | None:
+    """The certificate a stall's best stands under once the stall is decided: the hypothesis's
+    newest, when it is of those bytes under the pinned plan and the installed engine — the
+    one the stall made, or the one it found and so did not make again.
+
+    Any other is not this run's outcome. A rewound `best` leaves another subject's
+    certificate newest, and a stall its search correction spared leaves one under a plan or
+    an engine since replaced, which certified the bytes under a bar the stall no longer
+    judges by; reporting either as what this run came to would be a lie."""
+    newest = certificate.latest(opened, hyp_id)
+    pinned = read_plan(ws, hyp_id)
+    if newest is None or pinned is None:
+        return None
+    standing = (newest.strategy_sha, newest.plan_version, newest.nautilus_version)
+    return newest if standing == (sha, pinned.plan_version, engine_version()) else None
 
 
 def _start(ws: Workspace) -> Report:

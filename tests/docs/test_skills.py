@@ -87,6 +87,21 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     assert "passes on research data. One it refuses is **spared**" in text
     assert "`hypotheses[].last_stall.precheck`" in text
     assert "`kanso cert run` by hand is never spared" in text
+    # `measured` is where the precheck was judged; the child judges at every stall it is
+    # started for, so a certified stall says `true` whatever its card was measured under.
+    assert "because the card was measured under another" not in text
+    assert "`measured` — where it was judged, not why" in text
+    assert "so every stall that certified says `true`" in text
+    assert "`null` beside a spared stall, whatever an earlier plan certified" in text
+
+
+def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None:
+    """An agent driving the loop reads what a stall leads to here; told only that a keep above
+    zero is certified, it would report a spared stall's missing certificate as a fault."""
+    text = skill(PACKAGED, "kanso-research")
+    assert "unless the plan's search correction refuses it on research data, which **spares**" in (
+        text
+    )
 
 
 def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
