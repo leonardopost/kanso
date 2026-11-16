@@ -780,7 +780,8 @@ class _DeflatedSharpe:
     rather than candidates the selection could have chosen, the third a number in other
     units — and includes one refused as redundant, which is a candidate the selection ranked
     and declined. The count is the larger of that set's and `trials`, every card that ran
-    and traded under any objective (`_searched`). The
+    and traded under any objective and every setting the family declares tried outside
+    kanso (`_searched`). The
     estimate's own error is the objective's, the one its card carried: Mertens' variance of a
     Sharpe for skewed and fat-tailed returns, fold by fold, widened for serial correlation,
     and Memmel's paired one for a Sharpe differenced against a host or a hold. The estimate,
@@ -969,8 +970,9 @@ class _DeflatedContribution:
     paired per-period differences against the host's for the marginal form, widened for
     serial correlation — and the expected maximum it is measured against is that of as many
     draws as the selection took the maximum over (`_searched`, every card that ran and traded
-    under any objective), from the distribution of the trials' own metrics in the same units
-    (`trial_metrics`, the same set `deflated_sharpe` reads), read robustly as 1.4826 times
+    under any objective and every setting a declared grid adds), from the distribution of
+    the trials' own metrics in the same units (`trial_metrics`, the same set
+    `deflated_sharpe` reads), read robustly as 1.4826 times
     their median absolute deviation (`robust_variance`), so a few trials that blew up do not
     widen the search past any candidate the selection weighed. The probability reported is
     that of the estimate exceeding that maximum by its own error, and the gate passes when it
@@ -995,7 +997,8 @@ class _DeflatedEdge:
     linearised period by period, so trades of one session that move together count as one
     session's worth, widened for serial correlation across periods, and for the marginal form
     the two runs' linearisations differenced period by period — and the bar the expected
-    maximum of the search, from the count of its candidates and the robust spread of its
+    maximum of the search, from the count of its candidates — the cards and the settings a
+    declared grid adds — and the robust spread of its
     trials scored under the same objective. Until it existed a run scored on a per-trade edge
     reached a certificate with nothing pricing the search behind it: both other deflations
     skip it, and the embargo's fraction of a selected maximum is only an implicit, partial

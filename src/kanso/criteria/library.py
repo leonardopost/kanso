@@ -351,11 +351,12 @@ def plan_complaints(
     and with every parameter it declares set — because the result a certificate judges is
     then the best of a search, nothing else in a plan prices one, and a deflation gate with
     no threshold skips, which passes. The threshold's value stays the planner's. The gate
-    itself takes its expected maximum over every card that ran and traded and its spread
-    from the narrower set of `trial_metrics`; certification refuses a subject behind two
-    such cards with fewer than two of these (`kanso.certify.run.unpriced`), since that
-    spread cannot be read, and the gate skips only where fewer than two cards ran and
-    traded at all: then nothing was chosen over anything.
+    itself takes its expected maximum over every card that ran and traded and every setting
+    the family declares, and its spread from the narrower set of `trial_metrics`;
+    certification refuses a subject behind two such draws — one card behind a declared grid
+    among them — with fewer than two of these (`kanso.certify.run.unpriced`), since that
+    spread cannot be read, and the gate skips only where the search has fewer than two draws
+    at all: then nothing was chosen over anything.
 
     A `cost_scenario` on a hypothesis charged a dated spread states a `fixed_bps` above zero. A
     scenario's parameters are numbers and cannot carry a table, and one that leaves the width

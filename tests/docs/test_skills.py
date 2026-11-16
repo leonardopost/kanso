@@ -70,9 +70,11 @@ def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
     text = skill(PACKAGED, "kanso-certify")
     assert "and the `prior_trials` its family declares tried outside kanso" in text
     assert (
-        "from the second draw: the second card, the first behind a declared grid, or none yet "
-        "behind a grid of two settings or more"
+        "from the second draw: by `cert plan` and `cert run` from the second card or the first "
+        "behind a declared grid, and by `cert plan` already with no card behind a grid of two "
+        "settings or more, where `cert run` has no card to certify"
     ) in text
+    assert "or none yet behind a grid" not in text
     assert "or the first card behind a declared grid" in text
     assert "can exceed the certificate's `n_trials`, which counts cards alone" in text
     assert "every card it has, reaches two" not in text
