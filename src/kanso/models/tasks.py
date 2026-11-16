@@ -427,7 +427,12 @@ INSTRUCTIONS: Final[dict[TaskClass, str]] = {
         "program's own prohibitions exclude it; a thesis that does not mention a filter does "
         "not forbid one. When `rewound_for` is given, this run was already rewound for those "
         "reasons, and a change that returns in one of those directions is drift again — "
-        "unless the program permits it and the thesis does not state the opposite. Answer the "
+        "unless the program permits it and the thesis does not state the opposite. When "
+        "`rewound_in_earlier_runs` is given, this hypothesis was rewound in earlier runs for "
+        "those directions, each with the change refused; a change that returns in one of them "
+        "is drift again unless the program permits it and the thesis does not state the "
+        "opposite — `same_program: false` means the program has been edited since that "
+        "verdict, and `same_thesis: false` that the hypothesis was re-pinned since. Answer the "
         "same change the same way every time it is put to you. Give the reason in under 200 "
         "characters."
     ),

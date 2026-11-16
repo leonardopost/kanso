@@ -525,6 +525,19 @@ def test_both_pages_say_the_run_s_base_is_never_judged() -> None:
     assert "`judged: false`" in alignment
 
 
+def test_both_pages_say_the_judge_reads_the_rewinds_of_earlier_runs() -> None:
+    """A run kept a filter an earlier run of its hypothesis had been rewound for, its judge
+    shown nothing of that verdict."""
+    row = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso align check")
+    )
+    assert "those the hypothesis was rewound for in its earlier runs" in row
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "A direction refused in one run is not met fresh in the next" in alignment
+    assert "`same_program` and `same_thesis`" in alignment
+    assert "cut to forty lines with the rest counted" in alignment
+
+
 def test_the_pages_say_a_closed_day_is_no_hole_and_an_answer_closes_nothing() -> None:
     """A chunk edge on a weekend split a series with no session missing, and the rule that
     first joined it counted an empty answer as coverage, a trading day the source lost
