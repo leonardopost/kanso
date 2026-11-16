@@ -13,7 +13,10 @@ nothing and a gate that judges nothing passes (`check_params`). A card gate whos
 `required_for` names an objective is carried by every hypothesis scored on it, with all
 its parameters set (`required_card_gates`): an objective struck on the book rewards
 trading less once every trade loses, and the gate that refuses that is part of what the
-objective means, not a choice about this hypothesis.
+objective means, not a choice about this hypothesis. A cert gate whose `required_for` names
+it is carried by every certification plan for such a hypothesis, in the same way
+(`required_cert_gates`): an absolute objective credits a drift held as if it were timed, and
+`entry_timing` is what tells the two apart.
 
 A range bound may be written against the run's own scale rather than in absolute units —
 `1 * folds`, `100 * horizon` — so an item is written once and sized to each hypothesis.
@@ -23,8 +26,11 @@ between one and the fold count this workspace actually uses, whatever that is.
 Plan validation enforces the structural invariants and nothing else. Every gate exists,
 runs at the stage the toolbox says it runs at, and carries values inside its ranges; every
 gate the toolbox marks required is present and none of them is excluded; the plan reaches
-all three stages; and once the hypothesis's `n_trials` — every card it has, the count a
-certificate is stamped with — reaches `SEARCH_TRIALS`, the plan includes the gate that
+all three stages; every cert gate `required_for` the hypothesis's objective is present, with
+every parameter it declares set, and not excluded; and once the hypothesis's `n_trials` —
+every card it has, the count a certificate is stamped with — and the `prior_trials` its
+family declares tried outside kanso together reach `SEARCH_TRIALS`, the plan includes the
+gate that
 `deflates` its objective, with its threshold set — a result selected from a search is
 priced for the search, and that is a structural fact about selection, not a judgement
 about this hypothesis. Which of the remaining gates to include, and with which values —
@@ -71,9 +77,9 @@ LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
 
 SEARCH_TRIALS: Final = 2
-"""From how many cards — `n_trials` — a plan must correct for the search: two cards are
-already a choice of one over another, and the maximum of two draws is above the mean of
-either."""
+"""From how many draws a plan must correct for the search — `n_trials`, the cards, and the
+`prior_trials` the family declares tried outside kanso, which every caller adds: two draws are
+already a choice of one over another, and the maximum of two is above the mean of either."""
 
 KIND_WORDS: Final = {
     "hours": "span of clock times on one day, HH:MM-HH:MM",
@@ -187,17 +193,31 @@ def deflation_gate(objective_id: str) -> str | None:
 
 def required_card_gates(objective_id: str) -> tuple[str, ...]:
     """The card gates every hypothesis scored on this objective carries, with every parameter
-    set, as the toolbox declares them in their `required_for` lists; in id order."""
+    set, as the toolbox declares them in their `required_for` lists; in id order. A cert gate
+    that guards the objective is a plan's to carry and never one of these."""
+    return _guarding(objective_id, "card")
+
+
+def required_cert_gates(objective_id: str) -> tuple[str, ...]:
+    """The cert gates every certification plan for a hypothesis scored on this objective
+    carries, with every parameter set, as the toolbox declares them in their `required_for`
+    lists; in id order."""
+    return _guarding(objective_id, "cert")
+
+
+def _guarding(objective_id: str, stage: str) -> tuple[str, ...]:
+    """The gates of one stage whose `required_for` names this objective, in id order."""
     return tuple(
         item.id
         for item in _catalogue().values()
-        if item.kind == "gate" and objective_id in (item.required_for or ())
+        if item.kind == "gate" and item.stage == stage and objective_id in (item.required_for or ())
     )
 
 
 def required_deflation(hyp: Hypothesis, n_trials: int) -> str | None:
     """The deflation gate a plan for this hypothesis must include, or `None` when it need
-    include none: before its second card, or with no objective to deflate."""
+    include none: before the search's second draw — `n_trials` is the cards and the declared
+    `prior_trials` together, as the caller counts them — or with no objective to deflate."""
     if hyp.objective is None or n_trials < SEARCH_TRIALS:
         return None
     return deflation_gate(hyp.objective.id)
@@ -355,17 +375,23 @@ def plan_complaints(
     All of them at once, because the planner is allowed one retry: a plan corrected one
     complaint at a time would cost a call per mistake.
 
-    `n_trials` is the hypothesis's count of cards, every one of every run, the count a
-    certificate is stamped with. From `SEARCH_TRIALS` on, the gate that `deflates` the
+    `n_trials` is the hypothesis's count of cards, every one of every run — the count a
+    certificate is stamped with — and the `prior_trials` its family declares tried outside
+    kanso, added by the caller. From `SEARCH_TRIALS` on, the gate that `deflates` the
     hypothesis's objective is held to more than a required gate is — present, not excluded,
     and with every parameter it declares set — because the result a certificate judges is
     then the best of a search, nothing else in a plan prices one, and a deflation gate with
     no threshold skips, which passes. The threshold's value stays the planner's. The gate
-    itself takes its expected maximum over every card that ran and traded and its spread
-    from the narrower set of `trial_metrics`; certification refuses a subject behind two
-    such cards with fewer than two of these (`kanso.certify.run.unpriced`), since that
-    spread cannot be read, and the gate skips only where fewer than two cards ran and
-    traded at all: then nothing was chosen over anything.
+    itself takes its expected maximum over every card that ran and traded and every setting
+    the family declares, and its spread from the narrower set of `trial_metrics`;
+    certification refuses a subject behind two such draws — one card behind a declared grid
+    among them — with fewer than two of these (`kanso.certify.run.unpriced`), since that
+    spread cannot be read, and the gate skips only where the search has fewer than two draws
+    at all: then nothing was chosen over anything.
+
+    A cert gate the toolbox declares `required_for` the hypothesis's objective is held as the
+    search correction is, from the first plan on: present, not excluded, and with every
+    parameter it declares set, since it is part of what that objective means.
 
     A `cost_scenario` on a hypothesis charged a dated spread states a `fixed_bps` above zero. A
     scenario's parameters are numbers and cannot carry a table, and one that leaves the width
@@ -414,7 +440,8 @@ def plan_complaints(
     correction = required_deflation(hyp, n_trials)
     searched = (
         f"is the search correction for {hyp.objective.id}, and a plan includes it once "
-        f"n_trials, every card of the hypothesis, reaches {SEARCH_TRIALS} (it is {n_trials})"
+        "n_trials, every card of the hypothesis, and the prior_trials its family declares "
+        f"reach {SEARCH_TRIALS} together (they are {n_trials})"
         if correction is not None and hyp.objective is not None
         else ""
     )
@@ -428,6 +455,16 @@ def plan_complaints(
             for name in offered[correction].params
             if name not in chosen
         )
+    # A guarding gate declares `together`, so `check_params` has already held one that is
+    # named to every parameter it declares; what is left is that it is named at all.
+    guarded = () if hyp.objective is None else required_cert_gates(hyp.objective.id)
+    guards = "" if hyp.objective is None else f"is required for {hyp.objective.id}, its objective"
+    complaints.extend(
+        f"gates: {gate_id} {guards}, and every plan for it includes the gate with every "
+        "parameter set; the values are yours, inside their ranges"
+        for gate_id in guarded
+        if gate_id in offered and gate_id not in named
+    )
     for left in excluded:
         item = items.get(left.id)
         if item is None or item.kind != "gate":
@@ -440,6 +477,8 @@ def plan_complaints(
             complaints.append(f"excluded.{left.id}: is required and cannot be left out")
         elif left.id == correction:
             complaints.append(f"excluded.{left.id}: {searched}, so it cannot be left out")
+        elif left.id in guarded:
+            complaints.append(f"excluded.{left.id}: {guards}, so it cannot be left out")
         elif left.id in named:
             complaints.append(f"excluded.{left.id}: is both included and excluded")
     if hyp.costs is not None and hyp.costs.spread == "dated":
@@ -486,9 +525,10 @@ def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, 
 
     The raising form of `plan_complaints`, which is the one rule set: two validators that
     had to agree would eventually not. The search it is checked against is the one the plan
-    records it was made behind, `inputs.n_trials`.
+    records it was made behind, `inputs.n_trials` and `inputs.prior_trials` together.
     """
     model = plan if isinstance(plan, CertificationPlan) else CertificationPlan.model_validate(plan)
-    problems = plan_complaints(model.gates, model.excluded, hyp, folds, model.inputs.n_trials)
+    searched = model.inputs.n_trials + model.inputs.prior_trials
+    problems = plan_complaints(model.gates, model.excluded, hyp, folds, searched)
     if problems:
         raise ValidationError("; ".join(problems))

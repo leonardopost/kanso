@@ -13,9 +13,11 @@ one the planner would accept, since the runner reads it through the planner.
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -59,22 +61,29 @@ from tests.own_bar_size import REFUSED, version_remedy
 from tests.research.conftest import (
     CERTIFICATION,
     DOCUMENT,
+    ENVELOPE,
     FLAT,
     HYP_ID,
     INSTRUMENT,
     RAISING,
+    RESEARCH,
     REVERTING,
+    SHALLOW,
     SPAN,
+    bar_type,
     bars,
     classify,
+    dataset,
     document,
     load_december,
+    price,
+    write_instruments,
 )
 from tests.research.test_attached import ALLOWING, DECLARING_HOST, FILTER, HOST, compose_host
 
 NOW = datetime(2024, 2, 1, tzinfo=UTC)
 
-CERT_GATES: list[dict[str, Any]] = [
+REQUIRED_GATES: list[dict[str, Any]] = [
     {
         "id": "embargoed_window",
         "stage": "cert",
@@ -95,6 +104,17 @@ CERT_GATES: list[dict[str, Any]] = [
     },
 ]
 """The three cert gates every plan must carry, since all three are structural invariants."""
+
+TIMING_GATE: dict[str, Any] = {
+    "id": "entry_timing",
+    "stage": "cert",
+    "params": {"max_p": 0.1},
+    "rationale": "required for a Sharpe: timing told from what holding the series earns",
+}
+"""The cert gate every plan for the demo's Sharpe carries beside them."""
+
+CERT_GATES: list[dict[str, Any]] = [*REQUIRED_GATES, TIMING_GATE]
+"""What a plan for the demo's Sharpe carries at the cert stage before it chooses anything."""
 
 SEARCHED: dict[str, Any] = {
     "id": "deflated_sharpe",
@@ -1129,7 +1149,11 @@ def test_a_plan_that_does_not_name_the_parity_gate_replays_nothing(
 
     made = certify(ws, store, HYP_ID)
 
-    assert [gate.id for gate in made.gates] == ["embargoed_window", "publication_lag"]
+    assert [gate.id for gate in made.gates] == [
+        "embargoed_window",
+        "publication_lag",
+        "entry_timing",
+    ]
     assert sessions(ws) == [], "nothing replayed, so no session was written"
 
 
@@ -1182,6 +1206,82 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     trials = records.trial_metrics(store, HYP_ID, "wf_sharpe_net")
     assert deflated.evidence["trials"] == len(trials) == 2
     assert records.n_trials(store, HYP_ID) == made.n_trials == 4
+
+
+# --- a grid declared tried outside kanso ---------------------------------------
+
+
+def a_grid(ws: Workspace, count: int = 27, name: str = "evidence/grid.md") -> dict[str, Any]:
+    """Evidence of an offline grid of `count` settings, copied into the workspace, and the
+    `prior_trials` block that states it."""
+    body = f"# pre-registered grid: {count} settings\n".encode()
+    path = ws.root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return {"count": count, "source": name, "sha256": sha256(body).hexdigest()}
+
+
+def test_a_declared_grid_is_among_the_draws_a_certificate_deflates_by_and_not_its_n_trials(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The grid's settings widen how many draws the maximum is taken over, beside the cards
+    that ran and traded; the spread is still the scored cards', and the certificate is still
+    stamped with kanso's own cards, which its filename carries."""
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    a_card(ws, store, FLAT, seq=1, metric=0.5, best=False)
+    a_card(ws, store, REVERTING, seq=2, metric=1.5)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    made = certify(ws, store, HYP_ID)
+
+    (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
+    assert deflated.skipped is None
+    assert deflated.evidence["trials"] == records.candidates(store, HYP_ID) + 27 == 29
+    assert deflated.evidence["prior_trials"] == 27
+    assert deflated.evidence["scored_trials"] == 2
+    assert made.n_trials == records.n_trials(store, HYP_ID) == 2
+
+
+def test_a_declared_grid_does_not_price_a_search_whose_spread_no_two_cards_read(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A grid is a count with no units: the first card behind it has a search of 28 draws
+    and no spread to price it by, so it is refused until a second card is scored."""
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    a_card(ws, store, REVERTING, seq=1, metric=1.5)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "demo_mr has 1 cards that ran and traded behind it and 1 of them scored under "
+        "wf_sharpe_net, beside 27 settings its family declares tried outside kanso, so "
+        "deflated_sharpe cannot read the spread of the search that selected this card: it "
+        "prices the search from two cards in its units"
+    )
+    assert run.unpriced(store, HYP_ID, "wf_sharpe_net", 1) == refused.value.message
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+
+
+def test_a_plan_pinned_without_its_correction_is_refused_once_a_grid_is_declared(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One card is no search, but one card behind a grid of 27 is the best of 28: the plan
+    must carry the correction for it, whatever it was pinned behind."""
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    a_card(ws, store, REVERTING, seq=1, metric=1.5)
+    write_plan(ws)
+
+    with pytest.raises(ValidationError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert (
+        "deflated_sharpe is the search correction for wf_sharpe_net, and a plan includes it "
+        "once n_trials, every card of the hypothesis, and the prior_trials its family declares "
+        "reach 2 together (they are 28)"
+    ) in refused.value.message
+    assert refused.value.remedy == "run `kanso cert plan demo_mr --replan` to plan again"
 
 
 # --- a search carried across a re-pin to another objective ---------------------
@@ -1278,6 +1378,26 @@ def test_a_card_scored_under_the_objective_before_the_re_pin_is_not_certified_by
     )
     assert refused.value.remedy == (
         "certify a card scored under wf_contribution_bps, as the best is: `kanso cert run demo_mr`"
+    )
+
+
+def test_a_card_scored_before_the_re_pin_is_not_certified_by_name_behind_one_card_and_a_grid(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One card is no search, but one card behind a declared grid is the best of 28: the plan
+    made for the contribution carries no correction for the Sharpe that card was scored
+    under, and that is what refuses it, before its spread is asked for."""
+    classify(ws, store, {**SWITCHED, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    before = a_card(ws, store, blob_from("9"), seq=1, metric=2.0, best=False)
+    write_plan(ws, gates=[*CERT_GATES, PRICED])
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr "
+        "carries no deflated_sharpe with its threshold, the search correction for it, so the "
+        "search that selected it would go unpriced"
     )
 
 
@@ -1597,7 +1717,13 @@ def test_the_evidence_gates_are_shown_the_window_and_never_the_prefix(
 
     made = certify(ws, store, HYP_ID)
 
-    assert made.verdict == "pass"
+    failed = [gate for gate in made.gates if gate.skipped is None and not gate.passed]
+    assert [gate.id for gate in failed] == ["entry_timing"], (
+        "warmed, the sleeve trades every cycle of the window, so a shift by whole cycles "
+        "trades each of them again: a tie with what it made, which counts against it"
+    )
+    (timing,) = failed
+    assert timing.evidence["null_max"] == timing.evidence["observed_bps_per_trade"]
     opens = midnight_ns(CERTIFICATION[0])
     assert min(handed) < opens, "the subject's run was handed its prefix through the fold"
     assert len([stamp for stamp in handed if stamp >= opens]) == (
@@ -1679,3 +1805,332 @@ def test_a_sleeve_without_a_benchmark_runs_no_hold(ws: Workspace, store: StateSt
     measured = run._measure(run._subject(ws, store, HYP_ID, None))
 
     assert (measured.benchmark_certification, measured.benchmark_research) == (None, None)
+
+
+# --- entry timing -------------------------------------------------------------
+
+MIRROR = REVERTING.replace(
+    b"first > second > third and not", b"first < second < third and not"
+).replace(b"first < second < third and self.long", b"first > second > third and self.long")
+"""The reverter the wrong way round: it buys the peak and sells the trough, so it loses out of
+sample and `embargoed_window` refuses it."""
+
+
+def timing_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[date, date]]:
+    """The window of every read `entry_timing`'s reader makes, as it makes it."""
+    read: list[tuple[date, date]] = []
+    original = backtest.window_chunks
+
+    def counted(request: backtest.RunRequest, catalog: Any) -> Any:
+        if sys._getframe(1).f_code is run._session_prices.__code__:
+            read.append(request.window)
+        return original(request, catalog)
+
+    monkeypatch.setattr(run.backtest, "window_chunks", counted)
+    return read
+
+
+def test_the_reverting_sleeve_s_timing_is_told_from_the_same_trades_a_cycle_later(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every shift by whole cycles lands one of its trades on the window's shallow first cycle,
+    and every other shift buys off the trough, so no draw earns what it did: the smallest p the
+    window can resolve, one read of the window, and its own value the runner's."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    read = timing_reads(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    (timing,) = [gate for gate in made.gates if gate.id == "entry_timing"]
+    assert made.verdict == "pass" and timing.skipped is None and timing.passed
+    assert read == [CERTIFICATION], "one more read of the certification window, for the gate"
+    evidence = timing.evidence
+    assert (evidence["sessions"], evidence["min_offset"], evidence["draws"]) == (24, 3, 19)
+    assert evidence["p"] == evidence["min_attainable_p"] == 1 / 20
+    assert evidence["null_max"] < evidence["observed_bps_per_trade"]
+    assert evidence["observed_bps_per_trade"] == pytest.approx(
+        evidence["observed_runner_bps_per_trade"]
+    )
+
+
+def test_offset_zero_charges_a_real_run_s_fills_what_the_runner_charged_them(
+    ws: Workspace, store: StateStore
+) -> None:
+    from kanso.criteria.timing import draw, keys_of, place
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    subject = run._subject(ws, store, HYP_ID, None)
+    window = run._measure(subject).certification
+
+    prices = run._session_prices(subject, keys_of(window))
+    own = draw([place(t, prices) for t in window.trades], prices, window.venue_model, 0)
+
+    assert own.costs == tuple(tuple(f.cost for f in t.fills) for t in window.trades)
+    assert own.kept == len(window.trades) == 5
+
+
+def test_a_failed_window_spares_the_read_and_says_what_it_spared(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    classify(ws, store, DOCUMENT, MIRROR)
+    a_card(ws, store, MIRROR)
+    write_plan(ws)
+    read = timing_reads(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    (window,) = [gate for gate in made.gates if gate.id == "embargoed_window"]
+    (timing,) = [gate for gate in made.gates if gate.id == "entry_timing"]
+    assert window.skipped is None and not window.passed
+    assert (timing.skipped, timing.passed, timing.evidence) == (run.TIMING_SPARED, True, {})
+    assert read == [], "the window was not read again"
+    assert len(run.TIMING_SPARED) <= 200
+
+
+def test_a_card_scored_on_a_sharpe_before_a_re_pin_is_not_certified_without_entry_timing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cert run --sha` of a card scored on `wf_sharpe_net` before a re-pin to the Sharpe against
+    a hold: the plan, made for the hold, rightly carries no `entry_timing`, and the card is
+    judged on its own objective, which no certificate is judged on without it."""
+    classify(ws, store, HELD, REVERTING)
+    before = a_card(ws, store, REVERTING)
+    write_plan(ws, gates=REQUIRED_GATES)
+    read = timing_reads(monkeypatch)
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr carries "
+        "no entry_timing with every parameter set, which every certificate of wf_sharpe_net is "
+        "judged by, so a drift it held would be credited as timing"
+    )
+    assert refused.value.remedy == (
+        "certify a card scored under wf_sharpe_vs_hold, as the best is: `kanso cert run demo_mr`"
+    )
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+    assert read == []
+
+    write_plan(ws, gates=CERT_GATES)
+    made = certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert made.objective.id == "wf_sharpe_net"
+    (timing,) = [gate for gate in made.gates if gate.id == "entry_timing"]
+    assert timing.skipped is None and read == [CERTIFICATION]
+
+
+def test_a_plan_that_does_not_name_entry_timing_reads_the_window_no_more(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Sharpe against a hold is not held to the gate; a plan that leaves it out pays nothing."""
+    classify(ws, store, HELD, REVERTING)
+    a_card(ws, store, REVERTING, document=HELD)
+    write_plan(ws, gates=REQUIRED_GATES)
+    read = timing_reads(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    assert "entry_timing" not in [gate.id for gate in made.gates]
+    assert read == []
+
+
+def test_a_pinned_plan_for_a_sharpe_without_entry_timing_is_refused_with_the_replan(
+    ws: Workspace, store: StateStore
+) -> None:
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=REQUIRED_GATES)
+
+    with pytest.raises(ValidationError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "the plan pinned for demo_mr is not one this kanso can run: gates: entry_timing is "
+        "required for wf_sharpe_net, its objective, and every plan for it includes the gate "
+        "with every parameter set"
+    )
+    assert refused.value.remedy == "run `kanso cert plan demo_mr --replan` to plan again"
+
+
+def test_the_reader_folds_bars_prints_and_quotes_and_nothing_before_the_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bar is read at its close, a print at its price and a quote at its bid and ask, each
+    name from the first series it has, and a point of the prefix belongs to no session."""
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+
+    from kanso.criteria.timing import BAR, PRINT, QUOTE, Reading, instant_at
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    subject = run._subject(ws, store, HYP_ID, None)
+    day = CERTIFICATION[0]
+    at = instant_at(day, 16 * 3_600 * 1_000_000_000)
+    early = midnight_ns(day) - 1
+    printed, quoted = InstrumentId.from_str("P.XNAS"), InstrumentId.from_str("Q.XNAS")
+    bar = Bar(
+        BarType.from_str(f"{INSTRUMENT}-1-DAY-LAST-EXTERNAL"),
+        *(Price.from_str("10.00"),) * 4,
+        Quantity.from_int(1),
+        ts_event=at,
+        ts_init=at,
+    )
+    stale = Bar(bar.bar_type, *(Price.from_str("99.00"),) * 4, Quantity.from_int(1), early, early)
+    trade_tick = TradeTick(
+        printed,
+        Price.from_str("20.00"),
+        Quantity.from_int(1),
+        AggressorSide.BUYER,
+        TradeId("T-1"),
+        ts_event=at,
+        ts_init=at,
+    )
+    quote = QuoteTick(
+        quoted,
+        Price.from_str("29.90"),
+        Price.from_str("30.10"),
+        Quantity.from_int(1),
+        Quantity.from_int(1),
+        ts_event=at,
+        ts_init=at,
+    )
+    monkeypatch.setattr(
+        run.backtest,
+        "window_chunks",
+        lambda *_: ((), iter([((stale,), (bar,), (trade_tick,), (quote,), (object(),))])),
+    )
+    wall = 16 * 3_600 * 1_000_000_000
+    keys = [(INSTRUMENT, wall), (str(printed), wall), (str(quoted), wall)]
+
+    prices = run._session_prices(subject, keys)
+
+    assert prices.sessions == (day,)
+    assert prices.source == {INSTRUMENT: BAR, str(printed): PRINT, str(quoted): QUOTE}
+    assert [prices.marks[key][0] for key in keys] == [
+        Reading(at, 10.0, 10.0),
+        Reading(at, 20.0, 20.0),
+        Reading(at, 29.9, 30.1),
+    ]
+    assert prices.schedules == {}
+
+
+def test_the_reader_reads_a_delayed_feed_at_the_instants_it_was_published(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One-minute bars published fifteen minutes after the minute they close, as kanso's own
+    `delayed_trade` rule stamps them: the venue fills a buy at 10:30 at the 10:15 bar it has
+    applied and a sale at 10:50 at the 10:35 one, and the reader prices the trade at offset 0
+    where the runner struck it, never at a bar the market had yet to publish."""
+    from nautilus_trader.model.data import BarSpecification
+    from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
+
+    from kanso.criteria.timing import draw, instant_at, place, wall_of
+    from kanso.data.publication import stamp
+    from tests.criteria.test_entry_timing import MODEL, a_fill, a_trade
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    subject = run._subject(ws, store, HYP_ID, None)
+    minute, day = 60 * 1_000_000_000, CERTIFICATION[0] + timedelta(days=1)
+    one_minute = BarType(
+        InstrumentId.from_str(INSTRUMENT),
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    made = []
+    for at in range(9 * 60 + 31, 11 * 60 + 1):
+        close = Price(10.0 if at < 10 * 60 + 20 else 11.0, 2)
+        stamped = instant_at(day, at * minute)
+        made.append(
+            Bar(one_minute, close, close, close, close, Quantity.from_int(100), stamped, stamped)
+        )
+    points = list(stamp(made, "delayed_trade"))
+    monkeypatch.setattr(run.backtest, "window_chunks", lambda *_: ((), iter([[points]])))
+
+    def struck(at: int) -> float:
+        public = [p for p in points if p.ts_init <= instant_at(day, at * minute)]
+        return float(max(public, key=lambda p: p.ts_init).close)
+
+    buy, sell = 10 * 60 + 30, 10 * 60 + 50
+    trade = a_trade(
+        a_fill(day, "BUY", 100.0, struck(buy), name=INSTRUMENT, wall=buy * minute),
+        a_fill(day, "SELL", 100.0, struck(sell), name=INSTRUMENT, wall=sell * minute),
+    )
+    keys = sorted({(f.instrument_id, wall_of(f.ts_ns)[1]) for f in trade.fills})
+
+    prices = run._session_prices(subject, keys)
+    own = draw([place(trade, prices)], prices, MODEL, 0)
+
+    assert (struck(buy), struck(sell)) == (10.0, 11.0)
+    session = prices.sessions.index(day)
+    reading = prices.marks[(INSTRUMENT, buy * minute)][session]
+    assert reading is not None
+    assert reading.ask == 10.0 and reading.ts_ns <= instant_at(day, buy * minute)
+    assert own.pnl == (pytest.approx(trade.pnl_net),)
+
+
+def midnight_bars(rule: str) -> list[Bar]:
+    """The saw-tooth of `bars`, one bar a day stamped at the New York midnight that ends it — a
+    vendor's daily aggregate — and published as `rule` says, a delay after it."""
+    from kanso.criteria.timing import instant_at
+    from kanso.data.publication import stamp
+
+    first = SPAN[0] - timedelta(days=1)
+    made: list[Bar] = []
+    for index in range((SPAN[1] - first).days):
+        day = first + timedelta(days=index)
+        close = Price(SHALLOW[1] if day == SHALLOW[0] else price(index), 2)
+        at = instant_at(day + timedelta(days=1), 0)
+        made.append(
+            Bar(
+                bar_type(),
+                close,
+                Price(close.as_double() + 0.25, 2),
+                Price(close.as_double() - 0.25, 2),
+                close,
+                Quantity.from_int(10_000),
+                ts_event=at,
+                ts_init=at,
+            )
+        )
+    return list(stamp(made, rule))
+
+
+def test_daily_bars_published_after_new_york_midnight_are_judged(tmp_path: Path) -> None:
+    """Daily bars stamped at the New York midnight that ends each day and published fifteen
+    minutes later, under the declared `official_close` rule: each fill is struck at a bar the
+    window holds, at the instant it was published, so the gate prices every trade at its own
+    instants and judges the book rather than failing it as unplaced."""
+    from kanso.data import catalog, snapshot
+    from kanso.data.instruments import resolve_universe
+    from kanso.env import write as write_envelope
+    from kanso.workspace import init
+
+    made = init(tmp_path / "ws")
+    with StateStore(made.path("state.db")) as opened:
+        opened.migrate()
+        write_instruments(made)
+        resolve_universe(made, [INSTRUMENT], RESEARCH[0])
+        ref = replace(dataset(), publication="delayed", publication_rule="official_close")
+        catalog.write(made, midnight_bars("official_close"), ref=ref, source="synthetic")
+        snapshot.freeze(made)
+        write_envelope(made, ENVELOPE)
+        classify(made, opened, DOCUMENT, REVERTING)
+        a_card(made, opened, REVERTING)
+        write_plan(made)
+
+        certified = certify(made, opened, HYP_ID)
+
+    (window,) = [gate for gate in certified.gates if gate.id == "embargoed_window"]
+    (timing,) = [gate for gate in certified.gates if gate.id == "entry_timing"]
+    assert window.passed and timing.skipped is None
+    assert "observed_dropped" not in timing.evidence, timing.evidence
+    assert timing.evidence["draws"] > 0
+    assert timing.evidence["observed_bps_per_trade"] == pytest.approx(
+        timing.evidence["observed_runner_bps_per_trade"]
+    )

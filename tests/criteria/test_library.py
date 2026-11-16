@@ -130,7 +130,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 37
+    assert len(items) == 38
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -583,7 +583,10 @@ def test_a_contribution_is_guarded_against_trading_less() -> None:
 
     items = catalogue()
     guarded = {
-        objective for item in items.values() if item.required_for for objective in item.required_for
+        objective
+        for item in items.values()
+        if item.required_for and item.stage == "card"
+        for objective in item.required_for
     }
     assert guarded == CONTRIBUTION_FAMILY
     assert all(items[objective].kind == "objective" for objective in guarded)
@@ -592,6 +595,161 @@ def test_a_contribution_is_guarded_against_trading_less() -> None:
     assert lib.required_card_gates("net_edge_bps") == ()
     assert items["edge_per_trade"].stage == "card"
     assert items["edge_per_trade"].together
+
+
+ABSOLUTE = frozenset({"wf_contribution_bps", "wf_sharpe_net"})
+"""The objectives that credit a drift held as if it were timed, which `entry_timing` guards."""
+
+
+def test_an_absolute_objective_s_timing_is_told_from_its_exposure() -> None:
+    """A contribution or a Sharpe of a book long a rising index some of the time is above zero
+    without any timing, so every plan for a hypothesis scored on one carries the gate that puts
+    its trades beside the same trades shifted in time; a sub-daily per-trade edge and a Sharpe
+    already measured against a hold are the planner's to choose it for."""
+    items = catalogue()
+    guarded = {
+        objective
+        for item in items.values()
+        if item.required_for and item.stage == "cert"
+        for objective in item.required_for
+    }
+    assert guarded == ABSOLUTE
+    for objective in ABSOLUTE:
+        assert lib.required_cert_gates(objective) == ("entry_timing",)
+        assert "entry_timing" not in lib.required_card_gates(objective), (
+            "a cert gate is a plan's to carry, never a card gate a hypothesis is classified with"
+        )
+    for objective in ("net_edge_bps", "wf_sharpe_vs_hold", "marginal_wf_contribution_bps"):
+        assert lib.required_cert_gates(objective) == ()
+    assert items["entry_timing"].together
+    assert items["entry_timing"].ranges["max_p"] == (0.01, 0.25)
+
+
+def timed(**params: Any) -> dict[str, Any]:
+    """The demo plan with `entry_timing` included at these parameters."""
+    gate = {"id": "entry_timing", "stage": "cert", "params": params, "rationale": "timing"}
+    return plan(gates=[*PLAN["gates"], gate])
+
+
+SHARPE = {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
+
+
+def sharpe_hyp() -> Any:
+    """The demo hypothesis scored on a Sharpe, a day at a time, which `entry_timing` guards."""
+    return make_hyp(horizon="1d", objective=SHARPE)
+
+
+def corrected(gates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A plan's gates with its per-trade correction swapped for the Sharpe's."""
+    return [
+        {**g, "id": "deflated_sharpe", "params": {"min_dsr": 0.95}}
+        if g["id"] == "deflated_edge"
+        else g
+        for g in gates
+    ]
+
+
+def test_a_plan_for_an_absolute_objective_without_entry_timing_is_refused() -> None:
+    hyp = sharpe_hyp()
+    bare = plan(gates=corrected(PLAN["gates"]))
+    with pytest.raises(
+        ValidationError,
+        match="gates: entry_timing is required for wf_sharpe_net, its objective, and every plan "
+        "for it includes the gate with every parameter set",
+    ):
+        validate_plan(bare, hyp, FOLDS)
+    first = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1}}
+    with pytest.raises(ValidationError, match="entry_timing is required for wf_sharpe_net"):
+        validate_plan(first, hyp, FOLDS)
+    timed_plan = timed(max_p=0.1)
+    validate_plan({**timed_plan, "gates": corrected(timed_plan["gates"])}, hyp, FOLDS)
+    contribution = make_hyp(
+        objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    problems = lib.plan_complaints(
+        CertificationPlan.model_validate(first).gates, [], contribution, FOLDS, 1
+    )
+    assert problems == [
+        "gates: entry_timing is required for wf_contribution_bps, its objective, and every plan "
+        "for it includes the gate with every parameter set; the values are yours, inside their "
+        "ranges"
+    ]
+
+
+def test_entry_timing_is_carried_with_its_threshold_and_never_excluded() -> None:
+    hyp = sharpe_hyp()
+    bare = timed()
+    with pytest.raises(
+        ValidationError, match="gates.entry_timing.max_p: is not set, and entry_timing judges"
+    ):
+        validate_plan({**bare, "gates": corrected(bare["gates"])}, hyp, FOLDS)
+    left = plan(
+        gates=corrected(PLAN["gates"]),
+        excluded=[{"id": "entry_timing", "reason": "too few trades"}],
+    )
+    with pytest.raises(
+        ValidationError,
+        match="excluded.entry_timing: is required for wf_sharpe_net, its objective, so it "
+        "cannot be left out",
+    ):
+        validate_plan(left, hyp, FOLDS)
+    outside = timed(max_p=0.5)
+    with pytest.raises(ValidationError, match=r"max_p: 0.5 is outside the range \[0.01, 0.25\]"):
+        validate_plan({**outside, "gates": corrected(outside["gates"])}, hyp, FOLDS)
+
+
+WEEKLY: dict[str, Any] = {
+    "period": "week",
+    "opens": "Mon 04:00",
+    "tz": "America/New_York",
+    "target_bp": 1000,
+    "of": "capital",
+}
+DATED: dict[str, Any] = {
+    "spread": "dated",
+    "dated": [
+        {
+            "instrument": "DEMO",
+            "from": "2023-01-01",
+            **{"pre": 9.0, "open": 4.0, "rth": 1.0, "post": 9.0, "n_sessions": 5, "n_open": 25},
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "more", [{"period_target": WEEKLY}, {"costs": DATED}, {"period_target": WEEKLY, "costs": DATED}]
+)
+def test_entry_timing_is_refused_nowhere_a_contribution_is_scored(more: dict[str, Any]) -> None:
+    """The gate is required of a contribution, so a plan carrying it is admitted beside a weekly
+    target, whose cuts its null keeps, and under a dated spread, which it reads at each moved
+    instant: one refused where it is required would leave the hypothesis unplannable."""
+    hyp = make_hyp(
+        horizon="1d",
+        objective={"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        **more,
+    )
+    carried = timed(max_p=0.1)
+    gates = [
+        {**g, "id": "deflated_contribution", "params": {"min_probability": 0.95}}
+        if g["id"] == "deflated_edge"
+        else g
+        for g in carried["gates"]
+    ]
+
+    validate_plan({**carried, "gates": gates}, hyp, FOLDS)
+
+
+def test_a_per_trade_edge_may_leave_entry_timing_out_or_carry_it() -> None:
+    """A sub-daily certification window is often tens of sessions, whose few whole-session
+    shifts cannot resolve a small p: whether to carry it there is the planner's."""
+    validate_plan(PLAN, make_hyp(), FOLDS)
+    validate_plan(timed(max_p=0.25), make_hyp(), FOLDS)
+    validate_plan(
+        plan(excluded=[{"id": "entry_timing", "reason": "a few sessions resolve nothing"}]),
+        make_hyp(),
+        FOLDS,
+    )
 
 
 @pytest.mark.parametrize(
@@ -637,9 +795,22 @@ def test_a_plan_behind_two_cards_without_its_search_correction_is_refused() -> N
     with pytest.raises(
         ValidationError,
         match=r"deflated_edge is the search correction for net_edge_bps, and a plan includes "
-        r"it once n_trials, every card of the hypothesis, reaches 2 \(it is 40\)",
+        r"it once n_trials, every card of the hypothesis, and the prior_trials its family "
+        r"declares reach 2 together \(they are 40\)",
     ):
         validate_plan(without("deflated_edge"), make_hyp(), FOLDS)
+
+
+def test_a_plan_behind_one_card_and_a_declared_grid_without_its_correction_is_refused() -> None:
+    """A grid tried outside kanso is part of the search, so one card behind it is already a
+    choice of one over another: the plan's own record of both counts is what it is checked
+    against."""
+    bare = without("deflated_edge")
+    alone = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1}}
+    validate_plan(alone, make_hyp(), FOLDS)
+    gridded = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1, "prior_trials": 1}}
+    with pytest.raises(ValidationError, match=r"reach 2 together \(they are 2\)"):
+        validate_plan(gridded, make_hyp(), FOLDS)
 
 
 def test_a_search_correction_without_its_threshold_is_refused() -> None:

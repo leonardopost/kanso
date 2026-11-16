@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -564,9 +565,56 @@ def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(
     plan(ws, store, HYP_ID)
 
     assert (
-        "when n_trials is 2 or more, deflated_edge is required as well and may not be "
-        "excluded: it is the search correction for this hypothesis's objective, net_edge_bps"
+        "when n_trials + prior_trials is 2 or more, deflated_edge is required as well and may "
+        "not be excluded: it is the search correction for this hypothesis's objective, "
+        "net_edge_bps"
     ) in seen[0].system
+    assert (
+        "prior_trials is how many settings the hypothesis and those it derives from declare "
+        "were tried outside kanso"
+    ) in seen[0].system
+    assert (
+        "where the toolbox says a deflation gate is required from the second card, the second "
+        "card is the second of n_trials + prior_trials"
+    ) in seen[0].system, "the library's words count cards, and the rule counts a grid too"
+
+
+def declare_grid(ws: Workspace, store: StateStore, count: int) -> None:
+    """Re-pin the demo hypothesis stating an offline grid of `count` settings, with its
+    evidence copied into the workspace."""
+    body = f"# pre-registered: {count} settings\n".encode()
+    (ws.root / "evidence").mkdir(exist_ok=True)
+    (ws.root / "evidence" / "grid.md").write_bytes(body)
+    path = ws.path("hypotheses", HYP_ID, "hypothesis.yaml")
+    block = f"{{count: {count}, source: evidence/grid.md, sha256: {sha256(body).hexdigest()}}}"
+    path.write_text(path.read_text(encoding="utf-8") + f"prior_trials: {block}\n", "utf-8")
+    add(ws, store, path)
+
+
+def test_a_declared_grid_is_part_of_the_search_the_plan_is_read_against(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One card behind a grid of 27 is the best of 28: the plan carries the correction, the
+    planner is told both counts and the plan records them apart, kanso's cards in `n_trials`."""
+    declare_grid(ws, store, 27)
+    a_card(store, metric=1.0, seq=1)
+    script(ws, certify_plan=[answer(), answer(gates=gates_of(CORRECTED))])
+    seen = prompts(monkeypatch)
+
+    written = plan(ws, store, HYP_ID)
+
+    assert len(seen) == 2, "the first answer left the correction out"
+    assert '"n_trials": 1' in seen[0].user
+    assert '"prior_trials": 27' in seen[0].user
+    assert "reach 2 together (they are 28)" in seen[1].user
+    assert (written.inputs.n_trials, written.inputs.prior_trials) == (1, 27)
+    assert "deflated_edge" in [gate.id for gate in written.gates]
+    bare = written.model_dump(mode="json", by_alias=True)
+    bare["gates"] = [gate for gate in bare["gates"] if gate["id"] != "deflated_edge"]
+    with pytest.raises(ValidationError, match=r"\(they are 28\)"):
+        lib.validate_plan(bare, the_hypothesis(ws), ws.config.research.folds)
+    bare["inputs"]["prior_trials"] = 0
+    lib.validate_plan(bare, the_hypothesis(ws), ws.config.research.folds)
 
 
 def test_a_plan_behind_a_search_that_leaves_out_its_correction_is_retried(
@@ -1030,6 +1078,28 @@ def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
 
     assert bare.paper_window_s("30m") is None
     assert paper_window_note(ws, store, bare) is None
+
+
+def test_a_sharpe_s_invariants_require_entry_timing_from_the_first_plan() -> None:
+    """Whether a contribution or a Sharpe carries the timing test follows from its objective
+    alone, so it is folded into `required_gates` and stated as a rule; a per-trade edge is told
+    nothing of it, and the gate stays in its toolbox to choose."""
+    from tests.criteria.builders import make_hyp
+
+    sharpe = make_hyp(
+        horizon="1d", objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    edge = make_hyp()
+
+    stated = plan_module._invariants(sharpe)
+    told = plan_module._invariants(edge)
+
+    assert "entry_timing" in stated["required_gates"]
+    (rule,) = [rule for rule in stated["rules"] if rule.startswith("entry_timing")]
+    assert "wf_sharpe_net" in rule and "may not be excluded" in rule
+    assert "entry_timing" not in told["required_gates"]
+    assert not any("entry_timing" in rule for rule in told["rules"])
+    assert "entry_timing" in {item["id"] for item in plan_module._toolbox(edge, 4)}
 
 
 def test_paper_forward_without_a_parameter_is_retried_and_one_pinned_so_refused(

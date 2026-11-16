@@ -34,12 +34,21 @@ cannot run would pin a proof that can never be produced. It is, for the same rea
 required of a plan written by this version. Paper and live gates are run by the stages
 rather than here, so they are offered whether or not their implementations exist yet.
 
+**Timing is told from exposure, whatever the planner thinks.** A hypothesis scored on an
+objective a cert gate is declared `required_for` — `entry_timing` on `wf_contribution_bps` and
+`wf_sharpe_net` — has that gate in every plan, with every parameter set and never excluded: an
+absolute objective credits a drift held as if it were timed, and the gate that refuses that is
+part of what the objective means. The planner is told so in the invariants and refused when it
+forgets; its `max_p` is still the planner's answer.
+
 **A search is corrected for, whatever the planner thinks.** Once a hypothesis's `n_trials`
-— every card it has — reaches two, a plan includes the gate the toolbox says `deflates` its
-objective, with its threshold set: the subject a certificate judges is then the best of a
-search, and nothing else in a plan prices that. The planner is told so in the invariants
-and refused when it forgets, through the same check as any other complaint; how high that
-gate's bar sits is still its answer. It is also told how many looks the hypothesis's lineage
+— every card it has — and the `prior_trials` its family declares tried outside kanso
+together reach two, a plan includes the gate the toolbox says `deflates` its objective, with
+its threshold set: the subject a certificate judges is then the best of a search, and
+nothing else in a plan prices that. The plan records both counts (`PlanInputs`) and the
+planner is shown both; it is told the rule in the invariants and refused when it forgets,
+through the same check as any other complaint; how high that gate's bar sits is still its
+answer. It is also told how many looks the hypothesis's lineage
 has already taken at the certification window its subject is read on (`looks`,
 `kanso.certify.looks`) — the one the run that carded the best, or the card a certification
 names, pinned, which a re-pin that moved the window leaves where it was until a run under
@@ -60,11 +69,11 @@ planner's answer like the threshold itself.
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
 second opinion, and a pinned plan this version can no longer run is refused with the
-replan that would fix it — a plan pinned before the hypothesis's second card, or by a
-kanso that did not hold it to its correction, among them: the search it is checked against
-is the one the hypothesis has spent now. `replan` re-runs the planner over the same closed
-set of inputs, as they read now, and mints the next `plan_version`; the plan a certificate
-names is therefore always recoverable.
+replan that would fix it — a plan pinned before the search's second draw, card or declared
+setting, or by a kanso that did not hold it to its correction, among them: the search it is
+checked against is the one the hypothesis has spent now. `replan` re-runs the planner over
+the same closed set of inputs, as they read now, and mints the next `plan_version`; the plan
+a certificate names is therefore always recoverable.
 """
 
 from __future__ import annotations
@@ -81,7 +90,7 @@ from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_days, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
 from kanso.criteria.band import SHARPE_FOLD, to_resolve
-from kanso.criteria.library import SEARCH_TRIALS, as_pinned, deflation_gate
+from kanso.criteria.library import SEARCH_TRIALS, as_pinned, deflation_gate, required_cert_gates
 from kanso.criteria.objectives import REGISTRY
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
@@ -233,9 +242,10 @@ def plan(
         )
     folds = ws.config.research.folds
     trials = records.n_trials(store, hyp_id)
+    prior = records.prior_trials(store, hyp_id)
     pinned = read_plan(ws, hyp_id)
     if pinned is not None and not replan:
-        _refuse_unusable(pinned, hyp, folds, trials)
+        _refuse_unusable(pinned, hyp, folds, trials + prior)
         return pinned
 
     own = hyp.windows.certification
@@ -247,12 +257,13 @@ def plan(
         construct=construct,
         data_availability=availability(ws, hyp),
         n_trials=trials,
+        prior_trials=prior,
         looks=len(looks_at(store, hyp_id, window).prior),
     )
     accepted: list[Answered] = []
 
     def check(data: Mapping[str, object]) -> Sequence[str]:
-        answered, complaints = _read(data, hyp=hyp, folds=folds, n_trials=trials)
+        answered, complaints = _read(data, hyp=hyp, folds=folds, n_trials=trials + prior)
         if answered is not None and not complaints:
             accepted.append(answered)
         return complaints
@@ -320,6 +331,7 @@ def _call_inputs(hyp: Hypothesis, inputs: PlanInputs, folds: int, check: Check) 
         dynamic={
             "data_availability": inputs.data_availability.model_dump(mode="json"),
             "n_trials": inputs.n_trials,
+            "prior_trials": inputs.prior_trials,
             "looks": inputs.looks,
         },
         check=check,
@@ -377,23 +389,45 @@ def _finite(value: float) -> float | None:
 def _invariants(hyp: Hypothesis) -> dict[str, Any]:
     """The structural invariants, as the facts they are, rather than as prose to infer.
 
-    The search correction is stated as a rule over `n_trials` rather than folded into
+    A cert gate the toolbox declares `required_for` the hypothesis's objective — `entry_timing`
+    on a contribution or a Sharpe — is folded into `required_gates` and stated as a rule
+    beside it, since whether it is required follows from the objective alone. The search
+    correction is stated as a rule over `n_trials` and `prior_trials` rather than folded into
     `required_gates`: the gate it names follows from the hypothesis, which is the cached
-    prefix, and whether it is required follows from the trial count, which is not. What its
-    threshold bounds across the lineage's looks at the certification window is stated the
-    same way, over `looks`: a fact for the planner to weigh, since no rule moves the
-    threshold with the count.
+    prefix, and whether it is required follows from the trial count, which is not. The
+    deflation gates' library files say "from the second card", and rewording them would move
+    the criteria version every run records, so the rule says how to read those words over a
+    declared grid. What its threshold bounds across the lineage's looks at the certification
+    window is stated the same way, over `looks`: a fact for the planner to weigh, since no
+    rule moves the threshold with the count.
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
+    guarding = [
+        found
+        for found in (() if hyp.objective is None else required_cert_gates(hyp.objective.id))
+        if found in offered
+    ]
+    guarded = [
+        f"{found} is required for this hypothesis's objective, {hyp.objective.id}, from the "
+        "first plan on, and may not be excluded: an absolute objective credits a drift held "
+        "as if it were timed, and this gate tells the two apart; set every one of its "
+        "parameters, whose values are yours to choose inside their ranges"
+        for found in guarding
+        if hyp.objective is not None
+    ]
     correction = (
         []
         if gate is None or hyp.objective is None
         else [
-            f"when n_trials is {SEARCH_TRIALS} or more, {gate} is required as well and may "
-            f"not be excluded: it is the search correction for this hypothesis's objective, "
-            f"{hyp.objective.id}; set its threshold, whose value is yours to choose inside "
-            "its range",
+            f"when n_trials + prior_trials is {SEARCH_TRIALS} or more, {gate} is required as "
+            "well and may not be excluded: it is the search correction for this hypothesis's "
+            f"objective, {hyp.objective.id}; set its threshold, whose value is yours to choose "
+            "inside its range. prior_trials is how many settings the hypothesis and those it "
+            "derives from declare were tried outside kanso, in the grids that chose their seeds; "
+            "the correction counts them among its draws beside the cards, so where the toolbox "
+            "says a deflation gate is required from the second card, the second card is the "
+            "second of n_trials + prior_trials",
             "looks is how many certificates this hypothesis's lineage — every registered "
             "hypothesis joined to it by derived_from, either way — has already made that read a "
             "window sharing a day with the certification window its subject is read on — the one "
@@ -418,7 +452,9 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
         ]
     )
     return {
-        "required_gates": sorted(item.id for item in offered.values() if item.required),
+        "required_gates": sorted(
+            {*(item.id for item in offered.values() if item.required), *guarding}
+        ),
         "stages": list(PLAN_STAGES),
         "rules": [
             "every gate included is one of the toolbox gates above, at the stage the "
@@ -427,6 +463,7 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "a gate the toolbox marks together is named with every one of its parameters set, "
             "since half its rule judges nothing; it has no default to fall back on",
             "every required gate is included, and none of them is excluded",
+            *guarded,
             *correction,
             "the plan includes at least one gate at each of the cert, paper and live stages",
             "no gate is named twice, and no gate is both included and excluded",
@@ -655,8 +692,9 @@ def _rendered(seconds: float) -> str:
 def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int, n_trials: int) -> None:
     """Refuse a pinned plan this version can no longer run, naming the way out.
 
-    Checked against the search as it stands, `n_trials` now and not the count the plan was
-    made behind: a plan made before the second card is not a plan for the best of many. Its
+    Checked against the search as it stands, `n_trials` now — the cards and the declared
+    `prior_trials` together — and not the count the plan was made behind: a plan made before
+    the second card, or before a grid was declared, is not a plan for the best of many. Its
     reader did not choose the plan's values, so it is not told they are theirs (`as_pinned`).
     """
     problems = complaints_about(pinned.gates, pinned.excluded, hyp, folds, n_trials)

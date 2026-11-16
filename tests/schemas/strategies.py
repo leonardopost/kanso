@@ -59,6 +59,7 @@ from kanso.schemas import (
     PlannedGate,
     Portfolio,
     Power,
+    PriorTrials,
     Resolved,
     RiskLimits,
     Routing,
@@ -208,6 +209,17 @@ def books(draw: st.DrawFn, max_leverage: float) -> Book:
 
 
 @st.composite
+def prior_trials(draw: st.DrawFn) -> PriorTrials:
+    """An offline grid's count, with the evidence it is stated from: a relative path, as a
+    workspace names it, and the digest of its bytes."""
+    return PriorTrials(
+        count=draw(st.integers(1, 100_000)),
+        source=draw(st.from_regex(r"\Aevidence/[a-z0-9_./-]{1,40}\.md\Z")),
+        sha256=draw(SHAS),
+    )
+
+
+@st.composite
 def period_targets(draw: st.DrawFn, weekdays: tuple[str, ...] = WEEKDAYS) -> PeriodTarget:
     """A period target opening at any minute of the weekdays given, New York's."""
     day = draw(st.sampled_from(weekdays))
@@ -295,6 +307,7 @@ def hypotheses(draw: st.DrawFn, classified: bool | None = None) -> Hypothesis:
         book=book,
         period_target=period_target,
         depth=depth,
+        prior_trials=draw(st.none() | prior_trials()),
         construct=draw(construct_refs()) if classified else None,
         objective=ObjectiveRef(
             id=draw(CATALOGUE_IDS),
@@ -660,6 +673,7 @@ def plans(draw: st.DrawFn) -> CertificationPlan:
                 },
             ),
             n_trials=draw(st.integers(0, 5000)),
+            prior_trials=draw(st.integers(0, 500)),
             looks=draw(st.integers(0, 50)),
         ),
         gates=[

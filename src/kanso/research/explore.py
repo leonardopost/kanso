@@ -24,7 +24,8 @@ shown, and a row of a name outside its universe or from after its research is re
 
 **The answer is judged on the ladder, like a proposal.** An id that is not one, or that is
 registered or already has a directory; a `hypothesis.yaml` that does not parse as a
-hypothesis, declares another id, or carries a classification; a strategy the static
+hypothesis, declares another id, or carries a classification or a `prior_trials`, since the
+grid that chose the parent's seed is counted through `derived_from`; a strategy the static
 alignment checks refuse against that hypothesis, or whose bytes this workspace already
 stores; and windows that would research past the end of the parent's research window,
 certify before the start of the parent's certification window, or certify inside the
@@ -410,6 +411,11 @@ def _judge(
             f"hypothesis_yaml: derived_from does not name the parent {parent.id!r}; the "
             "candidate was chosen by the parent's research, so it states `derived_from: "
             f"[{parent.id}]` and its trials count the parent's"
+        )
+    if hyp.prior_trials is not None:
+        complaints.append(
+            "hypothesis_yaml: carries prior_trials; a candidate's search is its parent's, "
+            "counted through `derived_from`, grids and cards alike, so leave it out"
         )
     complaints.extend(_embargo(parent, seen, hyp))
     complaints.extend(f"strategy_py: {problem}" for problem in align.problems(hyp, strategy))

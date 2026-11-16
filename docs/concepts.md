@@ -1190,7 +1190,8 @@ tag, its keeps and their scores, its stalls, and each certificate's verdict with
 the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
 judged on the ladder: an id nothing holds, a file that parses with that id and no
 classification, naming the parent in `derived_from` so the parent's cards are the
-candidate's trials too, a strategy the static alignment checks accept against it and whose
+candidate's trials too — and its declared grid, so the candidate states no `prior_trials` of
+its own — a strategy the static alignment checks accept against it and whose
 bytes the workspace has never stored, and windows that neither research past the end of the
 parent's research window nor certify before the start of its certification window. Nor may
 the candidate certify inside its own embargo counted from the last day the *parent*
@@ -1233,8 +1234,22 @@ was asked before the signature, so it would have been kept had it beaten the bes
 another candidate held the same book makes it a correlated trial rather than no trial, and
 how much less than one a correlated trial is worth is open on the same terms as the
 hill-climbing path it sits on (`docs/backlog.md` row 59). The gate reports the candidates as
-`trials`, at or below the certificate's `n_trials`, and the trials its spread was read from
-as `scored_trials`.
+`trials`, at or below the certificate's `n_trials` until a grid is declared, and the trials
+its spread was read from as `scored_trials`.
+
+A seed chosen as the best of a grid run outside kanso was chosen from draws no card made, and
+`prior_trials` in `hypothesis.yaml` states how many, with the evidence (`docs/workspace.md`,
+`hypotheses/<id>/`). Every count by which kanso prices a search adds the settings the
+hypothesis's family declares — summed over the hypotheses `n_trials` counts, a grid two of
+them state counted once — to the cards it counts: the trials `edge_per_trade` holds a card's
+margin to, the candidates a deflation's expected maximum is taken over, the count of two
+from which a plan must carry its search correction, and the refusal of a search with no
+spread to read. It is a count with no units, so it widens the draws and never the spread: a
+deflation still reads its spread from the trials and is still refused until two of them
+exist. `n_trials` stays kanso's cards, since a card and a certificate are stamped with it
+and the certificate's filename carries it; each gate's evidence carries `trials`, the whole
+count, and `prior_trials`, the declared part of it, and a plan records `inputs.n_trials` and
+`inputs.prior_trials` apart.
 
 ## What a card must satisfy
 
@@ -1253,7 +1268,7 @@ already over. There are eleven.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
-| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 on a hypothesis's first card, 0.52 at 2 trials, 2.28 at 50, 3.05 at 500 — where `trials` is the card and every card of the hypothesis before it that ran to a result and traded, under any objective. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
+| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 at 1 trial, 0.52 at 2, 2.28 at 50, 3.05 at 500 — where `trials` is the card, every card of the hypothesis before it that ran to a result and traded, under any objective, and the `prior_trials` its family declares tried outside kanso (*Card* above), so a hypothesis's first card is held to 0 only where no grid is declared. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `prior_trials` — the declared part of it — `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 **A session is a clock in a zone, read date by date.** `trading_hours {session: "09:30-16:00",
@@ -1534,9 +1549,11 @@ its place.
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.
 Both are evaluated, yours first, and a gate you require is not reprised by a model that names
-it too. A gate the toolbox declares `required_for` the objective — `edge_per_trade` on a
+it too. A card gate the toolbox declares `required_for` the objective — `edge_per_trade` on a
 contribution — must be in one of them with every parameter set, and either list satisfies
-it. See `docs/workspace.md`.
+it. A cert gate declared `required_for` it — `entry_timing` on a contribution or a Sharpe — is
+in neither: every certification plan for the hypothesis carries it (*Certification*). See
+`docs/workspace.md`.
 
 **A gate added clears the best.** A best is only as good as the gates it was kept under, so a
 re-pin whose card gates name one the held pin did not — or name one at other parameters —
@@ -1663,16 +1680,17 @@ The syntax tree is read first. An instrument literal outside `universe`, a bar w
 aggregation is not `resolution`, and a subscription or handler for a type outside
 `data_requirements` are facts about the file, stated rather than judged, and they cost
 nothing. Only a file that passes them is shown to a model — the `align_check` task class —
-with the thesis, the run's pinned `program.md`, the file, the diff since the last check, and
-the reasons this run was already rewound for (the newest ten, each once).
+with the thesis, the run's pinned `program.md`, the file, the diff since the last check, the
+reasons this run was already rewound for, and the reasons the hypothesis was rewound for in
+its earlier runs (the newest ten of the two, this run's first, each once).
 
 **The program bounds the judgement.** `program.md` is where you say what the search may
 change and what it may not, and the model reads it with the thesis in that order: a change
 the program forbids, or one that contradicts something the thesis states outright, is drift;
 a change the program permits — a filter, a side, a size, a trigger, an exit it names — is
 aligned unless the thesis states the opposite or the program's own prohibitions exclude it;
-and a change that returns in a direction this run was already rewound for is drift again,
-unless the program permits it and the thesis does not say otherwise. The run's copy is the
+and a change that returns in a direction this run or an earlier one was already rewound for is
+drift again, unless the program permits it and the thesis does not say otherwise. The run's copy is the
 one read, because it is the one its proposer was told; an edit to the workspace file reaches
 the next run. Observed in a live workspace on 2026-10-11, before the model was shown either:
 a hypothesis whose program said "one side only if the evidence says one side pays" was
@@ -1680,6 +1698,27 @@ rewound for trading one side, the run's best at the time, and for an entry filte
 program listed; and another run's identical Friday skip was judged drift twice and then
 aligned, a verdict that stood, since no later check asks again about a file a check passed.
 So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs.
+
+**A direction refused in one run is not met fresh in the next.** Observed in a live workspace
+on 2026-11-15: a run was rewound for a trend filter and then for a volatility filter, and the
+next run kept a file carrying such a filter and its check passed it. So an earlier run's
+reason comes with the change the check refused — a unified diff from the bytes that run was
+rewound to, cut to forty lines with the rest counted on the last — the run's tag, and
+`same_program` and `same_thesis`: false where that run pinned another `program.md`, or a
+`hypothesis.yaml` whose thesis, mechanism, universe or horizon differ from this one's, or the
+resolution, `bar_resolution` or `data_requirements` the syntax tree reads. A direction you
+have permitted since is judged under the program or the pin that permits it, and a re-pin
+that changes none of what a check reads — a title, a limit, a window — is not taken for a
+new thesis. The `drifted` event records the bytes it refused for this (`drifted`, beside
+`from`, the bytes the run's last check left the lane on); for one an earlier kanso wrote, the
+change is read from the newest keep that check marked not aligned among the cards it judged,
+those since the check before it. The change is `null` where there is none to show: an old
+event that judged no keep, or a drift that refused the very bytes it rewound to, as a base
+that fails the syntax tree is. This makes the judge consistent across runs, not stricter:
+what the program permits stays aligned. And it bears only on what a run proposes: a run's
+base is never judged (below), so a best an earlier run kept stands as the next run's base even
+where it takes a direction another run was rewound for, and the judge is told that only the
+change since the last check can return in a refused direction.
 
 A drift is rewound rather than stopped: research is indefinite, and stopping it on a
 judgement call would hand the model a veto. The lane and `best` go back to the newest keep of
@@ -2448,24 +2487,25 @@ the complaints back to the same model, then to the next tier up; a plan still in
 that fails the step. With no model configured there is nothing to fall back on and the step
 exits 2.
 
-**A search is corrected for, from its second card.** Every objective has exactly one
+**A search is corrected for, from its second draw.** Every objective has exactly one
 deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
 Sharpes, `deflated_contribution` for the contributions, `deflated_edge` for the per-trade
-edges — and once the hypothesis's `n_trials`, every card it has, reaches two, a plan
-includes it with its threshold set: the subject a certificate judges is then the best of a
+edges — and once the hypothesis's `n_trials`, every card it has, and the `prior_trials` its
+family declares tried outside kanso reach two together, a plan includes it with its
+threshold set: the subject a certificate judges is then the best of a
 search, and nothing else in a plan prices that. A deflation gate named without its threshold
 would skip, and a skip passes, so a bare one is refused like a missing one. The planner is
 told so in the invariants and sent back when it forgets; how high the gate's bar sits is
 still its answer, from a range whose floor is 0.9 — at 0.5, where the three ranges used to
 start, a best with no edge passed `deflated_edge` and `deflated_contribution` 45 to 56
 percent of the time at 2, 50 and 500 trials, so a plan could satisfy the rule and price
-almost nothing. A plan pinned before the second card, under a threshold below the floor, or
-by a kanso that did not hold it to this, is refused where it is read — by `cert plan` and by
-`cert run` — with the way out:
+almost nothing. A plan pinned before the second card or before a grid was declared, under a
+threshold below the floor, or by a kanso that did not hold it to this, is refused where it is
+read — by `cert plan` and by `cert run` — with the way out:
 
 ```
 $ kanso cert run demo_mr
-error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan includes it once n_trials, every card of the hypothesis, reaches 2 (it is 4)
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_edge is the search correction for net_edge_bps, and a plan includes it once n_trials, every card of the hypothesis, and the prior_trials its family declares reach 2 together (they are 4)
 remedy: run `kanso cert plan demo_mr --replan` to plan again
 ```
 
@@ -2475,7 +2515,10 @@ maximum over the candidates, under every objective, and its spread from the tria
 above. While fewer than two cards are candidates at all it skips, which passes — nothing has
 yet been chosen over anything. A subject behind two candidates or more with fewer than two
 trials of its objective is refused before anything runs (exit 2): that search has a spread
-nobody can read, and a deflation that cannot read it skips. It is where a re-pin to another
+nobody can read, and a deflation that cannot read it skips. A grid the family declares
+(`prior_trials`, *Card* above) joins the cards in the requirement and the candidates in the
+gate and in this refusal, and never the trials, so the first card behind one is refused here
+until a second is scored. It is where a re-pin to another
 objective used to lead — the strategy the earlier search selected, carried across in the
 workspace `strategy.py`, became the next run's baseline and its best, and was certified with
 its correction skipping while the certificate was stamped with hundreds of cards:
@@ -2492,7 +2535,36 @@ best does not certify it either, and the run goes on. The other route is `cert r
 a card scored under the objective before the re-pin: the plan was made for the objective
 the hypothesis has now, and carries that one's correction, which skips on a number in other
 units. A subject scored under an objective whose correction the pinned plan does not carry
-with its threshold is refused (exit 2), naming the gate, once the search has two cards.
+with its threshold is refused (exit 2), naming the gate, once the search has two draws —
+cards, and the settings a declared grid adds.
+
+**An absolute objective's timing is told from its exposure, from the first plan.** A book long a
+rising index some of the time scores a contribution or a Sharpe above zero whenever it is long,
+whether or not it timed anything. So a cert gate can be declared `required_for` an objective,
+as a card gate can, and `entry_timing` is, for `wf_contribution_bps` and `wf_sharpe_net`: every
+plan for a hypothesis scored on one includes it with `max_p` set and does not exclude it, from
+the first plan on, whatever the trial count (*`entry_timing`* below). Whether it is carried is
+not the planner's decision; `max_p`, in `[0.01, 0.25]`, is. It is never one of a hypothesis's
+card gates: `kanso classify` and `kanso hyp validate` ask a contribution for `edge_per_trade`
+alone. A per-trade edge (`net_edge_bps`), a Sharpe already measured against a hold, a marginal
+objective and an attached construct carry it only where the planner chooses — a sub-daily
+certification window is often tens of sessions, whose few whole-session shifts cannot resolve a
+small `p`. A plan pinned without it is refused where it is read, by `cert plan` and by `cert
+run`, as one without its correction is. Here the demo, researched as `README.md` runs it and
+planned by `kanso cert plan demo_mr` — a plan that carries `deflated_edge` and leaves
+`deflated_sharpe` out, as a per-trade edge's does — has ended its run and been re-pinned to
+`wf_sharpe_net` at a `1d` horizon; its plan is refused for both, the correction first (exit 3):
+
+```
+$ kanso cert plan demo_mr
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_sharpe is the search correction for wf_sharpe_net, and a plan includes it once n_trials, every card of the hypothesis, and the prior_trials its family declares reach 2 together (they are 4); gates: entry_timing is required for wf_sharpe_net, its objective, and every plan for it includes the gate with every parameter set; excluded.deflated_sharpe: is the search correction for wf_sharpe_net, and a plan includes it once n_trials, every card of the hypothesis, and the prior_trials its family declares reach 2 together (they are 4), so it cannot be left out
+remedy: run `kanso cert plan demo_mr --replan` to plan again
+```
+
+The `cert run --sha` route is closed the same way. A card scored on `wf_contribution_bps` or
+`wf_sharpe_net` before a re-pin to an objective the gate does not guard is judged on its own
+objective, so a plan made for the new one, which rightly leaves the gate out, is refused for it
+(exit 2), naming the gate, at any number of cards, with certifying the best as the remedy.
 
 **A stall certifies only a best whose correction passes on research data.** The correction
 reads the research window and the trials alone, and a certificate is the conjunction of the
@@ -2517,8 +2589,9 @@ the failing certificate it writes is recorded beside a precheck that judged noth
 why. A refusal in either place spares the stall — no certification window read, no
 certificate, no failure counted toward `n_fail`, the hypothesis back in the queue at −1 — and
 the `stalled` event records the precheck (`docs/cli.md`). A correction that judged nothing
-spares nothing: a plan carries none before the second card, and a gate that skips on the
-research run would skip in the certificate too. `cert run` by hand is never spared.
+spares nothing: a plan carries none before the search's second draw, card or declared
+setting, and a gate that skips on the research run would skip in the certificate too.
+`cert run` by hand is never spared.
 
 The lane's reading is the certificate's exactly — measured on the research suite's
 synthetic workspace, a card the loop itself measured, the probability, the expected maximum
@@ -2589,7 +2662,7 @@ gates      6 judged · 6 pass · 0 fail · 0 skipped
            pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
            pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
            pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
-           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, prior_trials=0, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
 hold-out   look 1 of 2025-01-06..2025-05-30 by demo_mr
@@ -2677,9 +2750,10 @@ unperturbed objective at or below zero therefore fails the gate before any param
 moved, with the `reason` in its evidence and `n_backtests` at zero. It fails rather than
 skips because its context is whole and it is the subject that lacks the property: a plateau
 around a loss is a robust loss, not evidence of robustness, and a skip is a pass. The runner
-spares the same backtests once `embargoed_window` has failed. The plateau and the latency
-stress are judged after every other cert gate, and when the window gate judged the subject and refused it, each
-is recorded as skipped with the reason and no perturbation is run — the gates are
+spares the same backtests once `embargoed_window` has failed. The plateau, the latency
+stress and `entry_timing` are judged after every other cert gate, and when the window gate
+judged the subject and refused it, each is recorded as skipped with the reason and no
+perturbation is run, nor the window read again — the gates are
 evidence for a pass, and a certificate whose window failed cannot pass — while the
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
 spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
@@ -2721,6 +2795,85 @@ data lowered it. A clause whose pass rate does not move with the quantity it
 tests only refuses sound candidates at random, and a parameter that switched it on would only
 offer a planner those refusals. Whether the certification window holds the edge is
 `embargoed_window`'s question, asked against the research estimate.
+
+`entry_timing` asks whether the certification window's trades earned more than the same trades
+placed at other times. The null is the whole trade schedule **circularly shifted by whole
+sessions**, read on the clock the engine runs on: every point at the instant it was published,
+its `ts_init`, never the one it refers to, and every fill at the instant it filled. The sessions
+are the New York dates on which a price point of any of the subject's instruments was published
+in the window, `S` of them — a daily bar published at the New York midnight that ends its day is
+the date that midnight opens, and the date before the window's first is among them where the
+window holds a point published on its evening, which a window opening at UTC midnight delivers;
+every offset `k` from `h` to `S − h` is one draw, `h` the longest closed trade's hold in sessions
+plus one, so no draw overlaps its own original, and there are `D = S − 2h + 1` draws and no
+random number. Each fill moves to session `(i + k) mod S` at the New York time of day it filled
+at, and is struck at its instrument's last reading published at or before that time on that
+session — a bar's close where the window holds the instrument's bars, else a print, else the
+touch of a quote — and never at one carried from an earlier session, so a delayed bar is read
+where its delay puts it, as the venue applied it, and no draw prices a fill at what the market
+had yet to publish. One factor per trade, its opening notional over the same sum at the moved
+prices, scales every fill of it, so a moved trade opens the same notional and closes flat; a
+split between its fills is restated onto the shares it opened in, each fill by the clock its
+price was struck on and never by the instant it lands at — a recorded fill is in the shares
+the venue held its name in when it filled, every split the run booked before it
+(`adjustments`), and a moved one in the shares of the instant its reading was printed at, its
+`ts_event` — so the eve's daily bar, printed at the New York midnight that opens the ex-date
+and published after it, is in the old shares wherever it is read, as the venue, which applies
+a split only once a point printed past it reaches it, struck it, and a draw across a
+one-for-five is no fivefold move. Every moved fill is charged by `fill_cost` under the
+subject's venue model as the runner charges a fill struck at that close — never a maker's,
+touched where its instrument's last quote says so and on a venue that matches a level-two book
+always, as the runner counts every fill there, and the dated row of the instant the reading it
+is struck at refers to, as the runner charges the row of the instant a fill's price was struck
+at — and the
+subject's own value is the same arithmetic at offset 0, its own instants repriced alike, with
+the runner's own figure recorded beside it (`observed_runner_bps_per_trade`). A trade's profit
+is its fills' flows less those costs and nothing else, at offset 0 as in every draw — no
+funding of a perpetual, no cash in lieu of a split — so the runner's figure, which carries both,
+can differ from the subject's own by them (backlog row 320). The statistic is the mean net
+profit per trade in basis points of the capital, and
+`p = (1 + #{draws ≥ observed}) / (1 + D)`, a draw that kept no trade counted among those at or
+above; the gate passes at `p ≤ max_p`. Being long a rising index earns the drift at any time,
+so it earns it in every draw too and is not credited as timing; a series that repeats exactly
+earns each draw shifted by whole cycles exactly what it earned, which counts against the
+subject. A shift keeps the spacing and clustering of the trades and the exposure the book held
+at once, which independently drawn entries would not — a `full_book` sleeve holds one position
+at a time, and its draws would overlap — at the cost of resolution: the smallest attainable `p`
+is `1/(1 + D)`, recorded as `min_attainable_p`, and a window too short for it fails. It stands
+beside a weekly `period_target`, where `benchmark: hold` cannot: the null is the subject's own
+closed trades, whose holds already end where the target flattened them, and a moved trade keeps
+the cut its original took rather than the one its own moved week's target would have made —
+that is the approximation. It reads a dated spread at each moved reading, so it is refused
+nowhere a `cost_scenario` is. What it skips on is an absence of context — no `max_p`, an
+attached construct, fewer than two closed trades — and a missing price is never one: a traded
+instrument the window holds no bar, print or quote of fails it naming the instrument, as does a
+subject any of whose trades could not be priced at its own instants — a fill struck before the
+first reading of its instrument's session, a timer's at 09:30 where the first one-minute bar
+closes at 09:31, one struck on a quote before the session's first bar of a name the window
+holds bars of, which it is priced from (backlog row 323), or one a venue latency carried past
+New York midnight from a point published before it, where its instrument published nothing
+between the midnight and the fill (backlog row 325) — since a book judged on the trades
+that could be priced would leave the rest's timing untested; and a trade spanning more than
+half the window's sessions, its first and its last both counted, fails it with `draws: 0`.
+The certification runner hands it a reader of the window that reads the certification window
+once more, a chunk at a time, folding a number per
+instrument and time of day per session and the split schedules of the window's definitions,
+and nothing else of it: one more read and no backtest, paid only by a plan that names the
+gate, and spared like the plateau's runs when `embargoed_window` has refused the subject. Its
+evidence is `observed_bps_per_trade`, `observed_runner_bps_per_trade`, `trades`, the null's
+`null_mean`, `null_sd`, `null_p95` and `null_max`, `draws`, `empty_draws`, `dropped_mean` (the
+trades a draw dropped for crossing the window's end or landing where no price was, on average —
+an equity's leg on a weekend a round-the-clock name of the universe printed on (backlog row
+322), or a leg of a series published on another clock than New York's moved across a change of
+clocks: a coin's daily bar at 00:00 UTC is 19:00 New York in winter and 20:00 in summer, so a
+winter fill at 19:00 finds no reading at or before it on a summer session (backlog row 324)),
+`min_attainable_p`, `p`, `max_p`, `sessions` and `min_offset` and `max_offset`. A failure on a
+missing price records its `reason`, with `unpriced`, the instruments the window holds no price
+of, or `observed_dropped`, how many of the subject's trades could not be priced at their own
+instants, beside `trades`, `observed_runner_bps_per_trade`, `sessions` and `max_p`. At a few
+trades a week a certification window of three years holds a few dozen trades, and the null's spread of a
+mean over so few is wide, so a real timing edge can fail for want of resolution; the planner's
+`max_p` is the lever, and the failure is a look like any other.
 
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the
@@ -2773,7 +2926,7 @@ the sum of each look's own complement — not the threshold, and as good as the 
 own probability, which is a normal approximation. Over `L` looks whose corrections all judged
 by one threshold that sum is `L × (1 − threshold)`; it is more where an earlier plan, or a
 sibling's, sat lower, and a look whose correction judged nothing adds up to one: one judged
-under a plan that carried no correction, as one made before the hypothesis's second card is,
+under a plan that carried no correction, as one made before the search's second draw is,
 and one whose correction skipped, which passes — as the correction does while fewer than two
 cards are candidates (above), and on a research run too short to give an error or whose
 error is zero, among the reasons a skip names. Each certificate keeps its plan's threshold
@@ -2821,17 +2974,19 @@ subject travels with the files even where `state.db` does not.
 Four gates read what the others cannot. `deflated_contribution` is the multiple-testing
 control for a run scored on a contribution, and `deflated_edge` for one scored on a per-trade
 edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
-trade, against the expected maximum of the search — as many draws as it had candidates, from
-the spread of its trials in the same units — over the estimate's own error, the one its card
-carried, reported as a probability and held to `min_probability` — at a stall, on research
-data before the certification window is read (above). The trials' spread is read robustly, as
+trade, against the expected maximum of the search — as many draws as it had candidates and
+declared settings (`prior_trials`), from the spread of its trials in the same units — over
+the estimate's own error, the one its card carried, reported as a probability and held to
+`min_probability` — at a stall, on research data before the certification window is read
+(above). The trials' spread is read robustly, as
 1.4826 times the median absolute deviation of their metrics, so a few trials that blew up — a
 rule that traded itself to ruin, a seed that fired once — do not widen the search past any
 candidate the selection weighed; the spread it used is in the evidence as `trial_spread_bps`.
 `deflated_sharpe` deflates a Sharpe the same way, by the Sharpe's own error and the plain
 spread of its trials, all out of annualised units. Which of the three a plan carries is not
-the planner's to choose once the hypothesis has two cards (above). `min_event_days` is a card
-gate counting the distinct sessions any fill fell on, for a rule that fires on a regime or an
+the planner's to choose once the hypothesis has two draws, cards and declared settings
+together (above). `min_event_days` is a card gate counting the distinct sessions any fill
+fell on, for a rule that fires on a regime or an
 event and could put its whole sample into a handful of days that `min_trades` would count as
 many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share

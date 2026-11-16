@@ -453,6 +453,54 @@ def test_the_eve_s_daily_bar_stamped_at_the_ex_date_s_midnight_is_in_the_old_sha
     assert max(made.equity) - min(made.equity) == pytest.approx(16 * 603.0 * 0.0005)
 
 
+@pytest.mark.parametrize(
+    ("exit_on", "sold"),
+    [(2, ("SELL", 16.0, 603.0)), (4, ("SELL", 240.0, 40.2))],
+    ids=["sold-at-the-eve", "held-through"],
+)
+@pytest.mark.parametrize("lag", [0, 15 * 60 * SECOND_NS], ids=["published", "delayed"])
+def test_entry_timing_places_each_fill_in_the_shares_the_venue_struck_it_in(
+    request_for, exit_on: int, sold: tuple[str, float, float], lag: int
+) -> None:
+    """The daily bars of the eve test, published `lag` after the midnight that stamps them. The
+    venue applies the split at the ex-date's own bar, the first printed past it, so a sale at
+    the eve's bar is in the old shares — on a delayed feed it fills past the split's instant —
+    and one after it in the new. `entry_timing` places the trade selling what it bought, prices
+    it at offset 0 at what the runner booked, and moves it across the split, a leg read at the
+    eve's bar on the ex-date's session among them, for its costs and nothing else. The run is
+    read back as certification reads it from the child that ran it."""
+    from kanso.criteria.codec import decode_run, encode_run
+    from kanso.criteria.timing import BAR, Fold, draw, keys_of, place, struck_in
+    from kanso.nautilus.backtest import schedules_of
+
+    points = []
+    for day in [EX_EST + timedelta(days=offset) for offset in (-5, -1, 0, 1, 2)]:
+        at = new_york(day + timedelta(days=1))
+        price = Price(603.0 if day < EX_EST else 40.2, 2)
+        volume = Quantity.from_int(100_000)
+        points.append(Bar(bar_type(), price, price, price, price, volume, at, at + lag))
+    request = request_for(RESEARCH, source=HOLDER, overrides={"exit_on": exit_on})
+    held = [instrument(info=FIFTEEN)]
+
+    made = decode_run(encode_run(execute(request, held, [tuple(points)]).run))
+    fold = Fold(keys_of(made), RESEARCH, schedules_of(held))
+    for bar in points:
+        close = float(bar.close)
+        fold.take(BAR, INSTRUMENT, bar.ts_init, close, close, bar.ts_event)
+    prices = fold.prices()
+    placed = place(made.trades[0], prices, struck_in(made))
+
+    assert [(fill.side, fill.qty, fill.px) for fill in made.fills] == [("BUY", 16.0, 603.0), sold]
+    assert [(leg.qty, leg.px) for leg in placed.legs] == [(16.0, 603.0), pytest.approx((16, 603))]
+    own = draw([placed], prices, made.venue_model, 0)
+    assert own.pnl == (pytest.approx(made.trades[0].pnl_net),)
+    moved = [draw([placed], prices, made.venue_model, k) for k in range(1, len(prices.sessions))]
+    assert sum(each.kept for each in moved) > 0
+    for each in moved:
+        for pnl, costs in zip(each.pnl, each.costs, strict=True):
+            assert pnl == pytest.approx(-sum(costs)), f"offset {each.offset}: {pnl:.2f}"
+
+
 # --- what the runner refuses --------------------------------------------------
 
 

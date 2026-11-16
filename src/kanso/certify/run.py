@@ -29,9 +29,9 @@ certification would strike it now, on a snapshot that can support a claim; and i
 certification child itself, on the research window it has just run, before the certification
 window is read (`certify_at_stall`). Either refusal spares the stall: no certification window
 is read and no certificate is written. A correction that judged nothing — a plan that carries
-none before the search has two cards, or a gate that skips on the research run — spares
-nothing, since it would judge nothing in the certificate either. `kanso cert run` is the
-operator's own act and is never spared.
+none before the search has two draws, cards and declared settings together, or a gate that
+skips on the research run — spares nothing, since it would judge nothing in the certificate
+either. `kanso cert run` is the operator's own act and is never spared.
 
 **Both windows are measured the way a card is.** The objective the certificate records,
 and every gate's reading of it, is taken over the workspace's `[research] folds` equal
@@ -66,28 +66,45 @@ Only the subject's own parameters can move — a sleeve's own configuration fiel
 construct parameters an attached modifier was composed with — never the capital, the risk
 limits or anything else the hypothesis injects.
 
-**A failed window spares the perturbation backtests.** The gates are evidence for a pass,
-and a certificate is the conjunction of the gates that judged, so once `embargoed_window` —
-required of every plan — has judged the subject and refused it, nothing `param_plateau`
-could score changes the verdict. The plateau is therefore judged after every other cert
-gate and, when the window gate failed, recorded as skipped with the reason instead of
-running a backtest per parameter; the certificate lists its gates in the plan's order
-regardless. A window gate that judged nothing spares nothing: a skip is an absence of
-evidence, not a refusal, and the plateau then refuses a loss itself before moving anything.
+**A gate that moves the trades in time reads the window once more.** `entry_timing` prices
+the subject's trades at other sessions (`kanso.criteria.timing`), at prices the run does not
+carry, so it is handed a reader that reads the certification window again, a chunk at a time
+as every run reads it, and folds from each chunk only the readings at the instruments and New
+York times of day the trades were struck at — a number per key per session, with the split
+schedules the window's definitions carry — and nothing else of the window. No engine runs: the
+read is the whole cost, and a plan that does not name the gate never pays it.
+
+**A failed window spares the perturbation backtests, and that read.** The gates are evidence
+for a pass, and a certificate is the conjunction of the gates that judged, so once
+`embargoed_window` — required of every plan — has judged the subject and refused it, nothing
+`param_plateau` could score changes the verdict, nor anything `entry_timing` could price. Those
+gates are therefore judged after every other cert gate and, when the window gate failed,
+recorded as skipped with the reason instead of running a backtest per parameter or reading the
+window again; the certificate lists its gates in the plan's order regardless. A window gate
+that judged nothing spares nothing: a skip is an absence of evidence, not a refusal, and the
+plateau then refuses a loss itself before moving anything.
 
 **A search is priced in full, or no certificate is written.** The deflation a plan must carry
-from the second card takes its expected maximum over every card of the hypothesis's family
+from the search's second draw takes its expected maximum over every card of the hypothesis's family
 that ran and traded, under any objective, and its spread from the cards scored under the
 subject's own (`kanso.criteria.gates._searched`): a hypothesis re-pinned to another
 objective carries across the strategy the earlier search selected, and it is that search
-the certificate prices. Two cases are refused before anything runs, because each would
-otherwise be a certificate whose correction judged nothing and so passed. One is a subject
-behind two or more such cards with fewer than two scored in its objective's units — the
-carried strategy certified as the first card under its new objective — whose spread
-cannot be read (`unpriced`). The other is a subject scored under an objective whose
-correction the pinned plan does not carry, with its threshold, once the search has two
-cards: `cert run --sha` of a card from before the re-pin, whose plan was made for the
-objective the hypothesis has now.
+the certificate prices. The settings the family declares tried outside kanso in the grids
+that chose its seeds (`kanso.research.records.prior_trials`) are draws of the same search,
+so they join the cards in every count here — the draws, the count of two from which a plan
+carries the correction, and the two refusals below — and in no spread, and the
+certificate's `n_trials` stays kanso's cards. Two cases are refused before anything runs,
+because each would otherwise be a certificate whose correction judged nothing and so
+passed. One is a subject behind two or more such draws with fewer than two cards scored in
+its objective's units — the carried strategy certified as the first card under its new
+objective, or the first card behind a declared grid — whose spread cannot be read
+(`unpriced`). The other is a subject scored under an objective whose correction the pinned
+plan does not carry, with its threshold, once the search has two draws: `cert run --sha` of
+a card from before the re-pin, whose plan was made for the objective the hypothesis has now.
+That route is refused too for a subject scored under an objective a cert gate guards —
+`entry_timing` on a contribution or a Sharpe — when the plan does not carry the gate with
+every parameter set, at any number of cards: its certificate would credit a drift held as
+timing.
 
 **Every certificate is a look at its window, and records which.** The certificates the
 subject's lineage has already made at a certification window intersecting the subject's
@@ -137,12 +154,26 @@ from kanso.certify.plan import plan as plan_for
 from kanso.certify.power import power, window_params
 from kanso.classify.construct import Harness, HostRef
 from kanso.classify.construct import get as construct_for
-from kanso.criteria import CardRun, DatasetFacts, GateContext, criteria_version, gates, objectives
+from kanso.criteria import (
+    CardRun,
+    DatasetFacts,
+    GateContext,
+    criteria_version,
+    gates,
+    objectives,
+    plannable,
+)
 from kanso.criteria import catalogue as toolbox
 from kanso.criteria.digest import session_edge
-from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_deflation
+from kanso.criteria.library import (
+    SEARCH_TRIALS,
+    deflation_gate,
+    required_cert_gates,
+    required_deflation,
+)
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
+from kanso.criteria.timing import BAR, PRINT, QUOTE, Fold, PriceKey, SessionPrices
 from kanso.data.manifest import Manifest, catalog_path, manifests
 from kanso.data.publication import NANOS_PER_SECOND, PUBLICATION_RULES
 from kanso.data.snapshot import Snapshot
@@ -190,6 +221,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "CERTIFIABLE",
     "CERT_STAGE",
+    "TIMING_SPARED",
     "UNIMPLEMENTED",
     "WINDOW_FAILED",
     "Measured",
@@ -247,6 +279,21 @@ WINDOW_FAILED: Final = (
     "re-run backtests were not made: a plateau or a slower route around a result the embargo "
     "refused is not evidence"
 )
+
+TIMING: Final = "entry_timing"
+"""The cert gate that reads the certification window again, to price the subject's trades at
+other sessions; judged with the plateau, and spared with it."""
+
+LAST: Final = RERUNNING | {TIMING}
+"""The cert gates judged after every cheap verdict is in hand: the ones that re-run the subject
+and the one that reads its window again, each spared once the window gate has refused it."""
+
+TIMING_SPARED: Final = (
+    "embargoed_window failed and a certificate whose window failed cannot pass, so the window "
+    "was not read again: the timing of a result the embargo refused is not evidence"
+)
+"""Why `entry_timing` is skipped after a failed window, in words of its own: it re-runs no
+backtest, so `WINDOW_FAILED` would say what it did not spare."""
 
 _HEX: Final = frozenset("0123456789abcdef")
 
@@ -464,7 +511,8 @@ def _certify(
     plan = plan_for(ws, store, hyp_id, lane=lane, sha=subject.strategy_sha)
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
-    _refuse_uncorrected(plan, subject, n_trials, registration)
+    _refuse_uncorrected(plan, subject, n_trials + records.prior_trials(store, hyp_id), registration)
+    _refuse_unguarded(plan, subject, registration)
     reason = unpriced(store, hyp_id, subject.objective_id, n_trials)
     if reason is not None:
         raise PreconditionError(
@@ -542,25 +590,30 @@ def show(ws: Workspace, store: StateStore, hyp_id: str) -> Certificate | None:
 def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -> str | None:
     """Why the search behind a card scored under `objective_id` cannot be priced, or `None`.
 
-    The search is priced from `SEARCH_TRIALS` cards on, by the deflation gate the toolbox
-    says `deflates` the objective: over every card of the family that ran and traded, with
-    the spread of those scored in the objective's units. A family with two such cards and
-    fewer than two of them in those units has a search behind it and no spread to price it
-    by, and a deflation that cannot read its spread skips, which passes — the route a
-    strategy carried across a re-pin to another objective took to an uncorrected
-    certificate as the first card scored under its new one (`docs/backlog.md` row 173).
+    The search is priced from `SEARCH_TRIALS` trials on, by the deflation gate the toolbox
+    says `deflates` the objective: over every card of the family that ran and traded and the
+    settings the family declares tried outside kanso (`records.prior_trials`), with the
+    spread of the cards scored in the objective's units. A search of two such draws with
+    fewer than two cards in those units has no spread to price it by, and a deflation that
+    cannot read its spread skips, which passes — the route a strategy carried across a re-pin
+    to another objective took to an uncorrected certificate as the first card scored under
+    its new one (`docs/backlog.md` row 173), and the route a declared grid would take on the
+    first card of its hypothesis. `n_trials` is kanso's count of the family's cards; the
+    declared settings are added to it here.
     """
     gate = deflation_gate(objective_id)
-    if n_trials < SEARCH_TRIALS or gate is None:
+    prior = records.prior_trials(store, hyp_id)
+    if n_trials + prior < SEARCH_TRIALS or gate is None:
         return None
     searched = records.candidates(store, hyp_id)
     scored = len(records.trial_metrics(store, hyp_id, objective_id))
-    if searched < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
+    if searched + prior < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
         return None
+    beside = f", beside {prior} settings its family declares tried outside kanso" if prior else ""
     return (
         f"{hyp_id} has {searched} cards that ran and traded behind it and {scored} of them "
-        f"scored under {objective_id}, so {gate} cannot read the spread of the search that "
-        f"selected this card: it prices the search from two cards in its units"
+        f"scored under {objective_id}{beside}, so {gate} cannot read the spread of the search "
+        "that selected this card: it prices the search from two cards in its units"
     )
 
 
@@ -746,8 +799,9 @@ def _correction(
     precheck that judges nothing because the plan carries none — `measured` where the child,
     which has run the research window, finds that.
 
-    A plan carries it from the search's second card, so one without it has no search to
-    price; one made for another objective is refused by certification itself.
+    A plan carries it from the search's second draw — card, or setting of a declared grid —
+    so one without it has no search to price; one made for another objective is refused by
+    certification itself.
     """
     objective = cast("ObjectiveRef", hyp.objective).id
     gate = deflation_gate(objective)
@@ -760,7 +814,8 @@ def _correction(
         passed=None,
         evidence={},
         reason=f"plan version {plan.plan_version} carries no {gate}, the search correction for "
-        f"{objective}: a plan carries it once the search has {SEARCH_TRIALS} cards",
+        f"{objective}: a plan carries it once the search has {SEARCH_TRIALS} draws, its cards "
+        "and the prior_trials its family declares together",
         measured=measured,
     )
 
@@ -780,6 +835,7 @@ def _deflation(
     context `_judge` builds for it, with the research run in the run's place."""
     objective = cast("ObjectiveRef", hyp.objective).id
     research = hyp.windows.research
+    prior = records.prior_trials(store, hyp.id)
     context = GateContext(
         hyp=hyp,
         construct=cast("ConstructRef", hyp.construct).id,
@@ -796,7 +852,8 @@ def _deflation(
         benchmark_run=researched.benchmark,
         benchmark_research_run=researched.benchmark,
         trial_metrics=records.trial_metrics(store, hyp.id, objective),
-        trials=max(records.candidates(store, hyp.id), 1),
+        trials=max(records.candidates(store, hyp.id) + prior, 1),
+        prior_trials=prior,
     )
     result = gates()[planned.id].evaluate(context)
     judged = result.skipped is None
@@ -815,8 +872,9 @@ def _refuse_uncorrected(
 ) -> None:
     """Refuse a subject whose objective's search correction the pinned plan does not carry.
 
-    A plan is made for the objective the hypothesis is registered under, and from the second
-    card it carries that objective's deflation gate with its threshold. A card scored under
+    A plan is made for the objective the hypothesis is registered under, and from the
+    search's second draw — `n_trials`, the cards and the declared `prior_trials` together —
+    it carries that objective's deflation gate with its threshold. A card scored under
     another — one researched before a re-pin moved the objective, named by `--sha` — would
     be certified with that gate skipping on an objective it does not deflate and its own
     correction absent, so the search that selected it would go unpriced.
@@ -835,6 +893,35 @@ def _refuse_uncorrected(
         remedy=f"certify a card scored under {registration.objective}, as the best is: "
         f"`kanso cert run {subject.hyp.id}`",
     )
+
+
+def _refuse_unguarded(
+    plan: CertificationPlan, subject: Subject, registration: Registration
+) -> None:
+    """Refuse a subject whose objective's guarding cert gates the pinned plan does not carry.
+
+    A plan is made for the objective the hypothesis is registered under, and carries every cert
+    gate the toolbox declares `required_for` that one — `entry_timing` on a contribution or a
+    Sharpe — with every parameter set. A card scored under another objective — one researched
+    before a re-pin moved it, named by `--sha` — is judged on its own, so a plan made for one
+    the gate does not guard would certify a contribution or a Sharpe whose timing was never
+    told from its exposure.
+    """
+    offered = plannable()
+    for guard in required_cert_gates(subject.objective_id):
+        planned = next((gate for gate in plan.gates if gate.id == guard), None)
+        if guard not in offered or (
+            planned is not None and all(name in planned.params for name in offered[guard].params)
+        ):
+            continue
+        raise PreconditionError(
+            f"{subject.strategy_sha[:7]} was scored under {subject.objective_id}, and the plan "
+            f"pinned for {subject.hyp.id} carries no {guard} with every parameter set, which "
+            f"every certificate of {subject.objective_id} is judged by, so a drift it held "
+            "would be credited as timing",
+            remedy=f"certify a card scored under {registration.objective}, as the best is: "
+            f"`kanso cert run {subject.hyp.id}`",
+        )
 
 
 # --- resolving the subject ----------------------------------------------------
@@ -1310,6 +1397,55 @@ class _Evidence:
         return volumes
 
 
+def _session_prices(subject: Subject, keys: Sequence[PriceKey]) -> SessionPrices:
+    """The subject's certification window read once more and folded to `keys`.
+
+    Read as the subject's own run read it (`backtest.window_chunks`), a chunk at a time, each
+    chunk folded and let go before the next is read, so this holds a number per key per session
+    and one chunk of the window. Every point is folded at the instant it was published, its
+    `ts_init`, the clock the run was handed it on and its fills were struck on, with its
+    `ts_event` kept for the dated row a fill struck at it pays. A point of the prefix a warmed
+    subject is fed is folded into no session; one published on the evening before the window's
+    first New York date, which the window delivers, is that evening's own date's session, the
+    date before the first (`Fold`). A bar is read at its close and a print at its price; a quote
+    keeps its bid and ask. The split schedules are those of the definitions the window was
+    resolved with, which the moved trades are restated by and which nothing a gate is handed
+    carries otherwise.
+
+    Engine facts this relies on (nautilus_trader 1.231.0): a `Bar` carries its `close` and its
+    `bar_type.instrument_id`, a `TradeTick` its `price` and a `QuoteTick` its `bid_price` and
+    `ask_price`, each a `Price` that `float` reads, and both ticks their `instrument_id`; every
+    point carries `ts_init` and `ts_event` as nanoseconds since the epoch.
+    """
+    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+
+    request = _request(subject, subject.certification)
+    instruments, chunks = backtest.window_chunks(request, subject.catalog)
+    fold = Fold(keys, subject.certification, backtest.schedules_of(instruments))
+    for chunk in chunks:
+        for group in chunk:
+            for point in group:
+                if isinstance(point, Bar):
+                    close = float(point.close)
+                    name = str(point.bar_type.instrument_id)
+                    fold.take(BAR, name, point.ts_init, close, close, point.ts_event)
+                elif isinstance(point, TradeTick):
+                    price = float(point.price)
+                    fold.take(
+                        PRINT, str(point.instrument_id), point.ts_init, price, price, point.ts_event
+                    )
+                elif isinstance(point, QuoteTick):
+                    fold.take(
+                        QUOTE,
+                        str(point.instrument_id),
+                        point.ts_init,
+                        float(point.bid_price),
+                        float(point.ask_price),
+                        point.ts_event,
+                    )
+    return fold.prices()
+
+
 def _dataset_facts(
     ws: Workspace, snapshot: Snapshot, lags: Mapping[tuple[str, str], float]
 ) -> tuple[DatasetFacts, ...]:
@@ -1440,7 +1576,8 @@ def _judge(
     )
     stated = power(*researched, subject.research, subject.certification, window_params(plan))
     metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
-    searched = records.candidates(store, subject.hyp.id)
+    prior = records.prior_trials(store, subject.hyp.id)
+    searched = records.candidates(store, subject.hyp.id) + prior
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
     parameters = _tunable(subject)
@@ -1457,6 +1594,10 @@ def _judge(
         request = _request(subject, subject.certification, costs=costs)
         return _ran(subject, lambda: backtest.run(request, subject.catalog))
 
+    def session_prices(keys: Sequence[PriceKey]) -> SessionPrices:
+        """The certification window read again, folded to the readings at these keys."""
+        return _session_prices(subject, keys)
+
     registry = gates()
     verdicts: dict[str, EvaluatedGate] = {}
     for gate in _perturbation_last(planned):
@@ -1464,8 +1605,10 @@ def _judge(
         if found is None:
             verdicts[gate.id] = _skipped(gate, UNIMPLEMENTED)
             continue
-        if gate.id in RERUNNING and _window_failed(verdicts):
-            verdicts[gate.id] = _skipped(gate, WINDOW_FAILED)
+        if gate.id in LAST and _window_failed(verdicts):
+            verdicts[gate.id] = _skipped(
+                gate, WINDOW_FAILED if gate.id in RERUNNING else TIMING_SPARED
+            )
             continue
         context = GateContext(
             hyp=subject.hyp,
@@ -1484,11 +1627,13 @@ def _judge(
             benchmark_research_run=measured.benchmark_research,
             trial_metrics=metrics,
             trials=max(searched, 1),
+            prior_trials=prior,
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,
             rerun=rerun,
             rerun_costs=rerun_costs,
+            session_prices=session_prices,
             session=compared,
         )
         verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
@@ -1523,13 +1668,14 @@ def net_per_trade(run: CardRun) -> NetPerTrade | None:
 
 
 def _perturbation_last(planned: Sequence[PlannedGate]) -> list[PlannedGate]:
-    """The plan's cert gates with the ones that cost a backtest per move last.
+    """The plan's cert gates with the ones that cost a backtest per move, or a read of the
+    window, last.
 
     Every cheap verdict is then in hand before the expensive ones are paid for, the window
     gate's among them, which is the one that decides whether they are paid for at all. Only
     the judging is reordered: the certificate lists the gates in the plan's order.
     """
-    return sorted(planned, key=lambda gate: gate.id in RERUNNING)
+    return sorted(planned, key=lambda gate: gate.id in LAST)
 
 
 def _window_failed(verdicts: Mapping[str, EvaluatedGate]) -> bool:

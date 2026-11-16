@@ -6,8 +6,10 @@ so the test asserts both rather than only that something went wrong.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date
+from hashlib import sha256
 from typing import Any
 
 import pytest
@@ -18,6 +20,7 @@ from kanso.config import CONFIG_NAME, load_config
 from kanso.data.instruments import resolve_universe
 from kanso.errors import Exit, KansoError, ValidationError
 from kanso.hyp.validate import venue_models
+from kanso.state import StateStore
 from kanso.workspace import Workspace
 from tests.hyp.conftest import (
     DEMO_ENTRY,
@@ -70,6 +73,312 @@ def test_a_registered_parent_is_admissible(ws: Workspace) -> None:
         hyp.add(ws, store, write_hypothesis(ws, {**DOCUMENT, "id": "demo_parent"}))
 
     assert accepted(ws, document(derived_from=["demo_parent"])).derived_from == ["demo_parent"]
+
+
+# -- prior_trials --------------------------------------------------------------
+
+GRID = b"# pre-registered: x{1.25,1.75,2.25} x n{10,14,20} x 3 exits\n"
+"""Evidence of an offline grid, as an operator copies it into the workspace."""
+
+
+def evidence(ws: Workspace, name: str = "evidence/grid.md", count: int = 27) -> dict[str, Any]:
+    """Write `GRID` at `name` under the workspace and return the block that states it."""
+    path = ws.root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(GRID)
+    return {"count": count, "source": name, "sha256": sha256(GRID).hexdigest()}
+
+
+def register(ws: Workspace, doc: dict[str, Any]) -> None:
+    """Register a document, as `kanso hyp add` does."""
+    with StateStore(ws.path("state.db")) as store:
+        store.migrate()
+        hyp.add(ws, store, write_hypothesis(ws, doc))
+
+
+def test_a_grid_stated_with_its_evidence_in_the_workspace_is_admissible(ws: Workspace) -> None:
+    block = evidence(ws)
+
+    parsed = accepted(ws, document(prior_trials=block))
+
+    assert parsed.prior_trials is not None
+    assert parsed.prior_trials.model_dump() == block
+
+
+def test_a_grid_whose_evidence_resolves_outside_the_workspace_is_refused(ws: Workspace) -> None:
+    (ws.root.parent / "grid.md").write_bytes(GRID)
+    block = {"count": 27, "source": "../grid.md", "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == "prior_trials.source: ../grid.md is outside the workspace"
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_grid_whose_evidence_is_named_by_an_absolute_path_is_refused(ws: Workspace) -> None:
+    """The pin names the file for every host the workspace is checked out on, so the path is
+    the workspace's own, even where the absolute one lands inside it."""
+    block = evidence(ws)
+    absolute = str(ws.root.resolve() / block["source"])
+
+    failure = refused(ws, document(prior_trials={**block, "source": absolute}))
+
+    assert failure.message.startswith(
+        f"prior_trials.source: {absolute} is not named relative to the workspace root"
+    )
+    assert "name it from there" in (failure.remedy or "")
+
+
+def test_a_grid_whose_evidence_is_not_there_is_refused(ws: Workspace) -> None:
+    block = {"count": 9, "source": "evidence/missing.md", "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == (
+        "prior_trials.source: evidence/missing.md does not exist in the workspace"
+    )
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_grid_whose_evidence_hashes_otherwise_is_refused(ws: Workspace) -> None:
+    block = evidence(ws)
+    (ws.root / block["source"]).write_bytes(GRID + b"edited after the count was stated\n")
+    held = sha256((ws.root / block["source"]).read_bytes()).hexdigest()
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == (
+        f"prior_trials.sha256: the bytes of evidence/grid.md hash to {held}, not the "
+        f"{block['sha256']} the count was stated with"
+    )
+    assert "shasum -a 256" in (failure.remedy or "")
+    assert "`sha256sum` where shasum is not installed" in (failure.remedy or ""), "Linux's own"
+
+
+def test_a_grid_its_parent_already_states_is_refused(ws: Workspace) -> None:
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
+
+    failure = refused(ws, document(derived_from=["demo_parent"], prior_trials=block))
+
+    assert failure.message == (
+        "prior_trials: repeats demo_parent's block, whose grid derived_from already counts"
+    )
+    assert "drop prior_trials" in (failure.remedy or "")
+
+
+def test_a_grid_an_ancestor_further_back_states_is_refused(ws: Workspace) -> None:
+    """The family is transitive, so the grid a grandparent states is already counted."""
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_root", "prior_trials": block})
+    register(ws, {**DOCUMENT, "id": "demo_parent", "derived_from": ["demo_root"]})
+
+    failure = refused(ws, document(derived_from=["demo_parent"], prior_trials=block))
+
+    assert failure.message.startswith("prior_trials: repeats demo_root's block")
+
+
+def test_a_grid_of_its_own_beside_its_parent_s_is_admissible(ws: Workspace) -> None:
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": evidence(ws)})
+    own = evidence(ws, "evidence/own-grid.md", count=9)
+    (ws.root / own["source"]).write_bytes(b"# another grid\n")
+    own["sha256"] = sha256(b"# another grid\n").hexdigest()
+
+    parsed = accepted(ws, document(derived_from=["demo_parent"], prior_trials=own))
+
+    assert parsed.prior_trials is not None
+    assert parsed.prior_trials.count == 9
+
+
+def test_a_hypothesis_whose_parent_derives_from_it_is_not_refused_its_own_grid(
+    ws: Workspace,
+) -> None:
+    """A re-pin closing a cycle walks back to the file being validated, whose own newest
+    registration states its block: that is the same grid, not an ancestor's."""
+    block = evidence(ws)
+    register(ws, document(prior_trials=block))
+    register(ws, {**DOCUMENT, "id": "demo_parent", "derived_from": ["demo_mr"]})
+
+    parsed = accepted(ws, document(derived_from=["demo_parent"], prior_trials=block))
+
+    assert parsed.prior_trials is not None
+
+
+@pytest.mark.parametrize("touch", ["moved", "edited"])
+def test_a_grid_the_hypothesis_has_pinned_is_not_read_again(ws: Workspace, touch: str) -> None:
+    """The evidence is read when the block is stated; once the pinned file states it, a re-pin
+    of the same block reads only the pin, so moving or editing the evidence refuses nothing."""
+    block = evidence(ws)
+    register(ws, document(prior_trials=block))
+    held = ws.root / block["source"]
+    if touch == "moved":
+        held.rename(ws.root / "evidence" / "kept.md")
+    else:
+        held.write_bytes(GRID + b"a note added after hyp add\n")
+
+    parsed = accepted(ws, document(prior_trials=block))
+
+    assert parsed.prior_trials is not None
+    assert parsed.prior_trials.model_dump() == block
+
+
+def test_a_grid_changed_since_its_pin_is_read_again(ws: Workspace) -> None:
+    """A block the pin does not state — another count of the same evidence included — is a
+    new statement, and its evidence is read."""
+    block = evidence(ws)
+    register(ws, document(prior_trials=block))
+    (ws.root / block["source"]).unlink()
+
+    failure = refused(ws, document(prior_trials={**block, "count": 28}))
+
+    assert (
+        failure.message == "prior_trials.source: evidence/grid.md does not exist in the workspace"
+    )
+
+
+def _through_a_symlinked_directory(ws: Workspace) -> str:
+    """`notes` links to `evidence/inner`, so the filesystem reads the `..` after it as
+    `evidence` where the letters alone read it as the root."""
+    (ws.root / "evidence" / "inner").mkdir()
+    (ws.root / "notes").symlink_to("evidence/inner")
+    return "notes/../grid.md"
+
+
+def _through_a_symlink(ws: Workspace) -> str:
+    (ws.root / "evidence" / "alias.md").symlink_to("grid.md")
+    return "evidence/alias.md"
+
+
+def _in_another_case(ws: Workspace) -> str:
+    """macOS's filesystem, a supported host's, opens one file under either case."""
+    if not (ws.root / "EVIDENCE" / "GRID.MD").exists():
+        pytest.skip("a case-sensitive filesystem opens another file under another case")
+    return "Evidence/GRID.md"
+
+
+def _as_a_copy(ws: Workspace) -> str:
+    (ws.root / "evidence" / "copy.md").write_bytes(GRID)
+    return "evidence/copy.md"
+
+
+@pytest.mark.parametrize(
+    "respell",
+    [
+        lambda ws: "./evidence/grid.md",
+        lambda ws: "evidence/../evidence/grid.md",
+        _through_a_symlinked_directory,
+        _through_a_symlink,
+        _in_another_case,
+        _as_a_copy,
+    ],
+    ids=["dot", "dot-dot", "symlinked-directory", "symlink", "case", "copy"],
+)
+def test_a_grid_its_parent_states_under_another_name_is_refused(
+    ws: Workspace, respell: Any
+) -> None:
+    """One evidence file is one grid, known by the digest of its bytes, however `source`
+    names it: `./`, a `..` the letters read, a `..` after a symlinked directory, which the
+    filesystem reads after the link, a symlink, another case on a filesystem that opens
+    either, or a copy of the same bytes."""
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
+    named = respell(ws)
+
+    failure = refused(
+        ws, document(derived_from=["demo_parent"], prior_trials={**block, "source": named})
+    )
+
+    assert failure.message.startswith("prior_trials: repeats demo_parent's block")
+
+
+def test_a_grid_named_by_climbing_out_of_the_root_and_back_in_is_refused(ws: Workspace) -> None:
+    """A source is named from the root, so one that leaves it by the root's own directory name
+    and comes back names the file only while the workspace sits under that name: refused, as
+    an absolute path is, with the name the root gives it as the remedy."""
+    block = evidence(ws)
+    climbed = f"../{ws.root.resolve().name}/{block['source']}"
+
+    failure = refused(ws, document(prior_trials={**block, "source": climbed}))
+
+    assert failure.message == (
+        f"prior_trials.source: {climbed} leaves the workspace root to name a file inside it, "
+        "so it is not named relative to the root"
+    )
+    assert failure.remedy == "name it `evidence/grid.md`, as the workspace root names it"
+
+
+@pytest.mark.parametrize("links", [{"loop.md": "loop.md"}, {"a": "b", "b": "a"}])
+def test_a_source_that_is_a_symlink_loop_is_refused_as_inadmissible(
+    ws: Workspace, links: dict[str, str]
+) -> None:
+    """Python 3.12's `resolve` raises `RuntimeError` on a loop where 3.13's hands the path on
+    for `stat` to refuse: either way a path this host cannot open, the operator's to fix
+    (exit 3) and refused alike on every supported interpreter."""
+    (ws.root / "evidence").mkdir()
+    for name, target in links.items():
+        (ws.root / "evidence" / name).symlink_to(target)
+    source = f"evidence/{next(iter(links))}"
+    block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message.startswith(
+        f"prior_trials.source: {source!r} is not a path this host can open: "
+    )
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_source_that_names_a_directory_is_refused_as_not_a_file(ws: Workspace) -> None:
+    evidence(ws)
+    block = {"count": 27, "source": "evidence", "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message == "prior_trials.source: evidence is not a file"
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_source_with_a_nul_in_it_is_refused_as_inadmissible(ws: Workspace) -> None:
+    """A path the filesystem refuses outright is the operator's file to fix (exit 3), not a
+    fault of kanso's (exit 1)."""
+    source = "evidence/\0grid.md"
+    block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message.startswith(f"prior_trials.source: {source!r} is not a path this host")
+    assert "null" in failure.message
+    assert "evidence/" in (failure.remedy or "")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file whatever its mode")
+def test_a_source_the_host_may_not_read_is_refused_as_inadmissible(ws: Workspace) -> None:
+    """A file `stat` sees and the host may not read is refused as every other source is,
+    the field named and the remedy given."""
+    block = evidence(ws)
+    held = ws.root / block["source"]
+    held.chmod(0)
+    try:
+        failure = refused(ws, document(prior_trials=block))
+    finally:
+        held.chmod(0o644)
+
+    assert failure.message.startswith(
+        "prior_trials.source: 'evidence/grid.md' is not a path this host can open: "
+    )
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_source_longer_than_a_name_can_be_is_refused_as_inadmissible(ws: Workspace) -> None:
+    """`stat` raises `ENAMETOOLONG` on every supported interpreter, where `is_file` answers it
+    as no file on some, so it is refused as a path this host cannot open on all of them."""
+    source = "evidence/" + "x" * 5000 + ".md"
+    block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message.startswith(f"prior_trials.source: {source!r} is not a path this host")
+    assert "evidence/" in (failure.remedy or "")
 
 
 def test_a_classified_sleeve_is_admissible(ws: Workspace) -> None:
@@ -2047,6 +2356,20 @@ def test_a_contribution_carrying_edge_per_trade_in_either_list_is_admitted(
     held = accepted(ws, doc)
 
     assert {ref.id: ref.params for ref in held.card_gates}["edge_per_trade"] == GUARD["params"]
+
+
+def test_a_contribution_is_admitted_without_entry_timing_among_its_constraints(
+    ws: Workspace,
+) -> None:
+    """`entry_timing` guards a contribution too, but at certification: a plan carries it and a
+    card never does, so `hyp validate` asks a hypothesis scored on one for its card guard
+    alone and says nothing of the cert gate."""
+    doc = document(**CONTRIBUTION)
+    doc["constraints"] = [*CONTRIBUTION["constraints"], GUARD]
+
+    held = accepted(ws, doc)
+
+    assert "entry_timing" not in {ref.id for ref in held.card_gates}
 
 
 @pytest.mark.parametrize("where", ["required_constraints", "constraints"])

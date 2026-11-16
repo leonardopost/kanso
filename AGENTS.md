@@ -68,7 +68,11 @@ way — and it charges nothing because kanso's resolved instruments leave their 
 taker rates at zero, not because the venue is configured fee-free, so an instrument that
 arrives with a non-zero rate double-counts silently. A screen's hurdle is the same arithmetic
 applied to no fill (`kanso.screen.hurdle`): it strikes a round trip with `fill_cost` on the
-resolved venue model, sets it beside a gross move, and books nothing.
+resolved venue model, sets it beside a gross move, and books nothing. So is a certificate's
+timing null (`kanso.criteria.timing`): it charges every fill of the subject's trades, moved to
+other sessions, with `fill_cost` on the subject's venue model as the runner charges a fill
+struck at that close — never a maker's, touched where the quote says so and on a venue that
+matches a level-two book always, as the runner counts it — and books nothing either.
 
 **The embargo is code.** A backtest request may name only a window the hypothesis declares,
 and the card path accepts only the research window. A card runs in a child process with no
@@ -101,7 +105,9 @@ fallback for a decision an agent is supposed to make: with no model configured t
 exits 2. The framework's own opinions are structural invariants and the construct taxonomy,
 and nothing else. One of those invariants is that a search is priced: every objective is
 claimed by exactly one deflation gate, the one whose library file `deflates` it, and once a
-hypothesis's `n_trials` — every card it has — reaches two, a plan that leaves that gate out,
+hypothesis's `n_trials` — every card it has — and the `prior_trials` its family declares —
+the offline grid that chose its seed, which every count pricing the search adds
+(`records.prior_trials`) and `n_trials` never does — reach two, a plan that leaves that gate out,
 or names it without its threshold, is refused — by the planner's own check, and again by
 `cert plan` and `cert run` on a plan already pinned — with `kanso cert plan ID --replan` as
 the way out. Whether a search is corrected for is not a decision; how high the bar sits is,
@@ -124,7 +130,14 @@ The objective itself is the classifying model's to name, from the set the toolbo
 that a contribution, which rewards trading less once every trade loses, is scored only
 beside `edge_per_trade` with both its thresholds set: the gate's library file declares it
 `required_for` both contributions, and classification and `hyp validate` refuse it missing.
-A third is that a version is judged on the forward window before it is `promotable`: every
+A third is that an absolute objective's timing is told from its exposure: `entry_timing`, a
+cert gate, is declared `required_for` `wf_contribution_bps` and `wf_sharpe_net`, so every plan
+for a hypothesis scored on one carries it with `max_p` set and never excludes it — refused by
+the planner's own check, again by `cert plan` and `cert run` on a plan already pinned, and by
+`cert run --sha` of a card scored on one under a plan made for another objective — and `max_p`
+stays the planner's. A cert gate that guards an objective is a plan's to carry and
+never one of a hypothesis's card gates (`required_card_gates` reads the card stage alone).
+A fourth is that a version is judged on the forward window before it is `promotable`: every
 plan carries `forward_holdout`, a required paper gate with both `resolve` and `min_fraction`
 set, which fails until the paper window resolves the certified value and then asks it to stay
 above zero and that fraction of it; the monitor holds a pinned plan to it before it judges a

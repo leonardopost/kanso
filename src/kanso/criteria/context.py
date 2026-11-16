@@ -23,10 +23,13 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from kanso.criteria.run import CardRun
 from kanso.schemas import GateResult, Hypothesis, ParamValue
+
+if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.criteria.timing import PriceKey, SessionPrices
 
 
 @dataclass(frozen=True)
@@ -78,8 +81,10 @@ class GateContext:
       signature was, so the selection ranked its number and declined it;
     * `trials` is how many candidates the search behind `run` has drawn, `run` among them:
       on a card, the hypothesis's cards that ran to a result and traded under any
-      objective, and this one; at certification, every such card. A deflation takes its
-      expected maximum over this many draws and their spread from `trial_metrics`, since
+      objective, and this one; at certification, every such card. Either way it includes
+      `prior_trials`, the settings the hypothesis's family declared tried outside kanso in
+      the grids that chose its seeds, which the evidence states beside it. A deflation takes
+      its expected maximum over this many draws and their spread from `trial_metrics`, since
       a count has no units to keep apart and a spread does. It is 1 — no search — wherever
       no caller counts one;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
@@ -96,11 +101,16 @@ class GateContext:
     * `rerun_costs` runs it again over `window` under a venue model whose cost keys are
       replaced — `latency_ms`, the one a latency stress moves — with the strategy as it
       was: what a gate that asks how the result survives a slower route needs, since a
-      latency changes which fills a run has and cannot be re-applied to recorded ones.
+      latency changes which fills a run has and cannot be re-applied to recorded ones;
+    * `session_prices` reads `window` again for the prices at the instruments and New York
+      times of day it is asked for, session by session (`kanso.criteria.timing.SessionPrices`),
+      with the split schedules the window's definitions carry — what a gate that moves the
+      run's trades to other sessions needs, and the one thing here besides a re-run that
+      reads the window to use.
 
-    A gate never runs anything itself: `rerun` and `rerun_costs` are supplied by whoever
-    ran the subject in the first place, so a perturbed run is measured exactly as the
-    unperturbed one was.
+    A gate never runs anything itself: `rerun`, `rerun_costs` and `session_prices` are
+    supplied by whoever ran the subject in the first place, so a perturbed run is measured,
+    and a moved trade priced, exactly as the unperturbed one was.
     """
 
     hyp: Hypothesis
@@ -122,6 +132,7 @@ class GateContext:
     benchmark_research_run: CardRun | None = None
     trial_metrics: Sequence[float] = ()
     trials: int = 1
+    prior_trials: int = 0
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     datasets: Sequence[DatasetFacts] = ()
@@ -131,6 +142,7 @@ class GateContext:
     tunable: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
     rerun: Callable[[Mapping[str, float]], CardRun] | None = None
     rerun_costs: Callable[[Mapping[str, float]], CardRun] | None = None
+    session_prices: Callable[[Sequence[PriceKey]], SessionPrices] | None = None
 
 
 class Gate(Protocol):
