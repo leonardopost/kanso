@@ -835,6 +835,21 @@ def test_a_book_that_buys_an_irregular_saw_tooth_s_troughs_has_the_smallest_p_th
     assert result.evidence["null_max"] < result.evidence["observed_bps_per_trade"]
 
 
+def test_a_window_too_short_to_resolve_max_p_fails_a_perfectly_timed_book() -> None:
+    """Three cycles hold thirteen draws, so the smallest p the window can resolve is 1/14: above
+    a `max_p` of 0.05, so even a book beaten by no draw fails, and says why."""
+    closes, troughs = sawtooth(7, 3)
+    days = weekdays(len(closes))
+    trades = [round_trip(days, closes, t, t + 2) for t in troughs]
+
+    result = judged(a_run(trades, days), folded(closes, days), max_p=0.05)
+
+    assert (result.passed, result.skipped) == (False, None)
+    assert result.evidence["draws"] == 13
+    assert result.evidence["p"] == result.evidence["min_attainable_p"] == 1 / 14
+    assert result.evidence["null_max"] < result.evidence["observed_bps_per_trade"]
+
+
 def test_a_periodic_series_cannot_tell_timing_from_a_whole_cycle_later() -> None:
     """Every shift by whole cycles of a series that repeats exactly lands each trade on a trough,
     earns exactly what the subject did, and counts against it."""
