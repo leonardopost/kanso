@@ -27,7 +27,7 @@ import typer
 from kanso import inbox, models
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
-from kanso.cli.research import stopped_line
+from kanso.cli.research import spared_by, stopped_line
 from kanso.env import read as read_envelope
 from kanso.research import daemon, loop, records, scheduler
 from kanso.schemas import RunRecord
@@ -141,7 +141,8 @@ def _cards_per_hour(opened: StateStore) -> float:
 
 
 def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
-    """Every registered hypothesis with its status, its best metric and its card count."""
+    """Every registered hypothesis with its status, its best metric, its card count and its
+    newest stall: whether it certified, and the search correction that decided it."""
     rows = opened.connection.execute(
         "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric,"
         " h.consecutive_cert_failures AS cert_failures,"
@@ -156,6 +157,7 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
             "best_metric": None if row["best_metric"] is None else float(row["best_metric"]),
             "cards": int(row["cards"]),
             "cert_failures": int(row["cert_failures"]),
+            "last_stall": scheduler.last_stall(opened, str(row["hyp_id"])),
         }
         for row in rows
     ]
@@ -234,7 +236,10 @@ def _lane_line(row: dict[str, Any]) -> str:
 
 def _hypothesis_line(row: dict[str, Any]) -> str:
     best = "no keep yet" if row["best_metric"] is None else f"{row['best_metric']:.6f}"
-    return f"{row['id']:<20}{row['status']:<13}{best:<14}{row['cards']} card(s)"
+    line = f"{row['id']:<20}{row['status']:<13}{best:<14}{row['cards']} card(s)"
+    stall = row["last_stall"]
+    spared = None if stall is None else spared_by(stall["precheck"])
+    return line if spared is None else f"{line} · stall spared: {spared}"
 
 
 def _escalation_line(entry: dict[str, Any]) -> str:

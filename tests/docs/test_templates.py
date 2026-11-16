@@ -97,6 +97,15 @@ def test_the_program_states_the_repair_budget_the_driver_enforces() -> None:
     assert spelled(stated.group(1)) == driver.REPAIRS
 
 
+def test_the_program_says_a_stall_s_certification_can_be_spared() -> None:
+    """An interactive proposer reads what a stall leads to here; told only that a keep above
+    zero is certified, it would take a spared stall's missing certificate for a fault."""
+    never_stop = template("program.md").split("## Never stop", 1)[1]
+    assert "unless the plan's search correction refuses it on research data, which spares the " in (
+        never_stop
+    )
+
+
 def test_the_program_names_every_status_a_card_can_carry_and_only_the_printed_ones() -> None:
     """Step 3 tells the proposer to read one output line and names the statuses it can
     say; step 4 covers the one the command refuses instead of printing. A status in the

@@ -167,11 +167,13 @@ def a_card(
     status: str = "keep",
     n_trades: int = 4,
     model: VenueModel | None = None,
+    measured_sha: str | None = None,
 ) -> str:
     """One recorded card of a closed run, and the run record that pinned its data.
 
     `model` is the venue model the card was measured under; the demo's on XNAS unless the
-    subject trades somewhere else.
+    subject trades somewhere else. `measured_sha` is the measurement it kept, none unless
+    given.
     """
     pinned = yaml.safe_dump(document or DOCUMENT, sort_keys=False).encode("utf-8")
     run_record = records.insert(
@@ -214,6 +216,7 @@ def a_card(
                 "desc": "a card",
                 "venue_model": model or venue_model(),
                 "created_at": NOW,
+                "measured_sha": measured_sha,
             }
         ),
     )
@@ -1637,9 +1640,9 @@ def test_both_windows_are_measured_against_their_own_hold_and_a_perturbation_mov
     monkeypatch.setattr(run.backtest, "benchmark", counted)
     made = certify(ws, store, HYP_ID)
 
-    assert derived == [CERTIFICATION, (date(2024, 1, 1), date(2024, 1, 31)), CERTIFICATION], (
-        "one hold per window for the certificate, whatever param_plateau moved, and one for "
-        "the expectation of the version the pass composed"
+    assert derived == [(date(2024, 1, 1), date(2024, 1, 31)), CERTIFICATION, CERTIFICATION], (
+        "one hold per window for the certificate, the research window's first, whatever "
+        "param_plateau moved, and one for the expectation of the version the pass composed"
     )
     subject = run._subject(ws, store, HYP_ID, None)
     measured = run._measure(subject)

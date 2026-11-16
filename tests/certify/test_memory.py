@@ -293,7 +293,7 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
     (plateau,) = [gate for gate in made.gates if gate.id == "param_plateau"]
     assert plateau.skipped is None and plateau.evidence["n_backtests"] == 2 * FIELDS
     assert made.verdict == "pass", "a pass composes, which is one more run of the window"
-    subject, research, *moved, composed = ran
+    research, subject, *moved, composed = ran  # the research window is run first
     assert subject.window == composed.window == CERTIFICATION and not subject.overrides
     assert research.window == RESEARCH
     assert len(moved) == 2 * FIELDS and all(each.overrides for each in moved)

@@ -21,6 +21,7 @@ from kanso.workspace import find
 
 from . import mocked
 from .conftest import HYP_ID, at, edit, payload
+from .test_research_run import searched_wide
 
 
 def test_a_fresh_workspace_reports_every_field_with_nothing_in_it(
@@ -80,6 +81,37 @@ def test_the_best_metric_is_reported_per_hypothesis(runner: CliRunner, mocked_ws
     assert entry["best_sha"] is not None
     assert entry["best_metric"] is not None
     assert entry["cards"] >= 2
+    assert entry["last_stall"] is None, "the run has not stalled"
+
+
+def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """A stall the correction spared certified nothing and says why, by the gate's own
+    probability against the threshold the plan pinned."""
+    searched_wide(mocked_ws)
+    mocked.tuned(mocked_ws, stall_k=1)
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+
+    found = payload(at(runner, mocked_ws, "status", "--json"))
+
+    (entry,) = found["hypotheses"]
+    stall = entry["last_stall"]
+    assert stall["best_sha"] == outcome["best_sha"]
+    assert (stall["certifiable"], stall["verdict"]) == (False, None)
+    assert stall["precheck"] == outcome["stall"]["precheck"]
+    precheck = stall["precheck"]
+    assert (precheck["gate"], precheck["judged"], precheck["pass"]) == (
+        "deflated_edge",
+        True,
+        False,
+    )
+    evidence = precheck["evidence"]
+    spared = (
+        f"stall spared: deflated_edge {evidence['probability']:.3f} < "
+        f"{evidence['min_probability']:.3f}"
+    )
+    assert spared in at(runner, mocked_ws, "status").stdout
 
 
 def test_today_s_spend_is_what_the_ledger_holds_broken_out_by_lane(

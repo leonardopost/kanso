@@ -257,9 +257,13 @@ class Outcome:
     ended: bool
     best_sha: str | None
     best_metric: float | None
+    stall: scheduler.Stall | None = None
+    """What the stall this invocation ended on decided (`scheduler.on_stall`), as it returned
+    it; `None` when the run did not stall. It is the caller's to report, since the store's
+    newest `stalled` event is another stall's when this one wrote none."""
 
     def payload(self) -> dict[str, object]:
-        """The outcome as one JSON object."""
+        """The outcome as one JSON object, the stall left to the caller."""
         return {
             "id": self.hyp_id,
             "run_id": self.run_id,
@@ -449,10 +453,11 @@ def run(
             break
         active = research_loop.ongoing(store, active)
 
+    stalled: scheduler.Stall | None = None
     if reason == STALLED:
         research_loop.end(ws, store, hyp_id)
         scheduler.hold(store, hyp_id, lane)
-        scheduler.on_stall(ws, store, hyp_id, lane)
+        stalled = scheduler.on_stall(ws, store, hyp_id, lane)
     best_sha, best_metric = records.best_of(store, hyp_id)
     return Outcome(
         hyp_id=hyp_id,
@@ -471,6 +476,7 @@ def run(
         ended=reason == STALLED,
         best_sha=best_sha,
         best_metric=best_metric,
+        stall=stalled,
     )
 
 

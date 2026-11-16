@@ -50,7 +50,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, cast
 
 from kanso.errors import PreconditionError
-from kanso.hyp import active_run, set_status
+from kanso.hyp import active_run
 from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
 from kanso.research.passages import (
@@ -87,6 +87,7 @@ __all__ = [
     "drop",
     "enqueue",
     "hold",
+    "last_stall",
     "on_baseline_failed",
     "on_host_composed",
     "on_stall",
@@ -123,8 +124,11 @@ STALLED: Final = "stalled"
 CERTIFIABLE: Final = "certifiable"
 HOST_COMPOSED: Final = "host_composed"
 RESEED: Final = "reseed"
-"""The events this module appends beside the passages `research/passages.py` defines —
-`QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under the hypothesis id as subject."""
+"""The events a stall and a host's new version append beside the passages
+`research/passages.py` defines — `QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under
+the hypothesis id as subject. `CERTIFIABLE` is the stall's certification child's, appended once
+the search correction has not refused the best on research data — it passed, or it judged
+nothing — and the certification window is next."""
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,10 @@ class Stall:
     only way out of the queue is death, and the failure run is the one way to it."""
     reseed_from: str | None = None
     """The sha the next run was told to start from, when this stall decided one."""
+    precheck: dict[str, object] | None = None
+    """The best's search correction as judged on research data before any certification
+    window was read (`kanso.certify.run.Precheck.payload`) — the certification child's
+    wherever one was started; `None` where nothing was worth certifying before it."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -162,6 +170,7 @@ class Stall:
             "priority": self.priority,
             "verdict": self.verdict,
             "reseed_from": self.reseed_from,
+            "precheck": self.precheck,
         }
 
 
@@ -393,10 +402,35 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     a best whose search cannot be priced in its objective's units — fewer than two cards
     scored under it behind a family that has run more (`kanso.certify.run.unpriced`) —
     which certification would refuse, and the lane with it; the run goes on drawing
-    the cards that make it priceable. The
-    verdict says where the hypothesis stands and ends nothing: a pass certifies it and a fail
-    returns it to research, and either way it is requeued at −1, because the queue is left
-    only when an operator retires something.
+    the cards that make it priceable.
+
+    Nor, for the zero rule's reason, is a best whose search correction refuses it on research
+    data. The correction the plan pins — the gate whose library file `deflates` the best's
+    objective, at the threshold the planner chose — reads the research window and the trials
+    alone, and a certificate fails when any gate that judged fails, so a correction that
+    refuses the best on research data has decided the certificate before the certification
+    window is read. The plan is therefore made here, in the lane — the planner's call when
+    none is pinned, the refusal of a pinned plan this version cannot run — and the correction
+    judged on the measurement the best's newest card kept, running nothing; both on the
+    workspace as the child would open it, `kanso.toml` read again rather than as the lane
+    read it when it started (`kanso.certify.run.precheck_at_stall`). A refusal spares the
+    stall: no child is started, no certification window is read, the hypothesis stays where
+    it was and goes back to the queue at −1. A measurement struck under another `[research]`
+    reading than the file's now or another criteria version, or none at all, judges nothing
+    here, and nor does a snapshot that cannot support a claim, whose failing certificate is
+    how it reaches the operator. Whatever the lane read, a child it starts runs the research
+    window first and judges the correction again on that run, before it reads the
+    certification window, and spares the stall itself when it refuses
+    (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its reading
+    is the one a certificate agrees with. On a snapshot that cannot support a claim the child
+    runs no window at all and writes its failing certificate, and its precheck judges nothing
+    and says why. The `stalled` event records the lane's precheck where no child was started
+    — a spare, the only lane precheck that keeps a child from starting — and the child's
+    wherever one was. A correction that judged nothing spares nothing.
+
+    The verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
+    fail returns it to research, and either way it is requeued at −1, because the queue is
+    left only when an operator retires something.
 
     The retire is checked twice, before the certification and after it, because a run ends
     before this is called and an operator is free to retire in the seconds a certification
@@ -406,9 +440,12 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     call is billed to.
 
     A certification that cannot run at all — no model on the planner's tier, a plan this
-    version can no longer honour — raises out of here rather than being swallowed. The
-    lane that called it records the failure and puts the hypothesis back itself, and an
-    operator driving the loop by hand sees the reason instead of a silent stall.
+    version can no longer honour, both now met in the lane before the precheck, and a fault
+    in planning, raised as the refusal the child would have reported — raises out of here
+    rather than being swallowed; a fault reading the card judges nothing and leaves the stall
+    to the child. The lane that called it records the failure and puts the hypothesis back
+    itself, and an operator driving the loop by hand sees the reason instead of a silent
+    stall.
 
     A `queue remove` that lands during the certification is honoured like the retire: the
     hypothesis returns nowhere. Either way an open claim on it is closed.
@@ -424,7 +461,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     from kanso.certify.certificate import judged
     from kanso.certify.child import certify_in_child
     from kanso.certify.plan import read_plan
-    from kanso.certify.run import pinned_sha, unpriced
+    from kanso.certify.run import Precheck, pinned_sha, precheck_at_stall, unpriced
     from kanso.env.envelope import engine_version
 
     if _status(store, hyp_id) in DEAD:
@@ -451,17 +488,22 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
             objective is None
             or unpriced(store, hyp_id, objective, records.n_trials(store, hyp_id)) is None
         )
+    checked: Precheck | None = None
+    if certifiable:
+        checked = precheck_at_stall(ws.root, store, hyp_id, cast("str", best), lane=lane)
+        certifiable = not checked.spared
     verdict: str | None = None
     cost: dict[str, object] = {}
     if certifiable:
-        set_status(store, hyp_id, "candidate")
-        store.event(CERTIFIABLE, hyp_id, {"strategy_sha": best})
         made = certify_in_child(ws, store, hyp_id, sha=cast("str", best), lane=lane)
-        verdict = made.certificate.verdict
+        checked = made.precheck
+        certifiable = made.certificate is not None
+        verdict = None if made.certificate is None else made.certificate.verdict
         cost = {
             "cert_peak_mem_gb": round(made.peak_mem_gb, 3),
             "cert_wall_s": round(made.wall_s, 3),
         }
+    checks = None if checked is None else checked.payload()
     store.event(
         STALLED,
         hyp_id,
@@ -470,18 +512,43 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
             "best_metric": scored,
             "certifiable": certifiable,
             "verdict": verdict,
+            "precheck": checks,
             **cost,
         },
     )
     if _status(store, hyp_id) in DEAD:
         drop(store, hyp_id)
         _release(store, hyp_id, "retired")
-        return Stall(hyp_id, best, certifiable, None, verdict)
+        return Stall(hyp_id, best, certifiable, None, verdict, precheck=checks)
     if _kind(last_passage(store, hyp_id)) == REMOVED:
-        return Stall(hyp_id, best, certifiable, None, verdict)
+        return Stall(hyp_id, best, certifiable, None, verdict, precheck=checks)
     reseed = _reseed(store, hyp_id, best, ws.config.research.reseed_after_stalls)
     requeue(store, hyp_id, STALL_PRIORITY, reseed_from=reseed)
-    return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict, reseed)
+    return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict, reseed, checks)
+
+
+def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
+    """The newest stall of a hypothesis as `kanso status` shows it: when, on which best,
+    whether a certification followed, its verdict and the precheck that decided it — `None`
+    before the first stall. A `precheck` of `None` is a stall that had nothing worth
+    certifying — a best at or below zero, one already certified under the pinned plan and
+    the installed engine, a search not yet priceable — or one recorded before stalls judged
+    one."""
+    row = store.connection.execute(
+        "SELECT ts, detail FROM events WHERE kind = ? AND subject = ?"
+        " ORDER BY event_id DESC LIMIT 1",
+        (STALLED, hyp_id),
+    ).fetchone()
+    if row is None:
+        return None
+    detail = json.loads(str(row["detail"]))
+    return {
+        "at": str(row["ts"]),
+        "best_sha": detail.get("best_sha"),
+        "certifiable": detail.get("certifiable"),
+        "verdict": detail.get("verdict"),
+        "precheck": detail.get("precheck"),
+    }
 
 
 def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str | None:

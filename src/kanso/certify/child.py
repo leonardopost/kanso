@@ -20,23 +20,31 @@ share the envelope plans bounds everything a lane runs.
 
 What differs from a card is what the child may reach. A card has no path to any catalog and
 starts under an allow-list of the environment; certification is the one place a strategy
-meets the window kept from it, and it plans with a model when no plan is pinned, so the
-child opens the workspace, its catalog and its store as the lane does, under the lane's
-environment. It certifies exactly as `kanso cert run` does — `kanso.certify.run.certify`,
-the one function — writes the certificate and every event itself, and reports the
-certificate, or the refusal, to the lane, which raises that refusal as the same kind of
-error with the same remedy. The certificate it reports carries the certification window's
-net per trade, struck from the run its gates judged (`kanso.certify.run.net_per_trade`) —
-the number a book ranks its members by, which nothing ever recomputes by running the window
-again. A fault that is not a refusal comes back as one naming what
-raised, so a lane records it and goes on rather than dying of it. No wall time is imposed:
-how many engine runs a certification makes is its plan's choice — the gates, and the
-parameters a perturbation moves — so no multiple of a card's budget bounds it.
+meets the window kept from it, so the child opens the workspace, its catalog and its store
+as the lane does, under the lane's environment, and reads `kanso.toml` afresh, as the lane's
+plan and precheck for the stall did (`kanso.certify.run.precheck_at_stall`). The lane pins
+the plan before it starts the child, which reads it back as `kanso cert run` does and calls
+the planner only where that plan is gone by then. It certifies as `kanso cert run` does, by
+the one function, with the one difference a stall makes
+(`kanso.certify.run.certify_at_stall`): the research window is run first and the plan's
+search correction judged on it, and a correction that refuses the subject there spares the
+stall — the certification window is never read and no certificate is written. On a snapshot
+that cannot support a claim it runs neither window, as `cert run` does, and its precheck
+judges nothing and says why. It writes the certificate and every event itself, and reports
+the certificate, or that none was made, beside that precheck — or the refusal — to the lane,
+which raises a refusal as the same kind of error with the same remedy. The certificate it
+reports carries the certification window's net per trade, struck from the run its gates
+judged (`kanso.certify.run.net_per_trade`) — the number a book ranks its members by, which
+nothing ever recomputes by running the window again. A fault that is not a refusal comes
+back as one naming what raised, so a lane records it and goes on rather than dying of it.
+No wall time is imposed: how many engine runs a certification makes is its plan's choice —
+the gates, and the parameters a perturbation moves — so no multiple of a card's budget
+bounds it.
 
 A child killed over the share is refused, naming what it reached and the two ways to give
 it more: a larger `[env] mem_per_lane_gb`, which plans the lanes around what certification
 actually costs, or `kanso cert run` by hand, which certifies in the operator's own process
-with nothing but the host to bound it.
+with nothing but the host to bound it — and, being the operator's own act, is never spared.
 """
 
 from __future__ import annotations
@@ -51,7 +59,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, cast
 
-from kanso.certify.run import certify, subject_run
+from kanso.certify.run import Precheck, certify_at_stall, read_precheck, subject_run
 from kanso.errors import (
     ApprovalError,
     Exit,
@@ -90,10 +98,13 @@ _REFUSALS: Final[dict[Exit, Callable[[str, str | None], KansoError]]] = {
 
 @dataclass(frozen=True)
 class Certified:
-    """The certificate a child made, and what making it cost: the child's peak resident
+    """The certificate a child made — `None` when the search correction spared the stall —
+    the correction as it judged it on the research window it ran, or why it judged nothing
+    (`kanso.certify.run.certify_at_stall`), and what that cost: the child's peak resident
     memory in gibibytes and its wall time in seconds."""
 
-    certificate: Certificate
+    certificate: Certificate | None
+    precheck: Precheck
     peak_mem_gb: float
     wall_s: float
 
@@ -101,7 +112,8 @@ class Certified:
 def certify_in_child(
     ws: Workspace, store: StateStore, hyp_id: str, *, sha: str, lane: str = DEFAULT_LANE
 ) -> Certified:
-    """Certify one carded strategy of a hypothesis in a child, and return what it made.
+    """Certify one carded strategy of a hypothesis in a child, as a stall does, and return
+    what it made: a certificate, or none when the search correction spared it.
 
     Raises what the certification raised, as the same kind of error with the same remedy; a
     `PreconditionError` when the child was killed over its share, when this process was
@@ -133,15 +145,16 @@ def certify_in_child(
     if breach == backtest.INTERRUPTED:
         raise PreconditionError(
             f"the certification of {hyp_id} was interrupted: the lane running it was told to stop",
-            remedy="start the daemon again; the hypothesis goes back in the queue and is "
-            "certified at its next stall",
+            remedy="start the daemon again; the hypothesis goes back in the queue and its "
+            "best is certified at its next stall, unless its search correction spares it",
         )
     if breach is not None:  # no wall time is imposed, so only the memory share is breached
         raise PreconditionError(
             f"certifying {sha[:7]} of {hyp_id} needed more than the {cap:.2f} GB a card of its "
             f"run may hold, so it was killed at {peak_gb:.2f} GB",
             remedy="declare a larger `[env] mem_per_lane_gb` in kanso.toml and run `kanso env "
-            f"detect`, or certify it by hand with `kanso cert run {hyp_id}`",
+            f"detect`, or certify it by hand with `kanso cert run {hyp_id}`, which reads the "
+            "certification window whatever its search correction says",
         )
     if answer is None:
         raise PreconditionError(
@@ -150,11 +163,18 @@ def certify_in_child(
         )
     if not answer["ok"]:
         raise _refusal(answer)
-    return Certified(Certificate.model_validate(answer["certificate"]), peak_gb, wall_s)
+    made = answer["certificate"]
+    return Certified(
+        None if made is None else Certificate.model_validate(made),
+        read_precheck(cast("dict[str, object]", answer["precheck"])),
+        peak_gb,
+        wall_s,
+    )
 
 
 def main(argv: Sequence[str]) -> int:
-    """The child: certify, and write the certificate or the refusal where the lane reads it.
+    """The child: certify as a stall does, and write the certificate — or `null`, spared — and
+    the precheck, or the refusal, where the lane reads it.
 
     The last argument is the pid of the lane that started it, which it outlives by at most
     `backtest.PARENT_POLL_S` (`backtest.end_with`).
@@ -167,8 +187,12 @@ def main(argv: Sequence[str]) -> int:
     try:
         ws = find(Path(root))
         with StateStore(ws.path("state.db")) as store:
-            made = certify(ws, store, hyp_id, sha=sha, lane=lane)
-        answer = {"ok": True, "certificate": made.model_dump(mode="json", by_alias=True)}
+            made, checked = certify_at_stall(ws, store, hyp_id, sha=sha, lane=lane)
+        answer = {
+            "ok": True,
+            "certificate": None if made is None else made.model_dump(mode="json", by_alias=True),
+            "precheck": checked.payload(),
+        }
     except KansoError as refused:
         answer = {
             "ok": False,

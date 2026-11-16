@@ -79,6 +79,40 @@ def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
     assert "The run's base is never judged" in text
 
 
+def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> None:
+    """An agent asked why a stall certified nothing reads this file; told nothing of the
+    precheck, it would report a missing certificate as a fault, or certify by hand a best the
+    search correction had already refused on research data."""
+    text = skill(PACKAGED, "kanso-certify")
+    assert "passes on research data. One it refuses is **spared**" in text
+    assert "`hypotheses[].last_stall.precheck`" in text
+    assert "`kanso cert run` by hand is never spared" in text
+    # `measured` is whether the research window was run for the precheck; the child runs it
+    # at every stall it is started for but one on a snapshot that cannot support a claim, so
+    # a certified stall says `true` whatever its card was measured under, but for that one.
+    assert "because the card was measured under another" not in text
+    assert "`measured` — whether the research window was run for it, not why" in text
+    # A lane that could not judge starts the child, whose precheck replaces the lane's, so the
+    # lane's reason never reaches `last_stall` or `stall`: the one lane precheck recorded is a
+    # spare, and a `measured: false` that carries a reason is the snapshot's.
+    assert "with a `reason` where it could not" not in text
+    assert "its precheck is recorded only where it spared the stall" in text
+    assert "its reason is not recorded: the certification child is started" in text
+    assert "so a stall on one is never spared" in text
+    assert "so every stall that certified says `true` — but one on a snapshot that" in text
+    assert "`null` beside a spared stall, whatever an earlier plan or `hypothesis.yaml`" in text
+    assert "`dsr` against `min_dsr` under `deflated_sharpe`" in text
+
+
+def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None:
+    """An agent driving the loop reads what a stall leads to here; told only that a keep above
+    zero is certified, it would report a spared stall's missing certificate as a fault."""
+    text = skill(PACKAGED, "kanso-research")
+    assert "unless the plan's search correction refuses it on research data, which **spares**" in (
+        text
+    )
+
+
 def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
     """An agent declaring a US split without a zone gets a UTC day, which lands the split
     inside a winter post-market; the skill is where it learns the key exists."""

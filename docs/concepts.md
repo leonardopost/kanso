@@ -173,7 +173,8 @@ child is killed once its resident memory passes the lane's share, floored at thr
 what the run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's
 certification is a child held to the same figure for a card of the run it judges: both
 windows, every perturbation a gate runs and `parity_replay`'s node replay are made there,
-and the lane only reads back the certificate, or the refusal it raised, and records what the
+and the lane only reads back the certificate — or that the search correction spared it on
+the research window (Certification, below) — or the refusal it raised, and records what the
 certification cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Each of those
 runs reads its window a chunk at a time, as a card's child is fed it, and the child holds
 nothing of a run once it has ended, so what a certification holds — one read and one chunk
@@ -2490,6 +2491,48 @@ the hypothesis has now, and carries that one's correction, which skips on a numb
 units. A subject scored under an objective whose correction the pinned plan does not carry
 with its threshold is refused (exit 2), naming the gate, once the search has two cards.
 
+**A stall certifies only a best whose correction passes on research data.** The correction
+reads the research window and the trials alone, and a certificate is the conjunction of the
+gates that judged, so a best the correction refuses on research data fails its certificate
+whatever the certification window shows — the reason a best at or below zero is not
+certified at a stall either. Reading the window then buys a verdict already known, and every
+read of it is one more look at the one sample research never saw. So at a stall the plan is
+made in the lane, and the correction judged at the planner's threshold on the measurement the
+best's newest card kept — by the gate's own `evaluate`, on the context certification builds
+for it, with that research run in the run's place — running nothing. A card measured under
+another `[research] folds`, `return_period` or capital, or another criteria version, or one
+that kept no measurement, is no reading of the arithmetic certification would use: the lane
+judges nothing. The settings are read from `kanso.toml` as it stands at the stall, as the
+certification child reads them, not as the lane read them when it started, so one edited
+under a running daemon is the one both judge by. A card the lane cannot read judges nothing
+either, and goes to the child, which never reads it. Nor does the lane judge on a snapshot
+that cannot support a claim, where certification judges no correction and whose failing
+certificate is how that snapshot reaches the operator, so a stall on one is never spared. Whatever the lane read, the certification child it starts
+runs the research window first and judges the correction again on it before it reads the
+certification window — on a snapshot that cannot support a claim it runs neither window, and
+the failing certificate it writes is recorded beside a precheck that judged nothing and says
+why. A refusal in either place spares the stall — no certification window read, no
+certificate, no failure counted toward `n_fail`, the hypothesis back in the queue at −1 — and
+the `stalled` event records the precheck (`docs/cli.md`). A correction that judged nothing
+spares nothing: a plan carries none before the second card, and a gate that skips on the
+research run would skip in the certificate too. `cert run` by hand is never spared.
+
+The lane's reading is the certificate's exactly — measured on the research suite's
+synthetic workspace, a card the loop itself measured, the probability, the expected maximum
+and the trial counts agree to the last bit — wherever nothing moved between the card and the
+stall that those guards cannot see. Several things can, and these are the ones known. A run
+upgraded mid-way to a build that changed how a return is struck is carded by both builds
+under one criteria version, since an edit between two builds of one version moves no
+criteria digest; and a criteria version names no engine, so a patch of the engine within
+the supported range moves a return under the same one. Certification resolves inputs afresh
+instead of reading them off the card — the warmup prefix, from the catalog as it stands,
+which a `kanso data load` adding a printed day inside the lookback moves, and an attached
+construct's budget and grains, from its host's registration as it stands. And the trials
+are counted when each reading is made, so a card another lane records, of a hypothesis this
+one derives from, between the lane's reading and the child's moves the search they price. In
+those cases a stall the lane lets through is judged again by the child on the run it makes,
+which is the certificate's own, and a stall the lane spares is spared on the card's reading.
+
 The plan is pinned. It changes only through `cert plan --replan`, which re-runs the planner
 on the same closed inputs and mints the next `plan_version`.
 
@@ -2699,15 +2742,17 @@ control for a run scored on a contribution, and `deflated_edge` for one scored o
 edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
 trade, against the expected maximum of the search — as many draws as it had candidates, from
 the spread of its trials in the same units — over the estimate's own error, the one its card
-carried, reported as a probability and held to `min_probability`. The trials' spread is read robustly, as 1.4826 times the median absolute
-deviation of their metrics, so a few trials that blew up — a rule that traded itself to ruin, a
-seed that fired once — do not widen the search past any candidate the selection weighed; the
-spread it used is in the evidence as `trial_spread_bps`. `deflated_sharpe` deflates a Sharpe
-the same way, by the Sharpe's own error and the plain spread of its trials, all out of
-annualised units. Which of the three a plan carries is not the planner's to choose once the
-hypothesis has two cards (above). `min_event_days` is a card gate counting the distinct
-sessions any fill fell on, for a rule that fires on a regime or an event and could put its whole sample
-into a handful of days that `min_trades` would count as many. `cost_scenario` re-prices the
+carried, reported as a probability and held to `min_probability` — at a stall, on research
+data before the certification window is read (above). The trials' spread is read robustly, as
+1.4826 times the median absolute deviation of their metrics, so a few trials that blew up — a
+rule that traded itself to ruin, a seed that fired once — do not widen the search past any
+candidate the selection weighed; the spread it used is in the evidence as `trial_spread_bps`.
+`deflated_sharpe` deflates a Sharpe the same way, by the Sharpe's own error and the plain
+spread of its trials, all out of annualised units. Which of the three a plan carries is not
+the planner's to choose once the hypothesis has two cards (above). `min_event_days` is a card
+gate counting the distinct sessions any fill fell on, for a rule that fires on a regime or an
+event and could put its whole sample into a handful of days that `min_trades` would count as
+many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share
 commission, a flat rate, a maker's rate or per-share charge, a slippage in ticks, a fixed
 width, the sell-side fees — through the runner's own per-fill

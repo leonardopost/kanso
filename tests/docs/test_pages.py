@@ -274,6 +274,62 @@ def test_the_cli_page_says_a_stage_speed_paces_nothing_in_this_version() -> None
     assert "the catch-up itself runs unpaced" in text
 
 
+def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -> None:
+    """A stall the search correction refuses on research data reads no certification window
+    (`kanso.certify.run.precheck`, `certify_at_stall`). The pages say so where the stall's
+    rule and its two commands are described, and name every key the `stalled` event records
+    for it, so an operator reading one can tell a spared stall from one that judged
+    nothing."""
+    from kanso.certify.run import Precheck
+
+    cli = prose(page("cli.md"))
+    concepts = prose(page("concepts.md"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    rule = "A stall certifies only a best whose search correction passes on research data."
+    assert f"**{rule}**" in cli and f"**{rule}**" in changelog
+    assert "**A stall certifies only a best whose correction passes on research data.**" in (
+        concepts
+    )
+    for key in Precheck("deflated_edge", False, None, {}, "why", measured=False).payload():
+        assert f"`{key}`" in cli, key
+    research_run = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
+    )
+    assert "carries `stall`" in research_run and "`certification` line" in research_run
+    assert "never read back from an earlier stall's event" in research_run
+    assert "which a spared stall leaves newest, is not this run's outcome" in research_run
+    assert "under the pin the stall judged them by, the pinned plan" in research_run
+    # The child runs no window on a snapshot that cannot support a claim, so the one stall
+    # that certifies without `measured: true` is named wherever the rule is stated.
+    exception = "but one on a snapshot that cannot support a claim"
+    assert f"so every stall that certified records `measured: true` {exception}" in cli
+    assert f"`measured` is `true` on every stall that certified {exception}" in changelog
+    assert "the child's wherever one was, judged or not" in cli
+    # A lane that judged nothing starts the child, so the lane's precheck a stall records is a
+    # spare; and the lane judges nothing on a snapshot certification judges nothing on, so its
+    # failing certificate, never a spare, is how that snapshot reaches the operator.
+    assert "a spare, since a lane that judged nothing starts one, so its reason is" in cli
+    for text in (cli, concepts, changelog):
+        assert "so a stall on one is never spared" in text
+    # The lane stands in for the child it would start, so it reads `kanso.toml` as the child
+    # does — again, at the stall — and a fault there ends as it did in the child.
+    assert "read again as the certification child reads it" in cli
+    assert "as the certification child reads them, not as the lane read them" in concepts
+    assert "read again, as the certification child reads it, not as the lane read it" in changelog
+    assert "remedy `kanso cert run ID`. Nor" in cli
+    workspace = prose(page("workspace.md"))
+    assert "A stall's certification is the exception" in workspace
+    assert "`dsr` and `min_dsr` under `deflated_sharpe`" in cli
+    status = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso status`")
+    )
+    assert "`last_stall`" in status and "stall spared:" in status
+    assert "`cert run` by hand is never spared" in concepts
+    assert "measured on the research suite's synthetic workspace, a card the loop itself" in (
+        concepts
+    )
+
+
 def test_the_cli_page_states_both_sides_of_the_paper_gate() -> None:
     monitoring = prose(section(page("cli.md"), "Monitoring"))
     assert "a short window is a fail" in monitoring

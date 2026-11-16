@@ -164,7 +164,7 @@ def test_a_fault_in_the_child_comes_back_as_an_error_naming_it(
     def tripped(*_: object, **__: object) -> Any:
         raise RuntimeError("the certifier tripped")
 
-    monkeypatch.setattr(child, "certify", tripped)
+    monkeypatch.setattr(child, "certify_at_stall", tripped)
     report = tmp_path / child.REPORT
 
     assert child.main([str(ws.root), hyp_id, sha, "l1", str(report), "4242"]) == 1

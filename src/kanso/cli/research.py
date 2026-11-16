@@ -18,8 +18,9 @@ active runs and their lane directories stay exactly where they are, and the next
 picks them up before it takes anything new — so stopping is a cheap act rather than a
 decision.
 
-A run that stalls with a keep nothing has certified certifies it before it returns, so
-`run` reports the certificate that stall produced and points at it.
+A run that stalls with a keep nothing has certified certifies it before it returns, unless
+its search correction refuses it on research data, so `run` reports what that stall decided:
+the certificate the best stands under, pointing at it, or the correction that spared it.
 
 `show` prints what is in state: a card's stored `strategy.py`, the unified diff between
 two of them, or — under `--measured` — what the newest card of those bytes that kept a
@@ -41,13 +42,16 @@ import typer
 
 from kanso import research
 from kanso.certify import certificate
+from kanso.certify.plan import read_plan
+from kanso.certify.run import pinned_sha
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent, stopped
 from kanso.criteria import criteria_version
+from kanso.env.envelope import engine_version
 from kanso.errors import PreconditionError, ValidationError
 from kanso.research import daemon, records
 from kanso.research.lanes import DEFAULT_LANE
-from kanso.schemas import Card, CardDigest, GateResult
+from kanso.schemas import Card, CardDigest, Certificate, GateResult
 from kanso.state import StateStore
 from kanso.workspace import Workspace
 
@@ -342,18 +346,24 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
     with store(ws) as opened:
         outcome = research.drive(ws, opened, hyp_id, cards=cards, lane=DEFAULT_LANE)
         trials = records.n_trials(opened, hyp_id)
-        # A run that stalls on a keep nothing has certified certifies it before it
-        # returns, so the certificate of the best is part of what this invocation did.
-        # One of another subject is not: a rewound `best` leaves an older certificate
-        # newest, and reporting that as this run's outcome would be a lie.
-        newest = certificate.latest(opened, hyp_id) if outcome.ended else None
-    certified = newest if newest is not None and newest.strategy_sha == outcome.best_sha else None
+        # What the stall this invocation ended on decided is what `on_stall` returned, never
+        # the store's newest `stalled` event, which is another stall's when this one wrote
+        # none (a retire that landed before it).
+        stall = outcome.stall
+        certified = (
+            None
+            if stall is None or stall.best_sha is None
+            else _standing(ws, opened, hyp_id, stall.best_sha)
+        )
     data: dict[str, Any] = {
         **outcome.payload(),
         "n_trials": trials,
         "certificate": None
         if certified is None
         else {"sha7": certified.sha7, "verdict": certified.verdict},
+        "stall": None
+        if stall is None
+        else {"certifiable": stall.certifiable, "precheck": stall.precheck},
     }
     best = (
         "none yet"
@@ -374,6 +384,13 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
     ]
     if certified is not None:
         lines.append(field("certified", f"{certified.sha7} · {certified.verdict}"))
+    spared = None if stall is None else spared_by(stall.precheck)
+    if spared is not None:
+        lines.append(
+            field(
+                "certification", f"spared · {spared} on research data, so the window was not read"
+            )
+        )
     lines.append(
         field(
             "next",
@@ -385,6 +402,28 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         )
     )
     return Report(data=data, lines=tuple(lines))
+
+
+def _standing(ws: Workspace, opened: StateStore, hyp_id: str, sha: str) -> Certificate | None:
+    """The certificate a stall's best stands under once the stall is decided: the hypothesis's
+    newest, when it is of those bytes under the pin the stall judged them by, the pinned plan
+    and the installed engine — the one the stall made, or the one it found and so did not
+    make again, by the predicate it found it with (`kanso.certify.certificate.judged`).
+
+    Any other is not this run's outcome. A rewound `best` leaves another subject's
+    certificate newest, and a stall its search correction spared leaves one under a
+    `hypothesis.yaml`, a plan or an engine since replaced, which certified the bytes under a
+    question or a bar the stall no longer judges by; reporting either as what this run came
+    to would be a lie."""
+    newest = certificate.latest(opened, hyp_id)
+    pinned = read_plan(ws, hyp_id)
+    if newest is None or pinned is None:
+        return None
+    pin = pinned_sha(opened, hyp_id, sha)
+    # A certificate recorded before certificates carried their pin matches any, as `judged`.
+    under = newest.hypothesis_sha or pin
+    standing = (newest.strategy_sha, under, newest.plan_version, newest.nautilus_version)
+    return newest if standing == (sha, pin, pinned.plan_version, engine_version()) else None
 
 
 def _start(ws: Workspace) -> Report:
@@ -426,6 +465,18 @@ def _stop(ws: Workspace, drain: bool = False) -> Report:
     # No run is ended and nothing is removed, so the next `start` resumes.
     lines.append(field("runs", "left open, with their lane directories"))
     return Report(data=data, lines=tuple(lines))
+
+
+def spared_by(precheck: object) -> str | None:
+    """`deflated_contribution 0.792 < 0.950`: the search correction that spared a stall, with
+    its probability and the planner's threshold, or `None` when the precheck spared nothing —
+    it passed, it judged nothing, or the stall recorded none."""
+    if not isinstance(precheck, dict) or not precheck.get("judged") or precheck.get("pass"):
+        return None
+    evidence = precheck["evidence"]
+    value = evidence.get("probability", evidence.get("dsr"))
+    floor = evidence.get("min_probability", evidence.get("min_dsr"))
+    return f"{precheck['gate']} {value:.3f} < {floor:.3f}"
 
 
 def stopped_line(children: Sequence[daemon.ChildPid], ending: Sequence[daemon.ChildPid]) -> str:
