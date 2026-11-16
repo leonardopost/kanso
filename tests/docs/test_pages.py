@@ -374,10 +374,23 @@ def test_the_pages_say_how_hold_out_looks_are_counted_and_that_they_move_no_bar(
     )
     assert (
         "the trial count and how many certificates the hypothesis's lineage has already made "
-        "that read its certification window"
+        "that read the certification window its best is certified on"
     ) in concepts
     assert "a re-pin that drops a `derived_from` link can split the lineage" in concepts
     assert "one onto a window sharing no day with the last" in concepts
+    assert "starts a new one once the subject is read there" in concepts
+    for where, text, said in (
+        (
+            "concepts",
+            concepts,
+            "the count `kanso status` shows and the planner is shown is the "
+            "one at the window the next certificate of the best reads",
+        ),
+        ("cli", cli, "the certification window the next certificate of its best reads"),
+        ("CHANGELOG", changelog, "Both count at the window the next certificate of the best reads"),
+    ):
+        assert said in text, (where, "a carried best is counted where it is certified")
+    assert "where there are any, `N hold-out look(s)`" in changelog, "the line is shown with looks"
     for text in (concepts, changelog, cli, workspace, agents):
         assert "1 − (1 − threshold) / L" not in text, "no rule splits the threshold"
     assert "**Hold-out looks are counted and shown, and they move no bar.**" in concepts
@@ -391,6 +404,9 @@ def test_the_pages_say_how_hold_out_looks_are_counted_and_that_they_move_no_bar(
         assert f"`{key}`" in cli and f"`{key}`" in workspace, key
     assert "`holdout_looks`" in cli and "`inputs.looks`" in cli
     assert "leaving out any struck on a snapshot that cannot support a claim" in cli
+    assert "counting one whose own window cannot be read as one that did" in cli, (
+        "`kanso status` counts a look whose window cannot be read, and its row says so"
+    )
     assert "hold-out look 2 of 2025-01-06..2025-05-30 by demo_mr" in concepts
     assert "demo_mr certified 9.986730 4 card(s) · 2 hold-out look(s)" in concepts
     assert "**Migration 0018**" in changelog and "`kanso migrate`" in changelog
@@ -442,6 +458,10 @@ def test_every_page_stating_the_bound_says_a_skipped_correction_judged_its_look_
     assert "one for a correction that skipped or a plan that carried none" in concepts
     assert "read the gate's `skipped` before its threshold" in statements["skill"]
     assert "a search correction that skipped, which passes, judged that look by none" in cli
+    assert (
+        "under a plan that carried none, or one that skipped, which passes, as it does while "
+        "fewer than two cards behind the subject ran and traded"
+    ) in statements["CHANGELOG"], "the CHANGELOG's own statement of the skip, not any `skipped`"
     assert "one whose certification window cannot be read counts as one that did" in cli, (
         "a look whose window cannot be read is counted, and the planner's page says so"
     )

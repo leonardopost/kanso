@@ -649,6 +649,45 @@ def test_a_replan_is_told_the_looks_its_lineage_has_taken(
     assert (first["inputs"]["looks"], second["inputs"]["looks"]) == (0, 1)
 
 
+def test_status_and_the_planner_count_where_a_carried_best_is_certified(
+    runner: CliRunner, researched: Path
+) -> None:
+    """A re-pin that moves only the certification window keeps the best, which is certified
+    on the window of the run that carded it until a run under the new file cards it again: the
+    count `status` shows and the planner is told is the one there, so the next certificate is
+    the look after it; the run that begins under the new file re-cards the best as its
+    baseline, and the count moves to the new window, where nothing has looked yet."""
+    from .conftest import HYPOTHESIS
+
+    first = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))["holdout"]
+    assert at(runner, researched, "research", "end", HYP_ID, "--json").exit_code == Exit.OK
+    windows = {
+        **HYPOTHESIS["windows"],
+        "certification": {"start": "2024-06-03", "end": "2024-06-21"},
+        "forward": {"start": "2024-06-24"},
+    }
+    path = write_hypothesis(researched, mocked.SEED, windows=windows)
+    assert at(runner, researched, "hyp", "add", path, "--json").exit_code == Exit.OK
+    classify(researched)
+
+    (shown,) = payload(at(runner, researched, "status", "--json"))["hypotheses"]
+    planned = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+    second = payload(at(runner, researched, "cert", "run", HYP_ID, "--json"))["holdout"]
+    (after,) = payload(at(runner, researched, "status", "--json"))["hypotheses"]
+
+    assert second["window_start"] < "2024-06-03" and first["look"] == 1
+    assert {**second, "look": 1} == first, "the carried best is read on its run's window"
+    assert second["look"] == planned["inputs"]["looks"] + 1 == shown["holdout_looks"] + 1 == 2
+    assert after["holdout_looks"] == 2
+
+    begin(runner, researched)
+    (moved,) = payload(at(runner, researched, "status", "--json"))["hypotheses"]
+    replanned = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+
+    assert moved["best_sha"] == shown["best_sha"]
+    assert moved["holdout_looks"] == replanned["inputs"]["looks"] == 0
+
+
 def test_show_of_something_that_is_not_a_hypothesis_is_refused(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

@@ -94,7 +94,11 @@ subject's lineage has already made at a certification window intersecting the su
 (`kanso.certify.looks`) are counted when the certificate is written, under the write lock its
 row is written under, so two certifications of one lineage judged at once are two looks in
 the order they were written; the certificate records the window, its look — one more than
-those — and the lineage (`holdout`). The count is shown and judges nothing: every gate that
+those — and the lineage (`holdout`). The window is the subject's, read off the file its run
+pinned, and a plan certification makes where none is pinned is shown the looks taken there,
+not at the window the hypothesis is registered under now (`plan`'s `sha`), so a card carded
+before a re-pin that moved the window is the look after those its planner was told of. The
+count is shown and judges nothing: every gate that
 judges, the search correction included, does so by the threshold the plan pins at any look, a
 stall's precheck as well, and a correction that skips passes at any look as at the first. One
 struck on a snapshot that cannot support a claim read no window and records none.
@@ -457,7 +461,7 @@ def _certify(
     registration = _registration(ws, store, hyp_id)
     _certifiable(registration)
     subject = _subject(ws, store, hyp_id, sha)
-    plan = plan_for(ws, store, hyp_id, lane=lane)
+    plan = plan_for(ws, store, hyp_id, lane=lane, sha=subject.strategy_sha)
     engine = engine_version()
     n_trials = records.n_trials(store, hyp_id)
     _refuse_uncorrected(plan, subject, n_trials, registration)
@@ -586,7 +590,7 @@ def precheck_at_stall(
     """
     try:
         ws = find(root)
-        planned = plan_for(ws, store, hyp_id, lane=lane)
+        planned = plan_for(ws, store, hyp_id, lane=lane, sha=sha)
     except KansoError:
         raise
     except Exception as fault:

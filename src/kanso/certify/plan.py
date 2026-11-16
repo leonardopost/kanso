@@ -9,14 +9,14 @@ is about what the call may see and what its answer must satisfy.
 set the plan then records: the hypothesis, the construct it was classified as, the gate
 toolbox with each gate's `meaningful_when`, parameters and ranges, what data the
 workspace holds for the universe, how many trials the search has spent, how many looks
-its lineage has taken at its certification window, and the structural invariants. No card
-metric and no strategy source is assembled here or reachable from anything that is, and of
-the certificates only that count is: `kanso.certify.looks` reads which of the lineage's
-certificates read the window — from the window each one's pin declares and whether it was
-struck on a snapshot that could support a claim — and returns no verdict, no evidence and
-no strategy source, and the plan keeps the number. A plan written against the results it
-will judge proves nothing, and the only way to guarantee that is to never put them in the
-prompt.
+its lineage has taken at the certification window its subject is read on, and the
+structural invariants. No card metric and no strategy source is assembled here or reachable
+from anything that is, and of the certificates only that count is: `kanso.certify.looks`
+reads which of the lineage's certificates read the window — from the window each one's pin
+declares and whether it was struck on a snapshot that could support a claim — and returns no
+verdict, no evidence and no strategy source, and the plan keeps the number. A plan written
+against the results it will judge proves nothing, and the only way to guarantee that is to
+never put them in the prompt.
 
 **The answer is checked before it is believed.** A gate that is not in the toolbox, one
 planned at a stage it does not run at, a value outside its declared range, a missing
@@ -40,7 +40,10 @@ objective, with its threshold set: the subject a certificate judges is then the 
 search, and nothing else in a plan prices that. The planner is told so in the invariants
 and refused when it forgets, through the same check as any other complaint; how high that
 gate's bar sits is still its answer. It is also told how many looks the hypothesis's lineage
-has already taken at its certification window (`looks`, `kanso.certify.looks`) and what a
+has already taken at the certification window its subject is read on (`looks`,
+`kanso.certify.looks`) — the one the run that carded the best, or the card a certification
+names, pinned, which a re-pin that moved the window leaves where it was until a run under
+the new file cards the subject again, as the power statement reads it — and what a
 threshold bounds across them. Each look was judged under the plan its own hypothesis had
 pinned when it was made: its correction judged it by that plan's threshold where it judged,
 and by none where that plan carried no correction or the correction skipped — a skip judges
@@ -73,6 +76,7 @@ from math import isfinite, sqrt
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from kanso.certify.looks import looks as looks_at
+from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
@@ -196,11 +200,16 @@ def plan(
     *,
     replan: bool = False,
     lane: str = DEFAULT_LANE,
+    sha: str | None = None,
 ) -> CertificationPlan:
     """Plan one hypothesis's certification, or return the plan it already has.
 
     `replan` re-runs the planner and mints the next `plan_version`. `lane` is the lane
-    the call's spend is attributed to.
+    the call's spend is attributed to. `sha` is the card a certification about to be made
+    judges, where planning is part of one; the hypothesis's best otherwise. The looks the
+    planner is shown are counted at the certification window that card is read on — the one
+    the run that carded it pinned (`kanso.certify.looks.subject_pin`) — so its next
+    certificate is look `looks + 1` whichever window the hypothesis is registered under now.
     """
     registration = cast("Registration", show(ws, store, hyp_id))
     hyp = _pinned_hypothesis(store, registration)
@@ -217,13 +226,16 @@ def plan(
         _refuse_unusable(pinned, hyp, folds, trials)
         return pinned
 
-    window = hyp.windows.certification
+    own = hyp.windows.certification
+    subject = sha if sha is not None else records.best_of(store, hyp_id)[0]
+    read = subject_pin(store, hyp_id, subject, registration.hypothesis_sha)
+    window = window_of(store, read, {}) or (own.start, own.end)
     inputs = PlanInputs(
         hypothesis_sha=cast("str", registration.hypothesis_sha),
         construct=construct,
         data_availability=availability(ws, hyp),
         n_trials=trials,
-        looks=len(looks_at(store, hyp_id, (window.start, window.end)).prior),
+        looks=len(looks_at(store, hyp_id, window).prior),
     )
     accepted: list[Answered] = []
 
@@ -370,9 +382,13 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "its range",
             "looks is how many certificates this hypothesis's lineage — every registered "
             "hypothesis joined to it by derived_from, either way — has already made that read a "
-            "window sharing a day with its certification window, one whose own window cannot be "
-            "read counting as one that did and one struck on a snapshot that could not support a "
-            "claim reading none, so the next is look L = looks + 1. Each look already taken was "
+            "window sharing a day with the certification window its subject is read on — the one "
+            "declared by the file the research run that carded the subject pinned, the subject "
+            "being its best or the card a certification names, which is the window of the "
+            "hypothesis you are shown unless a re-pin moved it and no run under the new file has "
+            "carded the subject since — one whose own window cannot be read counting as one that "
+            "did and one struck on a snapshot that could not support a claim reading none, so the "
+            "subject's next certificate is look L = looks + 1. Each look already taken was "
             "judged under the plan its own hypothesis had pinned when it was made: its search "
             "correction judged it by that plan's threshold where it judged, and by none where "
             "that plan carried no correction or the correction skipped — a skip judges nothing "

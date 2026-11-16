@@ -109,7 +109,8 @@ and stays the model's. `criteria/library.py` holds the rule and
 `tests/criteria/test_library.py` fails when an objective has no gate or a plan escapes it.
 That includes how high it sits at a lineage's later look at its hold-out: every certificate
 of a hypothesis's lineage — every registered hypothesis joined to it by `derived_from` — at a
-certification window sharing a day with its own is a look, but one struck on a snapshot that
+certification window sharing a day with the one its subject is read on, which the file the
+run that carded the subject pinned declares, is a look, but one struck on a snapshot that
 cannot support a claim, which read no window. The looks are counted by `certify/looks.py`,
 recorded on the certificate and shown to the planner beside `n_trials` with what a threshold
 bounds across them — a false pass up to the sum of each look's complement of the threshold

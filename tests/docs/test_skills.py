@@ -129,8 +129,13 @@ def test_the_certify_skill_says_every_certificate_is_a_look_and_that_it_moves_no
     assert (
         "A replan does not reset the count, nor does a re-pin that keeps `derived_from` and a "
         "certification window sharing a day with the last; a re-pin onto a window sharing no "
-        "day with it starts a new count, and one that drops a `derived_from` link can split "
-        "the lineage"
+        "day with it starts a new count once the subject is read there, and one that drops a "
+        "`derived_from` link can split the lineage"
+    ) in text
+    assert (
+        "a best carried across a re-pin that moved only the window is certified on — and "
+        "counted at — the old window until a research run under the new file cards it again; "
+        "`holdout_looks` and `inputs.looks` count where the best's next certificate reads"
     ) in text
     assert "never re-plan to make a later look pass" in text
     assert "(`inputs.looks`)" in text

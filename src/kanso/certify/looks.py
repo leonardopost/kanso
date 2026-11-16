@@ -20,10 +20,22 @@ file its row names, its two bounds read by the schema's own `DateWindow` from th
 plain mapping, so a pin written under an older schema is still read and every spelling of a
 day the schema admits reads as the day it admitted — intersects the window asked about.
 Intersection rather than equality, so a re-pin that moves the window by a day does not reset
-the count, and a re-pin onto a window wholly after it starts a new one. A row written before
-certificates recorded their pin names none and is read under its hypothesis's pin as it
-stands; a row whose file the store does not hold, or which declares no certification window
-that reads as one, cannot be shown to have looked elsewhere and counts.
+the count, and a re-pin onto a window wholly after it starts a new one once its subject is
+read there (below). A row written before certificates recorded their pin names none and is
+read under its hypothesis's pin as it stands; a row whose file the store does not hold, or
+which declares no certification window that reads as one, cannot be shown to have looked
+elsewhere and counts.
+
+**The window asked about is the one the subject is read on.** Certification runs a card again
+under the hypothesis file the research run that carded it pinned (`kanso.certify.run`), so
+its certificate reads that file's certification window, which need not be the one its
+hypothesis is registered under now: the window is no part of a hypothesis's scope, so a
+re-pin that moves only the window keeps the best, and the best is certified on the window
+of the run that carded it until a research run under the new pin cards those bytes again.
+The planner and `kanso status` therefore count at the window of the file `subject_pin`
+names — the newest card's run's, of the best or of the card a certification names — so the
+next certificate of that subject is look `looks + 1`; a hypothesis with no best counts at
+its own pinned window, which its first card's run will pin.
 
 **A certificate that read no window is not a look.** On a snapshot that cannot support a
 claim certification runs nothing and records every gate as failed with the snapshot's
@@ -62,6 +74,7 @@ __all__ = [
     "certification_window",
     "looks",
     "read_no_window",
+    "subject_pin",
     "window_of",
 ]
 
@@ -150,6 +163,22 @@ def looks(
             )
         )
     return Looks(window=window, lineage=lineage, prior=tuple(prior))
+
+
+def subject_pin(store: StateStore, hyp_id: str, sha: object, pin: object) -> object:
+    """The hypothesis file a certificate of the bytes `sha` reads its certification window
+    from: the one the run that made the newest card of them pinned, as certification pins its
+    subject (`kanso.certify.run.subject_run`). `pin`, the hypothesis's own, where `sha` is
+    `None` — a hypothesis with no best has no card to certify, and its next is carded under
+    its own pin — or names no card of it."""
+    if sha is None:
+        return pin
+    row = store.connection.execute(
+        "SELECT r.hypothesis_sha FROM cards c JOIN runs r ON r.run_id = c.run_id"
+        " WHERE c.hyp_id = ? AND c.strategy_sha = ? ORDER BY c.card_id DESC LIMIT 1",
+        (hyp_id, str(sha)),
+    ).fetchone()
+    return pin if row is None else row["hypothesis_sha"]
 
 
 def window_of(

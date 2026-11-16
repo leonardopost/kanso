@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -28,6 +28,7 @@ from hypothesis import strategies as st
 
 from kanso.certify import certificate, run
 from kanso.certify import looks as looks_module
+from kanso.certify import plan as plan_module
 from kanso.certify.looks import Look, certification_window, looks, read_no_window
 from kanso.certify.run import certify, certify_at_stall, precheck
 from kanso.cli import status
@@ -45,7 +46,7 @@ from tests.certify.test_run import (
     venue_model,
     write_plan,
 )
-from tests.research.conftest import CERTIFICATION, DOCUMENT, HYP_ID, REVERTING, classify
+from tests.research.conftest import CERTIFICATION, DOCUMENT, FLAT, HYP_ID, REVERTING, classify
 
 WINDOW = CERTIFICATION
 """The demo's certification window: 2024-02-06 to 2024-02-29."""
@@ -604,3 +605,120 @@ def test_the_child_certifies_a_best_its_correction_passes_whatever_look_it_is(
     assert made is not None and child.passed and not child.spared and child.measured
     assert child.evidence == deflation(made) and child.evidence["min_dsr"] == 0.9
     assert made.holdout is not None and made.holdout.look == 2
+
+
+# --- the window the subject is read on ---------------------------------------
+
+
+MOVED_WINDOW = (date(2024, 3, 4), date(2024, 3, 29))
+"""A certification window sharing no day with the demo's."""
+
+MOVED: dict[str, Any] = {
+    **DOCUMENT,
+    "windows": {
+        **DOCUMENT["windows"],
+        "certification": {"start": MOVED_WINDOW[0], "end": MOVED_WINDOW[1]},
+        "forward": {"start": date(2024, 4, 1)},
+    },
+}
+"""The demo re-pinned with its certification window moved wholly after the one it had: the
+window is no part of the hypothesis's scope, so the re-pin keeps its best."""
+
+
+class PlannedError(Exception):
+    """Raised in the router's place with the inputs the planner was about to be shown."""
+
+
+def planner_looks(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    call: Any = None,
+) -> int:
+    """The `looks` the planner is shown when `call` plans — a replan, where none is given —
+    read off the call's inputs as the router is handed them."""
+
+    def route(_ws: Any, _store: Any, _task: Any, inputs: Any, lane: str = "") -> Any:
+        raise PlannedError(inputs)
+
+    routed = plan_module.route
+    monkeypatch.setattr(plan_module, "route", route)
+    with pytest.raises(PlannedError) as caught:
+        if call is None:
+            plan_module.plan(ws, store, HYP_ID, replan=True)
+        else:
+            call()
+    monkeypatch.setattr(plan_module, "route", routed)
+    return int(caught.value.args[0].dynamic["looks"])
+
+
+def shown_looks(store: StateStore) -> int | None:
+    """What `kanso status` gives the demo as `holdout_looks`."""
+    (row,) = [row for row in status._hypotheses(store) if row["id"] == HYP_ID]
+    counted: int | None = row["holdout_looks"]
+    return counted
+
+
+def test_a_best_carried_across_a_window_move_is_counted_where_its_next_certificate_reads(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Certification runs a card again under the file the run that carded it pinned, so a best
+    carried across a re-pin that moved the window is certified on the old window until a run
+    under the new file cards it. The planner and `kanso status` count there, so the next
+    certificate is the look after the count both of them showed; once a run under the new
+    file cards the best, both count at the new window, where nothing has looked yet."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    best = a_card(ws, store, REVERTING)
+    write_plan(ws)
+    first = certify(ws, store, HYP_ID)
+    assert first.holdout is not None
+    assert (first.holdout.window_start, first.holdout.window_end, first.holdout.look) == (
+        *WINDOW,
+        1,
+    )
+
+    classify(ws, store, MOVED, REVERTING)
+    registered = records.best_of(store, HYP_ID)[0]
+    assert registered == best, "the re-pin keeps the best"
+    (own,) = store.connection.execute(
+        "SELECT hypothesis_sha FROM hypotheses WHERE hyp_id = ?", (HYP_ID,)
+    ).fetchone()
+    assert certification_window(store, own) == MOVED_WINDOW
+    told, shown = planner_looks(ws, store, monkeypatch), shown_looks(store)
+
+    monkeypatch.setattr(run, "engine_version", lambda: "9.9.9")
+    second = certify(ws, store, HYP_ID)
+
+    assert second.holdout is not None
+    assert (second.holdout.window_start, second.holdout.window_end) == WINDOW
+    assert second.holdout.look == told + 1 == cast("int", shown) + 1 == 2
+    assert shown_looks(store) == 2
+    read = looks_module.subject_pin(store, HYP_ID, best, own)
+    assert read == run.pinned_sha(store, HYP_ID, best) != own
+
+    a_card(ws, store, REVERTING, document=MOVED, seq=2)
+
+    assert looks_module.subject_pin(store, HYP_ID, best, own) == own
+    assert run.pinned_sha(store, HYP_ID, best) == own
+    assert (planner_looks(ws, store, monkeypatch), shown_looks(store)) == (0, 0)
+
+
+def test_a_certification_that_plans_counts_at_the_window_of_the_card_it_names(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cert run --sha` of a card carded before the re-pin reads that card's run's window, so
+    the plan the certification makes where none is pinned is shown the looks taken there, and
+    a plan made for the best is shown those at the best's."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    old = a_card(ws, store, REVERTING)
+    write_plan(ws)
+    certify(ws, store, HYP_ID)
+    classify(ws, store, MOVED, REVERTING)
+    a_card(ws, store, FLAT, document=MOVED, seq=2, metric=2.0)
+    assert records.best_of(store, HYP_ID)[0] == sha256(FLAT).hexdigest()
+    (certificate.certificates_dir(ws, HYP_ID) / "plan.yaml").unlink()
+
+    named = planner_looks(ws, store, monkeypatch, lambda: certify(ws, store, HYP_ID, sha=old))
+
+    assert named == 1, "the named card is read on the window its first look was taken at"
+    assert planner_looks(ws, store, monkeypatch) == shown_looks(store) == 0

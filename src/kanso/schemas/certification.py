@@ -71,9 +71,12 @@ class PlanInputs(KansoModel):
     data_availability: DataAvailability
     n_trials: int = Field(ge=0)
     looks: int = Field(default=0, ge=0)
-    """How many certificates the hypothesis's lineage had already made that read its
-    certification window when the plan was made (`kanso.certify.looks`), so the next is look
-    `looks + 1`; 0 on a plan made before kanso counted them."""
+    """How many certificates the hypothesis's lineage had already made, when the plan was
+    made, that read a window sharing a day with the certification window its subject is read
+    on: the one declared by the file the run that carded its best — or the card the
+    certification that made the plan names — pinned (`kanso.certify.looks.subject_pin`), so
+    that subject's next certificate is look `looks + 1`; 0 on a plan made before kanso
+    counted them."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]

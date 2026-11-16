@@ -117,8 +117,10 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
 def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
     runner: CliRunner, mocked_ws: Path
 ) -> None:
-    """Every certificate of the lineage at the window it is pinned to, whatever its verdict;
-    none for a hypothesis whose pinned file the store does not hold."""
+    """Every certificate of the lineage at the window the next certificate of its best reads,
+    whatever its verdict — the window of the file the run that carded the best pinned, which
+    the hypothesis's own pin does not move; none for a hypothesis with no best whose pinned
+    file the store does not hold."""
     from .test_cert import begin, keep, recertified
 
     begin(runner, mocked_ws)
@@ -134,6 +136,12 @@ def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
     with StateStore(mocked_ws / "state.db") as store:
         store.connection.execute(
             "UPDATE hypotheses SET hypothesis_sha = NULL WHERE hyp_id = ?", (HYP_ID,)
+        )
+    (carded,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert carded["holdout_looks"] == 2, "counted where the best's run pinned its window"
+    with StateStore(mocked_ws / "state.db") as store:
+        store.connection.execute(
+            "UPDATE hypotheses SET best_sha = NULL WHERE hyp_id = ?", (HYP_ID,)
         )
     (unpinned,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
     assert unpinned["holdout_looks"] is None
