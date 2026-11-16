@@ -87,14 +87,17 @@ meets the next run's judge fresh. Observed in a live workspace on 2026-11-15: on
 rewound for a trend filter and then for a volatility filter, and the next run kept a file
 carrying such a filter and its check passed it. A reason alone does not say which change it
 refused, so each earlier one comes with that change, as a diff from the bytes the run was
-rewound to, and with whether the `program.md` and `hypothesis.yaml` it was given under are
-this run's: an operator who permitted the direction since has changed one of them, and the
-judge must not read the old verdict as though they had not. The `drifted` event records
-the bytes it refused for this; one written before it did reads the newest keep of its run,
-at or before it, that a check marked not aligned, and carries no diff when there is none.
-This buys consistency across runs, not a stricter judge, and it never reaches a run's base:
-a keep an earlier run made and its checks passed is not re-judged by becoming the next
-run's base, whatever a later rewind refused.
+rewound to, and with whether the `program.md` it was given under, and the thesis, mechanism,
+universe and horizon its `hypothesis.yaml` stated, are this run's: an operator who permitted
+the direction since has changed one of them, and the judge must not read the old verdict as
+though they had not. A re-pin that changes none of them — a title, a limit, a field a
+release adds — changes nothing the judge reads, and is not said to. The `drifted` event
+records the bytes it refused for this; one written before it did reads the newest keep, of
+the cards that check judged, that it marked not aligned, and carries no diff where there is
+none to show. This buys consistency across runs, not a stricter judge, and it never reaches a
+run's base: a keep an earlier run made and its checks passed is not re-judged by becoming the
+next run's base, whatever a later rewind refused, and the judge is told that only the change
+since the last check can return in a refused direction.
 """
 
 from __future__ import annotations
@@ -106,6 +109,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+import yaml
+
 from kanso.hyp import HYPOTHESIS_FILE, PROGRAM_FILE, STRATEGY_FILE, hypothesis_dir
 from kanso.inbox import escalate
 from kanso.models import CallInputs, route
@@ -115,6 +120,8 @@ from kanso.research import loop as research_loop
 from kanso.schemas import Hypothesis, RunRecord, is_duration, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    import sqlite3
+
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
@@ -350,8 +357,9 @@ that drifts more often than this repeats itself, and the newest reasons are the 
 returning change is likeliest to meet."""
 
 REWOUND_DIFF_LINES: Final = 40
-"""How many lines of the change an earlier run was rewound for a check is shown; the rest are
-counted on one closing line, so a rewrite costs the prompt no more than a filter does."""
+"""How many lines of the change an earlier run was rewound for a check is shown at most. A
+longer change is cut so that its last shown line counts the rest, so however much a rewrite
+changed, it is shown in no more lines than this."""
 
 
 @dataclass(frozen=True)
@@ -412,12 +420,12 @@ def check(
     checkpoint stops short of any keep no check has answered for. A verdict marks the cards
     since the last check and is an event, and a drift also marks every card that carried
     the drifted bytes, reverts the lane copy, re-points `best`, rewrites the workspace copy
-    and escalates; its event records the bytes it refused (`drifted`) and those the diff it
-    was shown began from (`from`), beside the bytes it rewound to (`sha`), so a later run's
-    judge can be shown the change. The lane's bytes are stored either way, since the next
-    check differences from them. A run the operator ended while the model answered is
-    refused with `loop.TakenError` and the verdict dropped, so an end leaves the best where
-    it was and the lane directory removed.
+    and escalates; its event records the bytes it refused (`drifted`) and the bytes the last
+    check left the lane on (`from`), the run's base before its first, beside the bytes it
+    rewound to (`sha`), so a later run's judge can be shown the change. The lane's bytes are
+    stored either way, since the next check differences from them. A run the operator ended
+    while the model answered is refused with `loop.TakenError` and the verdict dropped, so
+    an end leaves the best where it was and the lane directory removed.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
     hyp = parse_yaml(
@@ -552,14 +560,16 @@ def rewound_before(
 
     A direction once each, as `rewound_for` lists them, and none this run was rewound for
     too: this run's own list says it already. Each entry is `{reason, run, same_program,
-    same_thesis, diff}`: the run's tag; whether that run pinned the `program.md` and the
-    `hypothesis.yaml` this one did, since the operator permits a direction by editing one of
-    them; and the change as a unified diff from the bytes the run was rewound to, cut to
-    `diff_lines` lines and the rest counted (`_refused`), or `None` where the change cannot
-    be recovered. Like `rewound_for` it carries nothing measured, on any window.
+    same_thesis, diff}`: the run's tag; whether that run pinned the `program.md` this one did,
+    and a `hypothesis.yaml` stating the thesis, mechanism, universe and horizon this one's
+    does (`_judged`), since the operator permits a direction by editing one of them; and the
+    change as a unified diff from the bytes the run was rewound to, at most `diff_lines` lines
+    (`_refused`), or `None` where there is none to show. Like `rewound_for` it carries nothing
+    measured, on any window.
     """
     rows = store.connection.execute(
-        "SELECT e.detail, r.run_id, r.tag, r.program_sha, r.hypothesis_sha FROM events e"
+        "SELECT e.event_id, e.subject, e.detail, r.run_id, r.tag, r.program_sha,"
+        " r.hypothesis_sha FROM events e"
         " JOIN runs r ON r.run_id = json_extract(e.detail, '$.run_id') AND r.hyp_id = e.subject"
         " WHERE e.kind = ? AND e.subject = ? ORDER BY e.event_id DESC",
         (DRIFTED, run.hyp_id),
@@ -576,44 +586,78 @@ def rewound_before(
         if not reason or reason in said:
             continue
         said.add(reason)
+        pin = str(row["hypothesis_sha"])
         found.append(
             {
                 "reason": reason,
                 "run": str(row["tag"]),
                 "same_program": row["program_sha"] == run.program_sha,
-                "same_thesis": row["hypothesis_sha"] == run.hypothesis_sha,
-                "diff": _refused(store, str(row["run_id"]), detail, diff_lines),
+                "same_thesis": pin == run.hypothesis_sha
+                or _judged(store, pin) == _judged(store, run.hypothesis_sha),
+                "diff": _refused(store, row, detail, diff_lines),
             }
         )
     return found
 
 
-def _refused(
-    store: StateStore, run_id: str, detail: dict[str, object], diff_lines: int
-) -> str | None:
-    """The change one drift refused, from the bytes it rewound to, at most `diff_lines` long.
+def _judged(store: StateStore, pin: str) -> dict[str, object]:
+    """What the judge reads of a pinned `hypothesis.yaml` (`_ask`), read as a plain mapping
+    so a file pinned under an older schema is still read."""
+    found = yaml.safe_load(store.get_blob(pin).decode("utf-8"))
+    document = found if isinstance(found, dict) else {}
+    return {
+        "thesis": document.get("thesis"),
+        "mechanism": document.get("mechanism"),
+        "universe": sorted(str(name) for name in document.get("universe") or ()),
+        "horizon": document.get("horizon"),
+    }
 
-    The event names the refused bytes. One written before it did is read from the cards: the
-    lane a check judges holds the run's newest keep, which the drift marked not aligned, so
-    the newest keep of that run at or before the drift that a check marked so is what it
-    refused; with none, `None`.
+
+def _refused(
+    store: StateStore, row: sqlite3.Row, detail: dict[str, object], diff_lines: int
+) -> str | None:
+    """The change one drift refused, from the bytes it rewound to, at most `diff_lines` long:
+    a longer one is cut to one line fewer and the rest counted on the last.
+
+    The event names the refused bytes. One written before it did is read from the cards it
+    judged, those since its run's check before it: a check that asks the model finds the lane
+    on a keep among them and marks it not aligned, so the newest keep among them marked so is
+    what it refused. With none — a drift the syntax tree found in bytes written into the lane
+    by hand — the answer is `None`, since a keep marked before them is another drift's
+    change. It is `None` too for a drift that refused the very bytes it rewound to, as one
+    on a base that fails the syntax tree does: there is no change to show.
     """
+    run_id = str(row["run_id"])
     drifted = detail.get("drifted")
     if drifted is None:
-        row = store.connection.execute(
-            "SELECT strategy_sha FROM cards WHERE run_id = ? AND status = 'keep'"
-            " AND aligned = 0 AND seq <= ? ORDER BY seq DESC LIMIT 1",
-            (run_id, int(str(detail["cards"]))),
+        keep = store.connection.execute(
+            "SELECT strategy_sha FROM cards WHERE run_id = ? AND status = 'keep' AND aligned = 0"
+            " AND seq <= ? AND seq > COALESCE((SELECT json_extract(detail, '$.cards')"
+            " FROM events WHERE kind IN (?, ?) AND subject = ? AND event_id < ?"
+            " AND json_extract(detail, '$.run_id') = ? ORDER BY event_id DESC LIMIT 1), 0)"
+            " ORDER BY seq DESC LIMIT 1",
+            (
+                run_id,
+                int(str(detail["cards"])),
+                ALIGNED,
+                DRIFTED,
+                row["subject"],
+                row["event_id"],
+                run_id,
+            ),
         ).fetchone()
-        if row is None:
+        if keep is None:
             return None
-        drifted = row["strategy_sha"]
+        drifted = keep["strategy_sha"]
     lines = diffs.unified(
         store.get_blob(str(detail["sha"])), store.get_blob(str(drifted))
     ).splitlines(keepends=True)
+    if not lines:
+        return None
     if len(lines) <= diff_lines:
         return "".join(lines)
-    return "".join(lines[:diff_lines]) + f"… {len(lines) - diff_lines} more lines\n"
+    shown = diff_lines - 1
+    return "".join(lines[:shown]) + f"… {len(lines) - shown} more lines\n"
 
 
 def _revert(ws: Workspace, store: StateStore, run: RunRecord, directory: Path) -> str:

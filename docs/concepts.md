@@ -1686,16 +1686,21 @@ So to widen or narrow what a hypothesis's search may do, edit `program.md` betwe
 on 2026-11-15: a run was rewound for a trend filter and then for a volatility filter, and the
 next run kept a file carrying such a filter and its check passed it. So an earlier run's
 reason comes with the change the check refused — a unified diff from the bytes that run was
-rewound to, cut to forty lines with the rest counted — the run's tag, and `same_program` and
-`same_thesis`, false where that run pinned another `program.md` or `hypothesis.yaml` than this
-one: a direction you have permitted since is judged under the program that permits it. The
-`drifted` event records the bytes it refused for this (`drifted`, beside `from`, the bytes
-the diff it was shown began from); for one an earlier kanso wrote, the change is read from the
-newest keep of its run at or before it that a check marked not aligned, and is `null` where
-there is none. This makes the judge consistent across runs, not stricter: what the program
-permits stays aligned. And it bears only on what a run proposes: a run's base is never judged
-(below), so a best an earlier run kept stands as the next run's base even where it takes a
-direction another run was rewound for.
+rewound to, cut to forty lines with the rest counted on the last — the run's tag, and
+`same_program` and `same_thesis`: false where that run pinned another `program.md`, or a
+`hypothesis.yaml` whose thesis, mechanism, universe or horizon differ from this one's. A
+direction you have permitted since is judged under the program that permits it, and a re-pin
+that changes none of what the judge reads — a title, a limit, a window — is not taken for a
+new thesis. The `drifted` event records the bytes it refused for this (`drifted`, beside
+`from`, the bytes the run's last check left the lane on); for one an earlier kanso wrote, the
+change is read from the newest keep that check marked not aligned among the cards it judged,
+those since the check before it. The change is `null` where there is none to show: an old
+event that judged no keep, or a drift that refused the very bytes it rewound to, as a base
+that fails the syntax tree is. This makes the judge consistent across runs, not stricter:
+what the program permits stays aligned. And it bears only on what a run proposes: a run's
+base is never judged (below), so a best an earlier run kept stands as the next run's base even
+where it takes a direction another run was rewound for, and the judge is told that only the
+change since the last check can return in a refused direction.
 
 A drift is rewound rather than stopped: research is indefinite, and stopping it on a
 judgement call would hand the model a veto. The lane and `best` go back to the newest keep of

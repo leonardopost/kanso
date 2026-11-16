@@ -18,10 +18,11 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+import yaml
 
 from kanso import inbox, research
 from kanso.errors import ValidationError
-from kanso.models import Call, spend
+from kanso.models import INSTRUCTIONS, Call, spend
 from kanso.research import align, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
@@ -712,16 +713,15 @@ def test_each_earlier_direction_is_shown_once_with_what_was_pinned_and_a_bounded
     store: StateStore, ws: Workspace
 ) -> None:
     """A direction refused in two earlier runs is the newer one's; one this run was rewound
-    for too is this run's list's; a run under another `hypothesis.yaml` says so, since the
-    thesis is half of what the judge reads; a rewrite is cut to forty lines and the rest
-    counted; and an old event whose run kept nothing a check marked carries no change."""
+    for too is this run's list's; a run under another thesis says so, since the thesis is
+    half of what the judge reads; a rewrite is cut to forty lines, the last counting the rest;
+    and an old event whose run kept nothing a check marked carries no change."""
     scripted(ws)
     hyp_id = started(ws, store)
     run = records.require_active(store, hyp_id)
     older = ended_run(store, run, "20261101-1")
-    newer = ended_run(
-        store, run, "20261102-1", hypothesis_sha=store.put_blob(b"schema: 1\nid: re-pinned\n")
-    )
+    rethought = repinned(store, run, thesis="The series trends, so buying rises pays.")
+    newer = ended_run(store, run, "20261102-1", hypothesis_sha=rethought)
     rewrite = SEED + "".join(f"Strategy.knob_{n} = {n}\n" for n in range(100)).encode()
     drifted(store, older, "rewrites the exit", drifted=store.put_blob(rewrite))
     drifted(store, older, "adds a filter", drifted=store.put_blob(WEAK))
@@ -738,7 +738,7 @@ def test_each_earlier_direction_is_shown_once_with_what_was_pinned_and_a_bounded
     found = align.rewound_before(store, run, align.REWOUND_LINES)
 
     full = diffs.unified(SEED, rewrite).splitlines(keepends=True)
-    cut = "".join(full[: align.REWOUND_DIFF_LINES])
+    kept = align.REWOUND_DIFF_LINES - 1
     assert found == [
         {
             "reason": "adds a filter",
@@ -759,12 +759,133 @@ def test_each_earlier_direction_is_shown_once_with_what_was_pinned_and_a_bounded
             "run": "20261101-1",
             "same_program": True,
             "same_thesis": True,
-            "diff": f"{cut}… {len(full) - align.REWOUND_DIFF_LINES} more lines\n",
+            "diff": "".join(full[:kept]) + f"… {len(full) - kept} more lines\n",
         },
     ]
     assert len(full) > 100
+    assert len(str(found[-1]["diff"]).splitlines()) == align.REWOUND_DIFF_LINES
     assert align.rewound_before(store, run, 1) == found[:1]
     assert align.rewound_before(store, run, 0) == []
+
+
+def repinned(store: StateStore, run: RunRecord, **changes: object) -> str:
+    """The run's `hypothesis.yaml` pinned again with `changes`, as an operator's edit is."""
+    document = yaml.safe_load(store.get_blob(run.hypothesis_sha).decode("utf-8"))
+    return store.put_blob(yaml.safe_dump({**document, **changes}, sort_keys=False).encode())
+
+
+def test_a_re_pin_that_changes_nothing_the_judge_reads_is_the_same_thesis(
+    store: StateStore, ws: Workspace
+) -> None:
+    """The judge reads the thesis, mechanism, universe and horizon of `hypothesis.yaml`, and an
+    operator re-pins the file for much else — a title, a risk limit, a field a release adds.
+    Told that every re-pin was a new thesis, a judge would discount the very history it is
+    shown each time a hypothesis was re-pinned for anything at all."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    limits = {"max_position_pct": 10, "max_drawdown_pct": 40, "max_leverage": 1}
+    retitled = repinned(store, run, title="Demo, re-pinned", risk_limits=limits)
+    limited = ended_run(store, run, "20261101-1", hypothesis_sha=retitled)
+    longer = ended_run(store, run, "20261102-1", hypothesis_sha=repinned(store, run, horizon="2d"))
+    drifted(store, limited, "adds a filter", drifted=store.put_blob(REVERTING))
+    drifted(store, longer, "skips Fridays", drifted=store.put_blob(WEAK))
+
+    found = align.rewound_before(store, run, align.REWOUND_LINES)
+
+    assert retitled != run.hypothesis_sha
+    assert [(entry["run"], entry["same_thesis"]) for entry in found] == [
+        ("20261102-1", False),
+        ("20261101-1", True),
+    ]
+
+
+def test_a_change_is_cut_only_where_the_cut_shortens_it(store: StateStore, ws: Workspace) -> None:
+    """A change one line over the bound, cut to the bound and a count, would be as long as the
+    change and end on '… 1 more lines'. The count is one of the bound's lines, so a change
+    longer than the bound is shown in exactly as many, and one no longer is shown whole."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    drifted(
+        store, ended_run(store, run, "20261101-1"), "reverts", drifted=store.put_blob(REVERTING)
+    )
+    full = diffs.unified(SEED, REVERTING).splitlines(keepends=True)
+
+    def shown_in(lines: int) -> list[str]:
+        (entry,) = align.rewound_before(store, run, 1, diff_lines=lines)
+        return str(entry["diff"]).splitlines(keepends=True)
+
+    assert shown_in(len(full)) == full
+    assert shown_in(len(full) - 1) == [*full[: len(full) - 2], "… 2 more lines\n"]
+
+
+def test_a_drift_on_the_bytes_it_rewound_to_shows_the_next_run_no_change(
+    ws: Workspace, store: StateStore, recorded: Recorder
+) -> None:
+    """A base that fails the syntax tree drifts with nothing behind it to rewind to, so the
+    bytes refused are the bytes the lane is left on. There is no change to show, and an empty
+    one would read as a direction refused for nothing: the reason goes with none. No model was
+    shown a diff either, so `from` is the bytes the last check left the lane on — the base,
+    before any check — and not where a diff began."""
+    scripted(ws, align_check=None)
+    hyp_id = classify(ws, store, DOCUMENT, FOREIGN)
+    research.begin(ws, store, hyp_id)
+    first = records.require_active(store, hyp_id)
+    ok, reason = align.check(ws, store, hyp_id)
+    assert ok is False
+    assert recorded.of("align_check") == []
+    (event,) = store.events(kind=align.DRIFTED, subject=hyp_id)
+    assert event.detail["drifted"] == event.detail["sha"] == event.detail["from"] == first.base_sha
+    research.end(ws, store, hyp_id)
+    ws.path("hypotheses", hyp_id, "strategy.py").write_bytes(SEED)
+    research.begin(ws, store, hyp_id)
+
+    found = align.rewound_before(store, records.require_active(store, hyp_id), 1)
+
+    assert [(entry["reason"], entry["diff"]) for entry in found] == [(reason, None)]
+
+
+def test_an_old_drift_is_shown_only_a_keep_its_own_check_marked(
+    ws: Workspace, store: StateStore
+) -> None:
+    """An event an earlier kanso wrote names only the bytes it rewound to, so its change is
+    read from the cards that check judged: those since the check before it. A drift the syntax
+    tree found in a file written into the lane by hand judged none, and the newest keep marked
+    not aligned before it is the earlier drift's change; it goes with no change, not that one."""
+    scripted(ws, align_check=[DRIFTED])
+    hyp_id = started(ws, store)
+    write_lane(ws, hyp_id, REVERTING)
+    assert research.card(ws, store, hyp_id, "trade the trough").status == "keep"
+    assert align.check(ws, store, hyp_id) == (False, DRIFTED["reason"])
+    write_lane(ws, hyp_id, FOREIGN)
+    ok, static = align.check(ws, store, hyp_id)
+    assert ok is False
+    store.connection.execute(
+        "UPDATE events SET detail = json_remove(detail, '$.drifted', '$.from') WHERE kind = ?",
+        (align.DRIFTED,),
+    )
+    research.end(ws, store, hyp_id)
+    research.begin(ws, store, hyp_id)
+
+    found = align.rewound_before(store, records.require_active(store, hyp_id), 2)
+
+    assert [(entry["reason"], entry["diff"]) for entry in found] == [
+        (static, None),
+        (DRIFTED["reason"], diffs.unified(SEED, REVERTING)),
+    ]
+
+
+def test_the_judge_is_told_how_to_read_earlier_runs_and_what_can_return() -> None:
+    """The history reaches the judge as data, and it reads data it is not told how to read as
+    it likes. A run's base is never judged, and a best that takes a direction another run was
+    rewound for becomes the next run's base: a judge that took the whole file for the change
+    would find that direction in every proposal built on it, and rewind each to the base."""
+    said = INSTRUCTIONS["align_check"]
+    assert "When `rewound_in_earlier_runs` is given" in said
+    assert "`same_program: false` means the program has been edited since that verdict" in said
+    assert "`same_thesis: false` that its thesis, mechanism, universe or horizon has" in said
+    assert "Only a change in `diff_since_last_check` can return in such a direction" in said
 
 
 # --- the inbox the escalation lands in ---------------------------------------

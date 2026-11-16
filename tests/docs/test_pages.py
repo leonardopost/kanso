@@ -536,6 +536,9 @@ def test_both_pages_say_the_judge_reads_the_rewinds_of_earlier_runs() -> None:
     assert "A direction refused in one run is not met fresh in the next" in alignment
     assert "`same_program` and `same_thesis`" in alignment
     assert "cut to forty lines with the rest counted" in alignment
+    # a drift the syntax tree finds shows no model a diff, and records `from` all the same
+    assert "`from`, the bytes the run's last check left the lane on" in alignment
+    assert "the diff it was shown began from" not in alignment
 
 
 def test_the_pages_say_a_closed_day_is_no_hole_and_an_answer_closes_nothing() -> None:
