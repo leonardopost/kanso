@@ -51,7 +51,7 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace, find, init
 from tests.research.conftest import DOCUMENT, ENVELOPE, classify
 
-from .test_run import CERT_GATES, a_card, venue_model, write_plan
+from .test_run import REQUIRED_GATES, a_card, venue_model, write_plan
 
 HYP_ID = "dense_follow"
 NAME = "DENSE.XNAS"
@@ -114,7 +114,8 @@ DOC: dict[str, Any] = {
     "id": HYP_ID,
     "universe": [NAME],
     "resolution": "tick",
-    "horizon": "1d",
+    "horizon": "1h",
+    "objective": {"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
     "data_requirements": ["quote"],
     "costs": {**DOCUMENT["costs"], "latency_ms": 1},
     "windows": {
@@ -123,6 +124,9 @@ DOC: dict[str, Any] = {
         "forward": {"start": date(2024, 2, 1)},
     },
 }
+"""The sleeve trades a sine of an hour's period inside the session, so it is scored on its net
+edge per trade over an hour's horizon: eight sessions of whole-session shifts could resolve no
+`entry_timing` a Sharpe would carry, and what is measured here is the runs, not the timing."""
 
 PLATEAU = {
     "id": "param_plateau",
@@ -276,7 +280,7 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
     held = window_held(ws)
     classify(ws, store, DOC, SOURCE)
     a_card(ws, store, SOURCE, hyp_id=HYP_ID, document=DOC)
-    write_plan(ws, HYP_ID, gates=[*CERT_GATES, PLATEAU])
+    write_plan(ws, HYP_ID, gates=[*REQUIRED_GATES, PLATEAU])
     monkeypatch.setattr(backtest, "READ_POINTS", READ_POINTS)
     monkeypatch.setattr(backtest, "CHUNK_POINTS", CHUNK_POINTS)
     # The replay streams its window in the same chunks and is held to them by its own
@@ -306,3 +310,39 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
         f"the plateau's runs peaked {peaks}, apart by {max(peaks) - min(peaks):,} bytes; the "
         f"certification window held whole is {held:,}"
     )
+
+
+def test_the_timing_reader_holds_a_read_and_a_chunk_of_the_window_and_what_it_folded(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`entry_timing`'s reader reads the certification window once more for every contribution
+    and every Sharpe a plan certifies: it holds one read and one chunk of the window while it
+    reads, as a run does, and a reading per key per session once it has, never the window.
+    Measured on 2026-11-17 (nautilus_trader 1.231.0) at reads of 500 points and chunks of 250,
+    a quarter of the caps the runs here are cut at, it peaked at 0.13 of the window held whole
+    and kept 0.005 to 0.006 of it, over three runs."""
+    held = window_held(ws)
+    classify(ws, store, DOC, SOURCE)
+    a_card(ws, store, SOURCE, hyp_id=HYP_ID, document=DOC)
+    monkeypatch.setattr(backtest, "READ_POINTS", READ_POINTS // 4)
+    monkeypatch.setattr(backtest, "CHUNK_POINTS", CHUNK_POINTS // 4)
+    subject = run._subject(ws, store, HYP_ID, None)
+    hour = 3_600 * SECOND_NS
+    keys = ((NAME, 10 * hour), (NAME, 15 * hour))
+    run._session_prices(subject, keys)  # imports and caches are paid once, not measured
+    gc.collect()
+    tracemalloc.start()
+    try:
+        floor = tracemalloc.get_traced_memory()[0]
+        prices = run._session_prices(subject, keys)
+        gc.collect()
+        kept, peak = (each - floor for each in tracemalloc.get_traced_memory())
+    finally:
+        tracemalloc.stop()
+
+    assert len(prices.sessions) == (CERTIFICATION[1] - CERTIFICATION[0]).days + 1
+    assert all(None not in prices.quotes[key] for key in keys)
+    assert peak < held / 4, (
+        f"the reader peaked at {peak:,} bytes; the certification window held whole is {held:,}"
+    )
+    assert kept < held / 20, f"the reader kept {kept:,} bytes of a window of {held:,}"

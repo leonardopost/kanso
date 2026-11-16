@@ -31,9 +31,9 @@ asked to choose again.
 **The answer is checked before it is believed.** A construct that is not in the catalogue,
 a host that is not certified, an objective the construct's mode does not admit, a parameter
 outside its declared range, a constraint that is not a card-stage gate, a missing required
-gate — the toolbox's `required` ones, and those whose `required_for` names the objective
-written, each with every parameter set — and a gate whose parameters mean nothing apart
-named with some of them: each is a complaint handed back to the same model, and the router's
+gate — the toolbox's `required` ones, and the card gates whose `required_for` names the
+objective written, each with every parameter set — and a gate whose parameters mean nothing
+apart named with some of them: each is a complaint handed back to the same model, and the router's
 ladder decides how many attempts that is worth. Nothing half-valid reaches the file: the
 classification is spliced into the hypothesis, the whole document is validated as a
 workspace file would be, and only then is anything written.

@@ -1617,14 +1617,21 @@ def test_the_pages_define_the_plateau_around_an_edge_and_the_bootstrap_on_both_i
         "An unperturbed objective at or below zero therefore fails the gate before any "
         "parameter is moved" in concepts
     )
-    assert "The plateau and the latency stress are judged after every other cert gate" in concepts
+    assert (
+        "The plateau, the latency stress and `entry_timing` are judged after every other cert gate"
+        in concepts
+    )
     assert "A window gate that judged nothing spares nothing." in concepts
     assert "`bootstrap` judges both of the numbers it records" in concepts
     assert "a band that lies at or below zero says the population of trades carries no edge" in (
         concepts
     )
     cli = prose(page("cli.md"))
-    assert "once `embargoed_window` has failed it is recorded as skipped with the reason" in cli
+    assert (
+        "`param_plateau`, `latency_stress` and `entry_timing` are judged after every other cert "
+        "gate, and once `embargoed_window` has failed each is recorded as skipped with the reason"
+        in cli
+    )
     rows = {
         114: (
             "~~`param_plateau` set its floor at a fraction of the unperturbed objective",

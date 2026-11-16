@@ -348,6 +348,17 @@ draw — card, or setting of a declared `prior_trials` grid — a plan carries w
 three its objective names (`docs/concepts.md`, Certification); the bootstrap, cost-stress,
 cost-scenario, walk-forward and plateau gates read it as they read any objective.
 
+An absolute objective has a second flaw, at certification: a book long a rising index some of
+the time scores a contribution or a Sharpe above zero whenever it is long, whether or not it
+timed anything. So `entry_timing`, a cert gate, is declared `required_for` `wf_contribution_bps`
+and `wf_sharpe_net`: every certification plan for a hypothesis scored on one carries it with
+`max_p` set, and `kanso cert plan` sends a plan without it back and refuses a pinned one (exit
+3, the `--replan` remedy). It puts the certification window's trades beside the same trades
+circularly shifted by whole sessions, priced and costed alike (`docs/concepts.md`,
+Certification). It is no card gate, so `kanso classify` and `kanso hyp validate` ask a
+contribution for `edge_per_trade` alone, and the per-trade edges, the Sharpe against a hold and
+the marginal objectives carry it only where the planner chooses.
+
 **An objective the file already names is the operator's.** `kanso classify` keeps it, keep
 rule and all, whenever the construct chosen is measured in its mode and its parameters are
 inside the toolbox's ranges, shows it to the model as `objective_stated`, and says so on the

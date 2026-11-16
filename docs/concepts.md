@@ -1549,9 +1549,11 @@ its place.
 **Who chooses them.** `constraints` is the classifier's list, rewritten on every
 classification. `required_constraints` is yours, and classification does not read or write it.
 Both are evaluated, yours first, and a gate you require is not reprised by a model that names
-it too. A gate the toolbox declares `required_for` the objective — `edge_per_trade` on a
+it too. A card gate the toolbox declares `required_for` the objective — `edge_per_trade` on a
 contribution — must be in one of them with every parameter set, and either list satisfies
-it. See `docs/workspace.md`.
+it. A cert gate declared `required_for` it — `entry_timing` on a contribution or a Sharpe — is
+in neither: every certification plan for the hypothesis carries it (*Certification*). See
+`docs/workspace.md`.
 
 **A gate added clears the best.** A best is only as good as the gates it was kept under, so a
 re-pin whose card gates name one the held pin did not — or name one at other parameters —
@@ -2536,6 +2538,34 @@ units. A subject scored under an objective whose correction the pinned plan does
 with its threshold is refused (exit 2), naming the gate, once the search has two draws —
 cards, and the settings a declared grid adds.
 
+**An absolute objective's timing is told from its exposure, from the first plan.** A book long a
+rising index some of the time scores a contribution or a Sharpe above zero whenever it is long,
+whether or not it timed anything. So a cert gate can be declared `required_for` an objective,
+as a card gate can, and `entry_timing` is, for `wf_contribution_bps` and `wf_sharpe_net`: every
+plan for a hypothesis scored on one includes it with `max_p` set and does not exclude it, from
+the first plan on, whatever the trial count (*`entry_timing`* below). Whether it is carried is
+not the planner's decision; `max_p`, in `[0.01, 0.25]`, is. It is never one of a hypothesis's
+card gates: `kanso classify` and `kanso hyp validate` ask a contribution for `edge_per_trade`
+alone. A per-trade edge (`net_edge_bps`), a Sharpe already measured against a hold, a marginal
+objective and an attached construct carry it only where the planner chooses — a sub-daily
+certification window is often tens of sessions, whose few whole-session shifts cannot resolve a
+small `p`. A plan pinned without it is refused where it is read, by `cert plan` and by `cert
+run`, as one without its correction is. Here the demo, researched as `README.md` runs it and
+planned by `kanso cert plan demo_mr` — a plan that carries `deflated_edge` and leaves
+`deflated_sharpe` out, as a per-trade edge's does — has ended its run and been re-pinned to
+`wf_sharpe_net` at a `1d` horizon; its plan is refused for both, the correction first (exit 3):
+
+```
+$ kanso cert plan demo_mr
+error: the plan pinned for demo_mr is not one this kanso can run: gates: deflated_sharpe is the search correction for wf_sharpe_net, and a plan includes it once n_trials, every card of the hypothesis, and the prior_trials its family declares reach 2 together (they are 4); gates: entry_timing is required for wf_sharpe_net, its objective, and every plan for it includes the gate with every parameter set; the values are yours, inside their ranges; excluded.deflated_sharpe: is the search correction for wf_sharpe_net, and a plan includes it once n_trials, every card of the hypothesis, and the prior_trials its family declares reach 2 together (they are 4), so it cannot be left out
+remedy: run `kanso cert plan demo_mr --replan` to plan again
+```
+
+The `cert run --sha` route is closed the same way. A card scored on `wf_contribution_bps` or
+`wf_sharpe_net` before a re-pin to an objective the gate does not guard is judged on its own
+objective, so a plan made for the new one, which rightly leaves the gate out, is refused for it
+(exit 2), naming the gate, at any number of cards, with certifying the best as the remedy.
+
 **A stall certifies only a best whose correction passes on research data.** The correction
 reads the research window and the trials alone, and a certificate is the conjunction of the
 gates that judged, so a best the correction refuses on research data fails its certificate
@@ -2719,9 +2749,10 @@ unperturbed objective at or below zero therefore fails the gate before any param
 moved, with the `reason` in its evidence and `n_backtests` at zero. It fails rather than
 skips because its context is whole and it is the subject that lacks the property: a plateau
 around a loss is a robust loss, not evidence of robustness, and a skip is a pass. The runner
-spares the same backtests once `embargoed_window` has failed. The plateau and the latency
-stress are judged after every other cert gate, and when the window gate judged the subject and refused it, each
-is recorded as skipped with the reason and no perturbation is run — the gates are
+spares the same backtests once `embargoed_window` has failed. The plateau, the latency
+stress and `entry_timing` are judged after every other cert gate, and when the window gate
+judged the subject and refused it, each is recorded as skipped with the reason and no
+perturbation is run, nor the window read again — the gates are
 evidence for a pass, and a certificate whose window failed cannot pass — while the
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
 spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
@@ -2763,6 +2794,85 @@ data lowered it. A clause whose pass rate does not move with the quantity it
 tests only refuses sound candidates at random, and a parameter that switched it on would only
 offer a planner those refusals. Whether the certification window holds the edge is
 `embargoed_window`'s question, asked against the research estimate.
+
+`entry_timing` asks whether the certification window's trades earned more than the same trades
+placed at other times. The null is the whole trade schedule **circularly shifted by whole
+sessions**, read on the clock the engine runs on: every point at the instant it was published,
+its `ts_init`, never the one it refers to, and every fill at the instant it filled. The sessions
+are the New York dates on which a price point of any of the subject's instruments was published
+in the window, `S` of them — a daily bar published at the New York midnight that ends its day is
+the date that midnight opens, and the date before the window's first is among them where the
+window holds a point published on its evening, which a window opening at UTC midnight delivers;
+every offset `k` from `h` to `S − h` is one draw, `h` the longest closed trade's hold in sessions
+plus one, so no draw overlaps its own original, and there are `D = S − 2h + 1` draws and no
+random number. Each fill moves to session `(i + k) mod S` at the New York time of day it filled
+at, and is struck at its instrument's last reading published at or before that time on that
+session — a bar's close where the window holds the instrument's bars, else a print, else the
+touch of a quote — and never at one carried from an earlier session, so a delayed bar is read
+where its delay puts it, as the venue applied it, and no draw prices a fill at what the market
+had yet to publish. One factor per trade, its opening notional over the same sum at the moved
+prices, scales every fill of it, so a moved trade opens the same notional and closes flat; a
+split between its fills is restated onto the shares it opened in, each fill by the clock its
+price was struck on and never by the instant it lands at — a recorded fill is in the shares
+the venue held its name in when it filled, every split the run booked before it
+(`adjustments`), and a moved one in the shares of the instant its reading was printed at, its
+`ts_event` — so the eve's daily bar, printed at the New York midnight that opens the ex-date
+and published after it, is in the old shares wherever it is read, as the venue, which applies
+a split only once a point printed past it reaches it, struck it, and a draw across a
+one-for-five is no fivefold move. Every moved fill is charged by `fill_cost` under the
+subject's venue model as the runner charges a fill struck at that close — never a maker's,
+touched where its instrument's last quote says so and on a venue that matches a level-two book
+always, as the runner counts every fill there, and the dated row of the instant the reading it
+is struck at refers to, as the runner charges the row of the instant a fill's price was struck
+at — and the
+subject's own value is the same arithmetic at offset 0, its own instants repriced alike, with
+the runner's own figure recorded beside it (`observed_runner_bps_per_trade`). A trade's profit
+is its fills' flows less those costs and nothing else, at offset 0 as in every draw — no
+funding of a perpetual, no cash in lieu of a split — so the runner's figure, which carries both,
+can differ from the subject's own by them (backlog row 320). The statistic is the mean net
+profit per trade in basis points of the capital, and
+`p = (1 + #{draws ≥ observed}) / (1 + D)`, a draw that kept no trade counted among those at or
+above; the gate passes at `p ≤ max_p`. Being long a rising index earns the drift at any time,
+so it earns it in every draw too and is not credited as timing; a series that repeats exactly
+earns each draw shifted by whole cycles exactly what it earned, which counts against the
+subject. A shift keeps the spacing and clustering of the trades and the exposure the book held
+at once, which independently drawn entries would not — a `full_book` sleeve holds one position
+at a time, and its draws would overlap — at the cost of resolution: the smallest attainable `p`
+is `1/(1 + D)`, recorded as `min_attainable_p`, and a window too short for it fails. It stands
+beside a weekly `period_target`, where `benchmark: hold` cannot: the null is the subject's own
+closed trades, whose holds already end where the target flattened them, and a moved trade keeps
+the cut its original took rather than the one its own moved week's target would have made —
+that is the approximation. It reads a dated spread at each moved reading, so it is refused
+nowhere a `cost_scenario` is. What it skips on is an absence of context — no `max_p`, an
+attached construct, fewer than two closed trades — and a missing price is never one: a traded
+instrument the window holds no bar, print or quote of fails it naming the instrument, as does a
+subject any of whose trades could not be priced at its own instants — a fill struck before the
+first reading of its instrument's session, a timer's at 09:30 where the first one-minute bar
+closes at 09:31, one struck on a quote before the session's first bar of a name the window
+holds bars of, which it is priced from (backlog row 323), or one a venue latency carried past
+New York midnight from a point published before it, where its instrument published nothing
+between the midnight and the fill (backlog row 325) — since a book judged on the trades
+that could be priced would leave the rest's timing untested; and a trade spanning more than
+half the window's sessions, its first and its last both counted, fails it with `draws: 0`.
+The certification runner hands it a reader of the window that reads the certification window
+once more, a chunk at a time, folding a number per
+instrument and time of day per session and the split schedules of the window's definitions,
+and nothing else of it: one more read and no backtest, paid only by a plan that names the
+gate, and spared like the plateau's runs when `embargoed_window` has refused the subject. Its
+evidence is `observed_bps_per_trade`, `observed_runner_bps_per_trade`, `trades`, the null's
+`null_mean`, `null_sd`, `null_p95` and `null_max`, `draws`, `empty_draws`, `dropped_mean` (the
+trades a draw dropped for crossing the window's end or landing where no price was, on average —
+an equity's leg on a weekend a round-the-clock name of the universe printed on (backlog row
+322), or a leg of a series published on another clock than New York's moved across a change of
+clocks: a coin's daily bar at 00:00 UTC is 19:00 New York in winter and 20:00 in summer, so a
+winter fill at 19:00 finds no reading at or before it on a summer session (backlog row 324)),
+`min_attainable_p`, `p`, `max_p`, `sessions` and `min_offset` and `max_offset`. A failure on a
+missing price records its `reason`, with `unpriced`, the instruments the window holds no price
+of, or `observed_dropped`, how many of the subject's trades could not be priced at their own
+instants, beside `trades`, `observed_runner_bps_per_trade`, `sessions` and `max_p`. At a few
+trades a week a certification window of three years holds a few dozen trades, and the null's spread of a
+mean over so few is wide, so a real timing edge can fail for want of resolution; the planner's
+`max_p` is the lever, and the failure is a look like any other.
 
 The engine version is in that condition on purpose. A certificate is a claim about a
 strategy *under an engine*, so an engine upgrade invalidates it — and re-certifying the

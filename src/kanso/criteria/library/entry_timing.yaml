@@ -1,0 +1,10 @@
+id: entry_timing
+kind: gate
+stage: cert
+required: false
+required_for: [wf_contribution_bps, wf_sharpe_net]
+together: true
+meaningful_when: "The trades against the same trades shifted by whole sessions over the window (same names, sides, sizes, holds; costed alike), so drift is not timing. p is at least 1/(1+D), D about the sessions."
+params: {max_p: float}
+ranges: {max_p: [0.01, 0.25]}
+impl: kanso.criteria.gates.entry_timing.gate

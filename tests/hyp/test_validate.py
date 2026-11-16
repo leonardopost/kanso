@@ -2358,6 +2358,20 @@ def test_a_contribution_carrying_edge_per_trade_in_either_list_is_admitted(
     assert {ref.id: ref.params for ref in held.card_gates}["edge_per_trade"] == GUARD["params"]
 
 
+def test_a_contribution_is_admitted_without_entry_timing_among_its_constraints(
+    ws: Workspace,
+) -> None:
+    """`entry_timing` guards a contribution too, but at certification: a plan carries it and a
+    card never does, so `hyp validate` asks a hypothesis scored on one for its card guard
+    alone and says nothing of the cert gate."""
+    doc = document(**CONTRIBUTION)
+    doc["constraints"] = [*CONTRIBUTION["constraints"], GUARD]
+
+    held = accepted(ws, doc)
+
+    assert "entry_timing" not in {ref.id for ref in held.card_gates}
+
+
 @pytest.mark.parametrize("where", ["required_constraints", "constraints"])
 @pytest.mark.parametrize(
     ("given", "missing"), [({"min_bps": 0.0}, "k_se"), ({"k_se": 1.0}, "min_bps")]
