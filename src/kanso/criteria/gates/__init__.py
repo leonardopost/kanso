@@ -781,7 +781,8 @@ class _DeflatedSharpe:
     rather than candidates the selection could have chosen, the third a number in other
     units — and includes one refused as redundant, which is a candidate the selection ranked
     and declined. The count is the larger of that set's and `trials`, every card that ran
-    and traded under any objective (`_searched`). The
+    and traded under any objective and every setting the family declares tried outside
+    kanso (`_searched`). The
     estimate's own error is the objective's, the one its card carried: Mertens' variance of a
     Sharpe for skewed and fat-tailed returns, fold by fold, widened for serial correlation,
     and Memmel's paired one for a Sharpe differenced against a host or a hold. The estimate,
@@ -817,6 +818,7 @@ class _DeflatedSharpe:
                 "standard_error": error / scale,
                 "expected_maximum": expected,
                 "trials": searched,
+                "prior_trials": ctx.prior_trials,
                 "scored_trials": len(metrics),
             },
         )
@@ -863,7 +865,8 @@ def _searched(ctx: GateContext, metrics: Sequence[float]) -> int:
     from a per-trade edge to a contribution after three hundred cards: its first certificate
     was deflated by one trial and so skipped, and two cards later by the expected maximum of
     two draws rather than of three hundred, seven to thirteen basis points a day of selection
-    left unpriced (`docs/backlog.md` row 173). `trials` is what certification counts, and 1
+    left unpriced (`docs/backlog.md` row 173). `trials` is what certification counts — those
+    cards and the settings the family declares tried outside kanso, `prior_trials` — and 1
     where nothing did, so the set's own count is the floor.
     """
     return max(ctx.trials, len(metrics))
@@ -953,6 +956,7 @@ def _deflated_mean(
             "expected_maximum_bps": expected,
             "trial_spread_bps": sqrt(spread),
             "trials": searched,
+            "prior_trials": ctx.prior_trials,
             "scored_trials": len(metrics),
             counted: count_of,
         },
@@ -967,8 +971,9 @@ class _DeflatedContribution:
     paired per-period differences against the host's for the marginal form, widened for
     serial correlation — and the expected maximum it is measured against is that of as many
     draws as the selection took the maximum over (`_searched`, every card that ran and traded
-    under any objective), from the distribution of the trials' own metrics in the same units
-    (`trial_metrics`, the same set `deflated_sharpe` reads), read robustly as 1.4826 times
+    under any objective and every setting a declared grid adds), from the distribution of
+    the trials' own metrics in the same units (`trial_metrics`, the same set
+    `deflated_sharpe` reads), read robustly as 1.4826 times
     their median absolute deviation (`robust_variance`), so a few trials that blew up do not
     widen the search past any candidate the selection weighed. The probability reported is
     that of the estimate exceeding that maximum by its own error, and the gate passes when it
@@ -993,7 +998,8 @@ class _DeflatedEdge:
     linearised period by period, so trades of one session that move together count as one
     session's worth, widened for serial correlation across periods, and for the marginal form
     the two runs' linearisations differenced period by period — and the bar the expected
-    maximum of the search, from the count of its candidates and the robust spread of its
+    maximum of the search, from the count of its candidates — the cards and the settings a
+    declared grid adds — and the robust spread of its
     trials scored under the same objective. Until it existed a run scored on a per-trade edge
     reached a certificate with nothing pricing the search behind it: both other deflations
     skip it, and the embargo's fraction of a selected maximum is only an implicit, partial
@@ -1066,8 +1072,9 @@ class _EdgePerTrade:
     `net − margin × se > min_bps`, strictly, over trades that closed in at least two of the
     window's periods, where `margin` is `periods_margin` of the larger of `k_se` and
     `search_margin(trials)` — the evidence's `normal_margin` — over the periods that closed
-    a trade: on a hypothesis's first card, at `min_bps` zero and `k_se` zero, a card whose
-    trades closed in two periods or more passes exactly when its mean trade made money.
+    a trade: on a hypothesis's first card with no grid declared, at `min_bps` zero and `k_se`
+    zero, a card whose trades closed in two periods or more passes exactly when its mean trade
+    made money.
 
     The margin is a chance, and the periods set its width. An error read period by period
     has the degrees of freedom of the periods that closed a trade, and on few of them it
@@ -1086,9 +1093,11 @@ class _EdgePerTrade:
     earn nothing still clears `k_se` errors' chance with probability `1 − Φ(k_se)` — at
     `k_se` 1, one card in six — so a fixed margin lets zero-edge cards through in proportion
     to the search's length. So `normal_margin` is never below the expected maximum of `trials`
-    standard normals: 0 errors on one card, 0.52 at 2 trials, 2.28 at 50 and 3.05 at 500.
+    standard normals: 0 errors at 1 trial, 0.52 at 2, 2.28 at 50 and 3.05 at 500.
     `trials` is this card and every card of the hypothesis before it that ran to a result and
-    traded, under any objective (`GateContext.trials`). Each card is held to the search as it
+    traded, under any objective, and the settings its family declares tried outside kanso in
+    the grids that chose its seeds (`GateContext.trials`, the evidence's `prior_trials` saying
+    how many of them were declared). Each card is held to the search as it
     stood when it ran, so the expected count of zero-edge cards that pass grows with the
     logarithm of the search rather than with its length: over 500 cards, about 3.3 at `k_se`
     1 rather than 79, 2.3 at `k_se` 2 rather than 11, and 0.67 at `k_se` 3 either way. That
@@ -1151,6 +1160,7 @@ class _EdgePerTrade:
                 "se": se,
                 "k_se": k_se,
                 "trials": ctx.trials,
+                "prior_trials": ctx.prior_trials,
                 "expected_maximum": searched,
                 "normal_margin": normal,
                 "margin": margin,

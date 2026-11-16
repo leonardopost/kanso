@@ -81,8 +81,10 @@ class GateContext:
       signature was, so the selection ranked its number and declined it;
     * `trials` is how many candidates the search behind `run` has drawn, `run` among them:
       on a card, the hypothesis's cards that ran to a result and traded under any
-      objective, and this one; at certification, every such card. A deflation takes its
-      expected maximum over this many draws and their spread from `trial_metrics`, since
+      objective, and this one; at certification, every such card. Either way it includes
+      `prior_trials`, the settings the hypothesis's family declared tried outside kanso in
+      the grids that chose its seeds, which the evidence states beside it. A deflation takes
+      its expected maximum over this many draws and their spread from `trial_metrics`, since
       a count has no units to keep apart and a spread does. It is 1 — no search — wherever
       no caller counts one;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
@@ -130,6 +132,7 @@ class GateContext:
     benchmark_research_run: CardRun | None = None
     trial_metrics: Sequence[float] = ()
     trials: int = 1
+    prior_trials: int = 0
     lane_dir: Path | None = None
     pinned: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     datasets: Sequence[DatasetFacts] = ()

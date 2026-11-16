@@ -28,8 +28,9 @@ runs at the stage the toolbox says it runs at, and carries values inside its ran
 gate the toolbox marks required is present and none of them is excluded; the plan reaches
 all three stages; every cert gate `required_for` the hypothesis's objective is present, with
 every parameter it declares set, and not excluded; and once the hypothesis's `n_trials` —
-every card it has, the count a certificate is stamped with — reaches `SEARCH_TRIALS`, the
-plan includes the gate that
+every card it has, the count a certificate is stamped with — and the `prior_trials` its
+family declares tried outside kanso together reach `SEARCH_TRIALS`, the plan includes the
+gate that
 `deflates` its objective, with its threshold set — a result selected from a search is
 priced for the search, and that is a structural fact about selection, not a judgement
 about this hypothesis. Which of the remaining gates to include, and with which values —
@@ -76,9 +77,9 @@ LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
 
 SEARCH_TRIALS: Final = 2
-"""From how many cards — `n_trials` — a plan must correct for the search: two cards are
-already a choice of one over another, and the maximum of two draws is above the mean of
-either."""
+"""From how many draws a plan must correct for the search — `n_trials`, the cards, and the
+`prior_trials` the family declares tried outside kanso, which every caller adds: two draws are
+already a choice of one over another, and the maximum of two is above the mean of either."""
 
 KIND_WORDS: Final = {
     "hours": "span of clock times on one day, HH:MM-HH:MM",
@@ -215,7 +216,8 @@ def _guarding(objective_id: str, stage: str) -> tuple[str, ...]:
 
 def required_deflation(hyp: Hypothesis, n_trials: int) -> str | None:
     """The deflation gate a plan for this hypothesis must include, or `None` when it need
-    include none: before its second card, or with no objective to deflate."""
+    include none: before the search's second draw — `n_trials` is the cards and the declared
+    `prior_trials` together, as the caller counts them — or with no objective to deflate."""
     if hyp.objective is None or n_trials < SEARCH_TRIALS:
         return None
     return deflation_gate(hyp.objective.id)
@@ -360,17 +362,19 @@ def plan_complaints(
     All of them at once, because the planner is allowed one retry: a plan corrected one
     complaint at a time would cost a call per mistake.
 
-    `n_trials` is the hypothesis's count of cards, every one of every run, the count a
-    certificate is stamped with. From `SEARCH_TRIALS` on, the gate that `deflates` the
+    `n_trials` is the hypothesis's count of cards, every one of every run — the count a
+    certificate is stamped with — and the `prior_trials` its family declares tried outside
+    kanso, added by the caller. From `SEARCH_TRIALS` on, the gate that `deflates` the
     hypothesis's objective is held to more than a required gate is — present, not excluded,
     and with every parameter it declares set — because the result a certificate judges is
     then the best of a search, nothing else in a plan prices one, and a deflation gate with
     no threshold skips, which passes. The threshold's value stays the planner's. The gate
-    itself takes its expected maximum over every card that ran and traded and its spread
-    from the narrower set of `trial_metrics`; certification refuses a subject behind two
-    such cards with fewer than two of these (`kanso.certify.run.unpriced`), since that
-    spread cannot be read, and the gate skips only where fewer than two cards ran and
-    traded at all: then nothing was chosen over anything.
+    itself takes its expected maximum over every card that ran and traded and every setting
+    the family declares, and its spread from the narrower set of `trial_metrics`;
+    certification refuses a subject behind two such draws — one card behind a declared grid
+    among them — with fewer than two of these (`kanso.certify.run.unpriced`), since that
+    spread cannot be read, and the gate skips only where the search has fewer than two draws
+    at all: then nothing was chosen over anything.
 
     A cert gate the toolbox declares `required_for` the hypothesis's objective is held as the
     search correction is, from the first plan on: present, not excluded, and with every
@@ -423,7 +427,8 @@ def plan_complaints(
     correction = required_deflation(hyp, n_trials)
     searched = (
         f"is the search correction for {hyp.objective.id}, and a plan includes it once "
-        f"n_trials, every card of the hypothesis, reaches {SEARCH_TRIALS} (it is {n_trials})"
+        "n_trials, every card of the hypothesis, and the prior_trials its family declares "
+        f"reach {SEARCH_TRIALS} together (they are {n_trials})"
         if correction is not None and hyp.objective is not None
         else ""
     )
@@ -480,9 +485,10 @@ def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, 
 
     The raising form of `plan_complaints`, which is the one rule set: two validators that
     had to agree would eventually not. The search it is checked against is the one the plan
-    records it was made behind, `inputs.n_trials`.
+    records it was made behind, `inputs.n_trials` and `inputs.prior_trials` together.
     """
     model = plan if isinstance(plan, CertificationPlan) else CertificationPlan.model_validate(plan)
-    problems = plan_complaints(model.gates, model.excluded, hyp, folds, model.inputs.n_trials)
+    searched = model.inputs.n_trials + model.inputs.prior_trials
+    problems = plan_complaints(model.gates, model.excluded, hyp, folds, searched)
     if problems:
         raise ValidationError("; ".join(problems))

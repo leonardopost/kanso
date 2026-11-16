@@ -696,9 +696,22 @@ def test_a_plan_behind_two_cards_without_its_search_correction_is_refused() -> N
     with pytest.raises(
         ValidationError,
         match=r"deflated_edge is the search correction for net_edge_bps, and a plan includes "
-        r"it once n_trials, every card of the hypothesis, reaches 2 \(it is 40\)",
+        r"it once n_trials, every card of the hypothesis, and the prior_trials its family "
+        r"declares reach 2 together \(they are 40\)",
     ):
         validate_plan(without("deflated_edge"), make_hyp(), FOLDS)
+
+
+def test_a_plan_behind_one_card_and_a_declared_grid_without_its_correction_is_refused() -> None:
+    """A grid tried outside kanso is part of the search, so one card behind it is already a
+    choice of one over another: the plan's own record of both counts is what it is checked
+    against."""
+    bare = without("deflated_edge")
+    alone = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1}}
+    validate_plan(alone, make_hyp(), FOLDS)
+    gridded = {**bare, "inputs": {**PLAN["inputs"], "n_trials": 1, "prior_trials": 1}}
+    with pytest.raises(ValidationError, match=r"reach 2 together \(they are 2\)"):
+        validate_plan(gridded, make_hyp(), FOLDS)
 
 
 def test_a_search_correction_without_its_threshold_is_refused() -> None:

@@ -50,6 +50,46 @@ def test_the_hypothesis_skill_writes_a_session_the_gate_accepts() -> None:
     assert check_params(catalogue()["trading_hours"], params, make_hyp(), 4) == []
 
 
+def test_the_hypothesis_skill_states_a_grid_in_the_keys_the_schema_reads() -> None:
+    """The block is copied into hypotheses as written, so its keys are the schema's, and the
+    count is the operator's, never the agent's."""
+    from kanso.schemas import PriorTrials
+
+    text = skill(PACKAGED, "kanso-hypothesis")
+    found = re.search(r"`prior_trials: \{(.*?)\}`", text)
+    assert found is not None
+    keys = [part.split(":")[0].strip() for part in found.group(1).split(",")]
+    assert keys == list(PriorTrials.model_fields)
+    assert "take N from the operator, never from your own reading of the file" in text
+
+
+def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
+    """A plan carries its correction, a pinned one is refused without it and a search is
+    priced over its draws, a declared grid's settings among them: a skill counting cards alone
+    tells an agent a plan one card behind a grid needs no correction."""
+    text = skill(PACKAGED, "kanso-certify")
+    assert "and the `prior_trials` its family declares tried outside kanso" in text
+    assert (
+        "from the second draw: by `cert plan` and `cert run` from the second card or the first "
+        "behind a declared grid, and by `cert plan` already with no card behind a grid of two "
+        "settings or more, where `cert run` has no card to certify"
+    ) in text
+    assert "or none yet behind a grid" not in text
+    assert "or the first card behind a declared grid" in text
+    assert "can exceed the certificate's `n_trials`, which counts cards alone" in text
+    assert "every card it has, reaches two" not in text
+
+
+def test_the_classify_skill_deflates_a_re_pin_over_a_declared_grid_too() -> None:
+    """After a re-pin to another objective certification deflates over the cards behind it and
+    the settings of its family's declared grid, as `kanso.certify.run` counts them."""
+    text = skill(PACKAGED, "kanso-classify")
+    assert (
+        "deflates by every card behind it and every setting of a grid its family declares in "
+        "`prior_trials`"
+    ) in text
+
+
 def test_the_promote_skill_names_the_one_cost_a_broker_does_not_supply() -> None:
     text = skill(PACKAGED, "kanso-promote")
     assert "must be `fixed_bps` on the hypothesis or under `venues.<MIC>.costs`" in text
@@ -77,6 +117,16 @@ def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
     agent would take a check of a run still on its base for a verdict on it."""
     text = skill(PACKAGED, "kanso-align")
     assert "The run's base is never judged" in text
+
+
+def test_the_align_skill_names_the_rewinds_of_earlier_runs() -> None:
+    """An agent explaining a drift verdict that cites a direction this run never took needs
+    to know the judge reads the hypothesis's earlier runs, and that a base is not re-judged
+    by them, or it would report the verdict as a fault or the standing best as an oversight."""
+    text = skill(PACKAGED, "kanso-align")
+    assert "the reasons the hypothesis was rewound for in its earlier runs" in text
+    assert "(`same_program`, `same_thesis`)" in text
+    assert "Earlier rewinds bear on new proposals only" in text
 
 
 def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> None:

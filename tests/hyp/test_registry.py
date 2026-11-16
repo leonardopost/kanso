@@ -217,6 +217,27 @@ def test_a_re_registration_within_the_same_scope_keeps_the_best(
     assert found.best_metric == 1.5
 
 
+def test_a_re_pin_that_only_declares_a_grid_keeps_the_best(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`prior_trials` is not scope: the best's metric means what it meant, and the next
+    baseline judges it under the margin the grid widens."""
+    register(ws, store)
+    set_best(store)
+    grid = b"# 27 pre-registered settings\n"
+    (ws.root / "evidence").mkdir()
+    (ws.root / "evidence" / "grid.md").write_bytes(grid)
+    block = {"count": 27, "source": "evidence/grid.md", "sha256": sha256(grid).hexdigest()}
+
+    register(ws, store, document(prior_trials=block))
+
+    found = record(ws, store)
+    assert found.best_sha == "c" * 64
+    assert found.best_metric == 1.5
+    assert "prior_trials" not in found.pins
+    assert "best_cleared" not in [event.kind for event in store.events(subject=HYP_ID)]
+
+
 def test_reordering_the_universe_is_not_a_change_of_scope(ws: Workspace, store: StateStore) -> None:
     register(ws, store, document(universe=["DEMO", "EURO"]))
     set_best(store)

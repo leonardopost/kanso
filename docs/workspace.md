@@ -440,6 +440,45 @@ than it was while counting nothing. Classification neither reads nor writes it.
 derived_from: [sox_main]     # this idea was chosen by sox_main's research, so its 412 cards are trials here too
 ```
 
+**`prior_trials` states the offline grid that chose the seed.** A seed you picked as the best
+of a grid run outside kanso — a pre-registered sweep, a spreadsheet of settings — was chosen
+from that many draws before its first card ran. State the count, the evidence and its digest,
+and kanso adds the count to every number by which it prices the search: the trials
+`edge_per_trade` widens its margin for, the draws `deflated_*` take their expected maximum
+over, the count of two from which a plan must carry its search correction, and
+certification's refusal of a search it cannot read a spread for (`docs/concepts.md`, Card).
+It is summed over the family `derived_from` names, so a draft inherits its parent's grid as
+it inherits its cards; a block two members state from one evidence file — the same
+`sha256`, whatever name `source` gives the file, a copy of it included — is one grid, counted
+once, so give each grid its own evidence file. It is a count with no units: the deflation
+still reads its spread from kanso's own cards scored under the objective, and a certification
+behind one such card is still refused until a second is scored. The `n_trials` a card and a
+certificate are stamped with stays kanso's own cards.
+
+`source` is a file inside the workspace, named relative to its root — copy the evidence in,
+under `evidence/` say, and commit it with the rest. `kanso hyp validate` and `kanso hyp add`
+read it to check `sha256` against its bytes when the block is new, differing in any key from
+the one the hypothesis's pinned file states, and refuse (exit 3) a source that is absolute,
+resolves outside the workspace, climbs out of the root to name a file inside it, is not a path
+the host can open or read, is not there or is not a file, a digest the bytes do not hash to,
+and a block an ancestor already states, which `derived_from` already counts; so does `kanso
+classify`, which pins the file as it is on disk, for a block written in since the pin. Once a
+pin states the block only the pinned file is read: a re-pin of the same block, `kanso
+classify`'s included, reads nothing of the evidence, and moving or editing it refuses nothing.
+The count is yours, a whole number from 1 to a billion: kanso neither derives it nor checks it
+against what the evidence says. It is not scope, so a re-pin that only adds it keeps `best`,
+and the next run's baseline judges the best under the wider margin; a re-pin is refused while
+a run is active, so `kanso research end ID` first. kanso never writes the key; the classifying
+model is shown it with the rest of the file, and a `kanso hyp explore` draft that states one
+is refused on the ladder.
+
+```yaml
+prior_trials:
+  count: 27                                # settings of the grid the seed was the best of
+  source: evidence/measure-daily-PREREG.md # inside the workspace, relative to its root
+  sha256: 3f5c…                            # `shasum -a 256 evidence/measure-daily-PREREG.md`
+```
+
 **`sizing` is yours too, and it is not a gate.** A gate judges after a backtest has been
 paid for; this moves the size of every order to the harness, so a proposal that sizes wrong
 cannot be run at all:

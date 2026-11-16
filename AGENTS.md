@@ -105,7 +105,9 @@ fallback for a decision an agent is supposed to make: with no model configured t
 exits 2. The framework's own opinions are structural invariants and the construct taxonomy,
 and nothing else. One of those invariants is that a search is priced: every objective is
 claimed by exactly one deflation gate, the one whose library file `deflates` it, and once a
-hypothesis's `n_trials` — every card it has — reaches two, a plan that leaves that gate out,
+hypothesis's `n_trials` — every card it has — and the `prior_trials` its family declares —
+the offline grid that chose its seed, which every count pricing the search adds
+(`records.prior_trials`) and `n_trials` never does — reach two, a plan that leaves that gate out,
 or names it without its threshold, is refused — by the planner's own check, and again by
 `cert plan` and `cert run` on a plan already pinned — with `kanso cert plan ID --replan` as
 the way out. Whether a search is corrected for is not a decision; how high the bar sits is,

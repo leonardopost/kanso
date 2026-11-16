@@ -151,9 +151,9 @@ class CriteriaItem(KansoModel):
 
     `deflates` is a gate's claim to be the search correction for these objectives: the test
     that prices how many trials went into selecting a result scored on one of them. Every
-    objective is claimed by exactly one gate, and a plan for a hypothesis whose `n_trials`
-    has reached two includes that gate with its threshold set
-    (`kanso.criteria.library.deflation_gate`).
+    objective is claimed by exactly one gate, and a plan for a hypothesis whose `n_trials` and
+    declared `prior_trials` together have reached two includes that gate with its threshold
+    set (`kanso.criteria.library.deflation_gate`).
 
     `required_for` is a card or cert gate's claim to guard these objectives against a flaw of
     their own, with every parameter it declares set, so such a gate declares `together` too.

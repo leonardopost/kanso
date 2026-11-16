@@ -400,7 +400,8 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     model call and the certification window's backtests would buy a verdict already known.
     The `stalled` event records what the best scored, so the reason is on the record. Nor is
     a best whose search cannot be priced in its objective's units — fewer than two cards
-    scored under it behind a family that has run more (`kanso.certify.run.unpriced`) —
+    scored under it behind two or more draws, the cards the family has run and the settings
+    it declares tried outside kanso (`kanso.certify.run.unpriced`) —
     which certification would refuse, and the lane with it; the run goes on drawing
     the cards that make it priceable.
 
