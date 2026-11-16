@@ -411,14 +411,16 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     refuses the best on research data has decided the certificate before the certification
     window is read. The plan is therefore made here, in the lane — the planner's call when
     none is pinned, the refusal of a pinned plan this version cannot run — and the correction
-    judged on the measurement the best's newest card kept (`kanso.certify.run.precheck`),
-    running nothing. A refusal spares the stall: no child is started, no certification window
-    is read, the hypothesis stays where it was and goes back to the queue at −1. A
-    measurement struck under another `[research]` reading or criteria version, or none at
-    all, judges nothing here, and nor does a snapshot that cannot support a claim, whose
-    failing certificate is how it reaches the operator. Whatever the lane read, a child it
-    starts runs the research window first and judges the correction again on that run,
-    before it reads the certification window, and spares the stall itself when it refuses
+    judged on the measurement the best's newest card kept, running nothing; both on the
+    workspace as the child would open it, `kanso.toml` read again rather than as the lane
+    read it when it started (`kanso.certify.run.precheck_at_stall`). A refusal spares the
+    stall: no child is started, no certification window is read, the hypothesis stays where
+    it was and goes back to the queue at −1. A measurement struck under another `[research]`
+    reading than the file's now or another criteria version, or none at all, judges nothing
+    here, and nor does a snapshot that cannot support a claim, whose failing certificate is
+    how it reaches the operator. Whatever the lane read, a child it starts runs the research
+    window first and judges the correction again on that run, before it reads the
+    certification window, and spares the stall itself when it refuses
     (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its reading
     is the one a certificate agrees with. On a snapshot that cannot support a claim the child
     runs no window at all and writes its failing certificate, and its precheck judges nothing
@@ -438,10 +440,12 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     call is billed to.
 
     A certification that cannot run at all — no model on the planner's tier, a plan this
-    version can no longer honour, both now met in the lane before the precheck — raises out
-    of here rather than being swallowed. The lane that called it records the failure and
-    puts the hypothesis back itself, and an operator driving the loop by hand sees the
-    reason instead of a silent stall.
+    version can no longer honour, both now met in the lane before the precheck, and a fault
+    in planning, raised as the refusal the child would have reported — raises out of here
+    rather than being swallowed; a fault reading the card judges nothing and leaves the stall
+    to the child. The lane that called it records the failure and puts the hypothesis back
+    itself, and an operator driving the loop by hand sees the reason instead of a silent
+    stall.
 
     A `queue remove` that lands during the certification is honoured like the retire: the
     hypothesis returns nowhere. Either way an open claim on it is closed.
@@ -456,8 +460,8 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     # deferred so the cycle exists only while this function runs.
     from kanso.certify.certificate import judged
     from kanso.certify.child import certify_in_child
-    from kanso.certify.plan import plan, read_plan
-    from kanso.certify.run import Precheck, pinned_sha, precheck, unpriced
+    from kanso.certify.plan import read_plan
+    from kanso.certify.run import Precheck, pinned_sha, precheck_at_stall, unpriced
     from kanso.env.envelope import engine_version
 
     if _status(store, hyp_id) in DEAD:
@@ -486,7 +490,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         )
     checked: Precheck | None = None
     if certifiable:
-        checked = precheck(ws, store, hyp_id, cast("str", best), plan(ws, store, hyp_id, lane=lane))
+        checked = precheck_at_stall(ws.root, store, hyp_id, cast("str", best), lane=lane)
         certifiable = not checked.spared
     verdict: str | None = None
     cost: dict[str, object] = {}

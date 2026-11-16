@@ -7,7 +7,10 @@ a busy one skipped and left where it was.
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,10 +19,11 @@ import pytest
 from kanso import hyp
 from kanso.certify import certificate as certificates
 from kanso.certify import child
+from kanso.certify import plan as plans
 from kanso.certify.plan import read_plan
-from kanso.certify.run import precheck
+from kanso.certify.run import precheck, precheck_at_stall
 from kanso.data import snapshot as snapshots
-from kanso.errors import PreconditionError
+from kanso.errors import Exit, KansoError, PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
 from kanso.nautilus import backtest
@@ -29,7 +33,14 @@ from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
 from tests.certify.test_precheck import TIGHT, WIDE, measurement, searched
-from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, a_manifest, write_plan
+from tests.certify.test_run import (
+    CERT_GATES,
+    SEARCHED,
+    a_card,
+    a_manifest,
+    snapshot_id,
+    write_plan,
+)
 
 from .conftest import (
     ATTACHED_HOST,
@@ -596,6 +607,126 @@ def test_a_stall_with_no_plan_plans_in_the_lane_before_its_precheck(
     assert stall.precheck["evidence"]["min_dsr"] == next(
         gate.params["min_dsr"] for gate in pinned.gates if gate.id == "deflated_sharpe"
     )
+
+
+def test_a_stall_reads_kanso_toml_as_the_certification_child_it_would_start_reads_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A lane reads `kanso.toml` when it starts and the child it starts reads it again, so the
+    lane's plan and precheck read what the child reads. Once an operator edits `[research]
+    folds` under a running daemon, a card measured under the folds the lane started with is no
+    reading of the arithmetic certification makes: the lane judges nothing on it — where,
+    judged on its own start's folds, it spared the stall on a reading the child never makes
+    and withheld whatever the child would have certified — and the child judges the
+    correction on the research run it makes under the file's folds."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    searched(ws, store, *WIDE)
+    pinned = write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+    started = ws.config.research.folds
+    config = ws.path("kanso.toml")
+    text = config.read_text(encoding="utf-8")
+    edited = re.sub(r"(?m)^folds = \d+", f"folds = {started - 1}", text)
+    assert edited != text, "the workspace's kanso.toml declares its folds"
+    config.write_text(edited, encoding="utf-8")
+    assert precheck(ws, store, hyp_id, sha, pinned).spared, "judged on the lane's start"
+
+    lane = precheck_at_stall(ws.root, store, hyp_id, sha)
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert ws.config.research.folds == started, "the lane's own reading is its start's"
+    assert (lane.judged, lane.passed, lane.measured) == (False, None, False)
+    assert lane.reason is not None
+    assert f"under folds {started}, and certification would measure it under {started - 1}" in (
+        lane.reason
+    )
+    spared(ws, store, hyp_id, stall)
+    assert stall.precheck is not None
+    assert stall.precheck["measured"] is True, "the child's reading, on the run it made"
+    (stalled,) = store.events(kind=scheduler.STALLED)
+    assert float(str(stalled.detail["cert_wall_s"])) > 0, "the child ran the research window"
+
+
+def test_a_card_the_lane_cannot_read_leaves_the_stall_to_the_child(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The child turns a fault into a refusal its lane records; the lane reading a card in the
+    child's place has nothing to do so, and died of a measurement it could not decode where
+    the child never reads one. So the reading judges nothing and says what raised, and the
+    child certifies the stall on the research run it makes, as it did before the lane judged
+    anything."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=store.put_blob(b"no measurement"))
+    searched(ws, store, *TIGHT)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    lane = precheck_at_stall(ws.root, store, hyp_id, sha)
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert (lane.judged, lane.passed, lane.measured) == (False, None, False)
+    assert lane.reason is not None
+    assert lane.reason.startswith(f"reading the newest card of {sha[:7]} raised error")
+    assert (stall.certifiable, stall.verdict) == (True, "pass")
+    assert stall.precheck is not None
+    assert (stall.precheck["judged"], stall.precheck["pass"]) == (True, True)
+    assert stall.precheck["measured"] is True
+
+
+def test_a_fault_planning_a_stall_is_the_refusal_the_child_reported(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, recorded: Recorder
+) -> None:
+    """Planned in the child, a plan pinned on a full disk came back to the lane as a refusal,
+    which a daemon lane records and backs off from; planned in the lane, the `OSError` ended
+    the lane. It is raised as that refusal: exit 1, naming what raised, with `kanso cert run`
+    as the way to see it, and no child started."""
+    scripted(ws)
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    searched(ws, store, *WIDE)
+
+    def full(*_: object) -> None:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+    monkeypatch.setattr(plans, "_pin", full)
+    monkeypatch.setattr(child, "certify_in_child", refused)
+
+    with pytest.raises(KansoError) as raised:
+        scheduler.on_stall(ws, store, hyp_id, "l1")
+
+    assert raised.value.code is Exit.ERROR
+    assert f"of {hyp_id} raised OSError: [Errno {errno.ENOSPC}]" in raised.value.message
+    assert raised.value.remedy is not None
+    assert f"`kanso cert run {hyp_id}`" in raised.value.remedy
+    assert isinstance(raised.value.__cause__, OSError)
+    assert len(recorded.of("certify_plan")) == 1
+    assert read_plan(ws, hyp_id) is None
+    assert store.events(kind=scheduler.STALLED) == []
+
+
+@pytest.mark.parametrize("met", ["unplanned", "unsnapped"])
+def test_a_refusal_the_lane_meets_in_the_child_s_place_is_raised_as_itself(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, met: str
+) -> None:
+    """A refusal is no fault. Planning with no model to plan with, or reading a card whose
+    snapshot the workspace no longer holds, refuses in the lane as it refused in the child:
+    as itself, with its own remedy — never wrapped as a fault, nor read as a precheck that
+    judged nothing and let through to a child that would refuse it the same way."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    searched(ws, store, *WIDE)
+    if met == "unsnapped":
+        write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+        snapshots.snapshot_file(ws, snapshot_id(ws)).unlink()
+    monkeypatch.setattr(child, "certify_in_child", refused)
+
+    with pytest.raises(KansoError) as raised:
+        scheduler.on_stall(ws, store, hyp_id)
+
+    assert raised.value.code is not Exit.ERROR, "a refusal, not a fault"
+    assert raised.value.remedy is not None
+    assert "raised" not in raised.value.message
+    assert store.events(kind=scheduler.STALLED) == []
 
 
 def test_a_stall_on_a_best_whose_search_cannot_be_priced_is_not_certified(

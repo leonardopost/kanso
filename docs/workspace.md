@@ -195,7 +195,8 @@ until a vendor is configured, and the table you then append is not declared twic
 killed for it passes the hypothesis over until it, or another of what that baseline ran on,
 moves (`docs/cli.md`, The daemon and the queue), and a lane reads `kanso.toml` when it starts,
 so a budget raised under a running daemon reaches its lanes after `kanso research stop` and
-`kanso research start`.
+`kanso research start`. A stall's certification is the exception: its plan, its precheck and
+the child that certifies read the file again at the stall (`docs/cli.md`, Certification).
 
 `[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
 many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses

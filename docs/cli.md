@@ -155,13 +155,19 @@ remedy `kanso cert plan ID --replan`) and judges the correction on the measureme
 newest card kept, running nothing. A card measured under another `[research] folds`,
 `return_period`, capital or criteria version — a run's baseline struck by the build before an
 upgrade, say — or one that kept no measurement is no reading of the arithmetic certification
-would use, so the lane judges nothing. Nor does it judge on a snapshot that cannot support a
-claim: certification judges no correction there, and its failing certificate is how such a
-snapshot reaches the operator, so a stall on one is never spared. Whatever the lane read, the
-certification child it starts runs the research window first and judges the correction again
-on that run, before it reads the certification window — the run is the certificate's own, so
-a stall the lane let through on the card's reading can still be refused there — unless its
-snapshot cannot support a claim, where it runs no window at all (below). A refusal in either
+would use, so the lane judges nothing. The lane plans and judges on `kanso.toml` as it stands
+at the stall, read again as the certification child reads it, so a `[research]` setting
+edited under a running daemon is the one both use, though the lane read the file when it
+started. A card the lane cannot read judges nothing, its `reason` naming what raised, and the
+stall goes to the child, which never reads it; a fault making the plan is the refusal the
+child reported when it planned: exit 1, naming what raised, remedy `kanso cert run ID`. Nor
+does it judge on a snapshot that cannot support a claim: certification judges no correction
+there, and its failing certificate is how such a snapshot reaches the operator, so a stall on
+one is never spared. Whatever the lane read, the certification child it starts runs the
+research window first and judges the correction again on that run, before it reads the
+certification window — the run is the certificate's own, so a stall the lane let through on
+the card's reading can still be refused there — unless its snapshot cannot support a claim,
+where it runs no window at all (below). A refusal in either
 place **spares** the stall: no certification window is read, no certificate is written, the
 hypothesis keeps its status and goes back to the queue at −1, and nothing counts toward
 `[certify] n_fail`. A correction that judged nothing — a plan that carries none before the

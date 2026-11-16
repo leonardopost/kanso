@@ -2502,9 +2502,12 @@ best's newest card kept — by the gate's own `evaluate`, on the context certifi
 for it, with that research run in the run's place — running nothing. A card measured under
 another `[research] folds`, `return_period` or capital, or another criteria version, or one
 that kept no measurement, is no reading of the arithmetic certification would use: the lane
-judges nothing. Nor does it on a snapshot that cannot support a claim, where certification
-judges no correction and whose failing certificate is how that snapshot reaches the operator,
-so a stall on one is never spared. Whatever the lane read, the certification child it starts
+judges nothing. The settings are read from `kanso.toml` as it stands at the stall, as the
+certification child reads them, not as the lane read them when it started, so one edited
+under a running daemon is the one both judge by. A card the lane cannot read judges nothing
+either, and goes to the child, which never reads it. Nor does the lane judge on a snapshot
+that cannot support a claim, where certification judges no correction and whose failing
+certificate is how that snapshot reaches the operator, so a stall on one is never spared. Whatever the lane read, the certification child it starts
 runs the research window first and judges the correction again on it before it reads the
 certification window — on a snapshot that cannot support a claim it runs neither window, and
 the failing certificate it writes is recorded beside a precheck that judged nothing and says

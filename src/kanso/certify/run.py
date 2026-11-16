@@ -133,7 +133,7 @@ from kanso.data.snapshot import Snapshot
 from kanso.data.snapshot import read as read_snapshot
 from kanso.data.types import type_id_of
 from kanso.env.envelope import engine_version
-from kanso.errors import KansoError, PreconditionError, ValidationError
+from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
 from kanso.hyp import HYPOTHESIS_FILE, Registration, host_resolution, host_sizing, set_status
 from kanso.hyp import show as registration_of
 from kanso.inbox import escalate
@@ -163,6 +163,7 @@ from kanso.schemas import (
     load_yaml,
     parse_yaml,
 )
+from kanso.workspace import find
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from pathlib import Path
@@ -182,6 +183,7 @@ __all__ = [
     "certify_at_stall",
     "pinned_sha",
     "precheck",
+    "precheck_at_stall",
     "read_precheck",
     "show",
     "subject_run",
@@ -540,6 +542,58 @@ def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -
     )
 
 
+def precheck_at_stall(
+    root: Path, store: StateStore, hyp_id: str, sha: str, *, lane: str = DEFAULT_LANE
+) -> Precheck:
+    """A stall's plan and its search correction on research data, made in the lane in the
+    place of the certification child it would start, on the workspace that child opens.
+
+    Takes the workspace's root and never a workspace. A lane reads `kanso.toml` when it
+    starts; the child reads it again (`kanso.certify.child.main`), as `kanso cert run` does,
+    so under a daemon an operator has edited `[research] folds`, `return_period` or `capital`
+    beneath, the child certifies by the file and the lane remembers the start. Judged on the
+    lane's reading, a card measured under the old folds was judged and could be refused —
+    the stall spared, a certificate the child would have written withheld — and a plan made
+    on it was pinned against folds the child no longer runs. So the workspace is found again
+    at `root`, as the child finds it, and both the plan and the precheck are made on that.
+
+    The child turns a fault that is not a refusal into one its lane records and goes on from;
+    in the lane nothing does, and the lane dies of it. So the two faults the lane now meets
+    in the child's place end as they did in the child. One raised making the plan — a plan
+    pinned on a full disk, say — is raised as the refusal the child's report made of it, exit
+    1 naming what raised, with `kanso cert run ID` as the way to see it. One raised reading
+    the card — a measurement this build cannot decode — judges nothing and says what raised,
+    and the stall goes to the child, which never reads that measurement: it judges the
+    correction on the research run it makes.
+    """
+    try:
+        ws = find(root)
+        planned = plan_for(ws, store, hyp_id, lane=lane)
+    except KansoError:
+        raise
+    except Exception as fault:
+        raise KansoError(
+            f"planning the certification of {sha[:7]} of {hyp_id} raised "
+            f"{type(fault).__name__}: {fault}",
+            Exit.ERROR,
+            remedy=f"certify it by hand with `kanso cert run {hyp_id}` to see the traceback",
+        ) from fault
+    try:
+        return precheck(ws, store, hyp_id, sha, planned)
+    except KansoError:
+        raise
+    except Exception as fault:
+        return Precheck(
+            None,
+            judged=False,
+            passed=None,
+            evidence={},
+            reason=f"reading the newest card of {sha[:7]} raised {type(fault).__name__}: "
+            f"{fault}, so the certification child judges it on the research run it makes",
+            measured=False,
+        )
+
+
 def precheck(
     ws: Workspace, store: StateStore, hyp_id: str, sha: str, plan: CertificationPlan
 ) -> Precheck:
@@ -547,18 +601,19 @@ def precheck(
 
     Reads, and runs nothing. The subject is the card certification would take: the newest
     card of these bytes, under the hypothesis file its run pinned. Its stored measurement is
-    read only when it was struck the way certification would strike the research window now —
-    the pin's objective, `[research] folds` and `return_period`, the subject's capital and the
-    installed `criteria_version` — and otherwise the precheck judges nothing and says which
-    differed, as it does for a card that kept no measurement. Nor does it judge on a snapshot
-    that cannot support a claim: certification runs no window there and judges no correction,
-    and the failing certificate it writes is how that snapshot reaches the operator, so the
-    lane leaves the stall to it rather than spare it on a reading certification would not
-    make. Where it does judge, the gate is evaluated by its own `evaluate` on the context
-    certification would build for it (`_judge`), the measurement's run in both `run` and
-    `research_run` and the host and benchmark it was differenced against beside it, with the
-    trials certification counts: one arithmetic, so what this judges is what the
-    certificate's correction would judge from the same run.
+    read only when it was struck the way certification in `ws` would strike the research
+    window now — the pin's objective, `[research] folds` and `return_period`, the subject's
+    capital and the installed `criteria_version` — and otherwise the precheck judges nothing
+    and says which differed, as it does for a card that kept no measurement; a stall reads
+    `ws` as its certification child opens it (`precheck_at_stall`). Nor does it judge on a
+    snapshot that cannot support a claim: certification runs no window there and judges no
+    correction, and the failing certificate it writes is how that snapshot reaches the
+    operator, so the lane leaves the stall to it rather than spare it on a reading
+    certification would not make. Where it does judge, the gate is evaluated by its own
+    `evaluate` on the context certification would build for it (`_judge`), the measurement's
+    run in both `run` and `research_run` and the host and benchmark it was differenced
+    against beside it, with the trials certification counts: one arithmetic, so what this
+    judges is what the certificate's correction would judge from the same run.
 
     The same run is what certification makes only where nothing moved since the card was
     measured that the guards cannot see. A run upgraded mid-way to a build that changed a

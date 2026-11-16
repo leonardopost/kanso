@@ -20,23 +20,26 @@ share the envelope plans bounds everything a lane runs.
 
 What differs from a card is what the child may reach. A card has no path to any catalog and
 starts under an allow-list of the environment; certification is the one place a strategy
-meets the window kept from it, and it plans with a model when no plan is pinned, so the
-child opens the workspace, its catalog and its store as the lane does, under the lane's
-environment. It certifies as `kanso cert run` does, by the one function, with the one
-difference a stall makes (`kanso.certify.run.certify_at_stall`): the research window is run
-first and the plan's search correction judged on it, and a correction that refuses the
-subject there spares the stall — the certification window is never read and no certificate
-is written. On a snapshot that cannot support a claim it runs neither window, as `cert run`
-does, and its precheck judges nothing and says why. It writes the certificate and every
-event itself, and reports the certificate, or that none was made, beside that precheck — or
-the refusal — to the lane, which raises a refusal as the same kind of error with the same
-remedy. The certificate it reports carries the certification window's net per trade, struck
-from the run its gates judged (`kanso.certify.run.net_per_trade`) — the number a book ranks
-its members by, which nothing ever recomputes by running the window again. A fault that is
-not a refusal comes back as one naming what raised, so a lane records it and goes on rather
-than dying of it. No wall time is imposed: how many engine runs a certification makes is its
-plan's choice — the gates, and the parameters a perturbation moves — so no multiple of a
-card's budget bounds it.
+meets the window kept from it, so the child opens the workspace, its catalog and its store
+as the lane does, under the lane's environment, and reads `kanso.toml` afresh, as the lane's
+plan and precheck for the stall did (`kanso.certify.run.precheck_at_stall`). The lane pins
+the plan before it starts the child, which reads it back as `kanso cert run` does and calls
+the planner only where that plan is gone by then. It certifies as `kanso cert run` does, by
+the one function, with the one difference a stall makes
+(`kanso.certify.run.certify_at_stall`): the research window is run first and the plan's
+search correction judged on it, and a correction that refuses the subject there spares the
+stall — the certification window is never read and no certificate is written. On a snapshot
+that cannot support a claim it runs neither window, as `cert run` does, and its precheck
+judges nothing and says why. It writes the certificate and every event itself, and reports
+the certificate, or that none was made, beside that precheck — or the refusal — to the lane,
+which raises a refusal as the same kind of error with the same remedy. The certificate it
+reports carries the certification window's net per trade, struck from the run its gates
+judged (`kanso.certify.run.net_per_trade`) — the number a book ranks its members by, which
+nothing ever recomputes by running the window again. A fault that is not a refusal comes
+back as one naming what raised, so a lane records it and goes on rather than dying of it.
+No wall time is imposed: how many engine runs a certification makes is its plan's choice —
+the gates, and the parameters a perturbation moves — so no multiple of a card's budget
+bounds it.
 
 A child killed over the share is refused, naming what it reached and the two ways to give
 it more: a larger `[env] mem_per_lane_gb`, which plans the lanes around what certification

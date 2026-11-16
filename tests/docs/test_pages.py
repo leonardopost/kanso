@@ -311,6 +311,14 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
     assert "a spare, since a lane that judged nothing starts one, so its reason is" in cli
     for text in (cli, concepts, changelog):
         assert "so a stall on one is never spared" in text
+    # The lane stands in for the child it would start, so it reads `kanso.toml` as the child
+    # does — again, at the stall — and a fault there ends as it did in the child.
+    assert "read again as the certification child reads it" in cli
+    assert "as the certification child reads them, not as the lane read them" in concepts
+    assert "read again, as the certification child reads it, not as the lane read it" in changelog
+    assert "remedy `kanso cert run ID`. Nor" in cli
+    workspace = prose(page("workspace.md"))
+    assert "A stall's certification is the exception" in workspace
     assert "`dsr` and `min_dsr` under `deflated_sharpe`" in cli
     status = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso status`")
