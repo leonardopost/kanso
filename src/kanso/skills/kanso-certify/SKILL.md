@@ -21,4 +21,5 @@ metadata:
 
 ## Rules
 - Never re-plan to make a certificate pass.
+- A stall certifies only a best whose search correction — the plan's `deflated_sharpe`, `deflated_contribution` or `deflated_edge`, at its threshold — passes on research data. One it refuses is **spared**: no certification window is read, no certificate is written, nothing counts toward `n_fail`, and the hypothesis goes back to research. `kanso status --json` → `hypotheses[].last_stall.precheck` (and `kanso research run --json` → `stall.precheck`) names the gate, its `evidence` (probability against the threshold), and `measured`: `false` when the lane read the card's own measurement, `true` when the certification child ran the research window because the card was measured under another `folds`, `return_period`, capital or criteria version. `judged: false` with a `reason` spared nothing. Report a spared stall as research that has not yet beaten its own search; `kanso cert run` by hand is never spared, and certifying a spared best anyway is the operator's call, not yours.
 - Paper-stage gates run during paper via `kanso monitor run` (the daemon runs it too), not in `cert run`.

@@ -15,14 +15,17 @@ import pytest
 
 from kanso import hyp
 from kanso.certify import child
+from kanso.certify.plan import read_plan
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
 from kanso.inbox import unread
+from kanso.nautilus import backtest
 from kanso.research import passages, records, scheduler
 from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
 from kanso.workspace import Workspace
+from tests.certify.test_precheck import TIGHT, WIDE, measurement, searched
 from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, write_plan
 
 from .conftest import (
@@ -35,7 +38,7 @@ from .conftest import (
     classify,
     document,
 )
-from .mocked import tuned
+from .mocked import Recorder, fresh_cursors, scripted, tuned  # noqa: F401
 from .test_attached import compose_host
 
 
@@ -420,6 +423,132 @@ def test_a_stall_on_a_best_that_proved_no_edge_is_not_certified(
     assert ids(store) == [hyp_id], "back to research, as any stall"
     (stalled,) = store.events(kind=scheduler.STALLED)
     assert stalled.detail["best_metric"] == metric, "the event says what the best scored"
+
+
+def refused(*_: object, **__: object) -> Any:
+    raise AssertionError("a spared stall started a certification or read its window")
+
+
+def spared(ws: Workspace, store: StateStore, hyp_id: str, stall: scheduler.Stall) -> None:
+    """What a stall spared by its search correction leaves: no certificate, no `certifiable`,
+    the hypothesis researching as it was and back in the queue at −1, and the precheck that
+    refused it on its `stalled` event."""
+    assert (stall.certifiable, stall.verdict, stall.priority) == (
+        False,
+        None,
+        scheduler.STALL_PRIORITY,
+    )
+    assert stall.precheck is not None
+    assert (stall.precheck["judged"], stall.precheck["pass"]) == (True, False)
+    assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+    assert ids(store) == [hyp_id], "back to research, as any stall"
+    (stalled,) = store.events(kind=scheduler.STALLED)
+    assert stalled.detail["precheck"] == stall.precheck
+    assert stalled.detail["certifiable"] is False
+
+
+def test_a_stall_whose_best_fails_its_search_correction_on_research_data_is_spared(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The correction reads research alone and a certificate is a conjunction, so a best it
+    refuses would fail certification whatever the window showed: the lane judges it from the
+    measurement the card kept, starts no child and reads no window."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    searched(ws, store, *WIDE)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+    monkeypatch.setattr(child, "certify_in_child", refused)
+    monkeypatch.setattr(backtest, "window_chunks", refused)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    spared(ws, store, hyp_id, stall)
+    assert stall.precheck is not None
+    assert stall.precheck["gate"] == "deflated_sharpe" and stall.precheck["measured"] is False
+
+
+def test_a_stall_whose_best_passes_its_search_correction_is_certified_as_before(
+    ws: Workspace, store: StateStore
+) -> None:
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    searched(ws, store, *TIGHT)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert (stall.certifiable, stall.verdict) == (True, "pass")
+    assert show(ws, store, hyp_id).status == "certified"  # type: ignore[union-attr]
+    assert stall.precheck is not None
+    assert (stall.precheck["judged"], stall.precheck["pass"]) == (True, True)
+    assert stall.precheck["measured"] is True, "the child's reading, on the run it made"
+    kinds = [event.kind for event in store.events(subject=hyp_id)]
+    assert kinds.index(scheduler.CERTIFIABLE) < kinds.index(scheduler.STALLED)
+
+
+def test_a_stall_the_lane_cannot_judge_is_judged_by_the_child_before_the_window(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A card measured under another kanso is no reading of the arithmetic certification would
+    use, so the lane judges nothing and the child runs the research window first; a
+    correction that holds there certifies as before."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, criteria_version="0.0.1"))
+    searched(ws, store, *TIGHT)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    assert (stall.certifiable, stall.verdict) == (True, "pass")
+    assert stall.precheck is not None
+    assert (stall.precheck["judged"], stall.precheck["pass"]) == (True, True)
+    assert stall.precheck["measured"] is True
+
+
+def test_a_stall_the_child_refuses_on_research_data_is_spared_by_the_child(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Where the lane could not judge, the child's refusal spares the stall just the same: it
+    stops before the certification window, writes nothing and moves nothing."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    a_card(ws, store, REVERTING)
+    searched(ws, store, *WIDE)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    spared(ws, store, hyp_id, stall)
+    assert stall.precheck is not None and stall.precheck["measured"] is True
+    (stalled,) = store.events(kind=scheduler.STALLED)
+    assert float(str(stalled.detail["cert_wall_s"])) > 0, "the child ran the research window"
+
+
+def test_a_stall_with_no_plan_plans_in_the_lane_before_its_precheck(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, recorded: Recorder
+) -> None:
+    """The precheck reads the threshold the planner chose, so the plan is made in the lane: one
+    planner call, pinned, and the stall spared on it without a child."""
+    scripted(ws)
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    searched(ws, store, *WIDE)
+    monkeypatch.setattr(child, "certify_in_child", refused)
+
+    stall = scheduler.on_stall(ws, store, hyp_id, "l1")
+
+    assert len(recorded.of("certify_plan")) == 1
+    pinned = read_plan(ws, hyp_id)
+    assert pinned is not None and pinned.plan_version == 1
+    spared(ws, store, hyp_id, stall)
+    assert stall.precheck is not None
+    assert stall.precheck["evidence"]["min_dsr"] == next(
+        gate.params["min_dsr"] for gate in pinned.gates if gate.id == "deflated_sharpe"
+    )
 
 
 def test_a_stall_on_a_best_whose_search_cannot_be_priced_is_not_certified(

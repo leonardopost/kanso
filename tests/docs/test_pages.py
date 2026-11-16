@@ -274,6 +274,28 @@ def test_the_cli_page_says_a_stage_speed_paces_nothing_in_this_version() -> None
     assert "the catch-up itself runs unpaced" in text
 
 
+def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -> None:
+    """A stall the search correction refuses on research data reads no certification window
+    (`kanso.certify.run.precheck`, `certify_at_stall`). The pages say so where the stall's
+    rule and its two commands are described, and name every key the `stalled` event records
+    for it, so an operator reading one can tell a spared stall from one that judged
+    nothing."""
+    from kanso.certify.run import Precheck
+
+    cli = prose(page("cli.md"))
+    concepts = prose(page("concepts.md"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    rule = "A stall certifies only a best whose search correction passes on research data."
+    assert f"**{rule}**" in cli and f"**{rule}**" in changelog
+    assert "**A stall certifies only a best whose correction passes on research data.**" in (
+        concepts
+    )
+    for key in Precheck("deflated_edge", False, None, {}, "why").payload():
+        assert f"`{key}`" in cli, key
+    assert "`cert run` by hand is never spared" in concepts
+    assert "measured on the demo, the probability, the expected maximum and the trial" in (concepts)
+
+
 def test_the_cli_page_states_both_sides_of_the_paper_gate() -> None:
     monitoring = prose(section(page("cli.md"), "Monitoring"))
     assert "a short window is a fail" in monitoring

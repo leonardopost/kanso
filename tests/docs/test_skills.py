@@ -79,6 +79,16 @@ def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
     assert "The run's base is never judged" in text
 
 
+def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> None:
+    """An agent asked why a stall certified nothing reads this file; told nothing of the
+    precheck, it would report a missing certificate as a fault, or certify by hand a best the
+    search correction had already refused on research data."""
+    text = skill(PACKAGED, "kanso-certify")
+    assert "passes on research data. One it refuses is **spared**" in text
+    assert "`hypotheses[].last_stall.precheck`" in text
+    assert "`kanso cert run` by hand is never spared" in text
+
+
 def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
     """An agent declaring a US split without a zone gets a UTC day, which lands the split
     inside a winter post-market; the skill is where it learns the key exists."""
