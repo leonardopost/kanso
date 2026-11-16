@@ -151,6 +151,7 @@ def test_a_grid_whose_evidence_hashes_otherwise_is_refused(ws: Workspace) -> Non
         f"{block['sha256']} the count was stated with"
     )
     assert "shasum -a 256" in (failure.remedy or "")
+    assert "`sha256sum` where shasum is not installed" in (failure.remedy or ""), "Linux's own"
 
 
 def test_a_grid_its_parent_already_states_is_refused(ws: Workspace) -> None:
@@ -200,6 +201,78 @@ def test_a_hypothesis_whose_parent_derives_from_it_is_not_refused_its_own_grid(
     parsed = accepted(ws, document(derived_from=["demo_parent"], prior_trials=block))
 
     assert parsed.prior_trials is not None
+
+
+@pytest.mark.parametrize("touch", ["moved", "edited"])
+def test_a_grid_the_hypothesis_has_pinned_is_not_read_again(ws: Workspace, touch: str) -> None:
+    """The evidence is read when the block is stated; once the pinned file states it, a re-pin
+    of the same block reads only the pin, so moving or editing the evidence refuses nothing."""
+    block = evidence(ws)
+    register(ws, document(prior_trials=block))
+    held = ws.root / block["source"]
+    if touch == "moved":
+        held.rename(ws.root / "evidence" / "kept.md")
+    else:
+        held.write_bytes(GRID + b"a note added after hyp add\n")
+
+    parsed = accepted(ws, document(prior_trials=block))
+
+    assert parsed.prior_trials is not None
+    assert parsed.prior_trials.model_dump() == block
+
+
+def test_a_grid_changed_since_its_pin_is_read_again(ws: Workspace) -> None:
+    """A block the pin does not state — another count of the same evidence included — is a
+    new statement, and its evidence is read."""
+    block = evidence(ws)
+    register(ws, document(prior_trials=block))
+    (ws.root / block["source"]).unlink()
+
+    failure = refused(ws, document(prior_trials={**block, "count": 28}))
+
+    assert (
+        failure.message == "prior_trials.source: evidence/grid.md does not exist in the workspace"
+    )
+
+
+@pytest.mark.parametrize("spelled", ["./evidence/grid.md", "evidence/../evidence/grid.md"])
+def test_a_grid_its_parent_states_under_another_spelling_is_refused(
+    ws: Workspace, spelled: str
+) -> None:
+    """One file is one grid, however its path is spelled."""
+    block = evidence(ws)
+    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
+
+    failure = refused(
+        ws, document(derived_from=["demo_parent"], prior_trials={**block, "source": spelled})
+    )
+
+    assert failure.message.startswith("prior_trials: repeats demo_parent's block")
+
+
+def test_a_source_with_a_nul_in_it_is_refused_as_inadmissible(ws: Workspace) -> None:
+    """A path the filesystem refuses outright is the operator's file to fix (exit 3), not a
+    fault of kanso's (exit 1)."""
+    source = "evidence/\0grid.md"
+    block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message.startswith(f"prior_trials.source: {source!r} is not a path this host")
+    assert "null" in failure.message
+    assert "evidence/" in (failure.remedy or "")
+
+
+def test_a_source_longer_than_a_name_can_be_is_refused_as_inadmissible(ws: Workspace) -> None:
+    """Python 3.12 and 3.13 raise `ENAMETOOLONG` from `is_file`, which is refused as a path
+    this host cannot open; a pathlib that answers it as no file refuses it as missing."""
+    source = "evidence/" + "x" * 5000 + ".md"
+    block = {"count": 27, "source": source, "sha256": sha256(GRID).hexdigest()}
+
+    failure = refused(ws, document(prior_trials=block))
+
+    assert failure.message.startswith("prior_trials.source: ")
+    assert "evidence/" in (failure.remedy or "")
 
 
 def test_a_classified_sleeve_is_admissible(ws: Workspace) -> None:

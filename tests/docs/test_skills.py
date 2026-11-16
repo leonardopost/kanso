@@ -63,6 +63,18 @@ def test_the_hypothesis_skill_states_a_grid_in_the_keys_the_schema_reads() -> No
     assert "take N from the operator, never from your own reading of the file" in text
 
 
+def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
+    """A plan carries its correction, a pinned one is refused without it and a search is
+    priced over its draws, a declared grid's settings among them: a skill counting cards alone
+    tells an agent a plan one card behind a grid needs no correction."""
+    text = skill(PACKAGED, "kanso-certify")
+    assert "and the `prior_trials` its family declares tried outside kanso" in text
+    assert "from the second draw: the second card, or the first behind a declared grid" in text
+    assert "or the first card behind a declared grid" in text
+    assert "can exceed the certificate's `n_trials`, which counts cards alone" in text
+    assert "every card it has, reaches two" not in text
+
+
 def test_the_promote_skill_names_the_one_cost_a_broker_does_not_supply() -> None:
     text = skill(PACKAGED, "kanso-promote")
     assert "must be `fixed_bps` on the hypothesis or under `venues.<MIC>.costs`" in text

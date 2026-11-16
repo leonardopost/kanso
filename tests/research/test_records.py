@@ -366,6 +366,19 @@ def test_a_family_s_prior_trials_are_the_sum_of_its_grids_each_counted_once(
     assert records.declared_prior(store, "nobody_here") is None
 
 
+def test_one_grid_spelled_two_ways_is_counted_once(store: StateStore) -> None:
+    """`./` and `..` name the file they would open, so one evidence file is one grid whichever
+    spelling a member pinned."""
+    a_hypothesis(store, "demo_root", a_grid(27))
+    a_hypothesis(store, "demo_dotted", a_grid(27, "./evidence/grid.md", "3f" * 32, "demo_root"))
+    a_hypothesis(
+        store, "demo_climbed", a_grid(27, "evidence/../evidence/grid.md", "3f" * 32, "demo_root")
+    )
+
+    assert records.prior_trials(store, "demo_dotted") == 27
+    assert records.prior_trials(store, "demo_climbed") == 27
+
+
 def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     store: StateStore, registered: str
 ) -> None:

@@ -62,11 +62,11 @@ planner's answer like the threshold itself.
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
 second opinion, and a pinned plan this version can no longer run is refused with the
-replan that would fix it — a plan pinned before the hypothesis's second card, or by a
-kanso that did not hold it to its correction, among them: the search it is checked against
-is the one the hypothesis has spent now. `replan` re-runs the planner over the same closed
-set of inputs, as they read now, and mints the next `plan_version`; the plan a certificate
-names is therefore always recoverable.
+replan that would fix it — a plan pinned before the search's second draw, card or declared
+setting, or by a kanso that did not hold it to its correction, among them: the search it is
+checked against is the one the hypothesis has spent now. `replan` re-runs the planner over
+the same closed set of inputs, as they read now, and mints the next `plan_version`; the plan
+a certificate names is therefore always recoverable.
 """
 
 from __future__ import annotations
@@ -370,10 +370,12 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
 
     The search correction is stated as a rule over `n_trials` and `prior_trials` rather than
     folded into `required_gates`: the gate it names follows from the hypothesis, which is the
-    cached prefix, and whether it is required follows from the trial count, which is not. What its
-    threshold bounds across the lineage's looks at the certification window is stated the
-    same way, over `looks`: a fact for the planner to weigh, since no rule moves the
-    threshold with the count.
+    cached prefix, and whether it is required follows from the trial count, which is not. The
+    deflation gates' library files say "from the second card", and rewording them would move
+    the criteria version every run records, so the rule says how to read those words over a
+    declared grid. What its threshold bounds across the lineage's looks at the certification
+    window is stated the same way, over `looks`: a fact for the planner to weigh, since no
+    rule moves the threshold with the count.
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
@@ -386,7 +388,9 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             f"objective, {hyp.objective.id}; set its threshold, whose value is yours to choose "
             "inside its range. prior_trials is how many settings the hypothesis and those it "
             "derives from declare were tried outside kanso, in the grids that chose their seeds; "
-            "the correction counts them among its draws beside the cards",
+            "the correction counts them among its draws beside the cards, so where the toolbox "
+            "says a deflation gate is required from the second card, the second card is the "
+            "second of n_trials + prior_trials",
             "looks is how many certificates this hypothesis's lineage — every registered "
             "hypothesis joined to it by derived_from, either way — has already made that read a "
             "window sharing a day with the certification window its subject is read on — the one "

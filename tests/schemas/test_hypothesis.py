@@ -282,6 +282,7 @@ def test_prior_trials_is_optional_and_reads_back_as_stated() -> None:
     [
         ({**GRID, "count": 0}, "prior_trials.count"),
         ({**GRID, "count": -27}, "prior_trials.count"),
+        ({**GRID, "count": 10**16}, "prior_trials.count"),
         ({**GRID, "source": ""}, "prior_trials.source"),
         ({**GRID, "sha256": "3F" * 32}, "prior_trials.sha256"),
         ({**GRID, "sha256": "3f5c"}, "prior_trials.sha256"),
@@ -294,6 +295,28 @@ def test_a_grid_is_a_count_of_one_or_more_with_its_evidence_and_nothing_else(
 ) -> None:
     with pytest.raises(ValidationError, match=field.replace(".", r"\.")):
         build(prior_trials=block)
+
+
+def test_a_grid_is_never_wider_than_a_margin_can_be_struck_over() -> None:
+    """Past about 6.6e15 draws the expected maximum cannot be struck in floating point, and a
+    baseline over a count the file admitted would raise; the bound keeps every admitted count
+    priceable beside any number of cards a workspace could run."""
+    from kanso.criteria.gates import search_margin
+    from kanso.schemas.hypothesis import MAX_PRIOR_TRIALS
+
+    stated = build(prior_trials={**GRID, "count": MAX_PRIOR_TRIALS}).prior_trials
+    assert stated is not None
+    assert search_margin(stated.count + 10**9) > search_margin(stated.count)
+    with pytest.raises(ValidationError, match=r"prior_trials\.count"):
+        build(prior_trials={**GRID, "count": MAX_PRIOR_TRIALS + 1})
+
+
+def test_a_grid_is_known_by_its_evidence_however_its_path_is_spelled() -> None:
+    plain = PriorTrials.model_validate(GRID)
+    dotted = PriorTrials.model_validate({**GRID, "source": "./evidence/x/../grid.md"})
+
+    assert plain.grid == dotted.grid == ("evidence/grid.md", GRID["sha256"])
+    assert dotted.source == "./evidence/x/../grid.md", "the operator's spelling is kept"
 
 
 @given(prior_trials())

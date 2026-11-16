@@ -1268,7 +1268,7 @@ already over. There are eleven.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
-| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 on a hypothesis's first card, 0.52 at 2 trials, 2.28 at 50, 3.05 at 500 — where `trials` is the card and every card of the hypothesis before it that ran to a result and traded, under any objective. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
+| `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 at 1 trial, 0.52 at 2, 2.28 at 50, 3.05 at 500 — where `trials` is the card, every card of the hypothesis before it that ran to a result and traded, under any objective, and the `prior_trials` its family declares tried outside kanso (*Card* above), so a hypothesis's first card is held to 0 only where no grid is declared. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `prior_trials` — the declared part of it — `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
 **A session is a clock in a zone, read date by date.** `trading_hours {session: "09:30-16:00",
@@ -2463,7 +2463,7 @@ the complaints back to the same model, then to the next tier up; a plan still in
 that fails the step. With no model configured there is nothing to fall back on and the step
 exits 2.
 
-**A search is corrected for, from its second card.** Every objective has exactly one
+**A search is corrected for, from its second draw.** Every objective has exactly one
 deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
 Sharpes, `deflated_contribution` for the contributions, `deflated_edge` for the per-trade
 edges — and once the hypothesis's `n_trials`, every card it has, and the `prior_trials` its
@@ -2476,8 +2476,8 @@ still its answer, from a range whose floor is 0.9 — at 0.5, where the three ra
 start, a best with no edge passed `deflated_edge` and `deflated_contribution` 45 to 56
 percent of the time at 2, 50 and 500 trials, so a plan could satisfy the rule and price
 almost nothing. A plan pinned before the second card or before a grid was declared, under a
-threshold below the floor, or by a kanso that did not hold it to this, is refused where it is read — by `cert plan` and by
-`cert run` — with the way out:
+threshold below the floor, or by a kanso that did not hold it to this, is refused where it is
+read — by `cert plan` and by `cert run` — with the way out:
 
 ```
 $ kanso cert run demo_mr
@@ -2511,7 +2511,8 @@ best does not certify it either, and the run goes on. The other route is `cert r
 a card scored under the objective before the re-pin: the plan was made for the objective
 the hypothesis has now, and carries that one's correction, which skips on a number in other
 units. A subject scored under an objective whose correction the pinned plan does not carry
-with its threshold is refused (exit 2), naming the gate, once the search has two cards.
+with its threshold is refused (exit 2), naming the gate, once the search has two draws —
+cards, and the settings a declared grid adds.
 
 **A stall certifies only a best whose correction passes on research data.** The correction
 reads the research window and the trials alone, and a certificate is the conjunction of the
@@ -2536,8 +2537,9 @@ the failing certificate it writes is recorded beside a precheck that judged noth
 why. A refusal in either place spares the stall — no certification window read, no
 certificate, no failure counted toward `n_fail`, the hypothesis back in the queue at −1 — and
 the `stalled` event records the precheck (`docs/cli.md`). A correction that judged nothing
-spares nothing: a plan carries none before the second card, and a gate that skips on the
-research run would skip in the certificate too. `cert run` by hand is never spared.
+spares nothing: a plan carries none before the search's second draw, card or declared
+setting, and a gate that skips on the research run would skip in the certificate too.
+`cert run` by hand is never spared.
 
 The lane's reading is the certificate's exactly — measured on the research suite's
 synthetic workspace, a card the loop itself measured, the probability, the expected maximum
@@ -2791,7 +2793,7 @@ the sum of each look's own complement — not the threshold, and as good as the 
 own probability, which is a normal approximation. Over `L` looks whose corrections all judged
 by one threshold that sum is `L × (1 − threshold)`; it is more where an earlier plan, or a
 sibling's, sat lower, and a look whose correction judged nothing adds up to one: one judged
-under a plan that carried no correction, as one made before the hypothesis's second card is,
+under a plan that carried no correction, as one made before the search's second draw is,
 and one whose correction skipped, which passes — as the correction does while fewer than two
 cards are candidates (above), and on a research run too short to give an error or whose
 error is zero, among the reasons a skip names. Each certificate keeps its plan's threshold
@@ -2838,17 +2840,19 @@ subject travels with the files even where `state.db` does not.
 Four gates read what the others cannot. `deflated_contribution` is the multiple-testing
 control for a run scored on a contribution, and `deflated_edge` for one scored on a per-trade
 edge, where `deflated_sharpe` skips: the research estimate in basis points per period or per
-trade, against the expected maximum of the search — as many draws as it had candidates, from
-the spread of its trials in the same units — over the estimate's own error, the one its card
-carried, reported as a probability and held to `min_probability` — at a stall, on research
-data before the certification window is read (above). The trials' spread is read robustly, as
+trade, against the expected maximum of the search — as many draws as it had candidates and
+declared settings (`prior_trials`), from the spread of its trials in the same units — over
+the estimate's own error, the one its card carried, reported as a probability and held to
+`min_probability` — at a stall, on research data before the certification window is read
+(above). The trials' spread is read robustly, as
 1.4826 times the median absolute deviation of their metrics, so a few trials that blew up — a
 rule that traded itself to ruin, a seed that fired once — do not widen the search past any
 candidate the selection weighed; the spread it used is in the evidence as `trial_spread_bps`.
 `deflated_sharpe` deflates a Sharpe the same way, by the Sharpe's own error and the plain
 spread of its trials, all out of annualised units. Which of the three a plan carries is not
-the planner's to choose once the hypothesis has two cards (above). `min_event_days` is a card
-gate counting the distinct sessions any fill fell on, for a rule that fires on a regime or an
+the planner's to choose once the hypothesis has two draws, cards and declared settings
+together (above). `min_event_days` is a card gate counting the distinct sessions any fill
+fell on, for a rule that fires on a regime or an
 event and could put its whole sample into a handful of days that `min_trades` would count as
 many. `cost_scenario` re-prices the
 recorded fills under another cost model stated key for key as `costs:` is — a per-share

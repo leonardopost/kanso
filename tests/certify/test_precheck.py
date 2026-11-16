@@ -187,7 +187,7 @@ def test_a_best_that_kept_no_measurement_judges_nothing(ws: Workspace, store: St
 def test_a_plan_that_carries_no_correction_has_no_search_to_price(
     ws: Workspace, store: StateStore
 ) -> None:
-    """Before the search's second card a plan carries no correction, and nothing is spared."""
+    """Before the search's second draw a plan carries no correction, and nothing is spared."""
     classify(ws, store, DOCUMENT, REVERTING)
     sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
     plan = write_plan(ws)
@@ -197,7 +197,8 @@ def test_a_plan_that_carries_no_correction_has_no_search_to_price(
     assert (checked.gate, checked.judged, checked.passed) == ("deflated_sharpe", False, None)
     assert checked.reason == (
         "plan version 1 carries no deflated_sharpe, the search correction for wf_sharpe_net: "
-        "a plan carries it once the search has 2 cards"
+        "a plan carries it once the search has 2 draws, its cards and the prior_trials its "
+        "family declares together"
     )
 
 

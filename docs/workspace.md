@@ -446,24 +446,30 @@ from that many draws before its first card ran. State the count, the evidence an
 and kanso adds the count to every number by which it prices the search: the trials
 `edge_per_trade` widens its margin for, the draws `deflated_*` take their expected maximum
 over, the count of two from which a plan must carry its search correction, and
-certification's refusal of a search it cannot read a spread for (`docs/concepts.md`, Card). It is summed over the family
-`derived_from` names, so a draft inherits its parent's grid as it inherits its cards; a block
-two members state — the same `source` and `sha256` — is one grid, counted once. It is a count
-with no units: the deflation still reads its spread from kanso's own cards scored under the
-objective, and a certification behind one such card is still refused until a second is
-scored. The `n_trials` a card and a certificate are stamped with stays kanso's own cards.
+certification's refusal of a search it cannot read a spread for (`docs/concepts.md`, Card).
+It is summed over the family `derived_from` names, so a draft inherits its parent's grid as
+it inherits its cards; a block two members state — the same `sha256` from the same `source`,
+`./` and `..` read as a path reads them — is one grid, counted once, so give each grid its
+own evidence file. It is a count with no units: the deflation still reads its spread from
+kanso's own cards scored under the objective, and a certification behind one such card is
+still refused until a second is scored. The `n_trials` a card and a certificate are stamped
+with stays kanso's own cards.
 
 `source` is a file inside the workspace, named relative to its root — copy the evidence in,
 under `evidence/` say, and commit it with the rest. `kanso hyp validate` and `kanso hyp add`
-read it once to check `sha256` against its bytes, and refuse (exit 3) a source that is
-absolute, resolves outside the workspace or is not there, a digest the bytes do not hash to,
-and a block an ancestor already states, which `derived_from` already counts. After that only
-the pinned file is read. The count is yours: kanso neither derives it nor checks it against
-what the evidence says. It is not scope, so a re-pin that only adds it keeps `best`, and the
-next run's baseline judges the best under the wider margin; a re-pin is refused while a run
-is active, so `kanso research end ID` first. kanso never writes the key; the classifying
-model is shown it with the rest of the file, and a `kanso hyp explore` draft that states one
-is refused on the ladder.
+read it to check `sha256` against its bytes when the block is new, differing in any key from
+the one the hypothesis's pinned file states, and refuse (exit 3) a source that is absolute,
+resolves outside the workspace, is not a path the host can open or is not there, a digest the
+bytes do not hash to, and a block an ancestor already states, which `derived_from` already
+counts; so does `kanso classify`, which pins the file as it is on disk, for a block written
+in since the pin. Once a pin states the block only the pinned file is read: a re-pin of the
+same block, `kanso classify`'s included, reads nothing of the evidence, and moving or editing
+it refuses nothing. The count is yours, from 1 to a billion: kanso neither derives it nor
+checks it against what the evidence says. It is not scope, so a re-pin that only adds it
+keeps `best`, and the next run's baseline judges the best under the wider margin; a re-pin is
+refused while a run is active, so `kanso research end ID` first. kanso never writes the key;
+the classifying model is shown it with the rest of the file, and a `kanso hyp explore` draft
+that states one is refused on the ladder.
 
 ```yaml
 prior_trials:

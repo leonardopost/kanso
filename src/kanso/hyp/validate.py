@@ -130,6 +130,7 @@ from kanso.schemas import (
     Hypothesis,
     ObjectiveRef,
     PeriodTarget,
+    PriorTrials,
     StrategyFile,
     VenueDeclaration,
     VenueModel,
@@ -310,21 +311,52 @@ def _check_prior_trials(ws: Workspace, hyp: Hypothesis) -> None:
     the count was stated from, and is not a grid an ancestor already states.
 
     The count is the operator's, and kanso never derives it; what is checked is that the
-    statement can be read back. The evidence is named relative to the workspace root and
-    resolved there — a path that is absolute, or resolves outside the root, is refused —
-    and its bytes hash to `sha256`, read here, once: after registration only the pinned file
-    is read. A block an ancestor's newest registration states — the same `source` and
-    `sha256` — is a grid `derived_from` already counts (`kanso.research.records.prior_trials`
-    counts it once whoever states it), so a file that repeats it is refused rather than read
-    as a second grid. Must run after `_check_derived_from`, which guarantees every parent is
-    registered and so that the store exists.
+    statement can be read back, when it is made. A block the hypothesis's newest
+    registration does not already state — count, source and digest — has its evidence read
+    here (`_check_evidence`); one it does state was read when it was pinned, so the evidence
+    is never read again, by a re-pin of the same block or by `kanso classify`'s, and may move
+    or change after `kanso hyp add` without refusing either. A block an ancestor's newest
+    registration states — the same grid, `PriorTrials.grid` — is one `derived_from` already
+    counts (`kanso.research.records.prior_trials` counts it once whoever states it), so a
+    file that repeats it is refused rather than read as a second grid. Must run after
+    `_check_derived_from`, which guarantees every parent is registered and so that the store
+    exists wherever the file names one.
     """
     declared = hyp.prior_trials
     if declared is None:
         return
+    from kanso.research import records
+    from kanso.state import StateStore
+
+    path = ws.path(STATE_DB)
+    if not path.is_file():
+        _check_evidence(ws, declared)
+        return
+    with StateStore(path) as store:
+        if records.declared_prior(store, hyp.id) != declared:
+            _check_evidence(ws, declared)
+        for parent in hyp.derived_from or ():
+            for ancestor in records.family(store, parent):
+                stated = None if ancestor == hyp.id else records.declared_prior(store, ancestor)
+                if stated is not None and stated.grid == declared.grid:
+                    raise ValidationError(
+                        f"prior_trials: repeats {ancestor}'s block, whose grid derived_from "
+                        "already counts",
+                        remedy="drop prior_trials from this file: the search behind it counts "
+                        f"{ancestor}'s grid through derived_from",
+                    )
+
+
+def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
+    """The evidence a grid is stated from is a file inside the workspace, named relative to
+    its root, whose bytes hash to the digest stated.
+
+    A path that is absolute, resolves outside the root, cannot be named on this host — a NUL
+    in it, a name longer than the filesystem holds — or is not there is refused, and so is a
+    digest its bytes do not hash to.
+    """
     root = ws.root.resolve()
     named = Path(declared.source)
-    target = (root / named).resolve()
     place = f"copy the evidence under {root}, e.g. into `evidence/`, and name it from there"
     if named.is_absolute():
         raise ValidationError(
@@ -332,11 +364,20 @@ def _check_prior_trials(ws: Workspace, hyp: Hypothesis) -> None:
             "root, so the pin would name a file only this host holds",
             remedy=place,
         )
+    try:
+        target = (root / named).resolve()
+        present = target.is_file()
+    except (OSError, ValueError) as exc:
+        reason = getattr(exc, "strerror", None) or str(exc)
+        raise ValidationError(
+            f"prior_trials.source: {declared.source!r} is not a path this host can open: {reason}",
+            remedy=place,
+        ) from None
     if not target.is_relative_to(root):
         raise ValidationError(
             f"prior_trials.source: {declared.source} is outside the workspace", remedy=place
         )
-    if not target.is_file():
+    if not present:
         raise ValidationError(
             f"prior_trials.source: {declared.source} does not exist in the workspace",
             remedy=place,
@@ -346,28 +387,9 @@ def _check_prior_trials(ws: Workspace, hyp: Hypothesis) -> None:
         raise ValidationError(
             f"prior_trials.sha256: the bytes of {declared.source} hash to {digest}, not the "
             f"{declared.sha256} the count was stated with",
-            remedy=f"run `shasum -a 256 {target}` and state that digest, or restore the file "
-            "the count was stated from",
+            remedy=f"run `shasum -a 256 {target}` (`sha256sum` where shasum is not installed) "
+            "and state that digest, or restore the file the count was stated from",
         )
-    if not hyp.derived_from:
-        return
-    from kanso.research import records
-    from kanso.state import StateStore
-
-    with StateStore(ws.path(STATE_DB)) as store:
-        for parent in hyp.derived_from:
-            for ancestor in records.family(store, parent):
-                stated = None if ancestor == hyp.id else records.declared_prior(store, ancestor)
-                if stated is not None and (stated.source, stated.sha256) == (
-                    declared.source,
-                    declared.sha256,
-                ):
-                    raise ValidationError(
-                        f"prior_trials: repeats {ancestor}'s block, whose grid derived_from "
-                        "already counts",
-                        remedy="drop prior_trials from this file: the search behind it counts "
-                        f"{ancestor}'s grid through derived_from",
-                    )
 
 
 def _check_screened(ws: Workspace, hyp: Hypothesis) -> None:

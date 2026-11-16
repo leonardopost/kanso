@@ -542,6 +542,10 @@ def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(
         "prior_trials is how many settings the hypothesis and those it derives from declare "
         "were tried outside kanso"
     ) in seen[0].system
+    assert (
+        "where the toolbox says a deflation gate is required from the second card, the second "
+        "card is the second of n_trials + prior_trials"
+    ) in seen[0].system, "the library's words count cards, and the rule counts a grid too"
 
 
 def declare_grid(ws: Workspace, store: StateStore, count: int) -> None:

@@ -1068,8 +1068,9 @@ class _EdgePerTrade:
     `net − margin × se > min_bps`, strictly, over trades that closed in at least two of the
     window's periods, where `margin` is `periods_margin` of the larger of `k_se` and
     `search_margin(trials)` — the evidence's `normal_margin` — over the periods that closed
-    a trade: on a hypothesis's first card, at `min_bps` zero and `k_se` zero, a card whose
-    trades closed in two periods or more passes exactly when its mean trade made money.
+    a trade: on a hypothesis's first card with no grid declared, at `min_bps` zero and `k_se`
+    zero, a card whose trades closed in two periods or more passes exactly when its mean trade
+    made money.
 
     The margin is a chance, and the periods set its width. An error read period by period
     has the degrees of freedom of the periods that closed a trade, and on few of them it
@@ -1088,7 +1089,7 @@ class _EdgePerTrade:
     earn nothing still clears `k_se` errors' chance with probability `1 − Φ(k_se)` — at
     `k_se` 1, one card in six — so a fixed margin lets zero-edge cards through in proportion
     to the search's length. So `normal_margin` is never below the expected maximum of `trials`
-    standard normals: 0 errors on one card, 0.52 at 2 trials, 2.28 at 50 and 3.05 at 500.
+    standard normals: 0 errors at 1 trial, 0.52 at 2, 2.28 at 50 and 3.05 at 500.
     `trials` is this card and every card of the hypothesis before it that ran to a result and
     traded, under any objective, and the settings its family declares tried outside kanso in
     the grids that chose its seeds (`GateContext.trials`, the evidence's `prior_trials` saying

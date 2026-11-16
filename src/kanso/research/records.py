@@ -504,17 +504,16 @@ def prior_trials(store: StateStore, hyp_id: str) -> int:
     margin, the deflation gates' draws, the rule from which a plan carries its correction and
     `kanso.certify.run.unpriced` — adds this to the cards it counts. It is a count of draws and
     has no units, like `candidates`, so no spread is read from it. A block two members state —
-    the same `source` and `sha256`, one grid — is counted once, at the larger count either
-    states, and a member the workspace has not registered states nothing, as it counts no
-    card. A card's and a certificate's `n_trials` stay kanso's own cards, so this is never
-    part of a filename.
+    the same `source`, however `./` and `..` spell it, and `sha256`: one grid
+    (`PriorTrials.grid`) — is counted once, at the larger count either states, and a member the
+    workspace has not registered states nothing, as it counts no card. A card's and a
+    certificate's `n_trials` stay kanso's own cards, so this is never part of a filename.
     """
     grids: dict[tuple[str, str], int] = {}
     for member in family(store, hyp_id):
         block = declared_prior(store, member)
         if block is not None:
-            key = (block.source, block.sha256)
-            grids[key] = max(grids.get(key, 0), block.count)
+            grids[block.grid] = max(grids.get(block.grid, 0), block.count)
     return sum(grids.values())
 
 
@@ -548,12 +547,13 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     maximum from 0.055 to 1.82. Those cards still count toward how many draws the maximum is
     taken over (`candidates`), which is a count and carries no units, so the strategy carried
     across the re-pin is priced for the search that chose it; and a certification behind two
-    such cards with fewer than two of these is refused (`kanso.certify.run.unpriced`), since
-    its spread cannot be read. The objective is read from the hypothesis file each card's run
-    pinned, as a plain mapping, so a pin written under an older schema is still read. Nothing
-    else about the pins narrows the set: a re-pin under the same objective, a newer snapshot or
-    a kanso upgrade is the same search continuing, and a set that reset at each of them would
-    price a search by its latest stretch.
+    such cards, or a declared grid's settings beside them (`prior_trials`), with fewer than two
+    of these is refused (`kanso.certify.run.unpriced`), since its spread cannot be read. The
+    objective is read from the hypothesis file each card's run pinned, as a plain mapping, so a
+    pin written under an older schema is still read. Nothing else about the pins narrows the
+    set: a re-pin under the same objective, a newer snapshot or a kanso upgrade is the same
+    search continuing, and a set that reset at each of them would price a search by its latest
+    stretch.
 
     A redundant card is one of these. The keep rule is asked before the signature, so a
     candidate that beat the best would have been kept whatever it resembled: it is a

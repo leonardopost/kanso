@@ -26,6 +26,7 @@ catalogue and whether an objective applies are checked where those catalogues li
 from __future__ import annotations
 
 import math
+import posixpath
 import re
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
@@ -416,6 +417,12 @@ class SessionScope(KansoModel):
 
 MARKET_TYPES: Final = ("bar", "quote", "trade", "book")
 
+MAX_PRIOR_TRIALS: Final = 1_000_000_000
+"""The most settings a declared offline grid may state. The margin a search is priced by is
+the expected maximum of its draws, struck in floating point, which cannot be struck at all
+from about 6.6e15 draws on (`kanso.criteria.gates.search_margin`); a billion is past any grid
+run outside kanso and far short of that."""
+
 
 class PriorTrials(KansoModel):
     """How many settings were tried outside kanso in the search that chose a hypothesis's
@@ -423,16 +430,25 @@ class PriorTrials(KansoModel):
 
     A seed chosen as the best of an offline grid is a selection the cards never saw: the grid's
     settings are draws the maximum was taken over before the first card ran. `count` is that
-    many, the operator's statement and never kanso's inference. `source` names the evidence, a
-    file inside the workspace named relative to its root, and `sha256` the digest of its bytes,
-    which `kanso hyp validate` and `kanso hyp add` check; after that the pinned file is read,
-    never the evidence again. The count has no units, so it widens how many draws a search is
-    priced over and nothing a spread is read from (`kanso.research.records.prior_trials`).
+    many, the operator's statement and never kanso's inference, at most `MAX_PRIOR_TRIALS`.
+    `source` names the evidence, a file inside the workspace named relative to its root, and
+    `sha256` the digest of its bytes, which `kanso hyp validate` and `kanso hyp add` check
+    where the hypothesis's pinned file does not already state the block; after that the pinned
+    file is read, never the evidence again. The count has no units, so it widens how many
+    draws a search is priced over and nothing a spread is read from
+    (`kanso.research.records.prior_trials`).
     """
 
-    count: int = Field(ge=1)
+    count: int = Field(ge=1, le=MAX_PRIOR_TRIALS)
     source: NonEmpty
     sha256: Sha256
+
+    @property
+    def grid(self) -> tuple[str, str]:
+        """What makes two blocks one grid: the digest of the evidence, and its name with `./`
+        and `..` read as a path reads them, so `./evidence/grid.md` and `evidence/grid.md` are
+        one file. The name stays the operator's spelling in `source`."""
+        return (posixpath.normpath(self.source), self.sha256)
 
 
 class Hypothesis(Versioned):
@@ -480,10 +496,11 @@ class Hypothesis(Versioned):
     price — summed over the family `derived_from` names, a block two members state counted
     once; a card's and a certificate's `n_trials` stay kanso's own cards. Operator-owned and
     not scope: kanso never writes it, a re-pin that adds it keeps `best`, which the next
-    baseline judges under the wider margin, and classification's checks read nothing of it,
+    baseline judges under the wider margin, and classification decides nothing from it,
     though the classifying model is shown it with the rest of the file. `kanso hyp validate`
-    refuses evidence outside the workspace or whose bytes hash otherwise, and a block an
-    ancestor already states."""
+    refuses evidence outside the workspace or whose bytes hash otherwise — read where the
+    hypothesis's pinned file does not already state the block, and never again once it does,
+    by a re-pin or by `kanso classify` — and a block an ancestor already states."""
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None

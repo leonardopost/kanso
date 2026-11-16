@@ -29,9 +29,9 @@ certification would strike it now, on a snapshot that can support a claim; and i
 certification child itself, on the research window it has just run, before the certification
 window is read (`certify_at_stall`). Either refusal spares the stall: no certification window
 is read and no certificate is written. A correction that judged nothing — a plan that carries
-none before the search has two cards, or a gate that skips on the research run — spares
-nothing, since it would judge nothing in the certificate either. `kanso cert run` is the
-operator's own act and is never spared.
+none before the search has two draws, cards and declared settings together, or a gate that
+skips on the research run — spares nothing, since it would judge nothing in the certificate
+either. `kanso cert run` is the operator's own act and is never spared.
 
 **Both windows are measured the way a card is.** The objective the certificate records,
 and every gate's reading of it, is taken over the workspace's `[research] folds` equal
@@ -76,7 +76,7 @@ regardless. A window gate that judged nothing spares nothing: a skip is an absen
 evidence, not a refusal, and the plateau then refuses a loss itself before moving anything.
 
 **A search is priced in full, or no certificate is written.** The deflation a plan must carry
-from the second card takes its expected maximum over every card of the hypothesis's family
+from the search's second draw takes its expected maximum over every card of the hypothesis's family
 that ran and traded, under any objective, and its spread from the cards scored under the
 subject's own (`kanso.criteria.gates._searched`): a hypothesis re-pinned to another
 objective carries across the strategy the earlier search selected, and it is that search
@@ -565,11 +565,11 @@ def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -
     scored = len(records.trial_metrics(store, hyp_id, objective_id))
     if searched + prior < SEARCH_TRIALS or scored >= SEARCH_TRIALS:
         return None
-    beside = f", beside {prior} settings its family declares tried outside kanso,"
+    beside = f", beside {prior} settings its family declares tried outside kanso" if prior else ""
     return (
-        f"{hyp_id} has {searched} cards that ran and traded behind it{beside if prior else ''} "
-        f"and {scored} of them scored under {objective_id}, so {gate} cannot read the spread of "
-        "the search that selected this card: it prices the search from two cards in its units"
+        f"{hyp_id} has {searched} cards that ran and traded behind it and {scored} of them "
+        f"scored under {objective_id}{beside}, so {gate} cannot read the spread of the search "
+        "that selected this card: it prices the search from two cards in its units"
     )
 
 
@@ -755,8 +755,9 @@ def _correction(
     precheck that judges nothing because the plan carries none — `measured` where the child,
     which has run the research window, finds that.
 
-    A plan carries it from the search's second card, so one without it has no search to
-    price; one made for another objective is refused by certification itself.
+    A plan carries it from the search's second draw — card, or setting of a declared grid —
+    so one without it has no search to price; one made for another objective is refused by
+    certification itself.
     """
     objective = cast("ObjectiveRef", hyp.objective).id
     gate = deflation_gate(objective)
@@ -769,7 +770,8 @@ def _correction(
         passed=None,
         evidence={},
         reason=f"plan version {plan.plan_version} carries no {gate}, the search correction for "
-        f"{objective}: a plan carries it once the search has {SEARCH_TRIALS} cards",
+        f"{objective}: a plan carries it once the search has {SEARCH_TRIALS} draws, its cards "
+        "and the prior_trials its family declares together",
         measured=measured,
     )
 
@@ -826,8 +828,9 @@ def _refuse_uncorrected(
 ) -> None:
     """Refuse a subject whose objective's search correction the pinned plan does not carry.
 
-    A plan is made for the objective the hypothesis is registered under, and from the second
-    card it carries that objective's deflation gate with its threshold. A card scored under
+    A plan is made for the objective the hypothesis is registered under, and from the
+    search's second draw — `n_trials`, the cards and the declared `prior_trials` together —
+    it carries that objective's deflation gate with its threshold. A card scored under
     another — one researched before a re-pin moved the objective, named by `--sha` — would
     be certified with that gate skipping on an objective it does not deflate and its own
     correction absent, so the search that selected it would go unpriced.

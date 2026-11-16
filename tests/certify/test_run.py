@@ -1224,8 +1224,8 @@ def test_a_declared_grid_does_not_price_a_search_whose_spread_no_two_cards_read(
         certify(ws, store, HYP_ID)
 
     assert refused.value.message == (
-        "demo_mr has 1 cards that ran and traded behind it, beside 27 settings its family "
-        "declares tried outside kanso, and 1 of them scored under wf_sharpe_net, so "
+        "demo_mr has 1 cards that ran and traded behind it and 1 of them scored under "
+        "wf_sharpe_net, beside 27 settings its family declares tried outside kanso, so "
         "deflated_sharpe cannot read the spread of the search that selected this card: it "
         "prices the search from two cards in its units"
     )

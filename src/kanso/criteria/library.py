@@ -72,9 +72,9 @@ LIBRARY: Final = Path(__file__).resolve().parent / "library"
 """One YAML file per toolbox item, named by its id."""
 
 SEARCH_TRIALS: Final = 2
-"""From how many cards — `n_trials` — a plan must correct for the search: two cards are
-already a choice of one over another, and the maximum of two draws is above the mean of
-either."""
+"""From how many draws a plan must correct for the search — `n_trials`, the cards, and the
+`prior_trials` the family declares tried outside kanso, which every caller adds: two draws are
+already a choice of one over another, and the maximum of two is above the mean of either."""
 
 KIND_WORDS: Final = {
     "hours": "span of clock times on one day, HH:MM-HH:MM",
@@ -198,7 +198,8 @@ def required_card_gates(objective_id: str) -> tuple[str, ...]:
 
 def required_deflation(hyp: Hypothesis, n_trials: int) -> str | None:
     """The deflation gate a plan for this hypothesis must include, or `None` when it need
-    include none: before its second card, or with no objective to deflate."""
+    include none: before the search's second draw — `n_trials` is the cards and the declared
+    `prior_trials` together, as the caller counts them — or with no objective to deflate."""
     if hyp.objective is None or n_trials < SEARCH_TRIALS:
         return None
     return deflation_gate(hyp.objective.id)
