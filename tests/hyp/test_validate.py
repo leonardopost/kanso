@@ -236,33 +236,69 @@ def test_a_grid_changed_since_its_pin_is_read_again(ws: Workspace) -> None:
     )
 
 
-@pytest.mark.parametrize("spelled", ["./evidence/grid.md", "evidence/../evidence/grid.md"])
-def test_a_grid_its_parent_states_under_another_spelling_is_refused(
-    ws: Workspace, spelled: str
+def _through_a_symlinked_directory(ws: Workspace) -> str:
+    """`notes` links to `evidence/inner`, so the filesystem reads the `..` after it as
+    `evidence` where the letters alone read it as the root."""
+    (ws.root / "evidence" / "inner").mkdir()
+    (ws.root / "notes").symlink_to("evidence/inner")
+    return "notes/../grid.md"
+
+
+def _through_a_symlink(ws: Workspace) -> str:
+    (ws.root / "evidence" / "alias.md").symlink_to("grid.md")
+    return "evidence/alias.md"
+
+
+def _in_another_case(ws: Workspace) -> str:
+    """macOS's filesystem, a supported host's, opens one file under either case."""
+    if not (ws.root / "EVIDENCE" / "GRID.MD").exists():
+        pytest.skip("a case-sensitive filesystem opens another file under another case")
+    return "Evidence/GRID.md"
+
+
+def _as_a_copy(ws: Workspace) -> str:
+    (ws.root / "evidence" / "copy.md").write_bytes(GRID)
+    return "evidence/copy.md"
+
+
+@pytest.mark.parametrize(
+    "respell",
+    [
+        lambda ws: "./evidence/grid.md",
+        lambda ws: "evidence/../evidence/grid.md",
+        _through_a_symlinked_directory,
+        _through_a_symlink,
+        _in_another_case,
+        _as_a_copy,
+    ],
+    ids=["dot", "dot-dot", "symlinked-directory", "symlink", "case", "copy"],
+)
+def test_a_grid_its_parent_states_under_another_name_is_refused(
+    ws: Workspace, respell: Any
 ) -> None:
-    """One file is one grid, however its path is spelled."""
+    """One evidence file is one grid, known by the digest of its bytes, however `source`
+    names it: `./`, a `..` the letters read, a `..` after a symlinked directory, which the
+    filesystem reads after the link, a symlink, another case on a filesystem that opens
+    either, or a copy of the same bytes."""
     block = evidence(ws)
     register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
+    named = respell(ws)
 
     failure = refused(
-        ws, document(derived_from=["demo_parent"], prior_trials={**block, "source": spelled})
+        ws, document(derived_from=["demo_parent"], prior_trials={**block, "source": named})
     )
 
     assert failure.message.startswith("prior_trials: repeats demo_parent's block")
 
 
 def test_a_grid_named_by_climbing_out_of_the_root_and_back_in_is_refused(ws: Workspace) -> None:
-    """A source is named from the root, so one that leaves it by the root's own name and comes
-    back opens a file inside it under a name no other spelling of that file shares: refused,
-    so every admitted source is one spelling up to `./` and a `..` inside the root, and a
-    child cannot count its parent's grid a second time under it."""
+    """A source is named from the root, so one that leaves it by the root's own directory name
+    and comes back names the file only while the workspace sits under that name: refused, as
+    an absolute path is, with the name the root gives it as the remedy."""
     block = evidence(ws)
-    register(ws, {**DOCUMENT, "id": "demo_parent", "prior_trials": block})
     climbed = f"../{ws.root.resolve().name}/{block['source']}"
 
-    failure = refused(
-        ws, document(derived_from=["demo_parent"], prior_trials={**block, "source": climbed})
-    )
+    failure = refused(ws, document(prior_trials={**block, "source": climbed}))
 
     assert failure.message == (
         f"prior_trials.source: {climbed} leaves the workspace root to name a file inside it, "

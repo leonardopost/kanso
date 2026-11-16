@@ -318,7 +318,8 @@ def _check_prior_trials(ws: Workspace, hyp: Hypothesis) -> None:
     here (`_check_evidence`); one it does state was read when it was pinned, so the evidence
     is never read again, by a re-pin of the same block or by `kanso classify`'s, and may move
     or change after `kanso hyp add` without refusing either. A block an ancestor's newest
-    registration states — the same grid, `PriorTrials.grid` — is one `derived_from` already
+    registration states — the same grid, `PriorTrials.grid`: the same evidence by its digest,
+    whatever name `source` gives it — is one `derived_from` already
     counts (`kanso.research.records.prior_trials` counts it once whoever states it), so a
     file that repeats it is refused rather than read as a second grid. Must run after
     `_check_derived_from`, which guarantees every parent is registered and so that the store
@@ -356,13 +357,13 @@ def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
     A path that is absolute, resolves outside the root, climbs above the root to name a file
     inside it, cannot be named or read on this host — a NUL in it, a name longer than the
     filesystem holds, a symlink loop, a mode that forbids reading — is not there or is not a
-    file is refused, and so is a digest its bytes do not hash to. Refusing the climb is what
-    keeps `./` and `..` from giving one file two keys in `PriorTrials.grid`: inside the root
-    they normalise away, and a climb out by the root's own name and back in would not.
-    Python 3.12's `Path.resolve` raises `RuntimeError` on a symlink loop where 3.13's returns
-    the path, and `is_file` answers some errors as no file on one and raises them on the
-    other, so the path is resolved and then `stat`ed, and every interpreter refuses the same
-    source the same way.
+    file is refused, and so is a digest its bytes do not hash to. The climb is refused as the
+    absolute path is: a name that leaves the root by its own directory's name and comes back
+    names the file only while the workspace sits under that name. Python 3.12's
+    `Path.resolve` raises `RuntimeError` on a symlink loop where 3.13's returns the path, and
+    `is_file` answers some errors as no file on one and raises them on the other, so the path
+    is resolved and then `stat`ed, and every interpreter refuses the same source the same way.
+    The name is the operator's and is never what makes a grid one (`PriorTrials.grid`).
     """
     root = ws.root.resolve()
     named = Path(declared.source)

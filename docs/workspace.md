@@ -448,12 +448,12 @@ and kanso adds the count to every number by which it prices the search: the tria
 over, the count of two from which a plan must carry its search correction, and
 certification's refusal of a search it cannot read a spread for (`docs/concepts.md`, Card).
 It is summed over the family `derived_from` names, so a draft inherits its parent's grid as
-it inherits its cards; a block two members state — the same `sha256` from the same `source`,
-`./` and `..` read as a path reads them — is one grid, counted once, so give each grid its
-own evidence file. It is a count with no units: the deflation still reads its spread from
-kanso's own cards scored under the objective, and a certification behind one such card is
-still refused until a second is scored. The `n_trials` a card and a certificate are stamped
-with stays kanso's own cards.
+it inherits its cards; a block two members state from one evidence file — the same
+`sha256`, whatever name `source` gives the file, a copy of it included — is one grid, counted
+once, so give each grid its own evidence file. It is a count with no units: the deflation
+still reads its spread from kanso's own cards scored under the objective, and a certification
+behind one such card is still refused until a second is scored. The `n_trials` a card and a
+certificate are stamped with stays kanso's own cards.
 
 `source` is a file inside the workspace, named relative to its root — copy the evidence in,
 under `evidence/` say, and commit it with the rest. `kanso hyp validate` and `kanso hyp add`

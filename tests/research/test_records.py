@@ -366,18 +366,19 @@ def test_a_family_s_prior_trials_are_the_sum_of_its_grids_each_counted_once(
     assert records.declared_prior(store, "nobody_here") is None
 
 
-def test_one_grid_spelled_two_ways_is_counted_once(store: StateStore) -> None:
-    """`./` and a `..` inside the root name the file they would open, so one evidence file is
-    one grid whichever of those spellings a member pinned; `kanso hyp validate` refuses a
-    source that climbs above the root, so no member pins any other."""
+def test_one_evidence_file_named_two_ways_is_counted_once(store: StateStore) -> None:
+    """A grid is known by the digest of its evidence, so the name a member pins it under —
+    `./`, a `..`, a symlink or a copy of the same bytes — never makes it two."""
     a_hypothesis(store, "demo_root", a_grid(27))
     a_hypothesis(store, "demo_dotted", a_grid(27, "./evidence/grid.md", "3f" * 32, "demo_root"))
     a_hypothesis(
         store, "demo_climbed", a_grid(27, "evidence/../evidence/grid.md", "3f" * 32, "demo_root")
     )
+    a_hypothesis(store, "demo_aliased", a_grid(27, "notes/../grid.md", "3f" * 32, "demo_root"))
 
     assert records.prior_trials(store, "demo_dotted") == 27
     assert records.prior_trials(store, "demo_climbed") == 27
+    assert records.prior_trials(store, "demo_aliased") == 27
 
 
 def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(

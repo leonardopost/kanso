@@ -26,7 +26,6 @@ catalogue and whether an objective applies are checked where those catalogues li
 from __future__ import annotations
 
 import math
-import posixpath
 import re
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
@@ -445,13 +444,13 @@ class PriorTrials(KansoModel):
     sha256: Sha256
 
     @property
-    def grid(self) -> tuple[str, str]:
-        """What makes two blocks one grid: the digest of the evidence, and its name with `./`
-        and `..` read as a path reads them, so `./evidence/grid.md` and `evidence/grid.md` are
-        one file. A name that climbs above the root keeps its `..` here, and `kanso hyp
-        validate` refuses it, so no source admitted keeps one. The name stays the operator's
-        spelling in `source`."""
-        return (posixpath.normpath(self.source), self.sha256)
+    def grid(self) -> str:
+        """What makes two blocks one grid: the digest of the evidence's bytes, and nothing of
+        the name `source` gives it. One file has names without end — `./`, a `..` the letters
+        read and one the filesystem reads after a symlinked directory, a symlink to it,
+        another case where the filesystem opens either — and one set of bytes, so one evidence
+        file, or a copy of it, is one grid however a block names it; give each grid its own."""
+        return self.sha256
 
 
 class Hypothesis(Versioned):

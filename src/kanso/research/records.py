@@ -503,14 +503,13 @@ def prior_trials(store: StateStore, hyp_id: str) -> int:
     over as surely as a card is, so every count by which a search is priced — `edge_per_trade`'s
     margin, the deflation gates' draws, the rule from which a plan carries its correction and
     `kanso.certify.run.unpriced` — adds this to the cards it counts. It is a count of draws and
-    has no units, like `candidates`, so no spread is read from it. A block two members state —
-    the same `source`, however `./` and `..` spell it inside the root (`kanso hyp validate`
-    refuses one that climbs above it), and `sha256`: one grid (`PriorTrials.grid`) — is
-    counted once, at the larger count either states, and a member the
-    workspace has not registered states nothing, as it counts no card. A card's and a
+    has no units, like `candidates`, so no spread is read from it. Two members' blocks from
+    one evidence file — the same `sha256`, whatever name `source` gives it: one grid
+    (`PriorTrials.grid`) — are counted once, at the larger count either states, and a member
+    the workspace has not registered states nothing, as it counts no card. A card's and a
     certificate's `n_trials` stay kanso's own cards, so this is never part of a filename.
     """
-    grids: dict[tuple[str, str], int] = {}
+    grids: dict[str, int] = {}
     for member in family(store, hyp_id):
         block = declared_prior(store, member)
         if block is not None:
