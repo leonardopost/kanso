@@ -2950,7 +2950,9 @@ evidence kanso holds from a window no search and no certification looked at, and
 `forward_holdout` judges it before the version can be promotable (Promotion and demotion),
 counting only what it did from that version's own forward start: a version that joins a stage
 whose clock is earlier is not credited with the days before its window opened, nor with a
-trade that opened before it or a period that may have.
+period that may have opened before it, nor, under a per-trade objective, with a trade that
+did; under a returns objective a period's return is the book's, so what a position opened
+before the window made inside it is counted.
 
 A stage node restarts flat, and a version whose hypothesis declares a `warmup` re-warms on
 every restart: the sessions before the window on the first, and on a restart the sessions
@@ -3090,7 +3092,8 @@ deployment, demotion, halting a stage. Moving a version onto real capital does n
 
 What moves a paper version to `promotable` is every paper gate of its plan passing, at least
 one of them having judged, and every plan carries two, both required: `paper_forward` and
-`forward_holdout`. `paper_forward` is strict both ways: the version must have been on the stage for the longer of the plan's minimum
+`forward_holdout`, each with both its parameters, since one given half its rule skips and a
+skip passes. `paper_forward` is strict both ways: the version must have been on the stage for the longer of the plan's minimum
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
 objective it realised must fall **inside** the band struck for the paper window it realised
 it over, above the band as much a fail as below it, because a stage that out-performs its
@@ -3147,7 +3150,8 @@ it only once the window can answer:
 
 ```
 se_fwd   = se × √(N × Σ w(m_k) / K²)               the band's own term for the window
-judged   once  expected ≥ resolve × se_fwd         resolve: 1 to 3, the planner's
+judged   once  periods ≥ required_periods
+         and   expected ≥ resolve × se_fwd         resolve: 1 to 3, the planner's
 passes   once judged, when  realised > max(0, min_fraction × expected)
 ```
 
@@ -3157,19 +3161,23 @@ window's value if the version is what was certified. At `resolve` one, a true ed
 the certified value stands one forward error clear of zero when the gate first judges. Before
 that the gate **fails** — it does not skip, because a skip passes and the version would be
 promotable on `paper_forward` alone — and its evidence carries the window's `periods`, the
-`required_periods` an evenly filled window needs, `N × (resolve × se / value)²` and at least
-the fewest that strike a band, and `se_fwd`. A Sharpe's fold weighs more than `1/m`, so a
-Sharpe's window judges about two or three periods a fold after `required_periods`; and a value
-certified with an error of zero, which states no dispersion, is one no window judges. Every
-pass states the window's power beside it: `resolves = 2.49 × se_fwd`, the true value a
-one-sided five-percent test detects four times in five,
+`required_periods` it judges on no fewer than, `N × (resolve × se / value)²` and never fewer
+than one a fold, a Sharpe's four — a window holding fewer is cut into folds shorter than a
+period, one of which can strike a band alone — and `se_fwd`. A window filled evenly judges at
+`required_periods`; a Sharpe's fold weighs more than `1/m`, so a Sharpe's window judges about
+two or three periods a fold after it; and a value certified with an error of zero, which states
+no dispersion, is one no window judges. Every pass states the window's power beside it:
+`resolves = 2.49 × se_fwd`, the true value a one-sided five-percent test detects four times in
+five,
 `pass_at_expected = Φ((expected − bar) / se_fwd)` and `pass_at_zero = Φ(−bar / se_fwd)`; at a
 `min_fraction` of zero a version with no edge at all passes half the time once judged, and
 the evidence says so in numbers. It reads only what the version did from midnight of the
-hypothesis's `windows.forward.start` on — no trade opened before it, and, under a return period
-that does not divide a day on a stage that opened before it, not the first period that may
-have — over every window the version has closed on the stage since it first joined: a redeploy
-adds a window and restarts nothing. With no stage record, no expectation, or an expectation that
+hypothesis's `windows.forward.start` on — under a per-trade objective no trade opened before
+it, wherever it closed; under a returns objective every period from it on, so what a position
+opened before it made after it counts; and, under a return period that does not divide a day
+on a stage that opened before it, not the first period that may have opened before it — over
+every window the version has closed on the stage since it first joined: a redeploy adds a
+window and restarts nothing. With no stage record, no expectation, or an expectation that
 records no error or period count, it skips and says so, as `paper_forward` does.
 
 **What it costs is time, and at a low trade rate a great deal of it.** A mean's error falls as
@@ -3191,9 +3199,9 @@ the gate judges on, one a fold or a Sharpe's four — and the planner never sees
 **A plan pinned before `forward_holdout` was required promotes nothing.** The monitor reads
 the pinned plan as written, and nothing re-checks it against the toolbox between a `cert run`
 and a pass, so before it judges a paper version it holds the plan to the required paper gates
-itself: one that lacks `forward_holdout`, or names it without both its parameters, judges
-nothing and marks nothing, and the outcome says what it lacks and names `kanso cert plan ID
---replan`. Only the paper stage's part is held to — a cert-stage complaint, such as a search
+itself: one that lacks `forward_holdout`, or names either paper gate without both its
+parameters, judges nothing and marks nothing, and the outcome says what it lacks and names
+`kanso cert plan ID --replan`. Only the paper stage's part is held to — a cert-stage complaint, such as a search
 correction the lineage has outgrown, does not stop a version already deployed — and a version
 already `promotable` stays so, because a pass marks and never unmarks. `cert plan` and `cert
 run` refuse such a plan too (exit 3), as they refuse any plan this toolbox can no longer run.

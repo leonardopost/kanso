@@ -129,9 +129,9 @@ plan carries `forward_holdout`, a required paper gate with both `resolve` and `m
 set, which fails until the paper window resolves the certified value and then asks it to stay
 above zero and that fraction of it; the monitor holds a pinned plan to it before it judges a
 paper version, so a plan pinned before it marks nothing. It is a check beside certification
-and beside `paper_forward`, which every plan carries too, never instead of either. How long
-the window must be is the planner's `resolve`, and the wait it implies — `cert plan`'s
-`forward` line — is the operator's to accept.
+and beside `paper_forward`, which every plan carries too, with both its parameters set,
+never instead of either. How long the window must be is the planner's `resolve`, and the wait
+it implies — `cert plan`'s `forward` line — is the operator's to accept.
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
 `httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable

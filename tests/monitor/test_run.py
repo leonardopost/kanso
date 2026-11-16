@@ -121,16 +121,11 @@ def test_a_version_that_has_not_waited_long_enough_is_left_on_paper(
 def test_a_version_whose_every_paper_gate_skipped_is_not_promoted(
     ws: Workspace, store: StateStore
 ) -> None:
-    """A version tested by nothing is not a version ready for money: here `paper_forward`
-    states no floor and `forward_holdout` has no error to strike a forward one from."""
-    bare = [
-        EMBARGO,
-        {"id": "paper_forward", "stage": "paper", "params": {}, "rationale": "no floor chosen"},
-        FORWARD,
-        LIVE_DRIFT,
-    ]
+    """A version tested by nothing is not a version ready for money: here its expectation
+    records no error, so neither `paper_forward` nor `forward_holdout` can strike a band or a
+    forward error from it, and both skip."""
     pin_hypothesis(store, hypothesis())
-    write_plan(ws, plan(gates=bare))
+    write_plan(ws, plan())
     write_strategy(ws, store, version(se=None))
     write_book(store, "paper", run=flat_run())
     write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
@@ -201,6 +196,29 @@ def test_a_plan_naming_forward_holdout_without_a_parameter_marks_nothing(
     assert str(judged.skipped).startswith("its plan names forward_holdout, but min_fraction: ")
     assert str(judged.skipped).endswith("; run `kanso cert plan demo_mr --replan`")
     assert judged.gates == () and judged.actions == ()
+
+
+@pytest.mark.parametrize("params", [{}, {"min_duration": "5d"}, {"horizon_mult": 5.0}])
+def test_a_plan_naming_paper_forward_without_a_parameter_marks_nothing(
+    ws: Workspace, store: StateStore, params: dict[str, Any]
+) -> None:
+    """`paper_forward` given half its rule skips, and a skip passes: the forward check, which
+    passes this window, would be the only paper gate that judged, and the version would be
+    `promotable` on the forward window alone — no band, no duration, no drawdown read."""
+    bare = [EMBARGO, {**PAPER_FORWARD, "params": params}, FORWARD, LIVE_DRIFT]
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=bare))
+    write_strategy(ws, store, version(value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert str(judged.skipped).startswith("its plan names paper_forward, but ")
+    assert str(judged.skipped).endswith("; run `kanso cert plan demo_mr --replan`")
+    assert judged.gates == () and judged.actions == ()
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
+    assert inbox.unread(store) == []
 
 
 def test_a_plan_whose_only_paper_gate_is_the_forward_check_marks_nothing(

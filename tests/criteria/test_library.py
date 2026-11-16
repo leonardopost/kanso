@@ -208,8 +208,8 @@ def test_a_fold_bound_follows_the_workspace_fold_count() -> None:
 
 def test_a_duration_parameter_is_measured_in_seconds() -> None:
     item = catalogue()["paper_forward"]
-    assert check_params(item, {"min_duration": "30d"}, make_hyp(), FOLDS) == []
-    (problem,) = check_params(item, {"min_duration": "400d"}, make_hyp(), FOLDS)
+    assert check_params(item, {"min_duration": "30d", "horizon_mult": 1}, make_hyp(), FOLDS) == []
+    (problem,) = check_params(item, {"min_duration": "400d", "horizon_mult": 1}, make_hyp(), FOLDS)
     assert "outside the range" in problem
 
 
@@ -319,6 +319,35 @@ def test_the_forward_check_is_planned_with_both_its_parameters(missing: str) -> 
     assert (item.stage, item.required, item.together) == ("paper", True, True)
     with pytest.raises(ValidationError, match=rf"gates.forward_holdout.{missing}: is not set"):
         validate_plan(replacing("forward_holdout", params=half), make_hyp(), FOLDS)
+
+
+@pytest.mark.parametrize(
+    ("params", "missing"),
+    [
+        ({}, ["horizon_mult", "min_duration"]),
+        ({"min_duration": "30d"}, ["horizon_mult"]),
+        ({"horizon_mult": 10.0}, ["min_duration"]),
+    ],
+)
+def test_paper_forward_is_planned_with_both_its_parameters(
+    params: dict[str, Any], missing: list[str]
+) -> None:
+    """`paper_forward` skips unless both are set, and a skip passes: named without them, it
+    would leave the forward check the only paper gate that judges, and a version would be
+    `promotable` on the forward window alone — no band, no duration, no drawdown read."""
+    item = catalogue()["paper_forward"]
+    bare = replacing("paper_forward", params=params)
+
+    assert (item.stage, item.required, item.together) == ("paper", True, True)
+    for name in missing:
+        with pytest.raises(ValidationError, match=rf"gates.paper_forward.{name}: is not set"):
+            validate_plan(bare, make_hyp(), FOLDS)
+    shortfall = lib.stage_shortfall(
+        "paper", CertificationPlan.model_validate(bare).gates, make_hyp(), FOLDS
+    )
+    assert sorted(problem.split(":")[0] for problem in shortfall) == [
+        f"names paper_forward, but {name}" for name in missing
+    ]
 
 
 def test_a_stage_s_shortfall_is_its_required_gates_alone() -> None:

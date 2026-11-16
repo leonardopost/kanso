@@ -81,13 +81,34 @@ def test_it_fails_with_the_periods_it_needs_until_the_window_resolves_the_value(
 
 
 def test_the_periods_it_needs_scale_as_the_square_of_resolve_over_the_value_s_t() -> None:
-    """`N × (resolve × se / value)²`, and never fewer than strike a band: a Sharpe's four a
-    fold."""
+    """`N × (resolve × se / value)²`, and never fewer than one a fold, a Sharpe's four."""
     at_three = judge(se=RISING / 2, params={"resolve": 3.0, "min_fraction": 0.0})
     tight = judge(se=RISING / 100)
 
     assert at_three.evidence["required_periods"] == ceil(PERIODS * (3.0 / 2) ** 2)
     assert tight.evidence["required_periods"] == 16
+
+
+CONTRIBUTION = {
+    "objective": {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 0.5}}
+}
+"""A contribution, which scores a fold of a single period: no Sharpe's four to wait for."""
+
+
+@pytest.mark.parametrize("days", [1, 2, 3])
+def test_a_window_holding_fewer_periods_than_it_needs_has_not_judged(days: int) -> None:
+    """Certified a hundred errors clear, one forward day's error already spans the value, but a
+    window shorter than its folds is cut into spans shorter than a period, one of which scores:
+    the gate counts what the window held and judges nothing under `required_periods`, one a
+    fold, so the evidence never reads judged beside fewer periods than it says it needs."""
+    result = judge(run=run_over(tuple([10.0] * days)), hyp=hypothesis(**CONTRIBUTION), value=1.0)
+    four = judge(run=run_over((10.0,) * 4), hyp=hypothesis(**CONTRIBUTION), value=1.0)
+
+    assert result.evidence["periods"] == days < result.evidence["required_periods"] == 4
+    assert result.evidence["expected"] >= result.evidence["se_fwd"] > 0
+    assert result.evidence["judged"] is False and not result.passed
+    assert four.evidence["periods"] == four.evidence["required_periods"] == 4
+    assert four.evidence["judged"] is True and four.passed
 
 
 def test_a_certified_value_at_or_below_zero_is_never_judged() -> None:
@@ -272,6 +293,39 @@ def test_a_trade_opened_before_the_forward_start_is_not_counted() -> None:
     assert (
         result.evidence["realised"] == net_edge_bps.compute(replace(since, trades=(inside,)), 4)[0]
     )
+
+
+def test_a_returns_objective_counts_what_a_position_opened_before_the_start_made_after_it() -> None:
+    """A period's return is the book's, not a trade's: under a contribution or a Sharpe every
+    period from the forward start on is counted whatever was open across it, so a position
+    opened on the 1st and held into a window opening on the 4th is credited with what it made
+    from the 4th and not before — exactly as one opened on the 4th would be. Only a per-trade
+    edge drops the trade, its days inside the window with it."""
+    noon = NS_PER_DAY // 2
+    held = Trade(
+        midnight_ns(date(2024, 3, 1)) + noon,
+        midnight_ns(date(2024, 3, 15)) + noon,
+        "DEMO.XNAS",
+        100.0,
+        100.0,
+        120.0,
+        2_000.0,
+        1.0,
+        (),
+    )
+    marks = tuple(0.0 if day < 3 else (150.0 if day % 2 else 50.0) for day in range(20))
+    late = {"windows": {**DOCUMENT["windows"], "forward": {"start": "2024-03-04"}}}
+    at_start = replace(held, opened_ns=midnight_ns(date(2024, 3, 4)) + noon)
+
+    for objective in ("wf_contribution_bps", "wf_sharpe_net"):
+        hyp = hypothesis(
+            **late, objective={"id": objective, "params": {"min_delta": 0.0, "k_se": 0.5}}
+        )
+        before = judge(run=run_over(marks, trades=(held,)), hyp=hyp, value=1.0)
+        opened_at_start = judge(run=run_over(marks, trades=(at_start,)), hyp=hyp, value=1.0)
+
+        assert before.evidence["window"] == ["2024-03-04", "2024-03-20"], objective
+        assert before.evidence["realised"] == opened_at_start.evidence["realised"] > 0, objective
 
 
 def test_a_window_wholly_before_the_forward_start_holds_no_period() -> None:

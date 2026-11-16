@@ -1370,6 +1370,31 @@ def test_the_pages_say_what_the_forward_check_reads_and_what_it_leaves_promotabl
     assert "passed every paper gate (paper_forward, forward_holdout)" in concepts
 
 
+def test_the_pages_say_which_objectives_the_forward_check_drops_an_earlier_trade_under() -> None:
+    """`_forward` drops a trade opened before the forward start from `trades`, which only a
+    per-trade edge reads; a returns objective counts every period from the start, whatever was
+    open across it. Every page that says what the check credits says which, and none says no
+    trade opened before the start is counted at all."""
+    from kanso.criteria.gates import forward_holdout
+
+    texts = {
+        "concepts": prose(page("concepts.md")),
+        "cli": prose(section(page("cli.md"), "Monitoring")),
+        "CHANGELOG": prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8")),
+        "gate": prose(str(forward_holdout.__doc__)),
+    }
+    for name, text in texts.items():
+        assert "per-trade objective" in text, name
+        assert "returns objective" in text, name
+    for unscoped in (
+        "nor with a trade that opened before it or a period",
+        "A trade opened before that midnight is not counted",
+        "on — no trade opened before it,",
+        "A trade opened before it is not counted, wherever it closed.",
+    ):
+        assert all(unscoped not in text for text in texts.values()), unscoped
+
+
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
     """The engine's top-of-book venue ignored a quote or a print stamped before its book's
     last update while the sleeve was handed it; the page says the venue now applies it, and

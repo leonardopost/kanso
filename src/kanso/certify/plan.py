@@ -339,12 +339,14 @@ def _document(hyp: Hypothesis) -> dict[str, Any]:
 
 
 def _toolbox(hyp: Hypothesis, folds: int) -> list[dict[str, Any]]:
-    """Every plannable gate: what it means, what it takes and what it may be given."""
+    """Every plannable gate: what it means, what it takes, whether it takes all of it or
+    nothing (`together`, which `check_params` holds a plan to), and what it may be given."""
     return [
         {
             "id": item.id,
             "stage": item.stage,
             "required": bool(item.required),
+            "together": bool(item.together),
             "meaningful_when": item.meaningful_when,
             "params": dict(item.params),
             "ranges": _ranges(item, hyp, folds),
@@ -422,6 +424,8 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "every gate included is one of the toolbox gates above, at the stage the "
             "toolbox gives it",
             "every parameter value lies inside that parameter's stated range",
+            "a gate the toolbox marks together is named with every one of its parameters set, "
+            "since half its rule judges nothing; it has no default to fall back on",
             "every required gate is included, and none of them is excluded",
             *correction,
             "the plan includes at least one gate at each of the cert, paper and live stages",
@@ -554,13 +558,14 @@ def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) ->
     The forward error after `D` days is `se × √(R / D)` over a research window of `R` days —
     periods and trades arrive at research's rate — and the gate first judges once the value
     stands `resolve` of them clear of zero, at `D = R × (resolve × se / metric)²`. Stated from
-    research, which selection inflated, so the wait it states is the shortest: composition's
-    certified value, which the gate reads, is usually smaller, and the wait grows as the
-    square of the ratio. Never shorter than the fewest periods the gate can judge on — one a
-    fold, a Sharpe's four (`kanso.criteria.gates.forward_holdout`) — whatever research's numbers
-    say. Never shown to the planner, which chose `resolve` blind to it. `None` while the
-    hypothesis has no best card, when its error is zero, or when the plan sets no `resolve`
-    for `forward_holdout`.
+    research, which selection inflated, so the wait it states is usually the shortest:
+    composition's certified value, which the gate reads, is usually smaller, and the wait grows
+    as the square of the ratio — though a certified value above research's, or a narrower
+    certified error, makes the gate judge sooner. Never shorter than the fewest periods the gate
+    judges on — one a fold, a Sharpe's four (`kanso.criteria.gates.forward_holdout`) — whatever
+    research's numbers say. Never shown to the planner, which chose `resolve` blind to it.
+    `None` while the hypothesis has no best card, when its error is zero, or when the plan sets
+    no `resolve` for `forward_holdout`.
     """
     measured = _best_measured(store, pinned.hyp_id)
     resolve = next(

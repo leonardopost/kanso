@@ -402,6 +402,24 @@ def test_the_prompt_carries_the_idea_the_toolbox_and_the_invariants(
     assert "n_trials" in call.user
 
 
+def test_the_planner_is_told_which_gates_take_every_parameter_or_none(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The instruction says a parameter left out is left at its default, which a `together`
+    gate refuses: told neither, a planner that sets one of `paper_forward`'s or
+    `forward_holdout`'s two spends its one retry on the complaint."""
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    plan(ws, store, HYP_ID)
+
+    toolbox = {gate["id"]: gate for gate in plan_module._toolbox(the_hypothesis(ws), 4)}
+    assert toolbox["paper_forward"]["together"] is toolbox["forward_holdout"]["together"] is True
+    assert toolbox["embargoed_window"]["together"] is False
+    assert '"together": true' in seen[0].system
+    assert "marks together is named with every one of its parameters set" in seen[0].system
+
+
 def test_the_prompt_carries_no_card_metric_no_certificate_and_no_strategy_source(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -963,7 +981,11 @@ def test_a_paper_window_far_shorter_than_the_certification_window_is_warned_abou
     script(
         ws,
         certify_plan=[
-            answer(gates=replacing("paper_forward", params=pairs({"min_duration": "5d"})))
+            answer(
+                gates=replacing(
+                    "paper_forward", params=pairs({"min_duration": "5d", "horizon_mult": 1.0})
+                )
+            )
         ],
     )
     pinned = plan(ws, store, HYP_ID)
@@ -990,13 +1012,45 @@ def test_a_paper_window_comparable_with_the_certification_window_is_not(
 def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
     ws: Workspace, store: StateStore
 ) -> None:
-    """`paper_forward` reports an absent window itself, when it runs; there is nothing to size."""
-    bare = replacing("paper_forward", params=pairs())
-    script(ws, certify_plan=[answer(gates=bare)])
+    """A planner can no longer pin one — `paper_forward` is named with both its parameters —
+    but a plan pinned before that was held may ask for none, and the plan's refusal, not this
+    note, is what answers it; there is nothing to size."""
+    script(ws, certify_plan=[answer()])
     pinned = plan(ws, store, HYP_ID)
+    bare = pinned.model_copy(
+        update={
+            "gates": [
+                gate.model_copy(update={"params": {}}) if gate.id == "paper_forward" else gate
+                for gate in pinned.gates
+            ]
+        }
+    )
 
-    assert pinned.paper_window_s("30m") is None
-    assert paper_window_note(ws, store, pinned) is None
+    assert bare.paper_window_s("30m") is None
+    assert paper_window_note(ws, store, bare) is None
+
+
+def test_paper_forward_without_a_parameter_is_retried_and_one_pinned_so_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Half its rule judges nothing and a skip passes, so it would leave the forward check the
+    only paper gate that judged: the planner is sent back, and a plan pinned so is refused."""
+    half = replacing("paper_forward", params=pairs({"min_duration": "30d"}))
+    script(ws, certify_plan=[answer(gates=half), answer()])
+
+    written = plan(ws, store, HYP_ID)
+
+    (planned,) = [gate for gate in written.gates if gate.id == "paper_forward"]
+    assert set(planned.params) == {"min_duration", "horizon_mult"}
+    document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
+    for gate in document["gates"]:
+        if gate["id"] == "paper_forward":
+            gate["params"] = {"min_duration": "30d"}
+    plan_file(ws, HYP_ID).write_text(yaml.safe_dump(document), encoding="utf-8")
+    with pytest.raises(ValidationError) as refused:
+        plan(ws, store, HYP_ID)
+    assert "gates.paper_forward.horizon_mult: is not set" in refused.value.message
+    assert refused.value.remedy == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
 
 
 # --- when the forward window first judges --------------------------------------
@@ -1088,8 +1142,9 @@ def test_the_forward_note_never_states_a_wait_shorter_than_the_gate_judges_in(
     ws: Workspace, store: StateStore
 ) -> None:
     """A best a hundred errors clear would judge, on research's numbers alone, after under an
-    hour of forward window; the gate judges on no fewer periods than strike a band, one a fold
-    for the demo's per-trade edge, so the note states that floor: four one-day periods."""
+    hour of forward window; the gate judges on no fewer periods than one a fold for the demo's
+    per-trade edge, whatever its error says, so the note states that floor: four one-day
+    periods."""
     a_card(store, metric=1.0, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=0.01)
     script(ws, certify_plan=[answer()])
 

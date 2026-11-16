@@ -13,10 +13,10 @@ and `embargoed_window` and every other gate are unchanged.
 composition's certified value scaled to the folds the window filled, and `se_fwd` the error
 of the window's value under the certified dispersion — both exactly as `kanso.criteria.band`
 strikes them for `paper_forward`, without the certification value's own term
-(`Band.forward`, `forward_error`). The gate judges once `expected ≥ resolve × se_fwd` with
-`expected` above zero: a true edge equal to the certified value then stands `resolve`
-forward errors clear of zero. Before that it **fails**, with the periods the window holds,
-the periods it needs and its forward error in the evidence. It does not skip, because a
+(`Band.forward`, `forward_error`). The gate judges once the window holds `required_periods`
+and `expected ≥ resolve × se_fwd`: a true edge equal to the certified value then stands
+`resolve` forward errors clear of zero. Before that it **fails**, with the periods the window
+holds, the periods it needs and its forward error in the evidence. It does not skip, because a
 skip passes and the version would become `promotable` on `paper_forward` alone. A window too
 thin to strike a band — no fold that scores, or a Sharpe's fold under four periods — has not
 judged either, and a certified value at or below zero is one no window judges, as is one
@@ -31,13 +31,14 @@ expected value and if it is zero, `pass_at_expected = Φ((expected − bar) / se
 `pass_at_zero = Φ(−bar / se_fwd)`. At `min_fraction` zero a version with no edge passes half
 the time once judged, and the evidence says so in numbers.
 
-**`required_periods`** is the period count at which a window filled evenly first judges:
+**`required_periods`** is the fewest periods the gate judges on, and it judges on none fewer:
 `N × (resolve × se / value)²` from the certified value, its error and the `N` periods it was
-read over, since a mean over `M` such periods errs by `se × √(N / M)` — and at least the
-fewest that strike a band, one a fold or a Sharpe's four. A Sharpe's fold weighs its exact
-small-sample variance, heavier than `1/m` — twice it at five periods — so a Sharpe's window
-judges about two or three periods a fold after this count; `None` for a certified value at or
-below zero or an error of zero.
+read over — where a mean over `M` periods, erring by `se × √(N / M)`, first stands `resolve`
+errors clear — and never fewer than one a fold, a Sharpe's four a fold, since a window holding
+fewer is cut into folds shorter than a period, one of which can strike a band alone. A window
+filled evenly judges at this count; a Sharpe's fold weighs its exact small-sample variance,
+heavier than `1/m` — twice it at five periods — so a Sharpe's window judges about two or three
+periods a fold after it; `None` for a certified value at or below zero or an error of zero.
 
 **Only the forward window counts.** A stage resumes at its clock's day, or at the earliest
 forward start of what it holds, so a version can join a stage whose clock is before its own
@@ -46,10 +47,13 @@ forward start of what it holds, so a version can join a stage whose clock is bef
 belongs to the span holding its end, so where the run opened before that midnight a period
 that may have opened before it is not counted either: under a return period that divides a
 day none can, since every window is cut from a midnight, and under any other — a week — the
-first period that ends less than a period after it is dropped, whether or not it straddled. A trade
-opened before it is not counted, wherever it closed. The run is every window the version has
-closed on the stage since it first joined, joined into one (`kanso.monitor.realised`): a
-redeploy adds a window and restarts nothing, here as for `paper_forward`.
+first period that ends less than a period after it is dropped, whether or not it straddled.
+A per-trade objective counts no trade opened before it, wherever the trade closed, its days
+inside the window with it; a returns objective — a contribution, a Sharpe — counts every period
+from it on, so what a position opened before it made after it is counted, a period's return
+being the book's and not any one trade's. The run is every window the version has closed on
+the stage since it first joined, joined into one (`kanso.monitor.realised`): a redeploy adds a
+window and restarts nothing, here as for `paper_forward`.
 
 It skips, saying so, where `paper_forward` does: no parameters chosen, no stage record, no
 expectation, no objective, or an expectation that records no error or period count.
@@ -108,7 +112,16 @@ class _ForwardHoldout:
         )
         expected = 0.0 if band is None else band.expected
         se_fwd = None if band is None else band.forward
-        judged = se_fwd is not None and se_fwd > 0 and expected > 0 and expected >= resolve * se_fwd
+        fewest = (SHARPE_FOLD if objective.statistic == "sharpe" else 1) * ctx.research_folds
+        required = _required(value, se, periods, resolve, fewest)
+        held = 0 if run is None else len(run.returns)
+        judged = (
+            required is not None
+            and held >= required
+            and se_fwd is not None
+            and se_fwd > 0
+            and expected >= resolve * se_fwd
+        )
         bar = max(0.0, fraction * expected)
         realised = (
             None
@@ -120,7 +133,6 @@ class _ForwardHoldout:
                 _forward(ctx.benchmark_run, start),
             )[0]
         )
-        fewest = (SHARPE_FOLD if objective.statistic == "sharpe" else 1) * ctx.research_folds
         return verdict(
             self.id,
             judged and realised is not None and realised > bar,
@@ -128,8 +140,8 @@ class _ForwardHoldout:
                 "objective": objective.id,
                 "forward_start": start.isoformat(),
                 "window": None if run is None else [day.isoformat() for day in run.window],
-                "periods": 0 if run is None else len(run.returns),
-                "required_periods": _required(value, se, periods, resolve, fewest),
+                "periods": held,
+                "required_periods": required,
                 "resolve": resolve,
                 "min_fraction": fraction,
                 "judged": judged,
@@ -144,7 +156,8 @@ class _ForwardHoldout:
 
 def _forward(run: CardRun | None, start: date) -> CardRun | None:
     """`run` from midnight of `start` on, or `None` when it holds nothing after it: no period
-    that may have opened before that midnight, and no trade that did."""
+    that may have opened before that midnight, and no trade that did — which only a per-trade
+    objective reads; a returns objective reads the periods, whatever was open across them."""
     if run is None:
         return None
     opens, closes = run.bounds
@@ -159,8 +172,8 @@ def _forward(run: CardRun | None, start: date) -> CardRun | None:
 
 
 def _required(value: float, se: float, periods: float, resolve: float, fewest: int) -> int | None:
-    """The periods an evenly filled window needs before it judges; `None` for a certified
-    value at or below zero, or an error of zero, which no window judges."""
+    """The fewest periods the gate judges on; `None` for a certified value at or below zero,
+    or an error of zero, which no window judges."""
     if value <= 0 or se <= 0:
         return None
     return max(ceil(periods * (resolve * se / value) ** 2), fewest)

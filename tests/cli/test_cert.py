@@ -192,10 +192,10 @@ def test_the_plan_states_when_the_forward_window_first_judges(
 ) -> None:
     """From the best card's metric and error, at the `resolve` the planner chose: how long the
     forward window runs before `forward_holdout` judges, and its error after a year. No
-    version is marked `promotable` before that, so it is the shortest wait for live capital.
-    This best is so many errors clear that research alone would say under a day; the gate
-    judges on no fewer periods than strike a band, one in each of four folds, so the line
-    says four."""
+    version is marked `promotable` before that, so it is the wait for live capital, from
+    research's value. This best is so many errors clear that research alone would say under a
+    day; the gate judges on no fewer periods than one in each of four folds, so the line says
+    four."""
     result = at(runner, researched, "cert", "plan", HYP_ID)
     document = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
     with StateStore(researched / "state.db") as store:
