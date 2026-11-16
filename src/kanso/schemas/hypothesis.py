@@ -430,7 +430,8 @@ class PriorTrials(KansoModel):
 
     A seed chosen as the best of an offline grid is a selection the cards never saw: the grid's
     settings are draws the maximum was taken over before the first card ran. `count` is that
-    many, the operator's statement and never kanso's inference, at most `MAX_PRIOR_TRIALS`.
+    many, the operator's statement and never kanso's inference, at most `MAX_PRIOR_TRIALS`,
+    and a whole number written as one: YAML's `true` or a quoted `"27"` is no count.
     `source` names the evidence, a file inside the workspace named relative to its root, and
     `sha256` the digest of its bytes, which `kanso hyp validate` and `kanso hyp add` check
     where the hypothesis's pinned file does not already state the block; after that the pinned
@@ -439,7 +440,7 @@ class PriorTrials(KansoModel):
     (`kanso.research.records.prior_trials`).
     """
 
-    count: int = Field(ge=1, le=MAX_PRIOR_TRIALS)
+    count: int = Field(ge=1, le=MAX_PRIOR_TRIALS, strict=True)
     source: NonEmpty
     sha256: Sha256
 

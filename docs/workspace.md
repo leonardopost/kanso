@@ -465,7 +465,7 @@ block an ancestor already states, which `derived_from` already counts; so does `
 classify`, which pins the file as it is on disk, for a block written in since the pin. Once a
 pin states the block only the pinned file is read: a re-pin of the same block, `kanso
 classify`'s included, reads nothing of the evidence, and moving or editing it refuses nothing.
-The count is yours, from 1 to a billion: kanso neither derives it nor checks it
+The count is yours, a whole number from 1 to a billion: kanso neither derives it nor checks it
 against what the evidence says. It is not scope, so a re-pin that only adds it keeps `best`,
 and the next run's baseline judges the best under the wider margin; a re-pin is refused while
 a run is active, so `kanso research end ID` first. kanso never writes the key; the classifying
