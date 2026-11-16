@@ -79,6 +79,16 @@ def test_the_align_skill_says_the_run_s_base_is_never_judged() -> None:
     assert "The run's base is never judged" in text
 
 
+def test_the_align_skill_names_the_rewinds_of_earlier_runs() -> None:
+    """An agent explaining a drift verdict that cites a direction this run never took needs
+    to know the judge reads the hypothesis's earlier runs, and that a base is not re-judged
+    by them, or it would report the verdict as a fault or the standing best as an oversight."""
+    text = skill(PACKAGED, "kanso-align")
+    assert "the reasons the hypothesis was rewound for in its earlier runs" in text
+    assert "(`same_program`, `same_thesis`)" in text
+    assert "Earlier rewinds bear on new proposals only" in text
+
+
 def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> None:
     """An agent asked why a stall certified nothing reads this file; told nothing of the
     precheck, it would report a missing certificate as a fault, or certify by hand a best the

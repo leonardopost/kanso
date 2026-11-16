@@ -1663,16 +1663,17 @@ The syntax tree is read first. An instrument literal outside `universe`, a bar w
 aggregation is not `resolution`, and a subscription or handler for a type outside
 `data_requirements` are facts about the file, stated rather than judged, and they cost
 nothing. Only a file that passes them is shown to a model — the `align_check` task class —
-with the thesis, the run's pinned `program.md`, the file, the diff since the last check, and
-the reasons this run was already rewound for (the newest ten, each once).
+with the thesis, the run's pinned `program.md`, the file, the diff since the last check, the
+reasons this run was already rewound for, and the reasons the hypothesis was rewound for in
+its earlier runs (the newest ten of the two, this run's first, each once).
 
 **The program bounds the judgement.** `program.md` is where you say what the search may
 change and what it may not, and the model reads it with the thesis in that order: a change
 the program forbids, or one that contradicts something the thesis states outright, is drift;
 a change the program permits — a filter, a side, a size, a trigger, an exit it names — is
 aligned unless the thesis states the opposite or the program's own prohibitions exclude it;
-and a change that returns in a direction this run was already rewound for is drift again,
-unless the program permits it and the thesis does not say otherwise. The run's copy is the
+and a change that returns in a direction this run or an earlier one was already rewound for is
+drift again, unless the program permits it and the thesis does not say otherwise. The run's copy is the
 one read, because it is the one its proposer was told; an edit to the workspace file reaches
 the next run. Observed in a live workspace on 2026-10-11, before the model was shown either:
 a hypothesis whose program said "one side only if the evidence says one side pays" was
@@ -1680,6 +1681,27 @@ rewound for trading one side, the run's best at the time, and for an entry filte
 program listed; and another run's identical Friday skip was judged drift twice and then
 aligned, a verdict that stood, since no later check asks again about a file a check passed.
 So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs.
+
+**A direction refused in one run is not met fresh in the next.** Observed in a live workspace
+on 2026-11-15: a run was rewound for a trend filter and then for a volatility filter, and the
+next run kept a file carrying such a filter and its check passed it. So an earlier run's
+reason comes with the change the check refused — a unified diff from the bytes that run was
+rewound to, cut to forty lines with the rest counted on the last — the run's tag, and
+`same_program` and `same_thesis`: false where that run pinned another `program.md`, or a
+`hypothesis.yaml` whose thesis, mechanism, universe or horizon differ from this one's, or the
+resolution, `bar_resolution` or `data_requirements` the syntax tree reads. A direction you
+have permitted since is judged under the program or the pin that permits it, and a re-pin
+that changes none of what a check reads — a title, a limit, a window — is not taken for a
+new thesis. The `drifted` event records the bytes it refused for this (`drifted`, beside
+`from`, the bytes the run's last check left the lane on); for one an earlier kanso wrote, the
+change is read from the newest keep that check marked not aligned among the cards it judged,
+those since the check before it. The change is `null` where there is none to show: an old
+event that judged no keep, or a drift that refused the very bytes it rewound to, as a base
+that fails the syntax tree is. This makes the judge consistent across runs, not stricter:
+what the program permits stays aligned. And it bears only on what a run proposes: a run's
+base is never judged (below), so a best an earlier run kept stands as the next run's base even
+where it takes a direction another run was rewound for, and the judge is told that only the
+change since the last check can return in a refused direction.
 
 A drift is rewound rather than stopped: research is indefinite, and stopping it on a
 judgement call would hand the model a veto. The lane and `best` go back to the newest keep of
