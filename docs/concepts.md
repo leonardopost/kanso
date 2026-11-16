@@ -2809,9 +2809,10 @@ closes at 09:31, one struck on a quote before the session's first bar of a name 
 holds bars of, which it is priced from (backlog row 323), or one a venue latency carried past
 New York midnight from a point published before it, where its instrument published nothing
 between the midnight and the fill (backlog row 325) — since a book judged on the trades
-that could be priced would leave the rest's timing untested; and a hold longer than half the
-window fails with `draws: 0`. The certification runner hands it a reader of the window that
-reads the certification window once more, a chunk at a time, folding a number per
+that could be priced would leave the rest's timing untested; and a trade spanning more than
+half the window's sessions, its first and its last both counted, fails it with `draws: 0`.
+The certification runner hands it a reader of the window that reads the certification window
+once more, a chunk at a time, folding a number per
 instrument and time of day per session and the split schedules of the window's definitions,
 and nothing else of it: one more read and no backtest, paid only by a plan that names the
 gate, and spared like the plateau's runs when `embargoed_window` has refused the subject. Its

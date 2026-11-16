@@ -890,16 +890,26 @@ def test_a_book_is_not_judged_on_the_trades_its_own_instants_can_price() -> None
     assert "p" not in book.evidence
 
 
-def test_a_hold_longer_than_half_the_window_fails_with_no_draw() -> None:
-    days = weekdays(10)
-    closes = [10.0 + i for i in range(10)]
-    run = a_run([round_trip(days, closes, 0, 5), round_trip(days, closes, 6, 7)], days)
+@pytest.mark.parametrize(
+    ("sessions", "hold", "draws"), [(10, 5, 0), (11, 5, 0), (10, 4, 1), (12, 5, 1)]
+)
+def test_a_trade_spanning_more_than_half_the_window_s_sessions_leaves_no_draw(
+    sessions: int, hold: int, draws: int
+) -> None:
+    """`h` is the sessions the longest trade spans, its first and last both counted, and there
+    are `S - 2h + 1` draws: none exactly when that span is more than half the window's
+    sessions, as a hold of five sessions spans six, more than half of eleven though five is
+    not."""
+    days = weekdays(sessions)
+    closes = [10.0 + i for i in range(sessions)]
+    trades = [round_trip(days, closes, 0, hold), round_trip(days, closes, hold + 1, hold + 2)]
 
-    result = judged(run, folded(closes, days))
+    result = judged(a_run(trades, days), folded(closes, days))
 
     assert (result.passed, result.skipped) == (False, None)
-    assert (result.evidence["draws"], result.evidence["min_offset"]) == (0, 6)
-    assert result.evidence["reason"] == TOO_SHORT
+    assert (result.evidence["draws"], result.evidence["min_offset"]) == (draws, hold + 1)
+    assert (result.evidence.get("reason") == TOO_SHORT) == (2 * (hold + 1) > sessions)
+    assert "spans more than half the window's sessions" in TOO_SHORT
 
 
 def sawtooth(seed: int, cycles: int) -> tuple[list[float], list[int]]:

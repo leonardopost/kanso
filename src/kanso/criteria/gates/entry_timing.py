@@ -21,9 +21,10 @@ missing is the hole a search correction that skipped once was. So a traded instr
 holds no bar, print or quote of fails the gate naming it; so does a subject any of whose trades
 could not be priced at its own instants, counted as `observed_dropped` — a book judged on the
 trades that could be priced would leave the rest's timing untested, the drift a leg held among
-it; and so does a window too short for any offset — a hold longer than half the window leaves
-`D < 1`, stated as `draws: 0`. A window whose smallest attainable `p`, `1/(1 + D)`, is above
-`max_p` cannot pass either, and says so in `min_attainable_p`.
+it; and so does a window too short for any offset — a trade spanning more than half the
+window's sessions, its first and its last both counted, leaves `D < 1`, stated as `draws: 0`.
+A window whose smallest attainable `p`, `1/(1 + D)`, is above `max_p` cannot pass either, and
+says so in `min_attainable_p`.
 
 **On a venue that matches a level-two book every fill is struck at the touch.** The runner counts
 it so for a hypothesis that requires `book`, and the null does too, at offset 0 and in every draw.
@@ -75,8 +76,8 @@ UNPLACED: Final = (
     "the book's; a missing price fails, it does not pass"
 )
 TOO_SHORT: Final = (
-    "the longest hold is more than half the window, so no offset moves every trade off its own "
-    "original: there is no draw"
+    "the longest trade spans more than half the window's sessions, its first and its last both "
+    "counted, so no offset moves every trade off its own original: there is no draw"
 )
 
 
