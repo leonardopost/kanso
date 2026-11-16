@@ -12,9 +12,9 @@ bit.
 **It needs prices the run does not carry, and is handed a reader for them.** The certification
 runner supplies `GateContext.session_prices`, which reads the window again — a chunk at a time,
 folding a number per key per session — for exactly the instruments and times of day the trades
-were struck at. It judges nothing it was not handed: no threshold, an attached construct (whose
-trades are its host's as much as its own), fewer than two closed trades, or no reader are skips
-with the reason, as any gate without its context.
+filled at, each point at the instant it was published. It judges nothing it was not handed: no
+threshold, an attached construct (whose trades are its host's as much as its own), fewer than
+two closed trades, or no reader are skips with the reason, as any gate without its context.
 
 **A missing price is a failure, never a skip.** A required gate that passes because its input is
 missing is the hole a search correction that skipped once was. So a traded instrument the window

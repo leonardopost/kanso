@@ -190,26 +190,23 @@ def judged(run: CardRun, prices: SessionPrices | None, max_p: float | None = 0.0
 
 
 @pytest.mark.parametrize("day", [date(2025, 3, 7), date(2025, 3, 10), date(2025, 11, 3)])
-@pytest.mark.parametrize("wall", [1, 9 * HOUR + 31 * 60 * NS_PER_SECOND, CLOSE, DAY_NS])
+@pytest.mark.parametrize("wall", [0, 1, 9 * HOUR + 31 * 60 * NS_PER_SECOND, CLOSE, DAY_NS - 1])
 def test_a_time_of_day_reads_the_same_on_either_side_of_a_change_of_clocks(
     day: date, wall: int
 ) -> None:
-    at = instant_at(day, wall)
-
-    assert wall_of(at) == (day, wall)
-    local = datetime.fromtimestamp(at // NS_PER_SECOND, tz=UTC).astimezone()
-    assert local is not None
+    assert wall_of(instant_at(day, wall)) == (day, wall)
 
 
 def test_a_close_is_struck_at_its_wall_clock_time_whatever_the_offset() -> None:
-    """16:00 New York is 21:00Z before the March change and 20:00Z after it, and a daily bar
-    stamped at the next New York midnight belongs to its own session, at the day's end."""
+    """16:00 New York is 21:00Z before the March change and 20:00Z after it, and an instant at
+    a New York midnight — a daily bar published there, a fill a latency lands after it — is the
+    date that midnight opens."""
     friday, monday = date(2025, 3, 7), date(2025, 3, 10)
 
     assert datetime.fromtimestamp(instant_at(friday, CLOSE) // NS_PER_SECOND, tz=UTC).hour == 21
     assert datetime.fromtimestamp(instant_at(monday, CLOSE) // NS_PER_SECOND, tz=UTC).hour == 20
-    assert wall_of(instant_at(friday, DAY_NS)) == (friday, DAY_NS)
     assert instant_at(friday, DAY_NS) == instant_at(date(2025, 3, 8), 0)
+    assert wall_of(instant_at(friday, DAY_NS)) == (date(2025, 3, 8), 0)
 
 
 # --- the readings -----------------------------------------------------------------
@@ -229,8 +226,8 @@ def test_the_fold_keeps_each_session_s_last_reading_at_or_before_each_key() -> N
     """A bar after the key's time is not read at it; an earlier session's is never carried into
     a mark; a quote is, the last of a session's evening among them, as the runner carries one; a
     point arriving after a later one keeps it; the prefix belongs to no session, and the evening
-    before the window's first date, which a window opening at UTC midnight delivers, is that
-    date's session; a name nobody traded still names the sessions."""
+    before the window's first date, which a window opening at UTC midnight delivers, is its own
+    date's session, the date before the first; a name nobody traded still names the sessions."""
     days = weekdays(3)
     early, late = 10 * HOUR, CLOSE
     fold = Fold(((NAME, early), (NAME, late)), (days[1], days[2]))
@@ -257,30 +254,57 @@ def test_the_fold_keeps_each_session_s_last_reading_at_or_before_each_key() -> N
     assert (NAME, early) not in Fold(((NAME, early),), (days[0], days[0])).prices().marks
 
 
-def test_a_daily_bar_the_window_delivers_on_its_first_morning_is_the_evening_s_session() -> None:
-    """A daily bar is stamped at the next New York midnight, so the bar of the day before the
-    window opens inside it — the run trades on it — and the bar of its last date after it; a
-    trade bought on the first is priced at its own instants, and none is dropped."""
+@pytest.mark.parametrize(("lag", "latency"), [(0, 0), (0, 50_000_000), (15 * MINUTE, 0)])
+def test_a_daily_bar_published_at_a_new_york_midnight_is_the_session_that_midnight_opens(
+    lag: int, latency: int
+) -> None:
+    """A daily bar is stamped at the New York midnight that ends its day and published then or
+    later, so the bar of the day before the window opens inside it — the run trades on it — and
+    the bar of its last date after it. A fill struck at it, at its publication or a venue
+    latency after it, is on the session that midnight opens, as the bar is, and priced at its
+    own instants; none is dropped."""
     days = weekdays(6)
     closes = [10.0 + i for i in range(6)]
-    fold = Fold(((NAME, DAY_NS),), (days[1], days[-1]))
+    nights = [day + timedelta(days=1) for day in days]
+    fold = Fold(((NAME, lag + latency),), (days[1], days[-1]))
     fold.take(BAR, NAME, instant_at(days[0], CLOSE), 1.0, 1.0)
-    for day, close in zip(days, closes, strict=True):
-        fold.take(BAR, NAME, instant_at(day, DAY_NS), close, close)
+    for night, close in zip(nights, closes, strict=True):
+        at = instant_at(night, 0)
+        fold.take(BAR, NAME, at + lag, close, close, at)
     prices = fold.prices()
     trades = [
         a_trade(
-            a_fill(days[i], "BUY", 100.0, closes[i], wall=DAY_NS),
-            a_fill(days[i + 1], "SELL", 100.0, closes[i + 1], wall=DAY_NS),
+            a_fill(nights[i], "BUY", 100.0, closes[i], wall=lag + latency),
+            a_fill(nights[i + 1], "SELL", 100.0, closes[i + 1], wall=lag + latency),
         )
         for i in (0, 2)
     ]
 
     own = draw([place(t, prices) for t in trades], prices, MODEL, 0)
 
-    assert prices.sessions == tuple(days[:-1]), "the last date's bar is stamped after the window"
+    assert prices.sessions == tuple(nights[:-1]), "the last date's bar is stamped after the window"
     assert (own.kept, own.dropped) == (2, 0)
     assert own.costs == tuple(tuple(f.cost for f in t.fills) for t in trades)
+
+
+def test_a_reading_is_the_last_point_published_at_or_before_the_instant_it_is_read_at() -> None:
+    """One-minute bars published fifteen minutes after the minute they close: at 10:30 the
+    market has published the bar of 10:15 and no later one, so a fill at 10:30 — the instant the
+    runner's venue filled it, struck at what it had applied — is read at that bar, never at the
+    10:30 bar the market publishes at 10:45."""
+    day = weekdays(1)[0]
+    delay = 15 * MINUTE
+    fold = Fold(((NAME, 10 * HOUR + 30 * MINUTE),), (day, day))
+    for minute in range(9 * 60 + 31, 11 * 60 + 1):
+        at = instant_at(day, minute * MINUTE)
+        close = 10.0 if minute < 10 * 60 + 20 else 11.0
+        fold.take(BAR, NAME, at + delay, close, close, at)
+
+    (reading,) = fold.prices().marks[(NAME, 10 * HOUR + 30 * MINUTE)]
+
+    assert reading is not None
+    assert (reading.ts_ns, reading.ask) == (instant_at(day, 10 * HOUR + 30 * MINUTE), 10.0)
+    assert reading.priced_ns == instant_at(day, 10 * HOUR + 15 * MINUTE)
 
 
 @pytest.mark.parametrize(
@@ -439,6 +463,30 @@ def test_a_leg_with_no_price_on_the_session_it_lands_on_is_dropped() -> None:
     assert draw(placed, gapped, MODEL, 3).dropped == 1, "and here its entry does"
 
 
+def test_a_series_on_utc_s_clock_drops_a_trade_moved_across_a_change_of_clocks() -> None:
+    """A coin's daily bar published at 00:00 UTC is 19:00 New York in winter and 20:00 in
+    summer, every New York date holding one; a winter trade at 19:00 moved onto summer sessions
+    finds no reading at or before 19:00 there, and is dropped from the draw."""
+    days = [date(2025, 3, 3) + timedelta(days=i) for i in range(12)]
+    stamps = [midnight_ns(day) for day in days[1:]]
+    walls = sorted({wall_of(at)[1] for at in stamps})
+    fold = Fold(tuple((NAME, wall) for wall in walls), (days[0], days[-1]))
+    for at in stamps:
+        fold.take(BAR, NAME, at, 10.0, 10.0)
+    prices = fold.prices()
+    winter = [wall_of(at) for at in stamps[:3]]
+    trade = a_trade(
+        a_fill(winter[0][0], "BUY", 10.0, 10.0, wall=winter[0][1]),
+        a_fill(winter[1][0], "SELL", 10.0, 10.0, wall=winter[1][1]),
+    )
+    placed = [place(trade, prices)]
+
+    assert walls == [19 * HOUR, 20 * HOUR], "an hour apart either side of 9 March"
+    assert len(prices.sessions) == len(stamps), "every New York date holds a bar"
+    assert draw(placed, prices, MODEL, 2).kept == 1, "still in winter"
+    assert draw(placed, prices, MODEL, 8).dropped == 1, "moved into summer"
+
+
 def test_a_price_of_zero_cannot_size_a_moved_trade() -> None:
     days = weekdays(4)
     closes = [10.0, 10.0, 0.0, 10.0]
@@ -501,6 +549,41 @@ def test_a_trade_the_runner_held_through_a_split_is_restated_onto_the_shares_it_
     assert [leg.qty for leg in placed.legs] == [100.0, pytest.approx(100.0)]
     assert [leg.px for leg in placed.legs] == [10.0, pytest.approx(10.0)]
     assert own.costs[0] == tuple(f.cost for f in trade.fills)
+
+
+def test_a_dated_spread_is_read_at_the_instant_the_reading_refers_to() -> None:
+    """A bar of 15:59 published at 16:14 prices a fill at 16:14, and the runner charges that fill
+    the row of the instant its price was struck at, 15:59, inside regular hours; so does the null,
+    at offset 0 and in every draw, though the fill sits after the close."""
+    days = weekdays(6)
+    row = {"pre": 1.0, "open": 1.0, "rth": 2.0, "post": 40.0, "n_sessions": 20, "n_open": 20}
+    model = {
+        "costs": {
+            "commission_bps": 0.0,
+            "slippage_bps": 0.0,
+            "spread": "dated",
+            "dated": [{"instrument": NAME, "from": days[0].isoformat(), **row}],
+        }
+    }
+    struck, published = CLOSE - MINUTE, CLOSE + 14 * MINUTE
+    fold = Fold(((NAME, published),), (days[0], days[-1]))
+    for day in days:
+        at = instant_at(day, struck)
+        fold.take(BAR, NAME, at + 15 * MINUTE, 10.0, 10.0, at)
+    prices = fold.prices()
+    trade = a_trade(
+        a_fill(days[0], "BUY", 100.0, 10.0, wall=published),
+        a_fill(days[1], "SELL", 100.0, 10.0, wall=published),
+    )
+    placed = [place(trade, prices)]
+
+    from kanso.nautilus.costs import dated_rows
+
+    rth = dated_half_spread(dated_rows(model), NAME, instant_at(days[0], struck))
+    assert rth == 1.0 / BPS
+    assert dated_half_spread(dated_rows(model), NAME, instant_at(days[0], published)) != rth
+    for k in (0, 3):
+        assert draw(placed, prices, model, k).costs == ((1_000.0 * rth, 1_000.0 * rth),)
 
 
 def test_a_dated_spread_is_read_at_the_drawn_instant() -> None:
@@ -835,7 +918,7 @@ def rising_book(seed: int) -> tuple[CardRun, SessionPrices]:
     fold = Fold(((name, CLOSE),), ref.span)
     for bar in loaded:
         close = float(bar.close)
-        fold.take(BAR, name, int(bar.ts_event), close, close)
+        fold.take(BAR, name, int(bar.ts_init), close, close, int(bar.ts_event))
     prices = fold.prices()
     days = list(prices.sessions)
     marks = prices.marks[(name, CLOSE)]
@@ -893,12 +976,19 @@ def test_the_window_is_read_once_for_every_key_the_trades_need() -> None:
     assert asked == [((NAME, 10 * HOUR), (NAME, CLOSE))]
 
 
-def test_a_fill_is_placed_where_its_price_was_struck() -> None:
-    """Under a latency a fill lands after the point its price was read off; the null moves the
-    price's instant, not the fill's."""
+def test_a_fill_is_placed_at_the_instant_it_filled() -> None:
+    """The instant a fill's price refers to, which a dated spread keeps (`price_ts_ns`), is on
+    another clock than the one the window is read on; the fill sits where it filled, and is
+    struck at what was published there."""
     days = weekdays(4)
-    fill = replace(a_fill(days[1], "BUY", 1.0, 10.0), price_ts_ns=instant_at(days[0], CLOSE))
-    trade = a_trade(fill, a_fill(days[2], "SELL", 1.0, 10.0))
+    latency = 50_000_000
+    fill = replace(
+        a_fill(days[1], "BUY", 1.0, 10.0, wall=CLOSE + latency),
+        price_ts_ns=instant_at(days[0], CLOSE),
+    )
+    trade = a_trade(fill, a_fill(days[2], "SELL", 1.0, 10.0, wall=CLOSE + latency))
 
-    assert keys_of(a_run([trade], days)) == ((NAME, CLOSE),)
-    assert place(trade, folded([10.0] * 4, days)).first == 0
+    assert keys_of(a_run([trade], days)) == ((NAME, CLOSE + latency),)
+    prices = folded([10.0] * 4, days, keys=((NAME, CLOSE + latency),))
+    assert place(trade, prices).first == 1
+    assert draw([place(trade, prices)], prices, MODEL, 0).kept == 1

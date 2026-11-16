@@ -1387,9 +1387,12 @@ def _session_prices(subject: Subject, keys: Sequence[PriceKey]) -> SessionPrices
 
     Read as the subject's own run read it (`backtest.window_chunks`), a chunk at a time, each
     chunk folded and let go before the next is read, so this holds a number per key per session
-    and one chunk of the window. A point of the prefix a warmed subject is fed is folded into no
-    session; the evening before the window's first New York date, which the window delivers, is
-    that date's session (`Fold`). A bar is read at its close and a print at its price; a quote
+    and one chunk of the window. Every point is folded at the instant it was published, its
+    `ts_init`, the clock the run was handed it on and its fills were struck on, with its
+    `ts_event` kept for the dated row a fill struck at it pays. A point of the prefix a warmed
+    subject is fed is folded into no session; one published on the evening before the window's
+    first New York date, which the window delivers, is that evening's own date's session, the
+    date before the first (`Fold`). A bar is read at its close and a print at its price; a quote
     keeps its bid and ask. The split schedules are those of the definitions the window was
     resolved with, which the moved trades are restated by and which nothing a gate is handed
     carries otherwise.
@@ -1397,7 +1400,7 @@ def _session_prices(subject: Subject, keys: Sequence[PriceKey]) -> SessionPrices
     Engine facts this relies on (nautilus_trader 1.231.0): a `Bar` carries its `close` and its
     `bar_type.instrument_id`, a `TradeTick` its `price` and a `QuoteTick` its `bid_price` and
     `ask_price`, each a `Price` that `float` reads, and both ticks their `instrument_id`; every
-    point carries `ts_event` as nanoseconds since the epoch.
+    point carries `ts_init` and `ts_event` as nanoseconds since the epoch.
     """
     from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
 
@@ -1410,17 +1413,20 @@ def _session_prices(subject: Subject, keys: Sequence[PriceKey]) -> SessionPrices
                 if isinstance(point, Bar):
                     close = float(point.close)
                     name = str(point.bar_type.instrument_id)
-                    fold.take(BAR, name, point.ts_event, close, close)
+                    fold.take(BAR, name, point.ts_init, close, close, point.ts_event)
                 elif isinstance(point, TradeTick):
                     price = float(point.price)
-                    fold.take(PRINT, str(point.instrument_id), point.ts_event, price, price)
+                    fold.take(
+                        PRINT, str(point.instrument_id), point.ts_init, price, price, point.ts_event
+                    )
                 elif isinstance(point, QuoteTick):
                     fold.take(
                         QUOTE,
                         str(point.instrument_id),
-                        point.ts_event,
+                        point.ts_init,
                         float(point.bid_price),
                         float(point.ask_price),
+                        point.ts_event,
                     )
     return fold.prices()
 

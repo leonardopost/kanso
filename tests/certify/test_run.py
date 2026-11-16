@@ -15,8 +15,9 @@ from __future__ import annotations
 import shutil
 import sys
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -60,16 +61,23 @@ from tests.own_bar_size import REFUSED, version_remedy
 from tests.research.conftest import (
     CERTIFICATION,
     DOCUMENT,
+    ENVELOPE,
     FLAT,
     HYP_ID,
     INSTRUMENT,
     RAISING,
+    RESEARCH,
     REVERTING,
+    SHALLOW,
     SPAN,
+    bar_type,
     bars,
     classify,
+    dataset,
     document,
     load_december,
+    price,
+    write_instruments,
 )
 from tests.research.test_attached import ALLOWING, DECLARING_HOST, FILTER, HOST, compose_host
 
@@ -1906,3 +1914,120 @@ def test_the_reader_folds_bars_prints_and_quotes_and_nothing_before_the_window(
         Reading(at, 29.9, 30.1),
     ]
     assert prices.schedules == {}
+
+
+def test_the_reader_reads_a_delayed_feed_at_the_instants_it_was_published(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One-minute bars published fifteen minutes after the minute they close, as kanso's own
+    `delayed_trade` rule stamps them: the venue fills a buy at 10:30 at the 10:15 bar it has
+    applied and a sale at 10:50 at the 10:35 one, and the reader prices the trade at offset 0
+    where the runner struck it, never at a bar the market had yet to publish."""
+    from nautilus_trader.model.data import BarSpecification
+    from nautilus_trader.model.enums import AggregationSource, BarAggregation, PriceType
+
+    from kanso.criteria.timing import draw, instant_at, place, wall_of
+    from kanso.data.publication import stamp
+    from tests.criteria.test_entry_timing import MODEL, a_fill, a_trade
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    subject = run._subject(ws, store, HYP_ID, None)
+    minute, day = 60 * 1_000_000_000, CERTIFICATION[0] + timedelta(days=1)
+    one_minute = BarType(
+        InstrumentId.from_str(INSTRUMENT),
+        BarSpecification(1, BarAggregation.MINUTE, PriceType.LAST),
+        AggregationSource.EXTERNAL,
+    )
+    made = []
+    for at in range(9 * 60 + 31, 11 * 60 + 1):
+        close = Price(10.0 if at < 10 * 60 + 20 else 11.0, 2)
+        stamped = instant_at(day, at * minute)
+        made.append(
+            Bar(one_minute, close, close, close, close, Quantity.from_int(100), stamped, stamped)
+        )
+    points = list(stamp(made, "delayed_trade"))
+    monkeypatch.setattr(run.backtest, "window_chunks", lambda *_: ((), iter([[points]])))
+
+    def struck(at: int) -> float:
+        public = [p for p in points if p.ts_init <= instant_at(day, at * minute)]
+        return float(max(public, key=lambda p: p.ts_init).close)
+
+    buy, sell = 10 * 60 + 30, 10 * 60 + 50
+    trade = a_trade(
+        a_fill(day, "BUY", 100.0, struck(buy), name=INSTRUMENT, wall=buy * minute),
+        a_fill(day, "SELL", 100.0, struck(sell), name=INSTRUMENT, wall=sell * minute),
+    )
+    keys = sorted({(f.instrument_id, wall_of(f.ts_ns)[1]) for f in trade.fills})
+
+    prices = run._session_prices(subject, keys)
+    own = draw([place(trade, prices)], prices, MODEL, 0)
+
+    assert (struck(buy), struck(sell)) == (10.0, 11.0)
+    session = prices.sessions.index(day)
+    reading = prices.marks[(INSTRUMENT, buy * minute)][session]
+    assert reading is not None
+    assert reading.ask == 10.0 and reading.ts_ns <= instant_at(day, buy * minute)
+    assert own.pnl == (pytest.approx(trade.pnl_net),)
+
+
+def midnight_bars(rule: str) -> list[Bar]:
+    """The saw-tooth of `bars`, one bar a day stamped at the New York midnight that ends it — a
+    vendor's daily aggregate — and published as `rule` says, a delay after it."""
+    from kanso.criteria.timing import instant_at
+    from kanso.data.publication import stamp
+
+    first = SPAN[0] - timedelta(days=1)
+    made: list[Bar] = []
+    for index in range((SPAN[1] - first).days):
+        day = first + timedelta(days=index)
+        close = Price(SHALLOW[1] if day == SHALLOW[0] else price(index), 2)
+        at = instant_at(day + timedelta(days=1), 0)
+        made.append(
+            Bar(
+                bar_type(),
+                close,
+                Price(close.as_double() + 0.25, 2),
+                Price(close.as_double() - 0.25, 2),
+                close,
+                Quantity.from_int(10_000),
+                ts_event=at,
+                ts_init=at,
+            )
+        )
+    return list(stamp(made, rule))
+
+
+def test_daily_bars_published_after_new_york_midnight_are_judged(tmp_path: Path) -> None:
+    """Daily bars stamped at the New York midnight that ends each day and published fifteen
+    minutes later, under the declared `official_close` rule: each fill is struck at a bar the
+    window holds, at the instant it was published, so the gate prices every trade at its own
+    instants and judges the book rather than failing it as unplaced."""
+    from kanso.data import catalog, snapshot
+    from kanso.data.instruments import resolve_universe
+    from kanso.env import write as write_envelope
+    from kanso.workspace import init
+
+    made = init(tmp_path / "ws")
+    with StateStore(made.path("state.db")) as opened:
+        opened.migrate()
+        write_instruments(made)
+        resolve_universe(made, [INSTRUMENT], RESEARCH[0])
+        ref = replace(dataset(), publication="delayed", publication_rule="official_close")
+        catalog.write(made, midnight_bars("official_close"), ref=ref, source="synthetic")
+        snapshot.freeze(made)
+        write_envelope(made, ENVELOPE)
+        classify(made, opened, DOCUMENT, REVERTING)
+        a_card(made, opened, REVERTING)
+        write_plan(made)
+
+        certified = certify(made, opened, HYP_ID)
+
+    (window,) = [gate for gate in certified.gates if gate.id == "embargoed_window"]
+    (timing,) = [gate for gate in certified.gates if gate.id == "entry_timing"]
+    assert window.passed and timing.skipped is None
+    assert "observed_dropped" not in timing.evidence, timing.evidence
+    assert timing.evidence["draws"] > 0
+    assert timing.evidence["observed_bps_per_trade"] == pytest.approx(
+        timing.evidence["observed_runner_bps_per_trade"]
+    )

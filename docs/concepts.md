@@ -2754,23 +2754,28 @@ offer a planner those refusals. Whether the certification window holds the edge 
 
 `entry_timing` asks whether the certification window's trades earned more than the same trades
 placed at other times. The null is the whole trade schedule **circularly shifted by whole
-sessions**: the sessions are the New York dates on which any of the subject's instruments has a
-price point in the window, `S` of them — among them the date before the window's first where
-the window holds a point of its evening, which a window opening at UTC midnight delivers, a
-daily bar stamped at the first date's New York midnight with it; every offset `k` from `h` to
-`S − h` is one draw, `h`
-the longest closed trade's hold in sessions plus one, so no draw overlaps its own original, and
-there are `D = S − 2h + 1` draws and no random number. Each fill moves to session `(i + k) mod
-S` at the New York time of day its price was struck at, and is struck at its instrument's last
-reading at or before that time on that session — a bar's close where the window holds the
-instrument's bars, else a print, else the touch of a quote — and never at one carried from an
-earlier session. One factor per trade, its opening notional over the same sum at the moved
+sessions**, read on the clock the engine runs on: every point at the instant it was published,
+its `ts_init`, never the one it refers to, and every fill at the instant it filled. The sessions
+are the New York dates on which a price point of any of the subject's instruments was published
+in the window, `S` of them — a daily bar published at the New York midnight that ends its day is
+the date that midnight opens, and the date before the window's first is among them where the
+window holds a point published on its evening, which a window opening at UTC midnight delivers;
+every offset `k` from `h` to `S − h` is one draw, `h` the longest closed trade's hold in sessions
+plus one, so no draw overlaps its own original, and there are `D = S − 2h + 1` draws and no
+random number. Each fill moves to session `(i + k) mod S` at the New York time of day it filled
+at, and is struck at its instrument's last reading published at or before that time on that
+session — a bar's close where the window holds the instrument's bars, else a print, else the
+touch of a quote — and never at one carried from an earlier session, so a delayed bar is read
+where its delay puts it, as the venue applied it, and no draw prices a fill at what the market
+had yet to publish. One factor per trade, its opening notional over the same sum at the moved
 prices, scales every fill of it, so a moved trade opens the same notional and closes flat; a
 split between its fills is restated onto the shares it opened in, so a draw across a
 one-for-five is no fivefold move. Every moved fill is charged by `fill_cost` under the
 subject's venue model as the runner charges a fill struck at that close — never a maker's,
 touched where its instrument's last quote says so and on a venue that matches a level-two book
-always, as the runner counts every fill there, the dated row at the moved instant — and the
+always, as the runner counts every fill there, and the dated row of the instant the reading it
+is struck at refers to, as the runner charges the row of the instant a fill's price was struck
+at — and the
 subject's own value is the same arithmetic at offset 0, its own instants repriced alike, with
 the runner's own figure recorded beside it (`observed_runner_bps_per_trade`). A trade's profit
 is its fills' flows less those costs and nothing else, at offset 0 as in every draw — no
@@ -2788,14 +2793,16 @@ is `1/(1 + D)`, recorded as `min_attainable_p`, and a window too short for it fa
 beside a weekly `period_target`, where `benchmark: hold` cannot: the null is the subject's own
 closed trades, whose holds already end where the target flattened them, and a moved trade keeps
 the cut its original took rather than the one its own moved week's target would have made —
-that is the approximation. It reads a dated spread at each moved instant, so it is refused
+that is the approximation. It reads a dated spread at each moved reading, so it is refused
 nowhere a `cost_scenario` is. What it skips on is an absence of context — no `max_p`, an
 attached construct, fewer than two closed trades — and a missing price is never one: a traded
 instrument the window holds no bar, print or quote of fails it naming the instrument, as does a
 subject any of whose trades could not be priced at its own instants — a fill struck before the
 first reading of its instrument's session, a timer's at 09:30 where the first one-minute bar
-closes at 09:31, or one struck on a quote before the session's first bar of a name the window
-holds bars of, which it is priced from (backlog row 323) — since a book judged on the trades
+closes at 09:31, one struck on a quote before the session's first bar of a name the window
+holds bars of, which it is priced from (backlog row 323), or one a venue latency carried past
+New York midnight from a point published before it, where its instrument published nothing
+between the midnight and the fill (backlog row 325) — since a book judged on the trades
 that could be priced would leave the rest's timing untested; and a hold longer than half the
 window fails with `draws: 0`. The certification runner hands it a reader of the window that
 reads the certification window once more, a chunk at a time, folding a number per
@@ -2804,7 +2811,11 @@ and nothing else of it: one more read and no backtest, paid only by a plan that 
 gate, and spared like the plateau's runs when `embargoed_window` has refused the subject. Its
 evidence is `observed_bps_per_trade`, `observed_runner_bps_per_trade`, `trades`, the null's
 `null_mean`, `null_sd`, `null_p95` and `null_max`, `draws`, `empty_draws`, `dropped_mean` (the
-trades a draw dropped for crossing the window's end or landing where no price was, on average),
+trades a draw dropped for crossing the window's end or landing where no price was, on average —
+an equity's leg on a weekend a round-the-clock name of the universe printed on (backlog row
+322), or a leg of a series published on another clock than New York's moved across a change of
+clocks: a coin's daily bar at 00:00 UTC is 19:00 New York in winter and 20:00 in summer, so a
+winter fill at 19:00 finds no reading at or before it on a summer session (backlog row 324)),
 `min_attainable_p`, `p`, `max_p`, `sessions` and `min_offset` and `max_offset`. A failure on a
 missing price records its `reason`, with `unpriced`, the instruments the window holds no price
 of, or `observed_dropped`, how many of the subject's trades could not be priced at their own
