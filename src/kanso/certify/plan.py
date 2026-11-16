@@ -8,10 +8,14 @@ is about what the call may see and what its answer must satisfy.
 **The planner is blind to the research it is judging.** What it is shown is the closed
 set the plan then records: the hypothesis, the construct it was classified as, the gate
 toolbox with each gate's `meaningful_when`, parameters and ranges, what data the
-workspace holds for the universe, how many trials the search has spent, and the
-structural invariants. No card metric, no certificate and no strategy source is assembled
-here or reachable from anything that is — a plan written against the results it will
-judge proves nothing, and the only way to guarantee that is to never put them in the
+workspace holds for the universe, how many trials the search has spent, how many looks
+its lineage has taken at its certification window, and the structural invariants. No card
+metric and no strategy source is assembled here or reachable from anything that is, and of
+the certificates only that count is: `kanso.certify.looks` reads which of the lineage's
+certificates read the window — from the window each one's pin declares and whether it was
+struck on a snapshot that could support a claim — and returns no verdict, no evidence and
+no strategy source, and the plan keeps the number. A plan written against the results it
+will judge proves nothing, and the only way to guarantee that is to never put them in the
 prompt.
 
 **The answer is checked before it is believed.** A gate that is not in the toolbox, one
@@ -36,10 +40,16 @@ objective, with its threshold set: the subject a certificate judges is then the 
 search, and nothing else in a plan prices that. The planner is told so in the invariants
 and refused when it forgets, through the same check as any other complaint; how high that
 gate's bar sits is still its answer. It is also told how many looks the hypothesis's lineage
-has already taken at its certification window (`looks`, `kanso.certify.looks`), and that the
-threshold it sets holds at every look, so a lineage's chance of a false pass across `L` looks
-is up to `L` times the threshold's complement: the count judges nothing, and whether it moves
-the threshold, at a plan or a replan, is the planner's answer like the threshold itself.
+has already taken at its certification window (`looks`, `kanso.certify.looks`) and what a
+threshold bounds across them. Each look was judged under the plan its own hypothesis had
+pinned when it was made, its correction held to that plan's threshold or, before the
+correction was required, to none; the threshold being set holds at every look the new plan
+judges. A lineage's chance of a false pass at the window is therefore up to the sum of every
+look's complement of the threshold it was held to — one for a look held to none — which is
+`L` times one threshold's complement only where every look was held to that threshold. The
+planner is not shown the thresholds earlier looks were held to, and is told so. The count
+judges nothing, and whether it moves the threshold, at a plan or a replan, is the planner's
+answer like the threshold itself.
 
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
@@ -358,9 +368,15 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "looks is how many certificates this hypothesis's lineage — every registered "
             "hypothesis joined to it by derived_from, either way — has already made that read "
             "a window sharing a day with its certification window, one struck on a snapshot "
-            "that could not support a claim reading none, so the next is look L = looks + 1: "
-            f"{gate} is held to the threshold you set at every look, so the lineage's chance of "
-            "a false pass over L looks at that window is at most L × (1 − threshold)",
+            "that could not support a claim reading none, so the next is look L = looks + 1. "
+            "Each look already taken was judged under the plan its own hypothesis had pinned "
+            "when it was made, its search correction held to that plan's threshold — which you "
+            "are not shown — or to none where that plan carried no correction; "
+            f"{gate} is held to the threshold you set at every look this plan judges. So the "
+            "lineage's chance of a false pass over its looks at that window is at most the sum, "
+            "over every look, of 1 − the threshold its correction was held to, counting 1 for "
+            "a look held to none: each look this plan judges adds 1 − threshold, and the sum is "
+            "L × (1 − threshold) only where every look was held to the threshold you set",
         ]
     )
     return {

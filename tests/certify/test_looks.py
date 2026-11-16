@@ -178,18 +178,17 @@ def test_every_certificate_of_the_lineage_at_the_window_is_a_look(
     found = looks(store, HYP_ID, WINDOW)
 
     assert found.lineage == (HYP_ID, SIBLING)
-    assert [(look.hyp_id, look.plan_version, look.verdict) for look in found.prior] == [
-        (HYP_ID, 1, "pass"),
-        (HYP_ID, 2, "fail"),
-        (SIBLING, 1, "pass"),
-    ]
+    assert [(look.hyp_id, look.plan_version) for look in found.prior] == [
+        (HYP_ID, 1),
+        (HYP_ID, 2),
+        (SIBLING, 1),
+    ], "the second, failed, counts as the first did"
     assert found.look == 4
     assert found.prior[0] == Look(
         hyp_id=HYP_ID,
         sha7=sha256(f"# certified {HYP_ID} 1\n".encode()).hexdigest()[:7],
         plan_version=1,
         created_at=(THEN + timedelta(minutes=1)).isoformat(),
-        verdict="pass",
     )
     assert looks(store, SIBLING, WINDOW).look == 4, "a sibling's count is the lineage's"
     assert looks(store, STRANGER, WINDOW).look == 2
@@ -213,6 +212,33 @@ def test_a_window_that_shares_a_day_is_the_same_hold_out_and_one_wholly_after_is
     assert (
         looks(store, HYP_ID, (later[1] + timedelta(days=1), later[1] + timedelta(days=9))).look == 1
     )
+    assert (
+        looks(store, HYP_ID, (WINDOW[0] - timedelta(days=9), WINDOW[0] - timedelta(days=1))).look
+        == 1
+    ), "nor one wholly before"
+
+
+def test_a_re_pin_that_drops_derived_from_splits_the_lineage_and_its_looks(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The links are read off each member's file as it stands, as `family` reads them for a
+    search's trials, so a sibling re-pinned without `derived_from` takes its look out of the
+    demo's count and the demo's out of its own, and one re-pinned with it back rejoins."""
+    classify(ws, store, DOCUMENT)
+    derived(ws, store, SIBLING, HYP_ID)
+    looked(ws, store, HYP_ID, 1)
+    looked(ws, store, SIBLING, 2)
+    assert looks(store, HYP_ID, WINDOW).look == 3
+
+    derived(ws, store, SIBLING)
+
+    assert records.lineage(store, HYP_ID) == (HYP_ID,)
+    assert looks(store, HYP_ID, WINDOW).look == 2
+    assert looks(store, SIBLING, WINDOW).look == 2
+
+    derived(ws, store, SIBLING, HYP_ID)
+
+    assert looks(store, HYP_ID, WINDOW).look == 3
 
 
 def test_a_certificate_that_read_no_window_is_no_look(ws: Workspace, store: StateStore) -> None:

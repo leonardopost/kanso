@@ -332,10 +332,12 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -
 
 def test_the_pages_say_how_hold_out_looks_are_counted_and_that_they_move_no_bar() -> None:
     """Every certificate is a look at its window, counted over the lineage and recorded
-    (`kanso.certify.looks`), and the count judges nothing: the threshold the plan pins holds at
-    every look, which bounds the lineage's false passes by `L` times its complement, not by the
-    threshold, and every page that states the count says so, so no reader takes a later look
-    for a stricter test than it was, or the planner's threshold for the lineage's level."""
+    (`kanso.certify.looks`), and the count judges nothing: each look is held to the threshold
+    of the plan that judged it, which bounds the lineage's false passes by the sum of every
+    look's complement, not by the threshold — `L` times one complement only where every look
+    was held to it, since a replan or a sibling's plan sets its own — and every page that
+    states the count says so, so no reader takes a later look for a stricter test than it was,
+    or the planner's threshold for the lineage's level."""
     from kanso.schemas import Holdout
 
     concepts = prose(page("concepts.md"))
@@ -346,8 +348,34 @@ def test_the_pages_say_how_hold_out_looks_are_counted_and_that_they_move_no_bar(
     bound = "`L × (1 − threshold)`"
     for text in (concepts, cli, changelog):
         assert bound in text
-    assert "a false pass up to `L × (1 − threshold)`, not the threshold" in agents
+    assert "lineage's chance of a false pass over its looks at one window is up to the sum of" in (
+        concepts
+    )
+    assert "it is more where an earlier plan, or a sibling's, sat lower" in concepts
+    assert "up to the sum of each look's complement of its threshold" in cli
+    assert "up to the sum of each look's complement of the threshold its own plan held it to" in (
+        changelog
+    )
+    assert "a false pass up to the sum of each look's complement of the threshold its own" in (
+        agents
+    )
+    for text in (concepts, cli, changelog, agents):
+        assert "only where all `L` were held to one" in text or (
+            "Over `L` looks all held to one threshold that sum is `L × (1 − threshold)`" in text
+        )
+    assert "over `L` looks at one window the lineage's chance of a false pass" not in concepts
+    assert "chance of a false pass over `L` looks is up to" not in cli + changelog
+    assert "a false pass up to `L × (1 − threshold)`, not the threshold" not in agents
     assert "the gate holds the threshold the plan pins at every look" in agents
+    assert "but one struck on a snapshot that cannot support a claim, which read no window" in (
+        agents
+    )
+    assert (
+        "the trial count and how many certificates the hypothesis's lineage has already made "
+        "that read its certification window"
+    ) in concepts
+    assert "a re-pin that drops a `derived_from` link can split the lineage" in concepts
+    assert "one onto a window sharing no day with the last" in concepts
     for text in (concepts, changelog, cli, workspace, agents):
         assert "1 − (1 − threshold) / L" not in text, "no rule splits the threshold"
     assert "**Hold-out looks are counted and shown, and they move no bar.**" in concepts

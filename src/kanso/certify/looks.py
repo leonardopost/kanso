@@ -73,14 +73,14 @@ Window = tuple[date, date]
 
 @dataclass(frozen=True)
 class Look:
-    """One certificate that looked at the window: whose, of which bytes, under which plan,
-    when, and what it found."""
+    """One certificate that looked at the window: whose, of which bytes, under which plan and
+    when — never what it found. The count is shown to the planner (`kanso.certify.plan`),
+    which is never shown a result, so nothing a look carries is one."""
 
     hyp_id: str
     sha7: str
     plan_version: int
     created_at: str
-    verdict: str
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ def looks(
         ).fetchall()
     }
     rows = store.connection.execute(
-        "SELECT hyp_id, hypothesis_sha, strategy_sha, plan_version, created_at, verdict, gates"
+        "SELECT hyp_id, hypothesis_sha, strategy_sha, plan_version, created_at, gates"
         f" FROM certificates WHERE hyp_id IN ({marks}) ORDER BY created_at, rowid",
         lineage,
     ).fetchall()
@@ -146,7 +146,6 @@ def looks(
                 sha7=str(row["strategy_sha"])[:7],
                 plan_version=int(row["plan_version"]),
                 created_at=str(row["created_at"]),
-                verdict=str(row["verdict"]),
             )
         )
     return Looks(window=window, lineage=lineage, prior=tuple(prior))

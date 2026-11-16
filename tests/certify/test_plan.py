@@ -470,7 +470,10 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
     """How many certificates the lineage made at the certification window is a dynamic
     input, beside the trial count; what the threshold bounds across them is an invariant,
     stated as the fact it is — no rule moves the threshold with the count, which stays the
-    planner's to weigh."""
+    planner's to weigh. The look taken here was judged under no correction at all, so the
+    bound is the sum of each look's own complement, never `L` times the one being set: the
+    planner is told the looks behind it were held to their own plans' thresholds, which it
+    is not shown."""
     pin = show(ws, store, HYP_ID).hypothesis_sha
     store.connection.execute(
         "INSERT INTO certificates (hyp_id, hypothesis_sha, strategy_sha, plan_version,"
@@ -490,10 +493,18 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
         "looks is how many certificates this hypothesis's lineage — every registered "
         "hypothesis joined to it by derived_from, either way — has already made that read a "
         "window sharing a day with its certification window, one struck on a snapshot that "
-        "could not support a claim reading none, so the next is look L = looks + 1: "
-        "deflated_edge is held to the threshold you set at every look, so the lineage's chance "
-        "of a false pass over L looks at that window is at most L × (1 − threshold)"
+        "could not support a claim reading none, so the next is look L = looks + 1. Each look "
+        "already taken was judged under the plan its own hypothesis had pinned when it was "
+        "made, its search correction held to that plan's threshold — which you are not shown "
+        "— or to none where that plan carried no correction; deflated_edge is held to the "
+        "threshold you set at every look this plan judges. So the lineage's chance of a false "
+        "pass over its looks at that window is at most the sum, over every look, of 1 − the "
+        "threshold its correction was held to, counting 1 for a look held to none: each look "
+        "this plan judges adds 1 − threshold, and the sum is L × (1 − threshold) only where "
+        "every look was held to the threshold you set"
     ) in seen[0].system
+    assert "held to the threshold you set at every look," not in seen[0].system
+    assert "over L looks at that window is at most L × (1 − threshold)" not in seen[0].system
 
 
 def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(

@@ -106,14 +106,27 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
 
 def test_the_certify_skill_says_every_certificate_is_a_look_and_that_it_moves_no_bar() -> None:
     """An agent reporting a certificate reads this file; told nothing of the looks, it would
-    report a pass at a later look as a first look's, or re-plan to make a later look pass."""
+    report a pass at a later look as a first look's, or re-plan to make a later look pass.
+    Told a re-pin never resets the count, it would report a count a re-pin moved as standing;
+    told the lineage's bound is `L` times the threshold being set, it would understate it
+    wherever an earlier look was held lower."""
     text = skill(PACKAGED, "kanso-certify")
     assert "Every certificate is a **look** at its certification window" in text
     assert "The count judges nothing" in text
     assert "held to the threshold the plan pins at every look" in text
-    assert "up to `L × (1 − threshold)`, not the threshold" in text
+    assert (
+        "up to the sum of each look's complement of the threshold its own plan held it to — "
+        "`L × (1 − threshold)` only where all `L` were held to one threshold"
+    ) in text
+    assert "up to `L × (1 − threshold)`, not the threshold" not in text
     assert "`hypotheses[].holdout_looks`" in text and "the `hold-out` line" in text
-    assert "A replan or a re-pin does not reset the count" in text
+    assert "A replan or a re-pin does not reset the count" not in text
+    assert (
+        "A replan does not reset the count, nor does a re-pin that keeps `derived_from` and a "
+        "certification window sharing a day with the last; a re-pin onto a window sharing no "
+        "day with it starts a new count, and one that drops a `derived_from` link can split "
+        "the lineage"
+    ) in text
     assert "never re-plan to make a later look pass" in text
     assert "(`inputs.looks`)" in text
 

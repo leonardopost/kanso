@@ -2437,8 +2437,10 @@ seen.
 the register what would count as proof for *this* hypothesis: which gates, at which stage —
 `cert`, `paper` or `live` — with which parameters chosen inside the ranges the toolbox
 declares, and why. The planner is shown the hypothesis, its construct, the toolbox, what
-data the workspace holds and the trial count. It is **never** shown a card metric, a
-certificate or the strategy source, so a plan cannot be tuned to the result it is about to
+data the workspace holds, the trial count and how many certificates the hypothesis's lineage
+has already made that read its certification window (*Hold-out looks* below). It is
+**never** shown a card metric, a certificate — its verdict, its evidence or what it
+certified — or the strategy source, so a plan cannot be tuned to the result it is about to
 judge. kanso validates the plan against structural invariants — every required gate present,
 every parameter inside its range, at least one gate at each of the three stages — and sends
 the complaints back to the same model, then to the next tier up; a plan still invalid after
@@ -2730,12 +2732,16 @@ chance as surely as enough cards find it in research. So kanso counts them, over
 hypothesis's **lineage**: every registered hypothesis joined to it by `derived_from`, either
 way — its parents, its children and their other children — because a sibling certified on
 the same window looked at the same data, and a count over ancestors alone would start again
-at every new sibling. A look is a certificate of any member of the lineage, under any plan,
-engine or verdict, whose certification window — the one the file its run pinned declares,
-read as the schema read it when the file was added, however its days are spelled — shares a
-day with the subject's; a re-pin that moves the window by a day keeps the count, and one onto
-a window that opens after this one closes starts a new one. A certificate written before
-kanso recorded its pin is read under its hypothesis's file as it stands, and one whose file
+at every new sibling. The links are read off each member's file as it stands, as the
+trials a search is priced over are, so a re-pin that drops a `derived_from` link can split
+the lineage, taking the hypothesis's looks out of the others' count and theirs out of its
+own. A look is a certificate of any member of the lineage, under any plan, engine or
+verdict, whose certification window — the one the file its run pinned declares, read as the
+schema read it when the file was added, however its days are spelled — shares a day with the
+subject's. A replan keeps the count, and so does a re-pin that keeps `derived_from` and moves
+the window by a day; one onto a window sharing no day with the last — opening after it
+closes, or closing before it opens — starts a new one. A certificate written before kanso
+recorded its pin is read under its hypothesis's file as it stands, and one whose file
 declares no window that reads is counted wherever asked. A certificate struck on a snapshot
 that cannot support a claim read no window and is no look, and a spared stall writes none.
 The count is struck from the certificates each time, so certificates written before kanso
@@ -2743,18 +2749,24 @@ counted looks count at once; a certificate records the count standing when it is
 taken under the lock its row is written under, so two certifications of one lineage judged at
 once are two looks, in the order they were written.
 
-The count judges nothing. Every gate, the search correction included, is held to the
-threshold the plan pins at every look, and so is a stall's precheck, in the lane and in the
-child. A correction held to a threshold passes a search with no edge with a chance of about
-the threshold's complement at each look, so over `L` looks at one window the lineage's chance
-of a false pass is up to `L × (1 − threshold)` — not the threshold — as good as the
-correction's own probability, which is a normal approximation. How high the bar should sit
-at a later look is therefore a decision, and it stays the planner's: it is shown the looks
-already taken (`looks`, beside `n_trials`) and what its threshold bounds across them, and
-sets that threshold inside the gate's range at a plan or a replan, as it always does. The
-certificate records its look (`holdout`: the window, the look and the lineage), which `cert
-run` and `cert show` print on a `hold-out` line, and `kanso status` gives each hypothesis
-the looks its lineage has taken:
+The count judges nothing. At every look each gate, the search correction included, is held
+to the threshold of the plan its hypothesis has pinned when the look is made, and so is a
+stall's precheck, in the lane and in the child. A correction held to a threshold passes a
+search with no edge with a chance of about the threshold's complement at that look, so the
+lineage's chance of a false pass over its looks at one window is up to the sum of each look's
+own complement — not the threshold, and as good as the correction's own probability, which
+is a normal approximation. Over `L` looks all held to one threshold that sum is
+`L × (1 − threshold)`; it is more where an earlier plan, or a sibling's, sat lower, and a
+look judged under a plan that carried no correction — as one made before the hypothesis's
+second card is — adds up to one. Each certificate keeps the threshold it was held to among
+its gates' `params`, so the sum is read off the lineage's certificates. How high the bar
+should sit at a later look is therefore a decision, and it stays the planner's: it is shown
+the looks already taken (`looks`, beside `n_trials`), told that each was held to its own
+plan's threshold — which it is not shown — and that the threshold it sets adds its
+complement at every look its plan judges, and sets that threshold inside the gate's range
+at a plan or a replan, as it always does. The certificate records its look (`holdout`: the
+window, the look and the lineage), which `cert run` and `cert show` print on a `hold-out`
+line, and `kanso status` gives each hypothesis the looks its lineage has taken:
 
 ```
 $ kanso cert plan demo_mr --replan        # after one certificate; the plan's lines are elided
