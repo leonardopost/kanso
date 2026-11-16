@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from kanso.workspace import Workspace
 from .builders import (
     CAPITAL,
     PLAN,
+    RISING,
     STRATEGY_ID,
     WIDE,
     deploy,
@@ -27,6 +29,7 @@ from .builders import (
     plan,
     portfolio,
     position,
+    rising_run,
     run_over,
     version,
     write_book,
@@ -34,10 +37,14 @@ from .builders import (
     write_strategy,
 )
 
+EMBARGO, PAPER_FORWARD, FORWARD, LIVE_DRIFT = PLAN["gates"]
+
 LOSS_GATE: list[dict[str, Any]] = [
-    *PLAN["gates"][:2],
+    EMBARGO,
+    PAPER_FORWARD,
     {"id": "daily_loss_kill", "stage": "live", "params": {}, "rationale": "the day's limit"},
 ]
+"""A plan pinned before `forward_holdout` was required: the live stage is not held to it."""
 BOTH_LIVE_GATES: list[dict[str, Any]] = [*PLAN["gates"], LOSS_GATE[2]]
 
 
@@ -67,8 +74,10 @@ def _stage_outcome(outcomes: list[monitor.Outcome], stage: str) -> monitor.Outco
 def test_a_version_passing_every_paper_gate_becomes_promotable(
     ws: Workspace, store: StateStore
 ) -> None:
-    """The one decision the framework escalates rather than takes: real capital."""
-    deploy(ws, store)
+    """The one decision the framework escalates rather than takes: real capital. Both paper
+    gates pass: the window sits inside `paper_forward`'s band and `forward_holdout` has
+    judged it above zero."""
+    deploy(ws, store, run=rising_run(), value=RISING)
 
     outcomes = monitor.run_once(ws, store, demote=Recorder())
 
@@ -88,7 +97,7 @@ def test_a_version_already_promotable_is_not_escalated_again(
     ws: Workspace, store: StateStore
 ) -> None:
     """The pass runs every few minutes; an inbox repeating itself is one nobody reads."""
-    deploy(ws, store)
+    deploy(ws, store, run=rising_run(), value=RISING)
 
     monitor.run_once(ws, store, demote=Recorder())
     second = monitor.run_once(ws, store, demote=Recorder())
@@ -112,15 +121,12 @@ def test_a_version_that_has_not_waited_long_enough_is_left_on_paper(
 def test_a_version_whose_every_paper_gate_skipped_is_not_promoted(
     ws: Workspace, store: StateStore
 ) -> None:
-    """A version tested by nothing is not a version ready for money."""
-    bare = [
-        PLAN["gates"][0],
-        {"id": "paper_forward", "stage": "paper", "params": {}, "rationale": "no floor chosen"},
-        PLAN["gates"][2],
-    ]
+    """A version tested by nothing is not a version ready for money: here its expectation
+    records no error, so neither `paper_forward` nor `forward_holdout` can strike a band or a
+    forward error from it, and both skip."""
     pin_hypothesis(store, hypothesis())
-    write_plan(ws, plan(gates=bare))
-    write_strategy(ws, store, version())
+    write_plan(ws, plan())
+    write_strategy(ws, store, version(se=None))
     write_book(store, "paper", run=flat_run())
     write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
 
@@ -129,6 +135,147 @@ def test_a_version_whose_every_paper_gate_skipped_is_not_promoted(
     judged = _version_outcome(outcomes)
     assert judged.passed and judged.judged == ()
     assert judged.actions == ()
+
+
+def test_a_version_whose_forward_window_has_not_resolved_is_left_on_paper(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`paper_forward` passes, but the certified value is one error wide, so twenty forward
+    days resolve nothing: `forward_holdout` fails, rather than skipping, until they do."""
+    deploy(ws, store, run=rising_run(), value=RISING, se=RISING)
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    verdicts = {result.id: result for result in judged.gates}
+    assert verdicts["paper_forward"].passed and verdicts["paper_forward"].skipped is None
+    forward = verdicts["forward_holdout"]
+    assert not forward.passed and forward.skipped is None
+    assert forward.evidence["judged"] is False
+    assert forward.evidence["periods"] == 20 < forward.evidence["required_periods"] == 55
+    assert judged.actions == ()
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
+    assert inbox.unread(store) == []
+
+
+def test_a_plan_pinned_before_forward_holdout_marks_nothing_and_names_the_replan(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Under this plan `paper_forward` alone would make the version `promotable`, and nothing
+    re-checks a pinned plan between `cert run` and a pass, so the pass holds it to the
+    required paper gate itself. Its cert-stage shortfalls — no `publication_lag`, no search
+    correction behind twelve trials — are none of a deployed version's business."""
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=[EMBARGO, PAPER_FORWARD, LIVE_DRIFT]))
+    write_strategy(ws, store, version(value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert judged.skipped == (
+        "its plan lacks forward_holdout; run `kanso cert plan demo_mr --replan`"
+    )
+    assert judged.gates == () and judged.actions == ()
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
+    assert inbox.unread(store) == []
+
+
+def test_a_plan_naming_forward_holdout_without_a_parameter_marks_nothing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Half the rule judges nothing, and a gate that judges nothing passes."""
+    halfway = [EMBARGO, PAPER_FORWARD, {**FORWARD, "params": {"resolve": 1.0}}, LIVE_DRIFT]
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=halfway))
+    write_strategy(ws, store, version(value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert str(judged.skipped).startswith("its plan names forward_holdout, but min_fraction: ")
+    assert str(judged.skipped).endswith("; run `kanso cert plan demo_mr --replan`")
+    assert judged.gates == () and judged.actions == ()
+
+
+@pytest.mark.parametrize("params", [{}, {"min_duration": "5d"}, {"horizon_mult": 5.0}])
+def test_a_plan_naming_paper_forward_without_a_parameter_marks_nothing(
+    ws: Workspace, store: StateStore, params: dict[str, Any]
+) -> None:
+    """`paper_forward` given half its rule skips, and a skip passes: the forward check, which
+    passes this window, would be the only paper gate that judged, and the version would be
+    `promotable` on the forward window alone — no band, no duration, no drawdown read."""
+    bare = [EMBARGO, {**PAPER_FORWARD, "params": params}, FORWARD, LIVE_DRIFT]
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=bare))
+    write_strategy(ws, store, version(value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert str(judged.skipped).startswith("its plan names paper_forward, but ")
+    assert str(judged.skipped).endswith("; run `kanso cert plan demo_mr --replan`")
+    assert "yours" not in str(judged.skipped), "the values are the planner's, not the reader's"
+    assert judged.gates == () and judged.actions == ()
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
+    assert inbox.unread(store) == []
+
+
+def test_a_plan_whose_only_paper_gate_is_the_forward_check_marks_nothing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The forward check stands beside `paper_forward`, never in its place: judged on the
+    forward window alone, this version would be `promotable` with no band, no duration and
+    its paper drawdown unread."""
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=[EMBARGO, FORWARD, LIVE_DRIFT]))
+    write_strategy(ws, store, version(value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert judged.skipped == "its plan lacks paper_forward; run `kanso cert plan demo_mr --replan`"
+    assert judged.gates == () and judged.actions == ()
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
+    assert inbox.unread(store) == []
+
+
+def test_a_version_already_promotable_keeps_its_mark_under_a_plan_without_the_forward_check(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A pass marks and never unmarks: a version marked `promotable` before `forward_holdout`
+    existed stays so under its old plan, and nothing is escalated about it again — which is
+    why the pages say only versions marked from this release on wait for the forward check."""
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=[EMBARGO, PAPER_FORWARD, LIVE_DRIFT]))
+    write_strategy(ws, store, version(state="promotable", value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert judged.skipped == (
+        "its plan lacks forward_holdout; run `kanso cert plan demo_mr --replan`"
+    )
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "promotable"
+    assert inbox.unread(store) == []
+
+
+def test_a_redeploy_adds_a_window_the_forward_check_reads_and_restarts_nothing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A redeploy closes one window and opens another; the monitor joins every window the
+    version has closed on the stage since it first joined, so the forward check reads both."""
+    deploy(ws, store, run=rising_run(), value=RISING, se=RISING)
+    write_book(store, "paper", run=rising_run(start=date(2024, 3, 21)), session_id="session-2")
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    forward = next(result for result in judged.gates if result.id == "forward_holdout")
+    assert forward.evidence["window"] == ["2024-03-01", "2024-04-09"]
+    assert forward.evidence["periods"] == 40
 
 
 # --- the live stage -----------------------------------------------------------
@@ -410,9 +557,11 @@ def test_a_plan_naming_a_gate_this_build_cannot_run_records_it_as_skipped(
 ) -> None:
     """A pinned plan outlives the build that wrote it; a certificate must not claim it ran."""
     unknown = [
-        PLAN["gates"][0],
+        EMBARGO,
         {"id": "made_up_gate", "stage": "paper", "params": {}, "rationale": "from the future"},
-        PLAN["gates"][2],
+        PAPER_FORWARD,
+        FORWARD,
+        LIVE_DRIFT,
     ]
     pin_hypothesis(store, hypothesis())
     write_plan(ws, plan(gates=unknown))
@@ -476,14 +625,15 @@ def test_a_demotion_that_cannot_be_carried_out_does_not_end_the_pass(
 def test_the_paper_window_is_the_floor_the_plan_set() -> None:
     """Five days absolute against five one-day horizons: the same, and the longer wins."""
     longer = [
-        PLAN["gates"][0],
+        EMBARGO,
         {
             "id": "paper_forward",
             "stage": "paper",
             "params": {"min_duration": "5d", "horizon_mult": 12.0},
             "rationale": "twelve horizons",
         },
-        PLAN["gates"][2],
+        FORWARD,
+        LIVE_DRIFT,
     ]
 
     assert monitor.paper_window_s(plan(), hypothesis()) == 5 * 86_400
@@ -492,9 +642,10 @@ def test_the_paper_window_is_the_floor_the_plan_set() -> None:
 
 def test_a_plan_whose_paper_gates_state_no_duration_leaves_the_window_unknown() -> None:
     bare = [
-        PLAN["gates"][0],
+        EMBARGO,
         {"id": "paper_forward", "stage": "paper", "params": {}, "rationale": "no floor"},
-        PLAN["gates"][2],
+        FORWARD,
+        LIVE_DRIFT,
     ]
 
     assert monitor.paper_window_s(plan(gates=bare), hypothesis()) is None
@@ -513,7 +664,7 @@ def test_halting_writes_the_flag_an_operator_clears_by_hand(ws: Workspace) -> No
 
 
 def test_an_outcome_renders_as_one_json_object(ws: Workspace, store: StateStore) -> None:
-    deploy(ws, store)
+    deploy(ws, store, run=rising_run(), value=RISING)
 
     outcomes = monitor.run_once(ws, store, demote=Recorder())
 

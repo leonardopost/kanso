@@ -131,9 +131,16 @@ TAIL_GATES: list[dict[str, Any]] = [
         "params": {"min_duration": "30d", "horizon_mult": 10.0},
         "rationale": "forward evidence",
     },
+    {
+        "id": "forward_holdout",
+        "stage": "paper",
+        "params": {"resolve": 1.0, "min_fraction": 0.0},
+        "rationale": "the forward window, once it resolves the certified value",
+    },
     {"id": "live_drift", "stage": "live", "params": {}, "rationale": "the expectation holds"},
 ]
-"""A plan reaches every stage, so every plan here ends with these two."""
+"""A plan reaches every stage and carries the required paper gate, so every plan here ends
+with these three."""
 
 
 # --- building a workspace that has something to certify -----------------------
@@ -1944,7 +1951,7 @@ def test_a_pinned_plan_for_a_sharpe_without_entry_timing_is_refused_with_the_rep
     assert refused.value.message == (
         "the plan pinned for demo_mr is not one this kanso can run: gates: entry_timing is "
         "required for wf_sharpe_net, its objective, and every plan for it includes the gate "
-        "with every parameter set; the values are yours, inside their ranges"
+        "with every parameter set"
     )
     assert refused.value.remedy == "run `kanso cert plan demo_mr --replan` to plan again"
 

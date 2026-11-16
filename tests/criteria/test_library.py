@@ -43,6 +43,11 @@ neither offered to a planner nor required of a plan. No required gate is in that
 any more; `tests/criteria/test_pending_required.py` is what keeps it that way.
 """
 
+REQUIRED_PAPER_GATES = ("forward_holdout", "paper_forward")
+"""The paper gates every plan is held to: no version is marked `promotable` before the forward
+window has judged it, and the forward check stands beside `paper_forward`'s band, duration and
+risk limits rather than in their place."""
+
 PLAN: dict[str, Any] = {
     "schema": 1,
     "hyp_id": "demo_mr",
@@ -93,6 +98,12 @@ PLAN: dict[str, Any] = {
             "params": {"min_duration": "30d", "horizon_mult": 10.0},
             "rationale": "forward evidence",
         },
+        {
+            "id": "forward_holdout",
+            "stage": "paper",
+            "params": {"resolve": 1.0, "min_fraction": 0.0},
+            "rationale": "the forward window, once it resolves the certified value",
+        },
         {"id": "live_drift", "stage": "live", "params": {}, "rationale": "expectation holds"},
     ],
     "excluded": [{"id": "book_correlation", "reason": "nothing deployed"}],
@@ -119,7 +130,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 37
+    assert len(items) == 38
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -144,7 +155,12 @@ def test_the_structural_invariants_are_the_only_required_gates() -> None:
     """Including the ones this version cannot yet run — the catalogue is the declaration,
     and what a plan is held to is a separate question `plannable` answers."""
     required = {item.id for item in catalogue().values() if item.required}
-    assert required == {"strategy_integrity", *REQUIRED_CERT_GATES, *criteria.pending_required()}
+    assert required == {
+        "strategy_integrity",
+        *REQUIRED_CERT_GATES,
+        *REQUIRED_PAPER_GATES,
+        *criteria.pending_required(),
+    }
 
 
 def test_the_toolbox_reaches_every_stage() -> None:
@@ -192,8 +208,8 @@ def test_a_fold_bound_follows_the_workspace_fold_count() -> None:
 
 def test_a_duration_parameter_is_measured_in_seconds() -> None:
     item = catalogue()["paper_forward"]
-    assert check_params(item, {"min_duration": "30d"}, make_hyp(), FOLDS) == []
-    (problem,) = check_params(item, {"min_duration": "400d"}, make_hyp(), FOLDS)
+    assert check_params(item, {"min_duration": "30d", "horizon_mult": 1}, make_hyp(), FOLDS) == []
+    (problem,) = check_params(item, {"min_duration": "400d", "horizon_mult": 1}, make_hyp(), FOLDS)
     assert "outside the range" in problem
 
 
@@ -288,10 +304,78 @@ def test_a_valid_plan_is_accepted() -> None:
     validate_plan(CertificationPlan.model_validate(PLAN), make_hyp(), FOLDS)
 
 
-@pytest.mark.parametrize("gate_id", REQUIRED_CERT_GATES)
+@pytest.mark.parametrize("gate_id", [*REQUIRED_CERT_GATES, *REQUIRED_PAPER_GATES])
 def test_a_plan_missing_a_required_gate_is_refused(gate_id: str) -> None:
     with pytest.raises(ValidationError, match=f"{gate_id} is a structural invariant"):
         validate_plan(without(gate_id), make_hyp(), FOLDS)
+
+
+@pytest.mark.parametrize("missing", ["resolve", "min_fraction"])
+def test_the_forward_check_is_planned_with_both_its_parameters(missing: str) -> None:
+    """Judged-once and the bar mean nothing apart, and a gate given half its rule skips."""
+    item = catalogue()["forward_holdout"]
+    half = {name: 1.0 for name in ("resolve", "min_fraction") if name != missing}
+
+    assert (item.stage, item.required, item.together) == ("paper", True, True)
+    with pytest.raises(ValidationError, match=rf"gates.forward_holdout.{missing}: is not set"):
+        validate_plan(replacing("forward_holdout", params=half), make_hyp(), FOLDS)
+
+
+@pytest.mark.parametrize(
+    ("params", "missing"),
+    [
+        ({}, ["horizon_mult", "min_duration"]),
+        ({"min_duration": "30d"}, ["horizon_mult"]),
+        ({"horizon_mult": 10.0}, ["min_duration"]),
+    ],
+)
+def test_paper_forward_is_planned_with_both_its_parameters(
+    params: dict[str, Any], missing: list[str]
+) -> None:
+    """`paper_forward` skips unless both are set, and a skip passes: named without them, it
+    would leave the forward check the only paper gate that judges, and a version would be
+    `promotable` on the forward window alone — no band, no duration, no drawdown read."""
+    item = catalogue()["paper_forward"]
+    bare = replacing("paper_forward", params=params)
+
+    assert (item.stage, item.required, item.together) == ("paper", True, True)
+    for name in missing:
+        with pytest.raises(ValidationError, match=rf"gates.paper_forward.{name}: is not set"):
+            validate_plan(bare, make_hyp(), FOLDS)
+    shortfall = lib.stage_shortfall(
+        "paper", CertificationPlan.model_validate(bare).gates, make_hyp(), FOLDS
+    )
+    assert sorted(problem.split(":")[0] for problem in shortfall) == [
+        f"names paper_forward, but {name}" for name in missing
+    ]
+    assert all("yours" not in problem for problem in shortfall), "the monitor's, not the planner's"
+
+
+def test_a_stage_s_shortfall_is_its_required_gates_alone() -> None:
+    """What the monitor holds a pinned plan to: the paper stage's required gates, with every
+    parameter inside its range — and not another stage's, however short of it the plan is."""
+    hyp = make_hyp()
+    gates = PLAN["gates"]
+    absent = [gate for gate in gates if gate["id"] not in ("forward_holdout", "publication_lag")]
+    loose = [
+        {**gate, "params": {"resolve": 9.0}} if gate["id"] == "forward_holdout" else gate
+        for gate in gates
+    ]
+
+    def short(listed: list[dict[str, Any]], stage: str = "paper") -> list[str]:
+        return lib.stage_shortfall(
+            stage, CertificationPlan.model_validate(plan(gates=listed)).gates, hyp, FOLDS
+        )
+
+    assert short(gates) == [] and short(gates, "live") == []
+    assert short(absent) == ["lacks forward_holdout"]
+    assert short(absent, "cert") == ["lacks publication_lag"]
+    problems = short(loose)
+    assert [problem.split(":")[0] for problem in problems] == [
+        "names forward_holdout, but min_fraction",
+        "names forward_holdout, but resolve",
+    ]
+    assert "outside the range [1, 3]" in problems[1]
 
 
 def test_a_cost_scenario_on_a_dated_hypothesis_states_its_width() -> None:
@@ -395,6 +479,21 @@ def test_excluding_a_required_gate_is_refused() -> None:
             make_hyp(),
             FOLDS,
         )
+
+
+def test_the_forward_check_never_stands_in_for_paper_forward() -> None:
+    """Until `forward_holdout`, `paper_forward` was the toolbox's only paper gate, so a plan
+    reaching the paper stage carried it. A plan whose only paper gate is the forward check —
+    `paper_forward` left out, or excluded by name — would judge a paper version on the
+    forward window alone, with no band, no duration and no drawdown limit."""
+    alone = [g for g in PLAN["gates"] if g["id"] != "paper_forward"]
+    excluded = [*PLAN["excluded"], {"id": "paper_forward", "reason": "the forward check reads it"}]
+
+    for shape in (plan(gates=alone), plan(gates=alone, excluded=excluded)):
+        with pytest.raises(ValidationError, match="paper_forward is a structural invariant"):
+            validate_plan(shape, make_hyp(), FOLDS)
+    with pytest.raises(ValidationError, match="excluded.paper_forward: is required"):
+        validate_plan(plan(gates=alone, excluded=excluded), make_hyp(), FOLDS)
 
 
 def test_excluding_something_that_is_not_a_gate_is_refused() -> None:

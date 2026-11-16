@@ -80,15 +80,18 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from math import isfinite, sqrt
-from typing import TYPE_CHECKING, Any, Final, cast
+from math import ceil, isfinite, sqrt
+from typing import TYPE_CHECKING, Any, Final, TypeGuard, cast
 
 from kanso.certify.looks import looks as looks_at
 from kanso.certify.looks import subject_pin, window_of
-from kanso.certify.power import power, window_params
+from kanso.certify.power import power, window_days, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
-from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_cert_gates
+from kanso.criteria.band import SHARPE_FOLD, to_resolve
+from kanso.criteria.library import SEARCH_TRIALS, as_pinned, deflation_gate, required_cert_gates
+from kanso.criteria.objectives import REGISTRY
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import Registration, show
@@ -106,6 +109,7 @@ from kanso.schemas import (
     Power,
     Span,
     load_yaml,
+    parse_duration,
     parse_yaml,
     render_duration,
     write_yaml,
@@ -120,10 +124,12 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 
 __all__ = [
     "PLAN_FILE",
+    "Forward",
     "SAMPLING_FLOOR",
     "availability",
     "certificates_dir",
     "complaints_about",
+    "forward_note",
     "paper_window_note",
     "plan",
     "plan_file",
@@ -144,6 +150,12 @@ PLANNED: Final = "planned"
 
 DAY_S: Final = 86_400.0
 """Seconds in a day; the windows are dated, so a window is a whole number of these."""
+
+FORWARD_GATE: Final = "forward_holdout"
+"""The paper gate that judges the forward window, whose wait `forward_note` states."""
+
+YEAR_DAYS: Final = 365.0
+"""The forward window `forward_note` states the error after: a calendar year."""
 
 SAMPLING_FLOOR: Final = 0.1
 """The share of the certification window a paper window is warned for falling under.
@@ -339,12 +351,14 @@ def _document(hyp: Hypothesis) -> dict[str, Any]:
 
 
 def _toolbox(hyp: Hypothesis, folds: int) -> list[dict[str, Any]]:
-    """Every plannable gate: what it means, what it takes and what it may be given."""
+    """Every plannable gate: what it means, what it takes, whether it takes all of it or
+    nothing (`together`, which `check_params` holds a plan to), and what it may be given."""
     return [
         {
             "id": item.id,
             "stage": item.stage,
             "required": bool(item.required),
+            "together": bool(item.together),
             "meaningful_when": item.meaningful_when,
             "params": dict(item.params),
             "ranges": _ranges(item, hyp, folds),
@@ -446,6 +460,8 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "every gate included is one of the toolbox gates above, at the stage the "
             "toolbox gives it",
             "every parameter value lies inside that parameter's stated range",
+            "a gate the toolbox marks together is named with every one of its parameters set, "
+            "since half its rule judges nothing; it has no default to fall back on",
             "every required gate is included, and none of them is excluded",
             *guarded,
             *correction,
@@ -515,23 +531,118 @@ def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
     planner, which plans blind to every result. `None` while the hypothesis has no best card,
     or when the best card's error is zero (`kanso.certify.power`).
     """
-    best, _ = records.best_of(store, pinned.hyp_id)
-    if best is None:
+    measured = _best_measured(store, pinned.hyp_id)
+    if measured is None:
         return None
-    card = next(
-        c for c in reversed(records.cards_of(store, pinned.hyp_id)) if c.strategy_sha == best
-    )
-    run = next(run for run in records.runs_of(store, pinned.hyp_id) if run.run_id == card.run_id)
-    windows = parse_yaml(
-        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), f"{pinned.hyp_id} pin"
-    ).windows
+    metric, metric_se, windows = measured[0], measured[1], measured[2].windows
     return power(
-        card.metric,
-        card.metric_se,
+        metric,
+        metric_se,
         (windows.research.start, windows.research.end),
         (windows.certification.start, windows.certification.end),
         window_params(pinned),
     )
+
+
+def _best_measured(store: StateStore, hyp_id: str) -> tuple[float, float, Hypothesis] | None:
+    """The best card's metric and error, and the file its run pinned; `None` while the
+    hypothesis has no best card."""
+    best, _ = records.best_of(store, hyp_id)
+    if best is None:
+        return None
+    card = next(c for c in reversed(records.cards_of(store, hyp_id)) if c.strategy_sha == best)
+    run = next(run for run in records.runs_of(store, hyp_id) if run.run_id == card.run_id)
+    pinned = parse_yaml(
+        Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), f"{hyp_id} pin"
+    )
+    return card.metric, card.metric_se, pinned
+
+
+# -- when the forward window first judges -------------------------------------
+
+
+@dataclass(frozen=True)
+class Forward:
+    """When `forward_holdout` first judges at the plan's `resolve`, from research's numbers.
+
+    `periods_to_judge` counts `[research] return_period` periods of the calendar, `None` each
+    with `days_to_judge` for a research estimate at or too near zero to state a wait from
+    (`kanso.criteria.band.to_resolve`), in days or in periods shorter than a day, which count
+    more of them — the gate judges the certified value,
+    so a version certified above zero from such a best is judged all the same;
+    `se_after_one_year` is the forward error after a calendar year of it, in the objective's
+    units.
+    """
+
+    resolve: float
+    period: str
+    days_to_judge: float | None
+    periods_to_judge: int | None
+    se_after_one_year: float
+
+    def payload(self) -> dict[str, object]:
+        """The note as one JSON object."""
+        return {
+            "resolve": self.resolve,
+            "period": self.period,
+            "days_to_judge": self.days_to_judge,
+            "periods_to_judge": self.periods_to_judge,
+            "se_after_one_year": self.se_after_one_year,
+        }
+
+
+def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) -> Forward | None:
+    """How long the forward window runs before `forward_holdout` first judges, and its error
+    after a year, stated from the best card's metric and error as `power_of` states the
+    certification window's.
+
+    The forward error after `D` days is `se × √(R / D)` over a research window of `R` days —
+    periods and trades arrive at research's rate — and the gate first judges once the value
+    stands `resolve` of them clear of zero, at `D = R × (resolve × se / metric)²`. Stated from
+    research, which selection inflated, so the wait it states is usually the shortest:
+    composition's certified value, which the gate reads, is usually smaller, and the wait grows
+    as the square of the ratio — though a certified value above research's, or a narrower
+    certified error, makes the gate judge sooner. Never shorter than the fewest periods the gate
+    judges on — one a fold, a Sharpe's four (`kanso.criteria.gates.forward_holdout`) — whatever
+    research's numbers say. Never shown to the planner, which chose `resolve` blind to it.
+    `None` while the hypothesis has no best card, when its error is zero, or when the plan sets
+    no `resolve` for `forward_holdout`.
+    """
+    measured = _best_measured(store, pinned.hyp_id)
+    resolve = next(
+        (
+            gate.params.get("resolve")
+            for gate in pinned.stage_gates("paper")
+            if gate.id == FORWARD_GATE
+        ),
+        None,
+    )
+    if measured is None or measured[1] <= 0 or not _number(resolve):
+        return None
+    metric, metric_se, hyp = measured
+    windows = hyp.windows
+    research = float(window_days((windows.research.start, windows.research.end)))
+    period = ws.config.research.return_period
+    period_days = parse_duration(period, "return_period").total_seconds() / DAY_S
+    objective = None if hyp.objective is None else REGISTRY.get(hyp.objective.id)
+    sharpe = objective is not None and objective.statistic == "sharpe"
+    fewest = (SHARPE_FOLD if sharpe else 1) * ws.config.research.folds
+    days = to_resolve(metric, metric_se, research, float(resolve))
+    periods = None if days is None else days / period_days
+    if periods is None or not isfinite(periods):
+        days = periods = None
+    return Forward(
+        resolve=float(resolve),
+        period=period,
+        days_to_judge=None if days is None else max(days, fewest * period_days),
+        periods_to_judge=None if periods is None else max(ceil(periods), fewest),
+        se_after_one_year=metric_se * sqrt(research / YEAR_DAYS),
+    )
+
+
+def _number(value: object) -> TypeGuard[float]:
+    """Whether a parameter is a number."""
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 # -- the paper window a plan implies ------------------------------------------
@@ -583,13 +694,14 @@ def _refuse_unusable(pinned: CertificationPlan, hyp: Hypothesis, folds: int, n_t
 
     Checked against the search as it stands, `n_trials` now — the cards and the declared
     `prior_trials` together — and not the count the plan was made behind: a plan made before
-    the second card, or before a grid was declared, is not a plan for the best of many.
+    the second card, or before a grid was declared, is not a plan for the best of many. Its
+    reader did not choose the plan's values, so it is not told they are theirs (`as_pinned`).
     """
     problems = complaints_about(pinned.gates, pinned.excluded, hyp, folds, n_trials)
     if problems:
         raise ValidationError(
             f"the plan pinned for {pinned.hyp_id} is not one this kanso can run: "
-            + "; ".join(problems),
+            + "; ".join(as_pinned(problem) for problem in problems),
             remedy=f"run `kanso cert plan {pinned.hyp_id} --replan` to plan again",
         )
 

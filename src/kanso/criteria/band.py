@@ -49,6 +49,12 @@ window is taken to have filled all of its own. A window that filled none — a p
 edge's window that closed no trade — strikes no band: it realises zero whatever the version
 is, so it is evidence of nothing.
 
+**The window's own term is the forward error.** `se × √(N × Σ w(m_k) / K²)` is the error of
+the window's value alone under the certified dispersion, the band's spread without the
+certification value's own term (`forward_error`, `Band.forward`). `forward_holdout` reads it
+to say how far clear of zero a version that is what was certified stands on the window it
+has filled, so the two gates strike it with one function and cannot disagree on it.
+
 What it is not: it is not a test that the version still trades as certified fill by fill —
 the stage is a replay into the same simulated venue — and its coverage is nominal: a normal
 approximation, closer the more periods both windows hold. Simulated, a version that is what
@@ -61,16 +67,25 @@ period at all is judged by no band.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from math import fsum, sqrt
+from math import fsum, isfinite, sqrt
 from statistics import NormalDist
 from typing import Final
 
 from kanso.criteria.objectives import Objective
 from kanso.criteria.run import CardRun
 
-__all__ = ["COVERAGE", "SHARPE_FOLD", "Z", "Band", "prediction"]
+__all__ = [
+    "COVERAGE",
+    "SHARPE_FOLD",
+    "Z",
+    "Band",
+    "dispersion",
+    "forward_error",
+    "prediction",
+    "to_resolve",
+]
 
 COVERAGE: Final = 0.90
 """The band's nominal coverage: how often a version that is what was certified lands inside."""
@@ -100,6 +115,9 @@ class Band:
     folds: tuple[int, ...] = ()
     minimum: int = 1
     coverage: float = COVERAGE
+    forward: float | None = None
+    """The error of the window's value alone under the certified dispersion
+    (`forward_error`); `None` where no band is struck."""
 
     @property
     def struck(self) -> bool:
@@ -123,9 +141,10 @@ def prediction(
     `None` when the expectation records no value, error or period count — one composed
     before kanso recorded them — since there is then no dispersion to strike a band from.
     """
-    value, se, periods = (_number(expectation, key) for key in ("value", "se", "periods"))
-    if value is None or se is None or periods is None or periods <= 0:
+    found = dispersion(expectation)
+    if found is None:
         return None
+    value, se, periods = found
     held = tuple(max(len(fold.returns), 1) for fold in run.folds(folds) if _scores(objective, fold))
     sharpe = objective.statistic == "sharpe"
     expected = value * len(held) / folds
@@ -139,9 +158,58 @@ def prediction(
     )
     if not band.struck:
         return band
+    spread = se * sqrt(1 + _window_ratio(objective, periods, held, folds))
+    return replace(
+        band,
+        low=expected - Z * spread,
+        high=expected + Z * spread,
+        forward=forward_error(objective, se, periods, held, folds),
+    )
+
+
+def forward_error(
+    objective: Objective, se: float, periods: float, held: Sequence[int], folds: int
+) -> float:
+    """The error of a window's value under the certified dispersion: `se × √(N Σ w(m_k) / K²)`.
+
+    `se` and `periods` are the certified value's error and the periods it was read over,
+    `held` the periods each scoring fold of the window held and `folds` the fold count `K`;
+    a Sharpe's fold weighs its exact small-sample variance, any other `1/m`. A fold of a
+    Sharpe below `SHARPE_FOLD` has no variance, which `prediction` refuses before asking.
+    """
+    return se * sqrt(_window_ratio(objective, periods, held, folds))
+
+
+def to_resolve(value: float, se: float, over: float, resolve: float) -> float | None:
+    """How much of what `over` counts a mean must be read over to stand `resolve` errors
+    clear of zero, when over `over` it stood `value / se` errors clear: `over × (resolve × se /
+    value)²` — the periods `forward_holdout` judges on, and the days `cert plan` states it
+    waits. `None` where no length does — a value at or below zero or not a number, an error
+    of zero — or where the length is past what a float holds, an error without bound included.
+    """
+    if not value > 0 or not se > 0:
+        return None
+    try:
+        needed = over * (resolve * se / value) ** 2
+    except OverflowError:
+        return None
+    return needed if isfinite(needed) else None
+
+
+def _window_ratio(objective: Objective, periods: float, held: Sequence[int], folds: int) -> float:
+    """The window's variance in units of the certified value's: `N Σ w(m_k) / K²`."""
+    sharpe = objective.statistic == "sharpe"
     weights = fsum((m - 1) / (m * (m - 3)) if sharpe else 1 / m for m in held)
-    spread = se * sqrt(1 + periods * weights / folds**2)
-    return replace(band, low=expected - Z * spread, high=expected + Z * spread)
+    return periods * weights / folds**2
+
+
+def dispersion(expectation: Mapping[str, object] | None) -> tuple[float, float, float] | None:
+    """The certified value, its error and the periods it was read over, as an expectation
+    records them; `None` where it records no value, error or period count, or no period."""
+    value, se, periods = (_number(expectation, key) for key in ("value", "se", "periods"))
+    if value is None or se is None or periods is None or periods <= 0:
+        return None
+    return value, se, periods
 
 
 def _scores(objective: Objective, fold: CardRun) -> bool:

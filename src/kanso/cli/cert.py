@@ -32,6 +32,14 @@ own dispersion (`kanso.certify.power`). `plan` states it for the best card as it
 from the error that card recorded, and says so when there is nothing to state it from; a
 certificate records the one its run measured, from the research window run again. The two
 agree for a card this kanso measured, and can differ for one an earlier kanso did.
+
+`plan` also states, on a `forward` line, how long the paper stage's forward window runs
+before `forward_holdout` first judges at the `resolve` the planner chose, and the forward
+error after a year, from the same best card (`kanso.certify.plan.forward_note`): no version
+is marked `promotable` before that gate judges, so this is the wait for live capital the plan
+implies for one not marked already — usually the shortest, being stated from research's
+selection-inflated value where the gate reads the certified one. Like the power, it is stated
+for the operator and never shown to the planner.
 """
 
 from __future__ import annotations
@@ -41,7 +49,7 @@ from typing import Annotated, Any, cast
 import typer
 
 from kanso.certify.certificate import certificate_file, source_file
-from kanso.certify.plan import paper_window_note, plan_file, power_of
+from kanso.certify.plan import Forward, forward_note, paper_window_note, plan_file, power_of
 from kanso.certify.plan import plan as make_plan
 from kanso.certify.run import certify
 from kanso.certify.run import show as newest
@@ -118,6 +126,7 @@ def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
         pinned = make_plan(ws, opened, hyp_id, replan=replan, lane=DEFAULT_LANE)
         note = paper_window_note(ws, opened, pinned)
         stated = power_of(opened, pinned)
+        forward = forward_note(ws, opened, pinned)
     warnings = [] if note is None else [note]
     path = plan_file(ws, hyp_id)
     data: dict[str, Any] = {
@@ -125,6 +134,7 @@ def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
         "path": str(path),
         "warnings": warnings,
         "power": None if stated is None else stated.model_dump(mode="json"),
+        "forward": None if forward is None else forward.payload(),
     }
     counts = " · ".join(f"{stage} {len(pinned.stage_gates(stage))}" for stage in PLAN_STAGES)
     lines = [
@@ -135,6 +145,7 @@ def _plan(ws: Workspace, hyp_id: str, replan: bool) -> Report:
     lines.append(field("excluded", str(len(pinned.excluded))))
     lines += [indent(f"{'':<{MARK}}{item.id:<{GATE}}{item.reason}") for item in pinned.excluded]
     lines.append(field("power", NO_BEST if stated is None else _power(stated)))
+    lines.append(field("forward", NO_BEST if forward is None else _forward(forward)))
     if note is not None:
         lines.append(field("warning", note))
     lines += [field("pinned", path), field("next", f"kanso cert run {hyp_id}")]
@@ -283,6 +294,22 @@ def _power(stated: Power) -> str:
     return (
         f"{line} · embargoed_window passes {stated.pass_at_research:.2f} at the research "
         f"estimate, {stated.pass_at_zero:.2f} at zero"
+    )
+
+
+def _forward(note: Forward) -> str:
+    """When the forward window first judges at the planned resolve, and its error after a year."""
+    error = f"se {note.se_after_one_year:.4g} after a year"
+    if note.days_to_judge is None or note.periods_to_judge is None:
+        return (
+            f"forward_holdout states no wait at resolve {note.resolve:g}: research's estimate is "
+            f"at or too near zero to state one from, and the gate judges the certified value · "
+            f"{error}"
+        )
+    return (
+        f"forward_holdout first judges after about {note.days_to_judge:,.0f} days "
+        f"({note.periods_to_judge:,} periods of {note.period}) at resolve {note.resolve:g}, "
+        f"from research's estimate · {error}"
     )
 
 

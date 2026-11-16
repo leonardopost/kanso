@@ -137,6 +137,14 @@ the planner's own check, again by `cert plan` and `cert run` on a plan already p
 `cert run --sha` of a card scored on one under a plan made for another objective — and `max_p`
 stays the planner's. A cert gate that guards an objective is a plan's to carry and
 never one of a hypothesis's card gates (`required_card_gates` reads the card stage alone).
+A fourth is that a version is judged on the forward window before it is `promotable`: every
+plan carries `forward_holdout`, a required paper gate with both `resolve` and `min_fraction`
+set, which fails until the paper window resolves the certified value and then asks it to stay
+above zero and that fraction of it; the monitor holds a pinned plan to it before it judges a
+paper version, so a plan pinned before it marks nothing. It is a check beside certification
+and beside `paper_forward`, which every plan carries too, with both its parameters set,
+never instead of either. How long the window must be is the planner's `resolve`, and the wait
+it implies — `cert plan`'s `forward` line — is the operator's to accept.
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
 `httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable

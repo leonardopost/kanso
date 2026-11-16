@@ -13,6 +13,7 @@ certify twice arrive as exit 2.
 
 from __future__ import annotations
 
+from math import ceil, sqrt
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,16 @@ from kanso.state import StateStore
 from tests.params import pairs
 
 from . import mocked
-from .conftest import DRAFT, HYP_ID, INSTRUMENT, at, classify, payload, write_hypothesis
+from .conftest import (
+    DRAFT,
+    HYP_ID,
+    INSTRUMENT,
+    RESEARCH,
+    at,
+    classify,
+    payload,
+    write_hypothesis,
+)
 
 
 def begin(runner: CliRunner, root: Path) -> dict[str, Any]:
@@ -175,6 +185,63 @@ def test_a_plan_with_no_best_card_says_there_is_nothing_to_state_power_from(
     assert result.exit_code == Exit.OK
     assert document["power"] is None
     assert "no best card yet" in result.stdout
+
+
+def test_the_plan_states_when_the_forward_window_first_judges(
+    runner: CliRunner, researched: Path
+) -> None:
+    """From the best card's metric and error, at the `resolve` the planner chose: how long the
+    forward window runs before `forward_holdout` judges, and its error after a year. No
+    version is marked `promotable` before that, so it is the wait for live capital, from
+    research's value. This best is so many errors clear that research alone would say under a
+    day; the gate judges on no fewer periods than one in each of four folds, so the line says
+    four."""
+    result = at(runner, researched, "cert", "plan", HYP_ID)
+    document = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+    with StateStore(researched / "state.db") as store:
+        best = records.cards_of(store, HYP_ID)[-1]
+    days = (RESEARCH[1] - RESEARCH[0]).days + 1
+
+    forward = document["forward"]
+    assert best.metric > 0 and best.metric_se > 0
+    assert (forward["resolve"], forward["period"]) == (1.0, "1d")
+    raw, fewest = days * (best.metric_se / best.metric) ** 2, 4
+    assert raw < fewest
+    assert forward["days_to_judge"] == pytest.approx(max(raw, fewest))
+    assert forward["periods_to_judge"] == max(ceil(raw), fewest)
+    assert forward["se_after_one_year"] == pytest.approx(best.metric_se * sqrt(days / 365))
+    assert "forward    forward_holdout first judges after about" in result.stdout
+    assert "periods of 1d) at resolve 1" in result.stdout
+
+
+def test_a_best_at_or_below_zero_states_no_forward_wait() -> None:
+    """No wait can be stated from research's estimate there, and that is all the line says:
+    the gate judges the certified value, so a version certified above zero from such a best is
+    judged all the same."""
+    from kanso.certify.plan import Forward
+    from kanso.cli.cert import _forward
+
+    unstated = Forward(
+        resolve=1.0,
+        period="1d",
+        days_to_judge=None,
+        periods_to_judge=None,
+        se_after_one_year=2.5,
+    )
+
+    assert _forward(unstated) == (
+        "forward_holdout states no wait at resolve 1: research's estimate is at or too near zero "
+        "to state one from, and the gate judges the certified value · se 2.5 after a year"
+    )
+
+
+def test_a_plan_with_no_best_card_states_no_forward_wait(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    result = at(runner, mocked_ws, "cert", "plan", HYP_ID)
+
+    assert payload(at(runner, mocked_ws, "cert", "plan", HYP_ID, "--json"))["forward"] is None
+    assert "forward    nothing to state" in result.stdout
 
 
 def test_reading_a_pinned_plan_costs_nothing(runner: CliRunner, researched: Path) -> None:

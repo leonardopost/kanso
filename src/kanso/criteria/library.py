@@ -302,6 +302,19 @@ def _measured(kind: str, value: ParamValue) -> float:
     return float(value)
 
 
+_YOURS: Final = "; the values are yours, inside their ranges"
+"""Said by `check_params` beside a parameter a `together` item lacks, to whoever chose the
+values — the planner, the classifier, the operator's own `required_constraints` — and left
+off what is said of a plan already pinned (`as_pinned`)."""
+
+
+def as_pinned(problem: str) -> str:
+    """A `check_params` complaint as said of a plan already pinned, without telling its reader
+    the values are theirs: they are the planner's, and the way out is a replan. What the
+    monitor's outcome and `cert plan`'s and `cert run`'s refusal of a pinned plan say."""
+    return problem.removesuffix(_YOURS)
+
+
 def check_params(
     item: CriteriaItem, params: Mapping[str, ParamValue], hyp: Hypothesis, folds: int
 ) -> list[str]:
@@ -320,7 +333,7 @@ def check_params(
     if item.together:
         problems.extend(
             f"{name}: is not set, and {item.id} judges nothing without every one of "
-            f"{', '.join(item.params)}; the values are yours, inside their ranges"
+            f"{', '.join(item.params)}{_YOURS}"
             for name in item.params
             if name not in params
         )
@@ -478,6 +491,33 @@ def plan_complaints(
             if gate.id == COST_SCENARIO and not _positive(gate.params.get("fixed_bps"))
         )
     return complaints
+
+
+def stage_shortfall(stage: str, included: Sequence[Any], hyp: Hypothesis, folds: int) -> list[str]:
+    """How a plan's gates fall short of the ones the toolbox requires at one stage: each such
+    gate it lacks, and each it names without every parameter it declares or outside a range.
+
+    The part of `plan_complaints` a stage holds a pinned plan to. The monitor reads a plan
+    nothing has checked against this toolbox since it was pinned, and judges a deployed
+    version by its own stage's gates alone, so a complaint about another stage — a search
+    correction the lineage has since outgrown — is not one that should stop it. What it says
+    is read by whoever reads the monitor's outcome, so it leaves out what `check_params` tells
+    the planner about whose values they are.
+    """
+    named = {gate.id: gate for gate in included if gate.stage == stage}
+    shortfall: list[str] = []
+    for item in plannable().values():
+        if item.stage != stage or not item.required:
+            continue
+        gate = named.get(item.id)
+        if gate is None:
+            shortfall.append(f"lacks {item.id}")
+            continue
+        shortfall.extend(
+            f"names {item.id}, but {as_pinned(problem)}"
+            for problem in check_params(item, gate.params, hyp, folds)
+        )
+    return shortfall
 
 
 def validate_plan(plan: CertificationPlan | Mapping[str, Any], hyp: Hypothesis, folds: int) -> None:

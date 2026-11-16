@@ -1343,6 +1343,103 @@ def test_the_pages_state_the_band_a_paper_window_is_judged_by_and_its_coverage()
         assert f"(`{name}`" in certification, name
 
 
+def test_the_pages_state_the_forward_check_and_every_key_its_evidence_records() -> None:
+    """The forward check fails until it can judge, never skips, and the monitoring section
+    names every key its evidence carries, from the gate's own output."""
+    from kanso.criteria.gates.forward_holdout import gate
+    from tests.monitor.builders import gate_context, stage_record
+
+    promotion = prose(section(page("concepts.md"), "Promotion and demotion"))
+    assert "The forward window is an extra check, never a replacement." in promotion
+    assert "Before that the gate **fails** — it does not skip" in promotion
+    monitoring = prose(section(page("cli.md"), "Monitoring"))
+    evidence = gate.evaluate(
+        gate_context(params={"resolve": 1.0, "min_fraction": 0.0}, record=stage_record())
+    ).evidence
+    for key in set(evidence) - {"objective", "expected", "resolve", "min_fraction"}:
+        assert f"`{key}`" in monitoring, key
+
+
+def test_the_pages_say_what_the_forward_check_reads_and_what_it_leaves_promotable() -> None:
+    """The monitor joins every window a version closed on a stage (`kanso.monitor.realised`),
+    so a redeploy restarts nothing; a pass marks and never unmarks, so a version marked
+    before the gate existed stays `promotable`; both paper gates are required; and the demo's
+    `cert plan` and `inbox` transcripts carry what this kanso prints for them."""
+    concepts, cli = page("concepts.md"), page("cli.md")
+    promotion = prose(section(concepts, "Promotion and demotion"))
+    monitoring = prose(section(cli, "Monitoring"))
+    promote = prose(next(line for line in cli.splitlines() if line.startswith("| `kanso promote")))
+
+    for text in (promotion, monitoring):
+        assert "a redeploy adds a window and restarts nothing" in text
+        assert "a redeploy restarts it" not in text
+    assert "every plan carries two, both required: `paper_forward` and `forward_holdout`" in (
+        promotion
+    )
+    assert "one marked before it stays `promotable` (below), and `promote --live` takes it" in (
+        promotion
+    )
+    assert "one already `promotable` before this release stays so, and this command takes it" in (
+        promote
+    )
+    plan_block = concepts[concepts.index("$ kanso cert plan demo_mr ") :].split("```")[0]
+    lines = [line.split()[0] for line in plan_block.splitlines()[1:] if line.strip()]
+    assert lines == ["power", "forward", "warning"], lines
+    assert "passed every paper gate (paper_forward, forward_holdout)" in concepts
+
+
+def test_the_pages_say_which_objectives_the_forward_check_drops_an_earlier_trade_under() -> None:
+    """`_forward` drops a trade opened before the forward start from `trades`, which only a
+    per-trade edge reads; a returns objective counts every period from the start, whatever was
+    open across it. Every page that says what the check credits says which, and none says no
+    trade opened before the start is counted at all."""
+    from kanso.criteria.gates import forward_holdout
+
+    texts = {
+        "concepts": prose(page("concepts.md")),
+        "cli": prose(section(page("cli.md"), "Monitoring")),
+        "CHANGELOG": prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8")),
+        "gate": prose(str(forward_holdout.__doc__)),
+    }
+    for name, text in texts.items():
+        assert "per-trade objective" in text, name
+        assert "returns objective" in text, name
+        assert "closed inside a period not counted" in text, name
+    for unscoped in (
+        "nor with a trade that opened before it or a period",
+        "A trade opened before that midnight is not counted",
+        "on — no trade opened before it,",
+        "A trade opened before it is not counted, wherever it closed.",
+    ):
+        assert all(unscoped not in text for text in texts.values()), unscoped
+
+
+def test_the_pages_state_no_forward_wait_and_no_fresh_memory_the_code_does_not_keep() -> None:
+    """A best at or below zero is one research's estimate states no forward wait from, not one
+    no window judges: the gate judges the certified value. An open run keeps the pins it began
+    under across an upgrade, so the proposer's memory starts afresh only at each hypothesis's
+    next run. `cert run` refuses a plan short of either paper gate, and the monitor's outcome is
+    quoted as it prints it."""
+    from kanso.certify.plan import Forward
+
+    cli = page("cli.md")
+    skill = (ROOT / "src/kanso/skills/kanso-certify/SKILL.md").read_text(encoding="utf-8")
+    for name, text in {"cli": cli, "skill": skill, "Forward": str(Forward.__doc__)}.items():
+        stated = prose(text)
+        assert "no forward window judges" not in stated, name
+        assert "which it never judges" not in stated, name
+        assert "at or too near zero to state a wait from" in stated, name
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = next(line for line in changelog.splitlines() if "before it is promotable.**" in line)
+    assert "start afresh from the upgrade" not in entry
+    assert "from each hypothesis's first run begun after the upgrade" in entry
+    assert "a run left open across the upgrade keeps its pins and its window" in entry
+    run_row = next(line for line in cli.splitlines() if line.startswith("| `kanso cert run"))
+    assert "`paper_forward` and `forward_holdout`, each with both its parameters" in run_row
+    monitoring = prose(section(cli, "Monitoring"))
+    assert "``its plan lacks forward_holdout; run `kanso cert plan ID --replan` ``" in monitoring
+
+
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
     """The engine's top-of-book venue ignored a quote or a print stamped before its book's
     last update while the sleeve was handed it; the page says the venue now applies it, and

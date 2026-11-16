@@ -1,0 +1,9 @@
+id: forward_holdout
+kind: gate
+stage: paper
+required: true
+together: true
+meaningful_when: "The forward window, unread before paper: judged once resolve forward errors span the certified value, on one period a fold, a Sharpe's four, or more; then above zero and min_fraction of it."
+params: {resolve: float, min_fraction: float}
+ranges: {resolve: [1.0, 3.0], min_fraction: [0.0, 1.0]}
+impl: kanso.criteria.gates.forward_holdout.gate

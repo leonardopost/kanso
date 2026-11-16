@@ -12,6 +12,7 @@ whose register lists the mock on every tier.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -26,6 +27,7 @@ from kanso.certify.plan import (
     _ranges,
     availability,
     certificates_dir,
+    forward_note,
     paper_window_note,
     plan,
     plan_file,
@@ -33,6 +35,7 @@ from kanso.certify.plan import (
     read_plan,
 )
 from kanso.criteria import library as lib
+from kanso.criteria.band import to_resolve
 from kanso.data.manifest import Manifest, dataset_id, write_manifest
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import add, hypothesis_dir, show
@@ -138,6 +141,12 @@ def answer(**changes: Any) -> dict[str, Any]:
                 "params": pairs({"min_duration": "30d", "horizon_mult": 10.0}),
                 "rationale": "forward evidence",
             },
+            {
+                "id": "forward_holdout",
+                "stage": "paper",
+                "params": pairs({"resolve": 1.0, "min_fraction": 0.0}),
+                "rationale": "the forward window, once it resolves the certified value",
+            },
             {"id": "live_drift", "stage": "live", "params": pairs(), "rationale": "drift"},
         ],
         "excluded": [{"id": "deflated_sharpe", "reason": "a per-trade objective, not a Sharpe"}],
@@ -195,8 +204,11 @@ def prompts(monkeypatch: pytest.MonkeyPatch) -> list[Call]:
     return seen
 
 
-def a_card(store: StateStore, *, metric: float, seq: int = 1) -> None:
-    """One recorded card, so the hypothesis has a trial count and a measurement."""
+def a_card(
+    store: StateStore, *, metric: float, seq: int = 1, pinned: str = "a" * 64, se: float = 0.25
+) -> None:
+    """One recorded card, so the hypothesis has a trial count and a measurement; `pinned` is
+    the hypothesis file its run pinned."""
     run = records.insert(
         store,
         RunRecord.model_validate(
@@ -207,7 +219,7 @@ def a_card(store: StateStore, *, metric: float, seq: int = 1) -> None:
                 "lane": "op",
                 "dir": f"runs/op/{HYP_ID}",
                 "base_sha": "a" * 64,
-                "hypothesis_sha": "a" * 64,
+                "hypothesis_sha": pinned,
                 "program_sha": "a" * 64,
                 "snapshot_id": "snap1",
                 "criteria_version": "0.1.0",
@@ -228,7 +240,7 @@ def a_card(store: StateStore, *, metric: float, seq: int = 1) -> None:
                 "lane": "op",
                 "strategy_sha": sha,
                 "metric": metric,
-                "metric_se": 0.25,
+                "metric_se": se,
                 "n_trials": 1,
                 "n_trades": 40,
                 "wall_s": 1.0,
@@ -291,6 +303,7 @@ def test_a_plan_is_written_pinned_and_recorded(ws: Workspace, store: StateStore)
         "parity_replay",
         "bootstrap",
         "paper_forward",
+        "forward_holdout",
         "live_drift",
     ]
     assert [left.id for left in written.excluded] == ["deflated_sharpe"]
@@ -390,6 +403,24 @@ def test_the_prompt_carries_the_idea_the_toolbox_and_the_invariants(
     assert '"bar"' in call.user
     assert "2024-12-31" in call.user
     assert "n_trials" in call.user
+
+
+def test_the_planner_is_told_which_gates_take_every_parameter_or_none(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The instruction says a parameter left out is left at its default, which a `together`
+    gate refuses: told neither, a planner that sets one of `paper_forward`'s or
+    `forward_holdout`'s two spends its one retry on the complaint."""
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    plan(ws, store, HYP_ID)
+
+    toolbox = {gate["id"]: gate for gate in plan_module._toolbox(the_hypothesis(ws), 4)}
+    assert toolbox["paper_forward"]["together"] is toolbox["forward_holdout"]["together"] is True
+    assert toolbox["embargoed_window"]["together"] is False
+    assert '"together": true' in seen[0].system
+    assert "marks together is named with every one of its parameters set" in seen[0].system
 
 
 def test_the_prompt_carries_no_card_metric_no_certificate_and_no_strategy_source(
@@ -1000,7 +1031,11 @@ def test_a_paper_window_far_shorter_than_the_certification_window_is_warned_abou
     script(
         ws,
         certify_plan=[
-            answer(gates=replacing("paper_forward", params=pairs({"min_duration": "5d"})))
+            answer(
+                gates=replacing(
+                    "paper_forward", params=pairs({"min_duration": "5d", "horizon_mult": 1.0})
+                )
+            )
         ],
     )
     pinned = plan(ws, store, HYP_ID)
@@ -1027,13 +1062,22 @@ def test_a_paper_window_comparable_with_the_certification_window_is_not(
 def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
     ws: Workspace, store: StateStore
 ) -> None:
-    """`paper_forward` reports an absent window itself, when it runs; there is nothing to size."""
-    bare = replacing("paper_forward", params=pairs())
-    script(ws, certify_plan=[answer(gates=bare)])
+    """A planner can no longer pin one — `paper_forward` is named with both its parameters —
+    but a plan pinned before that was held may ask for none, and the plan's refusal, not this
+    note, is what answers it; there is nothing to size."""
+    script(ws, certify_plan=[answer()])
     pinned = plan(ws, store, HYP_ID)
+    bare = pinned.model_copy(
+        update={
+            "gates": [
+                gate.model_copy(update={"params": {}}) if gate.id == "paper_forward" else gate
+                for gate in pinned.gates
+            ]
+        }
+    )
 
-    assert pinned.paper_window_s("30m") is None
-    assert paper_window_note(ws, store, pinned) is None
+    assert bare.paper_window_s("30m") is None
+    assert paper_window_note(ws, store, bare) is None
 
 
 def test_a_sharpe_s_invariants_require_entry_timing_from_the_first_plan() -> None:
@@ -1056,3 +1100,157 @@ def test_a_sharpe_s_invariants_require_entry_timing_from_the_first_plan() -> Non
     assert "entry_timing" not in told["required_gates"]
     assert not any("entry_timing" in rule for rule in told["rules"])
     assert "entry_timing" in {item["id"] for item in plan_module._toolbox(edge, 4)}
+
+
+def test_paper_forward_without_a_parameter_is_retried_and_one_pinned_so_refused(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half its rule judges nothing and a skip passes, so it would leave the forward check the
+    only paper gate that judged: the planner is sent back, told the values are its own, and a
+    plan pinned so is refused with the replan — its reader is not told they are theirs."""
+    half = replacing("paper_forward", params=pairs({"min_duration": "30d"}))
+    script(ws, certify_plan=[answer(gates=half), answer()])
+    seen = prompts(monkeypatch)
+
+    written = plan(ws, store, HYP_ID)
+
+    assert "the values are yours" in seen[1].user, "the planner chose them"
+    (planned,) = [gate for gate in written.gates if gate.id == "paper_forward"]
+    assert set(planned.params) == {"min_duration", "horizon_mult"}
+    document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
+    for gate in document["gates"]:
+        if gate["id"] == "paper_forward":
+            gate["params"] = {"min_duration": "30d"}
+    plan_file(ws, HYP_ID).write_text(yaml.safe_dump(document), encoding="utf-8")
+    with pytest.raises(ValidationError) as refused:
+        plan(ws, store, HYP_ID)
+    assert "gates.paper_forward.horizon_mult: is not set" in refused.value.message
+    assert "yours" not in refused.value.message, "the values are the planner's, not the reader's"
+    assert refused.value.remedy == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+
+
+# --- when the forward window first judges --------------------------------------
+
+
+def forward_of(resolve: float) -> list[dict[str, Any]]:
+    """The usable plan's gates, with `forward_holdout` judging at `resolve`."""
+    return replacing("forward_holdout", params=pairs({"resolve": resolve, "min_fraction": 0.0}))
+
+
+def test_a_plan_without_the_forward_check_is_retried_and_one_pinned_without_it_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """No version is marked `promotable` before the forward window judges it: every plan carries
+    the gate; one pinned before it was required is refused, with the replan, where it is read."""
+    script(ws, certify_plan=[answer(gates=gates_of(drop="forward_holdout")), answer()])
+
+    written = plan(ws, store, HYP_ID)
+
+    assert "forward_holdout" in [gate.id for gate in written.gates]
+    document = yaml.safe_load(plan_file(ws, HYP_ID).read_text(encoding="utf-8"))
+    document["gates"] = [gate for gate in document["gates"] if gate["id"] != "forward_holdout"]
+    plan_file(ws, HYP_ID).write_text(yaml.safe_dump(document), encoding="utf-8")
+    with pytest.raises(ValidationError) as refused:
+        plan(ws, store, HYP_ID)
+    assert "forward_holdout is a structural invariant" in refused.value.message
+    assert refused.value.remedy == f"run `kanso cert plan {HYP_ID} --replan` to plan again"
+
+
+def test_the_forward_note_states_the_wait_from_the_best_card(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The demo researches over 365 days; a best of 1.0 ± 0.25 is four errors clear, so at a
+    resolve of 2 the forward window judges once its error is half the value: after a quarter
+    of the research window's days, 91.25, which is 92 one-day periods. A year of it errs by
+    exactly the research error, the two windows being a year each."""
+    pinned_sha = show(ws, store, HYP_ID).hypothesis_sha
+    a_card(store, metric=1.0, pinned=str(pinned_sha))
+    script(ws, certify_plan=[answer(gates=forward_of(2.0))])
+    written = plan(ws, store, HYP_ID)
+
+    note = forward_note(ws, store, written)
+
+    research = the_hypothesis(ws).windows.research
+    days = ((research.end - research.start).days + 1) * (2.0 * 0.25 / 1.0) ** 2
+    assert note is not None
+    assert (note.resolve, note.period) == (2.0, ws.config.research.return_period)
+    assert note.days_to_judge == pytest.approx(days) == pytest.approx(91.25)
+    assert note.periods_to_judge == 92
+    assert note.se_after_one_year == pytest.approx(0.25)
+    assert note.payload() == {
+        "resolve": 2.0,
+        "period": "1d",
+        "days_to_judge": note.days_to_judge,
+        "periods_to_judge": 92,
+        "se_after_one_year": note.se_after_one_year,
+    }
+
+
+@pytest.mark.parametrize("metric", [-1.0, 1e-160])
+def test_the_forward_note_states_no_wait_from_a_best_at_or_too_near_zero(
+    ws: Workspace, store: StateStore, metric: float
+) -> None:
+    """At or below zero no length of window resolves research's estimate, and a hair above it
+    the wait overflows a float: the note states none, and does not raise."""
+    pinned_sha = show(ws, store, HYP_ID).hypothesis_sha
+    a_card(store, metric=metric, pinned=str(pinned_sha))
+    script(ws, certify_plan=[answer()])
+
+    note = forward_note(ws, store, plan(ws, store, HYP_ID))
+
+    assert note is not None and note.days_to_judge is None and note.periods_to_judge is None
+    assert note.se_after_one_year > 0
+
+
+@pytest.mark.parametrize(("metric", "period"), [(3e-153, "1h"), (1e-152, "1m")])
+def test_the_forward_note_states_no_wait_its_periods_cannot_count(
+    ws: Workspace, store: StateStore, metric: float, period: str
+) -> None:
+    """A best this near zero waits a number of days a float holds, and a return period shorter
+    than a day counts it in more periods than one does: the note states neither, as it states
+    none for a best nearer zero still, and does not raise."""
+    a_card(store, metric=metric, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=1.0)
+    script(ws, certify_plan=[answer()])
+    pinned = plan(ws, store, HYP_ID)
+    research = ws.config.research.model_copy(update={"return_period": period})
+    sub_day = replace(ws, config=ws.config.model_copy(update={"research": research}))
+
+    note = forward_note(sub_day, store, pinned)
+
+    window = the_hypothesis(ws).windows.research
+    days = float((window.end - window.start).days + 1)
+    assert note is not None and note.period == period
+    assert to_resolve(metric, 1.0, days, note.resolve) is not None, "the days alone are finite"
+    assert (note.days_to_judge, note.periods_to_judge) == (None, None)
+    assert note.se_after_one_year > 0
+
+
+def test_the_forward_note_states_nothing_without_a_best_an_error_or_a_resolve(
+    ws: Workspace, store: StateStore
+) -> None:
+    script(ws, certify_plan=[answer()])
+    written = plan(ws, store, HYP_ID)
+    unset = written.model_copy(
+        update={"gates": [gate for gate in written.gates if gate.id != "forward_holdout"]}
+    )
+
+    assert forward_note(ws, store, written) is None, "no best card yet"
+    a_card(store, metric=1.0, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=0.0)
+    assert forward_note(ws, store, written) is None, "an error of zero states no dispersion"
+    assert forward_note(ws, store, unset) is None, "no resolve to state the wait at"
+
+
+def test_the_forward_note_never_states_a_wait_shorter_than_the_gate_judges_in(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A best a hundred errors clear would judge, on research's numbers alone, after under an
+    hour of forward window; the gate judges on no fewer periods than one a fold for the demo's
+    per-trade edge, whatever its error says, so the note states that floor: four one-day
+    periods."""
+    a_card(store, metric=1.0, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=0.01)
+    script(ws, certify_plan=[answer()])
+
+    note = forward_note(ws, store, plan(ws, store, HYP_ID))
+
+    assert note is not None and ws.config.research.folds == 4
+    assert (note.periods_to_judge, note.days_to_judge) == (4, 4.0)
