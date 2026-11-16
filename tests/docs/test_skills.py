@@ -135,7 +135,16 @@ def test_the_certify_skill_says_every_certificate_is_a_look_and_that_it_moves_no
     assert (
         "a best carried across a re-pin that moved only the window is certified on — and "
         "counted at — the old window until a research run under the new file cards it again; "
-        "`holdout_looks` and `inputs.looks` count where the best's next certificate reads"
+        "`holdout_looks` counts where the best's next certificate reads"
+    ) in text
+    # A plan `cert run --sha` makes, none being pinned, is shown the looks at the named card's
+    # window (`kanso.certify.plan.plan`), which a re-pin that moved only the window leaves
+    # apart from the best's: told `inputs.looks` always counts where the best's next
+    # certificate reads, an agent would report that plan's count as the best's prior looks.
+    assert "`holdout_looks` and `inputs.looks` count where the best's next certificate" not in text
+    assert (
+        "`inputs.looks` where the next certificate of the card its plan was made for read — "
+        "the best's, or the named card's where `cert run --sha` made the plan"
     ) in text
     assert "never re-plan to make a later look pass" in text
     assert "(`inputs.looks`)" in text

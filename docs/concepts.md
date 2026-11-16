@@ -2438,14 +2438,15 @@ the register what would count as proof for *this* hypothesis: which gates, at wh
 `cert`, `paper` or `live` — with which parameters chosen inside the ranges the toolbox
 declares, and why. The planner is shown the hypothesis, its construct, the toolbox, what
 data the workspace holds, the trial count and how many certificates the hypothesis's lineage
-has already made that read the certification window its best is certified on (*Hold-out
-looks* below). It is **never** shown a card metric, a certificate — its verdict, its
-evidence or what it certified — or the strategy source, so a plan cannot be tuned to the
-result it is about to judge. kanso validates the plan against structural invariants — every
-required gate present, every parameter inside its range, at least one gate at each of the
-three stages — and sends the complaints back to the same model, then to the next tier up; a
-plan still invalid after that fails the step. With no model configured there is nothing to
-fall back on and the step exits 2.
+has already made that read the certification window its subject is certified on — its
+best's, or the named card's where `cert run --sha` made the plan (*Hold-out looks* below).
+It is **never** shown a card metric, a certificate — its verdict, its evidence or what it
+certified — or the strategy source, so a plan cannot be tuned to the result it is about to
+judge. kanso validates the plan against structural invariants — every required gate present,
+every parameter inside its range, at least one gate at each of the three stages — and sends
+the complaints back to the same model, then to the next tier up; a plan still invalid after
+that fails the step. With no model configured there is nothing to fall back on and the step
+exits 2.
 
 **A search is corrected for, from its second card.** Every objective has exactly one
 deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
@@ -2750,12 +2751,13 @@ certificate of the best reads, and that certificate is the look after it; a hypo
 no best counts at the window its own file declares. `cert run --sha` of a card another run
 carded under another window reads that window: a plan the certification makes, none being
 pinned, is shown the looks taken there, while a plan already pinned was shown those at the
-window of the best it was made for, and the certificate's `hold-out` line says which look it
-was. A certificate written before kanso recorded its pin is read under its hypothesis's file
-as it stands, and one whose file declares no window that reads is counted wherever asked. A
-certificate struck on a snapshot that cannot support a claim read no window and is no look,
-and a spared stall writes none. The count is struck from the certificates each time, so
-certificates written before kanso counted looks count at once; a certificate records the
+window of the card it was made for — the best's, or the named card's where `cert run --sha`
+made it — and the certificate's `hold-out` line says which look it was. A certificate
+written before kanso recorded its pin is read under its hypothesis's file as it stands, and
+one whose file declares no window that reads is counted wherever asked. A certificate struck
+on a snapshot that cannot support a claim read no window and is no look, and a spared stall
+writes none. The count is struck from the certificates each time, so certificates written
+before kanso counted looks count at once; a certificate records the
 count standing when it is written, taken under the lock its row is written under, so two
 certifications of one lineage judged at once are two looks, in the order they were written —
 save two of one subject under one pin, plan and engine, which collide (`docs/backlog.md` row

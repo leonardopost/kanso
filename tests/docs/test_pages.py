@@ -372,9 +372,19 @@ def test_the_pages_say_how_hold_out_looks_are_counted_and_that_they_move_no_bar(
     assert "but one struck on a snapshot that cannot support a claim, which read no window" in (
         agents
     )
+    # A plan `cert run --sha` makes, none being pinned, is shown the looks at the named card's
+    # window (`kanso.certify.plan.plan`), not the best's, so a page saying the planner always
+    # counts at the best's window has a reader take that plan's count for the best's looks.
+    assert "the certification window its best is certified on" not in concepts
+    assert "at the window of the best it was made for" not in concepts
     assert (
         "the trial count and how many certificates the hypothesis's lineage has already made "
-        "that read the certification window its best is certified on"
+        "that read the certification window its subject is certified on — its best's, or the "
+        "named card's where `cert run --sha` made the plan"
+    ) in concepts
+    assert (
+        "a plan already pinned was shown those at the window of the card it was made for — "
+        "the best's, or the named card's where `cert run --sha` made it"
     ) in concepts
     assert "a re-pin that drops a `derived_from` link can split the lineage" in concepts
     assert "one onto a window sharing no day with the last" in concepts
