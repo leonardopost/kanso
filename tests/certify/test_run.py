@@ -1177,6 +1177,82 @@ def test_a_planned_deflated_sharpe_counts_the_cards_that_were_trials(
     assert records.n_trials(store, HYP_ID) == made.n_trials == 4
 
 
+# --- a grid declared tried outside kanso ---------------------------------------
+
+
+def a_grid(ws: Workspace, count: int = 27, name: str = "evidence/grid.md") -> dict[str, Any]:
+    """Evidence of an offline grid of `count` settings, copied into the workspace, and the
+    `prior_trials` block that states it."""
+    body = f"# pre-registered grid: {count} settings\n".encode()
+    path = ws.root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return {"count": count, "source": name, "sha256": sha256(body).hexdigest()}
+
+
+def test_a_declared_grid_is_among_the_draws_a_certificate_deflates_by_and_not_its_n_trials(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The grid's settings widen how many draws the maximum is taken over, beside the cards
+    that ran and traded; the spread is still the scored cards', and the certificate is still
+    stamped with kanso's own cards, which its filename carries."""
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    a_card(ws, store, FLAT, seq=1, metric=0.5, best=False)
+    a_card(ws, store, REVERTING, seq=2, metric=1.5)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    made = certify(ws, store, HYP_ID)
+
+    (deflated,) = [gate for gate in made.gates if gate.id == "deflated_sharpe"]
+    assert deflated.skipped is None
+    assert deflated.evidence["trials"] == records.candidates(store, HYP_ID) + 27 == 29
+    assert deflated.evidence["prior_trials"] == 27
+    assert deflated.evidence["scored_trials"] == 2
+    assert made.n_trials == records.n_trials(store, HYP_ID) == 2
+
+
+def test_a_declared_grid_does_not_price_a_search_whose_spread_no_two_cards_read(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A grid is a count with no units: the first card behind it has a search of 28 draws
+    and no spread to price it by, so it is refused until a second card is scored."""
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    a_card(ws, store, REVERTING, seq=1, metric=1.5)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "demo_mr has 1 cards that ran and traded behind it and 1 of them scored under "
+        "wf_sharpe_net, beside 27 settings its family declares tried outside kanso, so "
+        "deflated_sharpe cannot read the spread of the search that selected this card: it "
+        "prices the search from two cards in its units"
+    )
+    assert run.unpriced(store, HYP_ID, "wf_sharpe_net", 1) == refused.value.message
+    assert store.connection.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 0
+
+
+def test_a_plan_pinned_without_its_correction_is_refused_once_a_grid_is_declared(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One card is no search, but one card behind a grid of 27 is the best of 28: the plan
+    must carry the correction for it, whatever it was pinned behind."""
+    classify(ws, store, {**DOCUMENT, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    a_card(ws, store, REVERTING, seq=1, metric=1.5)
+    write_plan(ws)
+
+    with pytest.raises(ValidationError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert (
+        "deflated_sharpe is the search correction for wf_sharpe_net, and a plan includes it "
+        "once n_trials, every card of the hypothesis, and the prior_trials its family declares "
+        "reach 2 together (they are 28)"
+    ) in refused.value.message
+    assert refused.value.remedy == "run `kanso cert plan demo_mr --replan` to plan again"
+
+
 # --- a search carried across a re-pin to another objective ---------------------
 
 SWITCHED = document(
@@ -1271,6 +1347,26 @@ def test_a_card_scored_under_the_objective_before_the_re_pin_is_not_certified_by
     )
     assert refused.value.remedy == (
         "certify a card scored under wf_contribution_bps, as the best is: `kanso cert run demo_mr`"
+    )
+
+
+def test_a_card_scored_before_the_re_pin_is_not_certified_by_name_behind_one_card_and_a_grid(
+    ws: Workspace, store: StateStore
+) -> None:
+    """One card is no search, but one card behind a declared grid is the best of 28: the plan
+    made for the contribution carries no correction for the Sharpe that card was scored
+    under, and that is what refuses it, before its spread is asked for."""
+    classify(ws, store, {**SWITCHED, "prior_trials": a_grid(ws, 27)}, REVERTING)
+    before = a_card(ws, store, blob_from("9"), seq=1, metric=2.0, best=False)
+    write_plan(ws, gates=[*CERT_GATES, PRICED])
+
+    with pytest.raises(PreconditionError) as refused:
+        certify(ws, store, HYP_ID, sha=before[:12])
+
+    assert refused.value.message == (
+        f"{before[:7]} was scored under wf_sharpe_net, and the plan pinned for demo_mr "
+        "carries no deflated_sharpe with its threshold, the search correction for it, so the "
+        "search that selected it would go unpriced"
     )
 
 

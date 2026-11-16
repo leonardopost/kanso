@@ -493,6 +493,59 @@ def test_what_the_operator_requires_survives_every_classification(
     assert "strategy_integrity" in [ref.id for ref in gates], "and the rest of its answer stands"
 
 
+GRID = b"# pre-registered: x{1.25,1.75,2.25} x n{10,14,20} x 3 exits\n"
+"""Evidence of an offline grid, as an operator copies it into the workspace."""
+
+GRIDDED = DRAFT.replace(
+    "construct:",
+    f"prior_trials: {{count: 27, source: evidence/grid.md, sha256: {sha256(GRID).hexdigest()}}}\n"
+    "construct:",
+    1,
+)
+"""The draft stating the offline grid that chose its seed."""
+
+
+@pytest.mark.parametrize("touch", ["moved", "edited"])
+def test_a_grid_s_evidence_is_not_read_again_once_it_is_pinned(
+    ws: Workspace, store: StateStore, touch: str
+) -> None:
+    """`hyp add` read the evidence; classification re-pins the same block and reads only the
+    pin, so evidence moved or edited since refuses nothing."""
+    held = ws.root / "evidence" / "grid.md"
+    held.parent.mkdir()
+    held.write_bytes(GRID)
+    register(ws, store, HYP_ID, GRIDDED)
+    if touch == "moved":
+        held.rename(held.with_name("kept.md"))
+    else:
+        held.write_bytes(GRID + b"a note added after hyp add\n")
+    script(ws, classify=[answer()])
+
+    classified = classify(ws, store, HYP_ID).hyp
+
+    assert classified.prior_trials is not None
+    assert classified.prior_trials.count == 27
+    assert records.prior_trials(store, HYP_ID) == 27
+
+
+def test_a_grid_written_in_since_the_pin_is_read_when_classification_pins_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Classification pins the file as it is on disk, so a block `hyp add` never read is a new
+    statement, and its evidence is read before anything is sent to a model."""
+    register(ws, store, HYP_ID, DRAFT)
+    hypothesis_file(ws, HYP_ID).write_text(GRIDDED, encoding="utf-8")
+    script(ws, classify=[answer()])
+
+    with pytest.raises(ValidationError) as refused:
+        classify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "prior_trials.source: evidence/grid.md does not exist in the workspace"
+    )
+    assert show(ws, store, HYP_ID).status == "draft"
+
+
 def test_a_classification_whose_host_has_gone_can_be_redone(
     ws: Workspace, store: StateStore
 ) -> None:

@@ -228,6 +228,25 @@ def test_deflated_edge_deflates_the_research_edge_by_its_per_trade_error() -> No
     assert (result.evidence["trials"], result.evidence["trades"]) == (3, 8)
 
 
+@pytest.mark.parametrize(
+    ("gate", "made"),
+    [(deflated_contribution, contribution_context), (deflated_edge, edge_context)],
+    ids=["deflated_contribution", "deflated_edge"],
+)
+def test_a_mean_s_deflation_states_how_many_of_its_draws_a_grid_declared(
+    gate: Any, made: Any
+) -> None:
+    """`trials` is every draw the maximum is taken over, a declared grid's settings among
+    them; `prior_trials` says how many no card made, and changes nothing else."""
+    carded = gate.evaluate(made(trials=30))
+    gridded = gate.evaluate(made(trials=30, prior_trials=27))
+
+    assert carded.evidence["prior_trials"] == 0
+    assert gridded.evidence["prior_trials"] == 27
+    assert gridded.evidence["trials"] == 30
+    assert {**gridded.evidence, "prior_trials": 0} == carded.evidence
+
+
 def test_deflated_edge_fails_an_edge_a_wide_search_would_have_found_by_chance() -> None:
     result = deflated_edge.evaluate(edge_context(trial_metrics=(-60.0, 0.0, 60.0) * 200))
 

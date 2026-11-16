@@ -343,10 +343,10 @@ The `deflated_sharpe` gate skips a run scored on a contribution, as it does the 
 edge, since no card computed a Sharpe to deflate; `deflated_contribution` is its
 multiple-testing control instead — the research contribution against the expected maximum
 of the search, over the error of the per-period returns it is the mean of, passed at
-`min_probability` — as `deflated_edge` is the per-trade edge's, and from the second card a
-plan carries whichever of the three its objective names (`docs/concepts.md`,
-Certification); the bootstrap, cost-stress, cost-scenario, walk-forward and plateau gates
-read it as they read any objective.
+`min_probability` — as `deflated_edge` is the per-trade edge's, and from the search's second
+draw — card, or setting of a declared `prior_trials` grid — a plan carries whichever of the
+three its objective names (`docs/concepts.md`, Certification); the bootstrap, cost-stress,
+cost-scenario, walk-forward and plateau gates read it as they read any objective.
 
 **An objective the file already names is the operator's.** `kanso classify` keeps it, keep
 rule and all, whenever the construct chosen is measured in its mode and its parameters are

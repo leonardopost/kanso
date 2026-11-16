@@ -99,10 +99,14 @@ adapter supplied it.
 
 from __future__ import annotations
 
+import posixpath
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from hashlib import sha256
+from pathlib import Path
+from stat import S_ISREG
 from typing import TYPE_CHECKING, Any, Final
 
 from kanso import ext
@@ -128,6 +132,7 @@ from kanso.schemas import (
     Hypothesis,
     ObjectiveRef,
     PeriodTarget,
+    PriorTrials,
     StrategyFile,
     VenueDeclaration,
     VenueModel,
@@ -160,8 +165,6 @@ ASKING_MORE: Final = "that asks for more than bar"
 asked for bars alone is a bar signal, which carries no quotes or prints to ask it for."""
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from pathlib import Path
-
     from kanso.workspace import Workspace
 
 CARD_STAGE: Final = "card"
@@ -236,6 +239,7 @@ def admit(ws: Workspace, path: Path, source: bytes | None = None) -> Admitted:
     check_tick_costs(ws, hyp, models)
     _check_classification(ws, hyp)
     _check_derived_from(ws, hyp)
+    _check_prior_trials(ws, hyp)
     _check_screened(ws, hyp)
     return Admitted(hyp, cost_warnings(ws, hyp, instruments, models))
 
@@ -301,6 +305,120 @@ def _check_derived_from(ws: Workspace, hyp: Hypothesis) -> None:
             f"derived_from: {', '.join(missing)} is not a registered hypothesis of this "
             "workspace, so its cards cannot count toward this one's trials",
             remedy="register the parent with `kanso hyp add` first, or drop it from derived_from",
+        )
+
+
+def _check_prior_trials(ws: Workspace, hyp: Hypothesis) -> None:
+    """A declared offline grid names evidence inside the workspace whose bytes are the ones
+    the count was stated from, and is not a grid an ancestor already states.
+
+    The count is the operator's, and kanso never derives it; what is checked is that the
+    statement can be read back, when it is made. A block the hypothesis's newest
+    registration does not already state — count, source and digest — has its evidence read
+    here (`_check_evidence`); one it does state was read when it was pinned, so the evidence
+    is never read again, by a re-pin of the same block or by `kanso classify`'s, and may move
+    or change after `kanso hyp add` without refusing either. A block an ancestor's newest
+    registration states — the same grid, `PriorTrials.grid`: the same evidence by its digest,
+    whatever name `source` gives it — is one `derived_from` already
+    counts (`kanso.research.records.prior_trials` counts it once whoever states it), so a
+    file that repeats it is refused rather than read as a second grid. Must run after
+    `_check_derived_from`, which guarantees every parent is registered and so that the store
+    exists wherever the file names one.
+    """
+    declared = hyp.prior_trials
+    if declared is None:
+        return
+    from kanso.research import records
+    from kanso.state import StateStore
+
+    path = ws.path(STATE_DB)
+    if not path.is_file():
+        _check_evidence(ws, declared)
+        return
+    with StateStore(path) as store:
+        if records.declared_prior(store, hyp.id) != declared:
+            _check_evidence(ws, declared)
+        for parent in hyp.derived_from or ():
+            for ancestor in records.family(store, parent):
+                stated = None if ancestor == hyp.id else records.declared_prior(store, ancestor)
+                if stated is not None and stated.grid == declared.grid:
+                    raise ValidationError(
+                        f"prior_trials: repeats {ancestor}'s block, whose grid derived_from "
+                        "already counts",
+                        remedy="drop prior_trials from this file: the search behind it counts "
+                        f"{ancestor}'s grid through derived_from",
+                    )
+
+
+def _check_evidence(ws: Workspace, declared: PriorTrials) -> None:
+    """The evidence a grid is stated from is a file inside the workspace, named relative to
+    its root, whose bytes hash to the digest stated.
+
+    A path that is absolute, resolves outside the root, climbs above the root to name a file
+    inside it, cannot be named or read on this host — a NUL in it, a name longer than the
+    filesystem holds, a symlink loop, a mode that forbids reading — is not there or is not a
+    file is refused, and so is a digest its bytes do not hash to. The climb is refused as the
+    absolute path is: a name that leaves the root by its own directory's name and comes back
+    names the file only while the workspace sits under that name. Python 3.12's
+    `Path.resolve` raises `RuntimeError` on a symlink loop where 3.13's returns the path, and
+    `is_file` answers some errors as no file on one and raises them on the other, so the path
+    is resolved and then `stat`ed, and every interpreter refuses the same source the same way.
+    The name is the operator's and is never what makes a grid one (`PriorTrials.grid`).
+    """
+    root = ws.root.resolve()
+    named = Path(declared.source)
+    place = f"copy the evidence under {root}, e.g. into `evidence/`, and name it from there"
+    if named.is_absolute():
+        raise ValidationError(
+            f"prior_trials.source: {declared.source} is not named relative to the workspace "
+            "root, so the pin would name a file only this host holds",
+            remedy=place,
+        )
+
+    def unopenable(exc: Exception) -> ValidationError:
+        reason = getattr(exc, "strerror", None) or str(exc)
+        return ValidationError(
+            f"prior_trials.source: {declared.source!r} is not a path this host can open: {reason}",
+            remedy=place,
+        )
+
+    try:
+        target = (root / named).resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise unopenable(exc) from None
+    if not target.is_relative_to(root):
+        raise ValidationError(
+            f"prior_trials.source: {declared.source} is outside the workspace", remedy=place
+        )
+    if posixpath.normpath(declared.source).split("/")[0] == "..":
+        raise ValidationError(
+            f"prior_trials.source: {declared.source} leaves the workspace root to name a file "
+            "inside it, so it is not named relative to the root",
+            remedy=f"name it `{target.relative_to(root).as_posix()}`, as the workspace root "
+            "names it",
+        )
+    try:
+        mode = target.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        raise ValidationError(
+            f"prior_trials.source: {declared.source} does not exist in the workspace",
+            remedy=place,
+        ) from None
+    except (OSError, ValueError) as exc:
+        raise unopenable(exc) from None
+    if not S_ISREG(mode):
+        raise ValidationError(f"prior_trials.source: {declared.source} is not a file", remedy=place)
+    try:
+        held = target.read_bytes()
+    except OSError as exc:
+        raise unopenable(exc) from None
+    digest = sha256(held).hexdigest()
+    if digest != declared.sha256:
+        raise ValidationError(
+            f"prior_trials.sha256: the bytes of {declared.source} hash to {digest}, not the "
+            f"{declared.sha256} the count was stated with",
+            remedy=f"run `shasum -a 256 {target}` (`sha256sum` where shasum is not installed) "
+            "and state that digest, or restore the file the count was stated from",
         )
 
 

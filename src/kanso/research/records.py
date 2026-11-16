@@ -33,6 +33,9 @@ widens the term beside it. `docs/backlog.md` row 59 holds the measurement of bot
 directions and the reason nothing else changes here. `candidates` counts those cards under
 every objective: a card gate that holds one card's edge to the width of the search behind it
 needs how many draws there were and no spread, so it has no units to keep apart.
+`prior_trials` is the draws no card made: the settings a hypothesis's family declares tried
+outside kanso in the grids that chose its seeds, added to the cards wherever a search is
+priced and to no spread and no filename.
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
@@ -119,7 +122,15 @@ from kanso.criteria.library import objectives
 from kanso.criteria.objectives import difference
 from kanso.criteria.run import NS_PER_DAY, CardRun, day_of
 from kanso.errors import PreconditionError
-from kanso.schemas import Card, CardDigest, GateResult, ObjectiveRef, RunRecord, VenueModel
+from kanso.schemas import (
+    Card,
+    CardDigest,
+    GateResult,
+    ObjectiveRef,
+    PriorTrials,
+    RunRecord,
+    VenueModel,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import StateStore
@@ -136,6 +147,7 @@ __all__ = [
     "family",
     "cards_of",
     "close",
+    "declared_prior",
     "encode_measurement",
     "insert",
     "lineage",
@@ -146,6 +158,7 @@ __all__ = [
     "next_tag",
     "now",
     "objective_of",
+    "prior_trials",
     "prune",
     "read_measurement",
     "record_card",
@@ -454,13 +467,54 @@ def links(store: StateStore) -> dict[str, set[str]]:
 def _derived_from(store: StateStore, sha: object) -> tuple[str, ...]:
     """The `derived_from` a registered hypothesis file names, read as a plain mapping so a
     file pinned under an older schema is still read; nothing for a file that names none."""
-    if sha is None or not store.has_blob(str(sha)):
-        return ()
-    found = yaml.safe_load(store.get_blob(str(sha)).decode("utf-8"))
-    parents = found.get("derived_from") if isinstance(found, dict) else None
+    parents = _document(store, sha).get("derived_from")
     if not isinstance(parents, list):
         return ()
     return tuple(str(parent) for parent in parents)
+
+
+def _document(store: StateStore, sha: object) -> dict[str, Any]:
+    """A registered hypothesis file as a plain mapping; empty where the store holds none."""
+    if sha is None or not store.has_blob(str(sha)):
+        return {}
+    found = yaml.safe_load(store.get_blob(str(sha)).decode("utf-8"))
+    return found if isinstance(found, dict) else {}
+
+
+def declared_prior(store: StateStore, hyp_id: str) -> PriorTrials | None:
+    """The `prior_trials` block a hypothesis's newest registration states, or `None` for one
+    that states none or is not registered.
+
+    Read off the pinned file as a plain mapping, as `family` reads `derived_from`, so a file
+    pinned before the key existed states none; the block itself was checked when it was
+    pinned (`kanso.hyp.validate`)."""
+    row = store.connection.execute(
+        "SELECT hypothesis_sha FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
+    ).fetchone()
+    block = None if row is None else _document(store, row["hypothesis_sha"]).get("prior_trials")
+    return PriorTrials.model_validate(block) if isinstance(block, dict) else None
+
+
+def prior_trials(store: StateStore, hyp_id: str) -> int:
+    """The settings the hypothesis's family declared tried outside kanso, in the grids that
+    chose their seeds: the sum of each member's `prior_trials.count` over `family`.
+
+    A grid is a search the cards never saw, and its settings are draws the maximum was taken
+    over as surely as a card is, so every count by which a search is priced — `edge_per_trade`'s
+    margin, the deflation gates' draws, the rule from which a plan carries its correction and
+    `kanso.certify.run.unpriced` — adds this to the cards it counts. It is a count of draws and
+    has no units, like `candidates`, so no spread is read from it. Two members' blocks from
+    one evidence file — the same `sha256`, whatever name `source` gives it: one grid
+    (`PriorTrials.grid`) — are counted once, at the larger count either states, and a member
+    the workspace has not registered states nothing, as it counts no card. A card's and a
+    certificate's `n_trials` stay kanso's own cards, so this is never part of a filename.
+    """
+    grids: dict[str, int] = {}
+    for member in family(store, hyp_id):
+        block = declared_prior(store, member)
+        if block is not None:
+            grids[block.grid] = max(grids.get(block.grid, 0), block.count)
+    return sum(grids.values())
 
 
 def _placeholders(ids: Sequence[str]) -> str:
@@ -493,12 +547,13 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     maximum from 0.055 to 1.82. Those cards still count toward how many draws the maximum is
     taken over (`candidates`), which is a count and carries no units, so the strategy carried
     across the re-pin is priced for the search that chose it; and a certification behind two
-    such cards with fewer than two of these is refused (`kanso.certify.run.unpriced`), since
-    its spread cannot be read. The objective is read from the hypothesis file each card's run
-    pinned, as a plain mapping, so a pin written under an older schema is still read. Nothing
-    else about the pins narrows the set: a re-pin under the same objective, a newer snapshot or
-    a kanso upgrade is the same search continuing, and a set that reset at each of them would
-    price a search by its latest stretch.
+    such cards, or a declared grid's settings beside them (`prior_trials`), with fewer than two
+    of these is refused (`kanso.certify.run.unpriced`), since its spread cannot be read. The
+    objective is read from the hypothesis file each card's run pinned, as a plain mapping, so a
+    pin written under an older schema is still read. Nothing else about the pins narrows the
+    set: a re-pin under the same objective, a newer snapshot or a kanso upgrade is the same
+    search continuing, and a set that reset at each of them would price a search by its latest
+    stretch.
 
     A redundant card is one of these. The keep rule is asked before the signature, so a
     candidate that beat the best would have been kept whatever it resembled: it is a

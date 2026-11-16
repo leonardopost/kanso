@@ -275,6 +275,7 @@ def test_the_explorer_is_shown_the_research_and_only_ids_of_the_certification(
 
     [call] = [call for call in recorded.calls if call.task_class == "explore"]
     assert (call.tier, call.effort, call.max_output) == ("frontier", "high", 16384)
+    assert "Leave `prior_trials` out, even where the parent's file states it" in call.system
     stable = call.system.split("do not change while you work on demo_mr:\n", 1)[1]
     assert set(json.loads(stable)) == {"hypothesis.yaml", "program.md"}
     facts = json.loads(call.user)
@@ -465,6 +466,15 @@ def test_a_hypothesis_never_researched_has_nothing_to_explore_from(
         (
             {"hypothesis_yaml": candidate_yaml(derived_from=[])},
             f"derived_from does not name the parent {HYP_ID!r}",
+        ),
+        (
+            {
+                "hypothesis_yaml": candidate_yaml(
+                    prior_trials={"count": 27, "source": "evidence/grid.md", "sha256": "3f" * 32}
+                )
+            },
+            "hypothesis_yaml: carries prior_trials; a candidate's search is its parent's, "
+            "counted through `derived_from`, grids and cards alike, so leave it out",
         ),
         (
             {

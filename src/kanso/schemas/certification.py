@@ -70,6 +70,11 @@ class PlanInputs(KansoModel):
     construct_: ConstructRef = Field(alias="construct")
     data_availability: DataAvailability
     n_trials: int = Field(ge=0)
+    prior_trials: int = Field(default=0, ge=0)
+    """The settings the hypothesis's family declared tried outside kanso (`prior_trials` in
+    `hypothesis.yaml`, `kanso.research.records.prior_trials`) when the plan was made, beside
+    kanso's own cards in `n_trials`: the plan carries its search correction once the two
+    together reach two. 0 where none is declared, and on a plan made before kanso read them."""
     looks: int = Field(default=0, ge=0)
     """How many certificates the hypothesis's lineage had already made, when the plan was
     made, that read a window sharing a day with the certification window its subject is read

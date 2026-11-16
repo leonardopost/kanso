@@ -40,6 +40,7 @@ from kanso.schemas.base import (
     NonEmpty,
     Params,
     RemedyError,
+    Sha256,
     Versioned,
 )
 from kanso.schemas.duration import Duration, Resolution, is_duration, parse_duration
@@ -415,6 +416,42 @@ class SessionScope(KansoModel):
 
 MARKET_TYPES: Final = ("bar", "quote", "trade", "book")
 
+MAX_PRIOR_TRIALS: Final = 1_000_000_000
+"""The most settings a declared offline grid may state. The margin a search is priced by is
+the expected maximum of its draws, struck in floating point, which cannot be struck at all
+from about 6.6e15 draws on (`kanso.criteria.gates.search_margin`); a billion is past any grid
+run outside kanso and far short of that."""
+
+
+class PriorTrials(KansoModel):
+    """How many settings were tried outside kanso in the search that chose a hypothesis's
+    seed, and the workspace file that says so.
+
+    A seed chosen as the best of an offline grid is a selection the cards never saw: the grid's
+    settings are draws the maximum was taken over before the first card ran. `count` is that
+    many, the operator's statement and never kanso's inference, at most `MAX_PRIOR_TRIALS`,
+    and a whole number written as one: YAML's `true` or a quoted `"27"` is no count.
+    `source` names the evidence, a file inside the workspace named relative to its root, and
+    `sha256` the digest of its bytes, which `kanso hyp validate` and `kanso hyp add` check
+    where the hypothesis's pinned file does not already state the block; after that the pinned
+    file is read, never the evidence again. The count has no units, so it widens how many
+    draws a search is priced over and nothing a spread is read from
+    (`kanso.research.records.prior_trials`).
+    """
+
+    count: int = Field(ge=1, le=MAX_PRIOR_TRIALS, strict=True)
+    source: NonEmpty
+    sha256: Sha256
+
+    @property
+    def grid(self) -> str:
+        """What makes two blocks one grid: the digest of the evidence's bytes, and nothing of
+        the name `source` gives it. One file has names without end — `./`, a `..` the letters
+        read and one the filesystem reads after a symlinked directory, a symlink to it,
+        another case where the filesystem opens either — and one set of bytes, so one evidence
+        file, or a copy of it, is one grid however a block names it; give each grid its own."""
+        return self.sha256
+
 
 class Hypothesis(Versioned):
     """A falsifiable idea, its data requirements, its windows and its classification."""
@@ -454,6 +491,18 @@ class Hypothesis(Versioned):
     hypothesis it derives from, transitively. A hypothesis that names none counts its own.
     Operator-owned: classification neither reads nor writes it, and `kanso hyp validate`
     refuses a name the workspace has not registered."""
+    prior_trials: PriorTrials | None = None
+    """The offline grid that chose this hypothesis's seed. Its settings join every count a
+    search is priced by — `edge_per_trade`'s margin, the deflation gates' draws, the rule from
+    which a plan carries its correction and certification's refusal of a search it cannot
+    price — summed over the family `derived_from` names, a block two members state counted
+    once; a card's and a certificate's `n_trials` stay kanso's own cards. Operator-owned and
+    not scope: kanso never writes it, a re-pin that adds it keeps `best`, which the next
+    baseline judges under the wider margin, and classification decides nothing from it,
+    though the classifying model is shown it with the rest of the file. `kanso hyp validate`
+    refuses evidence outside the workspace or whose bytes hash otherwise — read where the
+    hypothesis's pinned file does not already state the block, and never again once it does,
+    by a re-pin or by `kanso classify` — and a block an ancestor already states."""
     required_constraints: list[ConstraintRef] | None = None
     construct_: ConstructRef | None = Field(default=None, alias="construct")
     objective: ObjectiveRef | None = None
