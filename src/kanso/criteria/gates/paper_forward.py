@@ -1,7 +1,8 @@
 """Whether a version has been on paper long enough, and behaved the way it said it would.
 
-This is the only gate between a composed strategy and a request for real capital, so it
-answers three questions at once and fails if any of them answers badly.
+Every plan carries it: it is one of the two paper gates between a composed strategy and a
+request for real capital, beside `forward_holdout`, and it answers three questions at once and
+fails if any of them answers badly.
 
 **Has enough of the stage's clock passed?** The plan names a floor two ways — an absolute
 minimum and a multiple of the hypothesis's own holding period — and the longer of the two is

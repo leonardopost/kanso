@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from typing import Any
 
 import pytest
@@ -200,6 +201,62 @@ def test_a_plan_naming_forward_holdout_without_a_parameter_marks_nothing(
     assert str(judged.skipped).startswith("its plan names forward_holdout, but min_fraction: ")
     assert str(judged.skipped).endswith("; run `kanso cert plan demo_mr --replan`")
     assert judged.gates == () and judged.actions == ()
+
+
+def test_a_plan_whose_only_paper_gate_is_the_forward_check_marks_nothing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The forward check stands beside `paper_forward`, never in its place: judged on the
+    forward window alone, this version would be `promotable` with no band, no duration and
+    its paper drawdown unread."""
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=[EMBARGO, FORWARD, LIVE_DRIFT]))
+    write_strategy(ws, store, version(value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert judged.skipped == "its plan lacks paper_forward; run `kanso cert plan demo_mr --replan`"
+    assert judged.gates == () and judged.actions == ()
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "paper"
+    assert inbox.unread(store) == []
+
+
+def test_a_version_already_promotable_keeps_its_mark_under_a_plan_without_the_forward_check(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A pass marks and never unmarks: a version marked `promotable` before `forward_holdout`
+    existed stays so under its old plan, and nothing is escalated about it again — which is
+    why the pages say only versions marked from this release on wait for the forward check."""
+    pin_hypothesis(store, hypothesis())
+    write_plan(ws, plan(gates=[EMBARGO, PAPER_FORWARD, LIVE_DRIFT]))
+    write_strategy(ws, store, version(state="promotable", value=RISING))
+    write_book(store, "paper", run=rising_run())
+    write_yaml(portfolio(paper=((STRATEGY_ID, 1),)), ws.path("portfolio.yaml"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    assert judged.skipped == (
+        "its plan lacks forward_holdout; run `kanso cert plan demo_mr --replan`"
+    )
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "promotable"
+    assert inbox.unread(store) == []
+
+
+def test_a_redeploy_adds_a_window_the_forward_check_reads_and_restarts_nothing(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A redeploy closes one window and opens another; the monitor joins every window the
+    version has closed on the stage since it first joined, so the forward check reads both."""
+    deploy(ws, store, run=rising_run(), value=RISING, se=RISING)
+    write_book(store, "paper", run=rising_run(start=date(2024, 3, 21)), session_id="session-2")
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    forward = next(result for result in judged.gates if result.id == "forward_holdout")
+    assert forward.evidence["window"] == ["2024-03-01", "2024-04-09"]
+    assert forward.evidence["periods"] == 40
 
 
 # --- the live stage -----------------------------------------------------------
@@ -483,6 +540,7 @@ def test_a_plan_naming_a_gate_this_build_cannot_run_records_it_as_skipped(
     unknown = [
         EMBARGO,
         {"id": "made_up_gate", "stage": "paper", "params": {}, "rationale": "from the future"},
+        PAPER_FORWARD,
         FORWARD,
         LIVE_DRIFT,
     ]

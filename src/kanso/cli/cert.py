@@ -36,8 +36,9 @@ agree for a card this kanso measured, and can differ for one an earlier kanso di
 `plan` also states, on a `forward` line, how long the paper stage's forward window runs
 before `forward_holdout` first judges at the `resolve` the planner chose, and the forward
 error after a year, from the same best card (`kanso.certify.plan.forward_note`): no version
-is `promotable` before that gate judges, so this is the shortest wait for live capital the
-plan implies. Like the power, it is stated for the operator and never shown to the planner.
+is marked `promotable` before that gate judges, so this is the shortest wait for live capital
+the plan implies for one not marked already. Like the power, it is stated for the operator
+and never shown to the planner.
 """
 
 from __future__ import annotations

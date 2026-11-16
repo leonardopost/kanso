@@ -4,7 +4,7 @@ zero and a stated fraction of it; failing, not skipping, until then."""
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from math import ceil, sqrt
 from statistics import NormalDist
 from typing import Any
@@ -21,8 +21,8 @@ from kanso.criteria.gates.forward_holdout import (
     NO_STAGE,
     gate,
 )
-from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
-from kanso.criteria.run import midnight_ns
+from kanso.criteria.objectives import net_edge_bps, wf_sharpe_net, wf_sharpe_vs_hold
+from kanso.criteria.run import NS_PER_DAY, CardRun, Trade, midnight_ns
 from kanso.schemas import GateResult
 from tests.monitor.builders import (
     DOCUMENT,
@@ -176,11 +176,15 @@ def test_the_evidence_states_its_power_on_every_pass() -> None:
     assert nothing.evidence["resolves"] == pytest.approx(RESOLVES * nothing.evidence["se_fwd"])
 
 
-def test_a_certified_error_of_zero_judges_at_once_and_states_no_power() -> None:
+def test_a_certified_error_of_zero_is_never_judged() -> None:
+    """An error of zero states no dispersion to resolve the value against — `cert plan` states
+    no power and no forward wait from one — so no window judges it, and it fails rather than
+    skipping, since a skip passes."""
     result = judge(se=0.0)
 
-    assert result.passed and result.evidence["se_fwd"] == 0.0
-    assert result.evidence["required_periods"] == 16
+    assert not result.passed and result.skipped is None
+    assert result.evidence["judged"] is False and result.evidence["se_fwd"] == 0.0
+    assert result.evidence["required_periods"] is None
     assert result.evidence["pass_at_zero"] is None
 
 
@@ -199,6 +203,74 @@ def test_only_the_days_from_the_forward_start_are_read() -> None:
     assert result.evidence["periods"] == 10
     assert result.evidence["realised"] == pytest.approx(
         wf_sharpe_net.compute(rising_run(days=10, start=date(2024, 3, 11)), 4)[0]
+    )
+
+
+def weekly(returns: tuple[float, ...], start: date) -> CardRun:
+    """A `1w` run cut one week after another from the midnight that opens it, each period
+    ending a nanosecond before the next week's midnight."""
+    daily = run_over(returns, start=start)
+    week = 7 * NS_PER_DAY
+    return replace(
+        daily,
+        window=(start, start + timedelta(days=7 * len(returns) - 1)),
+        period="1w",
+        period_ends_ns=tuple(
+            midnight_ns(start) + (index + 1) * week - 1 for index in range(len(returns))
+        ),
+    )
+
+
+def test_a_week_that_may_have_opened_before_the_forward_start_is_not_counted() -> None:
+    """The stage opened on Friday 2024-03-01, another version's forward start; this one's
+    opens on Monday the 4th. The stage's first week, [1st, 8th), ends after the 4th but three
+    of its days are not the forward window, so its loss is not this version's to answer for:
+    the gate reads the sixteen weeks after it."""
+    rising = tuple(150.0 if index % 2 == 0 else 50.0 for index in range(16))
+    run = weekly((-5_000.0, *rising), date(2024, 3, 1))
+
+    result = judge(run=run, value=1.0, hyp=forward_from(date(2024, 3, 4)))
+
+    assert result.evidence["periods"] == 16
+    assert result.evidence["window"][0] == "2024-03-10", "where a counted period can first end"
+    assert result.evidence["judged"] is True and result.evidence["realised"] > 0
+    assert result.passed
+
+
+def test_a_trade_opened_before_the_forward_start_is_not_counted() -> None:
+    """A position opened on Friday 2024-03-01 and closed inside this version's forward window
+    on the 5th earned most of its edge before that window opened: the per-trade edge is struck
+    from the trade made inside it alone."""
+    noon = NS_PER_DAY // 2
+    before = Trade(
+        midnight_ns(date(2024, 3, 1)) + noon,
+        midnight_ns(date(2024, 3, 5)) + noon,
+        "DEMO.XNAS",
+        100.0,
+        100.0,
+        120.0,
+        2_000.0,
+        1.0,
+        (),
+    )
+    inside = replace(
+        before,
+        opened_ns=midnight_ns(date(2024, 3, 12)) + noon,
+        closed_ns=midnight_ns(date(2024, 3, 13)) + noon,
+        avg_close=100.5,
+        pnl_net=50.0,
+    )
+    edge = hypothesis(
+        windows={**DOCUMENT["windows"], "forward": {"start": "2024-03-04"}},
+        objective={"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
+    )
+    run = run_over(tuple([10.0] * 20), trades=(before, inside))
+
+    result = judge(run=run, hyp=edge, value=1.0, se=0.01)
+
+    since = run.between(midnight_ns(date(2024, 3, 4)), run.bounds[1])
+    assert (
+        result.evidence["realised"] == net_edge_bps.compute(replace(since, trades=(inside,)), 4)[0]
     )
 
 

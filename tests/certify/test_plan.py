@@ -1010,7 +1010,7 @@ def forward_of(resolve: float) -> list[dict[str, Any]]:
 def test_a_plan_without_the_forward_check_is_retried_and_one_pinned_without_it_refused(
     ws: Workspace, store: StateStore
 ) -> None:
-    """No version is `promotable` before the forward window judges it, so every plan carries
+    """No version is marked `promotable` before the forward window judges it: every plan carries
     the gate; one pinned before it was required is refused, with the replan, where it is read."""
     script(ws, certify_plan=[answer(gates=gates_of(drop="forward_holdout")), answer()])
 
@@ -1082,3 +1082,18 @@ def test_the_forward_note_states_nothing_without_a_best_an_error_or_a_resolve(
     a_card(store, metric=1.0, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=0.0)
     assert forward_note(ws, store, written) is None, "an error of zero states no dispersion"
     assert forward_note(ws, store, unset) is None, "no resolve to state the wait at"
+
+
+def test_the_forward_note_never_states_a_wait_shorter_than_the_gate_judges_in(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A best a hundred errors clear would judge, on research's numbers alone, after under an
+    hour of forward window; the gate judges on no fewer periods than strike a band, one a fold
+    for the demo's per-trade edge, so the note states that floor: four one-day periods."""
+    a_card(store, metric=1.0, pinned=str(show(ws, store, HYP_ID).hypothesis_sha), se=0.01)
+    script(ws, certify_plan=[answer()])
+
+    note = forward_note(ws, store, plan(ws, store, HYP_ID))
+
+    assert note is not None and ws.config.research.folds == 4
+    assert (note.periods_to_judge, note.days_to_judge) == (4, 4.0)

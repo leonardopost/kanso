@@ -6,7 +6,8 @@ window — the one the paper stage replays from the hypothesis's `windows.forwar
 which no research or certification run may read (`kanso.nautilus.backtest.stage_of`) — of
 what composition certified, and asks it only once the window is long enough to say something.
 It is an extra check and never a replacement: a version reaches paper only from a
-certificate, and `paper_forward`, `embargoed_window` and every other gate are unchanged.
+certificate, every plan carries `paper_forward` beside it — both are required paper gates —
+and `embargoed_window` and every other gate are unchanged.
 
 **Judged once `resolve` forward errors span the certified value.** `expected` is
 composition's certified value scaled to the folds the window filled, and `se_fwd` the error
@@ -18,7 +19,8 @@ forward errors clear of zero. Before that it **fails**, with the periods the win
 the periods it needs and its forward error in the evidence. It does not skip, because a
 skip passes and the version would become `promotable` on `paper_forward` alone. A window too
 thin to strike a band — no fold that scores, or a Sharpe's fold under four periods — has not
-judged either, and a certified value at or below zero is one no window judges.
+judged either, and a certified value at or below zero is one no window judges, as is one
+certified with an error of zero, which states no dispersion to resolve it against.
 
 **Once judged it passes when `realised > max(0, min_fraction × expected)`.**
 
@@ -32,16 +34,22 @@ the time once judged, and the evidence says so in numbers.
 **`required_periods`** is the period count at which a window filled evenly first judges:
 `N × (resolve × se / value)²` from the certified value, its error and the `N` periods it was
 read over, since a mean over `M` such periods errs by `se × √(N / M)` — and at least the
-fewest that strike a band, one a fold or a Sharpe's four. A Sharpe's exact small-sample
-weight makes the real count a little longer at a few periods a fold; `None` for a certified
-value at or below zero.
+fewest that strike a band, one a fold or a Sharpe's four. A Sharpe's fold weighs its exact
+small-sample variance, heavier than `1/m` — twice it at five periods — so a Sharpe's window
+judges about two or three periods a fold after this count; `None` for a certified value at or
+below zero or an error of zero.
 
 **Only the forward window counts.** A stage resumes at its clock's day, or at the earliest
 forward start of what it holds, so a version can join a stage whose clock is before its own
 `windows.forward.start`. The run is therefore read from midnight of that day on
-(`CardRun.between`), and a window that holds nothing after it holds no period. Like
-`paper_forward` it reads the window since the version's current join, so a redeploy
-restarts it.
+(`CardRun.between`), and a window that holds nothing after it holds no period. A period
+belongs to the span holding its end, so where the run opened before that midnight a period
+that may have opened before it is not counted either: under a return period that divides a
+day none can, since every window is cut from a midnight, and under any other — a week — the
+first period that ends less than a period after it is dropped, whether or not it straddled. A trade
+opened before it is not counted, wherever it closed. The run is every window the version has
+closed on the stage since it first joined, joined into one (`kanso.monitor.realised`): a
+redeploy adds a window and restarts nothing, here as for `paper_forward`.
 
 It skips, saying so, where `paper_forward` does: no parameters chosen, no stage record, no
 expectation, no objective, or an expectation that records no error or period count.
@@ -49,6 +57,7 @@ expectation, no objective, or an expectation that records no error or period cou
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from math import ceil
 from statistics import NormalDist
@@ -58,7 +67,7 @@ from kanso.certify.power import RESOLVES
 from kanso.criteria.band import SHARPE_FOLD, dispersion, prediction
 from kanso.criteria.context import Gate, GateContext, number, skipped, verdict
 from kanso.criteria.objectives import REGISTRY
-from kanso.criteria.run import CardRun, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, CardRun, midnight_ns
 from kanso.monitor.stage import StageRecord
 from kanso.schemas import GateResult
 
@@ -99,7 +108,7 @@ class _ForwardHoldout:
         )
         expected = 0.0 if band is None else band.expected
         se_fwd = None if band is None else band.forward
-        judged = se_fwd is not None and expected > 0 and expected >= resolve * se_fwd
+        judged = se_fwd is not None and se_fwd > 0 and expected > 0 and expected >= resolve * se_fwd
         bar = max(0.0, fraction * expected)
         realised = (
             None
@@ -134,18 +143,25 @@ class _ForwardHoldout:
 
 
 def _forward(run: CardRun | None, start: date) -> CardRun | None:
-    """`run` from midnight of `start` on, or `None` when it holds nothing after it."""
+    """`run` from midnight of `start` on, or `None` when it holds nothing after it: no period
+    that may have opened before that midnight, and no trade that did."""
     if run is None:
         return None
     opens, closes = run.bounds
-    since = max(opens, midnight_ns(start))
-    return None if since >= closes else run.between(since, closes)
+    cut = midnight_ns(start)
+    since = opens if cut <= opens else cut
+    if since > opens and NS_PER_DAY % run.period_ns:
+        since += run.period_ns - 1
+    if since >= closes:
+        return None
+    kept = run.between(since, closes)
+    return replace(kept, trades=tuple(trade for trade in kept.trades if trade.opened_ns >= cut))
 
 
 def _required(value: float, se: float, periods: float, resolve: float, fewest: int) -> int | None:
     """The periods an evenly filled window needs before it judges; `None` for a certified
-    value at or below zero, which no window judges."""
-    if value <= 0:
+    value at or below zero, or an error of zero, which no window judges."""
+    if value <= 0 or se <= 0:
         return None
     return max(ceil(periods * (resolve * se / value) ** 2), fewest)
 

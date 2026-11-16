@@ -43,9 +43,10 @@ neither offered to a planner nor required of a plan. No required gate is in that
 any more; `tests/criteria/test_pending_required.py` is what keeps it that way.
 """
 
-REQUIRED_PAPER_GATES = ("forward_holdout",)
-"""The paper gate every plan is held to: no version is `promotable` before the forward window
-has judged it."""
+REQUIRED_PAPER_GATES = ("forward_holdout", "paper_forward")
+"""The paper gates every plan is held to: no version is marked `promotable` before the forward
+window has judged it, and the forward check stands beside `paper_forward`'s band, duration and
+risk limits rather than in their place."""
 
 PLAN: dict[str, Any] = {
     "schema": 1,
@@ -448,6 +449,21 @@ def test_excluding_a_required_gate_is_refused() -> None:
             make_hyp(),
             FOLDS,
         )
+
+
+def test_the_forward_check_never_stands_in_for_paper_forward() -> None:
+    """Until `forward_holdout`, `paper_forward` was the toolbox's only paper gate, so a plan
+    reaching the paper stage carried it. A plan whose only paper gate is the forward check —
+    `paper_forward` left out, or excluded by name — would judge a paper version on the
+    forward window alone, with no band, no duration and no drawdown limit."""
+    alone = [g for g in PLAN["gates"] if g["id"] != "paper_forward"]
+    excluded = [*PLAN["excluded"], {"id": "paper_forward", "reason": "the forward check reads it"}]
+
+    for shape in (plan(gates=alone), plan(gates=alone, excluded=excluded)):
+        with pytest.raises(ValidationError, match="paper_forward is a structural invariant"):
+            validate_plan(shape, make_hyp(), FOLDS)
+    with pytest.raises(ValidationError, match="excluded.paper_forward: is required"):
+        validate_plan(plan(gates=alone, excluded=excluded), make_hyp(), FOLDS)
 
 
 def test_excluding_something_that_is_not_a_gate_is_refused() -> None:

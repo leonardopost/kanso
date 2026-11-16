@@ -2572,6 +2572,7 @@ short paper window you meant is a short paper window you get.
 ```
 $ kanso cert plan demo_mr                 # the gates, the exclusions and the last two lines are elided
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+forward    forward_holdout first judges after about 4 days (5 periods of 1d) at resolve 1, from research's estimate · se 1.065 after a year
 warning    paper window 5d against a 145d certification window · the paper band is about 5x as wide as the certification value's own, so a version that has lost its edge can land inside it · raise min_duration or horizon_mult
 ```
 
@@ -2947,8 +2948,9 @@ or, with no clock, at the earliest `windows.forward.start` of what it holds, and
 certification run may read a forward window. So what a version realises on paper is the only
 evidence kanso holds from a window no search and no certification looked at, and
 `forward_holdout` judges it before the version can be promotable (Promotion and demotion),
-counting only the days from that version's own forward start: a version that joins a stage
-whose clock is earlier is not credited with the days before its window opened.
+counting only what it did from that version's own forward start: a version that joins a stage
+whose clock is earlier is not credited with the days before its window opened, nor with a
+trade that opened before it or a period that may have.
 
 A stage node restarts flat, and a version whose hypothesis declares a `warmup` re-warms on
 every restart: the sessions before the window on the first, and on a restart the sessions
@@ -3087,8 +3089,8 @@ happens without a person: classification, research, certification, composition, 
 deployment, demotion, halting a stage. Moving a version onto real capital does not.
 
 What moves a paper version to `promotable` is every paper gate of its plan passing, at least
-one of them having judged, and every plan carries two that do. `paper_forward` is strict
-both ways: the version must have been on the stage for the longer of the plan's minimum
+one of them having judged, and every plan carries two, both required: `paper_forward` and
+`forward_holdout`. `paper_forward` is strict both ways: the version must have been on the stage for the longer of the plan's minimum
 duration and its horizon multiple — a shorter window is a `fail`, not a skip — and the
 objective it realised must fall **inside** the band struck for the paper window it realised
 it over, above the band as much a fail as below it, because a stage that out-performs its
@@ -3156,13 +3158,18 @@ the certified value stands one forward error clear of zero when the gate first j
 that the gate **fails** — it does not skip, because a skip passes and the version would be
 promotable on `paper_forward` alone — and its evidence carries the window's `periods`, the
 `required_periods` an evenly filled window needs, `N × (resolve × se / value)²` and at least
-the fewest that strike a band, and `se_fwd`. Every pass states the window's power beside it:
-`resolves = 2.49 × se_fwd`, the true value a one-sided five-percent test detects four times in
-five, `pass_at_expected = Φ((expected − bar) / se_fwd)` and `pass_at_zero = Φ(−bar / se_fwd)`;
-at a `min_fraction` of zero a version with no edge at all passes half the time once judged, and
-the evidence says so in numbers. It reads only the days from midnight of the hypothesis's
-`windows.forward.start` on, and like `paper_forward` the window since the version's current
-join, so a redeploy restarts it. With no stage record, no expectation, or an expectation that
+the fewest that strike a band, and `se_fwd`. A Sharpe's fold weighs more than `1/m`, so a
+Sharpe's window judges about two or three periods a fold after `required_periods`; and a value
+certified with an error of zero, which states no dispersion, is one no window judges. Every
+pass states the window's power beside it: `resolves = 2.49 × se_fwd`, the true value a
+one-sided five-percent test detects four times in five,
+`pass_at_expected = Φ((expected − bar) / se_fwd)` and `pass_at_zero = Φ(−bar / se_fwd)`; at a
+`min_fraction` of zero a version with no edge at all passes half the time once judged, and
+the evidence says so in numbers. It reads only what the version did from midnight of the
+hypothesis's `windows.forward.start` on — no trade opened before it, and, under a return period
+that does not divide a day on a stage that opened before it, not the first period that may
+have — over every window the version has closed on the stage since it first joined: a redeploy
+adds a window and restarts nothing. With no stage record, no expectation, or an expectation that
 records no error or period count, it skips and says so, as `paper_forward` does.
 
 **What it costs is time, and at a low trade rate a great deal of it.** A mean's error falls as
@@ -3175,10 +3182,11 @@ it resolves 107, and the research mean is 0.93 of an error from zero, on five to
 trades. At `resolve` two it waits about 240 weeks and at three about 540, and a certified value
 half the research one multiplies each by four — and research's value is the optimistic one,
 since selection inflated it. Since `promote --live` takes only a `promotable` version, no
-version in any workspace reaches live capital before `forward_holdout` has judged it. The
-planner sets that wait when it chooses `resolve`, blind to every metric; `kanso cert plan`
-states it for the operator on its `forward` line, from the best card, and the planner never
-sees it.
+version marked `promotable` from this release on reaches live capital before `forward_holdout`
+has judged it; one marked before it stays `promotable` (below), and `promote --live` takes it.
+The planner sets that wait when it chooses `resolve`, blind to every metric; `kanso cert plan`
+states it for the operator on its `forward` line, from the best card — never fewer periods than
+the gate judges on, one a fold or a Sharpe's four — and the planner never sees it.
 
 **A plan pinned before `forward_holdout` was required promotes nothing.** The monitor reads
 the pinned plan as written, and nothing re-checks it against the toolbox between a `cert run`
@@ -3286,7 +3294,7 @@ nothing further: whether a model's idea deserves a lane is yours to say.
 ```
 $ kanso inbox
 unread     1 escalation(s)
-e33c9656 promotable    demo_mr@1           demo_mr@1 passed every paper gate (paper_forward) and is ready for real capital
+6047d3cd promotable     demo_mr@1           demo_mr@1 passed every paper gate (paper_forward, forward_holdout) and is ready for real capital
          kanso strat show demo_mr@1 · kanso promote demo_mr@1 --live --as <your name>
 file       /…/escalations/inbox.md
 ```

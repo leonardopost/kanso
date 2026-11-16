@@ -192,7 +192,10 @@ def test_the_plan_states_when_the_forward_window_first_judges(
 ) -> None:
     """From the best card's metric and error, at the `resolve` the planner chose: how long the
     forward window runs before `forward_holdout` judges, and its error after a year. No
-    version is `promotable` before that, so it is the shortest wait for live capital."""
+    version is marked `promotable` before that, so it is the shortest wait for live capital.
+    This best is so many errors clear that research alone would say under a day; the gate
+    judges on no fewer periods than strike a band, one in each of four folds, so the line
+    says four."""
     result = at(runner, researched, "cert", "plan", HYP_ID)
     document = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
     with StateStore(researched / "state.db") as store:
@@ -202,8 +205,10 @@ def test_the_plan_states_when_the_forward_window_first_judges(
     forward = document["forward"]
     assert best.metric > 0 and best.metric_se > 0
     assert (forward["resolve"], forward["period"]) == (1.0, "1d")
-    assert forward["days_to_judge"] == pytest.approx(days * (best.metric_se / best.metric) ** 2)
-    assert forward["periods_to_judge"] == ceil(forward["days_to_judge"])
+    raw, fewest = days * (best.metric_se / best.metric) ** 2, 4
+    assert raw < fewest
+    assert forward["days_to_judge"] == pytest.approx(max(raw, fewest))
+    assert forward["periods_to_judge"] == max(ceil(raw), fewest)
     assert forward["se_after_one_year"] == pytest.approx(best.metric_se * sqrt(days / 365))
     assert "forward    forward_holdout first judges after about" in result.stdout
     assert "periods of 1d) at resolve 1" in result.stdout

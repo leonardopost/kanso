@@ -1342,6 +1342,34 @@ def test_the_pages_state_the_forward_check_and_every_key_its_evidence_records() 
         assert f"`{key}`" in monitoring, key
 
 
+def test_the_pages_say_what_the_forward_check_reads_and_what_it_leaves_promotable() -> None:
+    """The monitor joins every window a version closed on a stage (`kanso.monitor.realised`),
+    so a redeploy restarts nothing; a pass marks and never unmarks, so a version marked
+    before the gate existed stays `promotable`; both paper gates are required; and the demo's
+    `cert plan` and `inbox` transcripts carry what this kanso prints for them."""
+    concepts, cli = page("concepts.md"), page("cli.md")
+    promotion = prose(section(concepts, "Promotion and demotion"))
+    monitoring = prose(section(cli, "Monitoring"))
+    promote = prose(next(line for line in cli.splitlines() if line.startswith("| `kanso promote")))
+
+    for text in (promotion, monitoring):
+        assert "a redeploy adds a window and restarts nothing" in text
+        assert "a redeploy restarts it" not in text
+    assert "every plan carries two, both required: `paper_forward` and `forward_holdout`" in (
+        promotion
+    )
+    assert "one marked before it stays `promotable` (below), and `promote --live` takes it" in (
+        promotion
+    )
+    assert "one already `promotable` before this release stays so, and this command takes it" in (
+        promote
+    )
+    plan_block = concepts[concepts.index("$ kanso cert plan demo_mr ") :].split("```")[0]
+    lines = [line.split()[0] for line in plan_block.splitlines()[1:] if line.strip()]
+    assert lines == ["power", "forward", "warning"], lines
+    assert "passed every paper gate (paper_forward, forward_holdout)" in concepts
+
+
 def test_the_concepts_page_says_the_venue_holds_every_point() -> None:
     """The engine's top-of-book venue ignored a quote or a print stamped before its book's
     last update while the sleeve was handed it; the page says the venue now applies it, and

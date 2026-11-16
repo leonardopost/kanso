@@ -80,7 +80,9 @@ from kanso.certify.looks import looks as looks_at
 from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_days, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
+from kanso.criteria.band import SHARPE_FOLD
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
+from kanso.criteria.objectives import REGISTRY
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import Registration, show
@@ -97,7 +99,6 @@ from kanso.schemas import (
     PlannedGate,
     Power,
     Span,
-    Windows,
     load_yaml,
     parse_duration,
     parse_yaml,
@@ -492,7 +493,7 @@ def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
     measured = _best_measured(store, pinned.hyp_id)
     if measured is None:
         return None
-    metric, metric_se, windows = measured
+    metric, metric_se, windows = measured[0], measured[1], measured[2].windows
     return power(
         metric,
         metric_se,
@@ -502,18 +503,18 @@ def power_of(store: StateStore, pinned: CertificationPlan) -> Power | None:
     )
 
 
-def _best_measured(store: StateStore, hyp_id: str) -> tuple[float, float, Windows] | None:
-    """The best card's metric and error, and the windows of the file its run pinned; `None`
-    while the hypothesis has no best card."""
+def _best_measured(store: StateStore, hyp_id: str) -> tuple[float, float, Hypothesis] | None:
+    """The best card's metric and error, and the file its run pinned; `None` while the
+    hypothesis has no best card."""
     best, _ = records.best_of(store, hyp_id)
     if best is None:
         return None
     card = next(c for c in reversed(records.cards_of(store, hyp_id)) if c.strategy_sha == best)
     run = next(run for run in records.runs_of(store, hyp_id) if run.run_id == card.run_id)
-    windows = parse_yaml(
+    pinned = parse_yaml(
         Hypothesis, store.get_blob(run.hypothesis_sha).decode("utf-8"), f"{hyp_id} pin"
-    ).windows
-    return card.metric, card.metric_se, windows
+    )
+    return card.metric, card.metric_se, pinned
 
 
 # -- when the forward window first judges -------------------------------------
@@ -555,9 +556,11 @@ def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) ->
     stands `resolve` of them clear of zero, at `D = R × (resolve × se / metric)²`. Stated from
     research, which selection inflated, so the wait it states is the shortest: composition's
     certified value, which the gate reads, is usually smaller, and the wait grows as the
-    square of the ratio. Never shown to the planner, which chose `resolve` blind to it. `None`
-    while the hypothesis has no best card, when its error is zero, or when the plan sets no
-    `resolve` for `forward_holdout`.
+    square of the ratio. Never shorter than the fewest periods the gate can judge on — one a
+    fold, a Sharpe's four (`kanso.criteria.gates.forward_holdout`) — whatever research's numbers
+    say. Never shown to the planner, which chose `resolve` blind to it. `None` while the
+    hypothesis has no best card, when its error is zero, or when the plan sets no `resolve`
+    for `forward_holdout`.
     """
     measured = _best_measured(store, pinned.hyp_id)
     resolve = next(
@@ -570,16 +573,20 @@ def forward_note(ws: Workspace, store: StateStore, pinned: CertificationPlan) ->
     )
     if measured is None or measured[1] <= 0 or not _number(resolve):
         return None
-    metric, metric_se, windows = measured
+    metric, metric_se, hyp = measured
+    windows = hyp.windows
     research = float(window_days((windows.research.start, windows.research.end)))
     period = ws.config.research.return_period
-    days = None if metric <= 0 else research * (float(resolve) * metric_se / metric) ** 2
     period_days = parse_duration(period, "return_period").total_seconds() / DAY_S
+    objective = None if hyp.objective is None else REGISTRY.get(hyp.objective.id)
+    sharpe = objective is not None and objective.statistic == "sharpe"
+    fewest = (SHARPE_FOLD if sharpe else 1) * ws.config.research.folds
+    days = None if metric <= 0 else research * (float(resolve) * metric_se / metric) ** 2
     return Forward(
         resolve=float(resolve),
         period=period,
-        days_to_judge=days,
-        periods_to_judge=None if days is None else ceil(days / period_days),
+        days_to_judge=None if days is None else max(days, fewest * period_days),
+        periods_to_judge=None if days is None else max(ceil(days / period_days), fewest),
         se_after_one_year=metric_se * sqrt(research / YEAR_DAYS),
     )
 
