@@ -141,8 +141,15 @@ CERT_GATES: list[dict[str, Any]] = [
         "params": {"ts_ns": 0},
         "rationale": "required; the deployed code path must be the researched one",
     },
+    {
+        "id": "entry_timing",
+        "stage": "cert",
+        "params": {"max_p": 0.1},
+        "rationale": "required for a Sharpe: timing told from what holding the series earns",
+    },
 ]
-"""The three cert gates every plan must carry, since all three are structural invariants."""
+"""The three cert gates every plan must carry, since all three are structural invariants, and
+the one every plan for the demo's Sharpe carries beside them."""
 
 BOOTSTRAP_GATE: dict[str, Any] = {
     "id": "bootstrap",

@@ -6,6 +6,13 @@ to trade: a strategy that buys the day after a fall and sells the day after a ri
 about ten percent a cycle, which is far above any cost model, so "improves" and "does not
 improve" are facts about the loop rather than accidents of the data.
 
+One peak is lower: the first of the certification window, on 2024-02-08, closes at 10.75.
+A series that repeats exactly earns a trade shifted by a whole cycle what it earned where it
+was, so `entry_timing` could never tell the reverting sleeve's timing from the same trades a
+cycle later; with that cycle shallower, every such shift lands one trade on it. No strategy
+here has the history to trade that cycle unless it is warmed, so what an unwarmed one makes
+in the certification window is what it always made.
+
 Every instrument is `manual`, so nothing here resolves through a vendor and the suite is
 green with every credential unset.
 """
@@ -15,7 +22,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -336,12 +343,18 @@ def price(index: int) -> float:
     return 10.0 + 0.5 * min(index % CYCLE, CYCLE - index % CYCLE)
 
 
+SHALLOW = (date(2024, 2, 8), 10.75)
+"""The certification window's first peak, and where it closes: below every other peak, so a
+circular shift by whole cycles is not a tie (the module docstring says why)."""
+
+
 def bars(window: tuple[date, date]) -> list[Bar]:
     """One bar per calendar day of the window, published a second after each close."""
     made: list[Bar] = []
     for index in range((window[1] - window[0]).days + 1):
         ts_event = midnight_ns(window[0]) + index * 86_400 * SECOND_NS + CLOSE_NS
-        close = price(index)
+        day, shallow = SHALLOW
+        close = shallow if window[0] + timedelta(days=index) == day else price(index)
         made.append(
             Bar(
                 bar_type(),

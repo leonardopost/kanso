@@ -51,7 +51,7 @@ from kanso.state import StateStore
 from kanso.workspace import Workspace, find, init
 from tests.research.conftest import DOCUMENT, ENVELOPE, classify
 
-from .test_run import CERT_GATES, a_card, venue_model, write_plan
+from .test_run import REQUIRED_GATES, a_card, venue_model, write_plan
 
 HYP_ID = "dense_follow"
 NAME = "DENSE.XNAS"
@@ -114,7 +114,8 @@ DOC: dict[str, Any] = {
     "id": HYP_ID,
     "universe": [NAME],
     "resolution": "tick",
-    "horizon": "1d",
+    "horizon": "1h",
+    "objective": {"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 0.5}},
     "data_requirements": ["quote"],
     "costs": {**DOCUMENT["costs"], "latency_ms": 1},
     "windows": {
@@ -123,6 +124,9 @@ DOC: dict[str, Any] = {
         "forward": {"start": date(2024, 2, 1)},
     },
 }
+"""The sleeve trades a sine of an hour's period inside the session, so it is scored on its net
+edge per trade over an hour's horizon: eight sessions of whole-session shifts could resolve no
+`entry_timing` a Sharpe would carry, and what is measured here is the runs, not the timing."""
 
 PLATEAU = {
     "id": "param_plateau",
@@ -276,7 +280,7 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
     held = window_held(ws)
     classify(ws, store, DOC, SOURCE)
     a_card(ws, store, SOURCE, hyp_id=HYP_ID, document=DOC)
-    write_plan(ws, HYP_ID, gates=[*CERT_GATES, PLATEAU])
+    write_plan(ws, HYP_ID, gates=[*REQUIRED_GATES, PLATEAU])
     monkeypatch.setattr(backtest, "READ_POINTS", READ_POINTS)
     monkeypatch.setattr(backtest, "CHUNK_POINTS", CHUNK_POINTS)
     # The replay streams its window in the same chunks and is held to them by its own

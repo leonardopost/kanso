@@ -66,14 +66,23 @@ Only the subject's own parameters can move — a sleeve's own configuration fiel
 construct parameters an attached modifier was composed with — never the capital, the risk
 limits or anything else the hypothesis injects.
 
-**A failed window spares the perturbation backtests.** The gates are evidence for a pass,
-and a certificate is the conjunction of the gates that judged, so once `embargoed_window` —
-required of every plan — has judged the subject and refused it, nothing `param_plateau`
-could score changes the verdict. The plateau is therefore judged after every other cert
-gate and, when the window gate failed, recorded as skipped with the reason instead of
-running a backtest per parameter; the certificate lists its gates in the plan's order
-regardless. A window gate that judged nothing spares nothing: a skip is an absence of
-evidence, not a refusal, and the plateau then refuses a loss itself before moving anything.
+**A gate that moves the trades in time reads the window once more.** `entry_timing` prices
+the subject's trades at other sessions (`kanso.criteria.timing`), at prices the run does not
+carry, so it is handed a reader that reads the certification window again, a chunk at a time
+as every run reads it, and folds from each chunk only the readings at the instruments and New
+York times of day the trades were struck at — a number per key per session, with the split
+schedules the window's definitions carry — and nothing else of the window. No engine runs: the
+read is the whole cost, and a plan that does not name the gate never pays it.
+
+**A failed window spares the perturbation backtests, and that read.** The gates are evidence
+for a pass, and a certificate is the conjunction of the gates that judged, so once
+`embargoed_window` — required of every plan — has judged the subject and refused it, nothing
+`param_plateau` could score changes the verdict, nor anything `entry_timing` could price. Those
+gates are therefore judged after every other cert gate and, when the window gate failed,
+recorded as skipped with the reason instead of running a backtest per parameter or reading the
+window again; the certificate lists its gates in the plan's order regardless. A window gate
+that judged nothing spares nothing: a skip is an absence of evidence, not a refusal, and the
+plateau then refuses a loss itself before moving anything.
 
 **A search is priced in full, or no certificate is written.** The deflation a plan must carry
 from the second card takes its expected maximum over every card of the hypothesis's family
@@ -143,6 +152,7 @@ from kanso.criteria.digest import session_edge
 from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_deflation
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
+from kanso.criteria.timing import BAR, PRINT, QUOTE, Fold, PriceKey, SessionPrices
 from kanso.data.manifest import Manifest, catalog_path, manifests
 from kanso.data.publication import NANOS_PER_SECOND, PUBLICATION_RULES
 from kanso.data.snapshot import Snapshot
@@ -190,6 +200,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "CERTIFIABLE",
     "CERT_STAGE",
+    "TIMING_SPARED",
     "UNIMPLEMENTED",
     "WINDOW_FAILED",
     "Measured",
@@ -247,6 +258,21 @@ WINDOW_FAILED: Final = (
     "re-run backtests were not made: a plateau or a slower route around a result the embargo "
     "refused is not evidence"
 )
+
+TIMING: Final = "entry_timing"
+"""The cert gate that reads the certification window again, to price the subject's trades at
+other sessions; judged with the plateau, and spared with it."""
+
+LAST: Final = RERUNNING | {TIMING}
+"""The cert gates judged after every cheap verdict is in hand: the ones that re-run the subject
+and the one that reads its window again, each spared once the window gate has refused it."""
+
+TIMING_SPARED: Final = (
+    "embargoed_window failed and a certificate whose window failed cannot pass, so the window "
+    "was not read again: the timing of a result the embargo refused is not evidence"
+)
+"""Why `entry_timing` is skipped after a failed window, in words of its own: it re-runs no
+backtest, so `WINDOW_FAILED` would say what it did not spare."""
 
 _HEX: Final = frozenset("0123456789abcdef")
 
@@ -1310,6 +1336,43 @@ class _Evidence:
         return volumes
 
 
+def _session_prices(subject: Subject, keys: Sequence[PriceKey]) -> SessionPrices:
+    """The subject's certification window read once more and folded to `keys`.
+
+    Read as the subject's own run read it (`backtest.window_chunks`), a chunk at a time, each
+    chunk folded and let go before the next is read, so this holds a number per key per session
+    and one chunk of the window. A point of a New York date outside the window's — the prefix a
+    warmed subject is fed, the evening before its first date — is folded into no session.
+    A bar is read at its close and a print at its price; a quote keeps its bid and ask. The
+    split schedules are those of the definitions the window was resolved with, which the moved
+    trades are restated by and which nothing a gate is handed carries otherwise.
+    """
+    from nautilus_trader.model.data import Bar, QuoteTick, TradeTick
+
+    request = _request(subject, subject.certification)
+    instruments, chunks = backtest.window_chunks(request, subject.catalog)
+    fold = Fold(keys, subject.certification, backtest.schedules_of(instruments))
+    for chunk in chunks:
+        for group in chunk:
+            for point in group:
+                if isinstance(point, Bar):
+                    close = float(point.close)
+                    name = str(point.bar_type.instrument_id)
+                    fold.take(BAR, name, point.ts_event, close, close)
+                elif isinstance(point, TradeTick):
+                    price = float(point.price)
+                    fold.take(PRINT, str(point.instrument_id), point.ts_event, price, price)
+                elif isinstance(point, QuoteTick):
+                    fold.take(
+                        QUOTE,
+                        str(point.instrument_id),
+                        point.ts_event,
+                        float(point.bid_price),
+                        float(point.ask_price),
+                    )
+    return fold.prices()
+
+
 def _dataset_facts(
     ws: Workspace, snapshot: Snapshot, lags: Mapping[tuple[str, str], float]
 ) -> tuple[DatasetFacts, ...]:
@@ -1457,6 +1520,10 @@ def _judge(
         request = _request(subject, subject.certification, costs=costs)
         return _ran(subject, lambda: backtest.run(request, subject.catalog))
 
+    def session_prices(keys: Sequence[PriceKey]) -> SessionPrices:
+        """The certification window read again, folded to the readings at these keys."""
+        return _session_prices(subject, keys)
+
     registry = gates()
     verdicts: dict[str, EvaluatedGate] = {}
     for gate in _perturbation_last(planned):
@@ -1464,8 +1531,10 @@ def _judge(
         if found is None:
             verdicts[gate.id] = _skipped(gate, UNIMPLEMENTED)
             continue
-        if gate.id in RERUNNING and _window_failed(verdicts):
-            verdicts[gate.id] = _skipped(gate, WINDOW_FAILED)
+        if gate.id in LAST and _window_failed(verdicts):
+            verdicts[gate.id] = _skipped(
+                gate, WINDOW_FAILED if gate.id in RERUNNING else TIMING_SPARED
+            )
             continue
         context = GateContext(
             hyp=subject.hyp,
@@ -1489,6 +1558,7 @@ def _judge(
             tunable=parameters,
             rerun=rerun,
             rerun_costs=rerun_costs,
+            session_prices=session_prices,
             session=compared,
         )
         verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
@@ -1523,13 +1593,14 @@ def net_per_trade(run: CardRun) -> NetPerTrade | None:
 
 
 def _perturbation_last(planned: Sequence[PlannedGate]) -> list[PlannedGate]:
-    """The plan's cert gates with the ones that cost a backtest per move last.
+    """The plan's cert gates with the ones that cost a backtest per move, or a read of the
+    window, last.
 
     Every cheap verdict is then in hand before the expensive ones are paid for, the window
     gate's among them, which is the one that decides whether they are paid for at all. Only
     the judging is reordered: the certificate lists the gates in the plan's order.
     """
-    return sorted(planned, key=lambda gate: gate.id in RERUNNING)
+    return sorted(planned, key=lambda gate: gate.id in LAST)
 
 
 def _window_failed(verdicts: Mapping[str, EvaluatedGate]) -> bool:

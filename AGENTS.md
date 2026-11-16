@@ -68,7 +68,11 @@ way — and it charges nothing because kanso's resolved instruments leave their 
 taker rates at zero, not because the venue is configured fee-free, so an instrument that
 arrives with a non-zero rate double-counts silently. A screen's hurdle is the same arithmetic
 applied to no fill (`kanso.screen.hurdle`): it strikes a round trip with `fill_cost` on the
-resolved venue model, sets it beside a gross move, and books nothing.
+resolved venue model, sets it beside a gross move, and books nothing. So is a certificate's
+timing null (`kanso.criteria.timing`): it charges every fill of the subject's trades, moved to
+other sessions, with `fill_cost` on the subject's venue model as the runner charges a fill
+struck at that close — never a maker's, touched only where the quote says so — and books
+nothing either.
 
 **The embargo is code.** A backtest request may name only a window the hypothesis declares,
 and the card path accepts only the research window. A card runs in a child process with no
@@ -124,6 +128,12 @@ The objective itself is the classifying model's to name, from the set the toolbo
 that a contribution, which rewards trading less once every trade loses, is scored only
 beside `edge_per_trade` with both its thresholds set: the gate's library file declares it
 `required_for` both contributions, and classification and `hyp validate` refuse it missing.
+A third is that an absolute objective's timing is told from its exposure: `entry_timing`, a
+cert gate, is declared `required_for` `wf_contribution_bps` and `wf_sharpe_net`, so every plan
+for a hypothesis scored on one carries it with `max_p` set and never excludes it — refused by
+the planner's own check and again by `cert plan` and `cert run` on a plan already pinned —
+and `max_p` stays the planner's. A cert gate that guards an objective is a plan's to carry and
+never one of a hypothesis's card gates (`required_card_gates` reads the card stage alone).
 
 **Runtime dependencies are exhaustive.** `nautilus_trader`, `pydantic`, `typer`, `pyyaml`,
 `httpx`, `numpy`, and the standard library. `pyarrow`, `pandas` and `msgspec` are reachable

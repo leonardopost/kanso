@@ -34,6 +34,13 @@ cannot run would pin a proof that can never be produced. It is, for the same rea
 required of a plan written by this version. Paper and live gates are run by the stages
 rather than here, so they are offered whether or not their implementations exist yet.
 
+**Timing is told from exposure, whatever the planner thinks.** A hypothesis scored on an
+objective a cert gate is declared `required_for` — `entry_timing` on `wf_contribution_bps` and
+`wf_sharpe_net` — has that gate in every plan, with every parameter set and never excluded: an
+absolute objective credits a drift held as if it were timed, and the gate that refuses that is
+part of what the objective means. The planner is told so in the invariants and refused when it
+forgets; its `max_p` is still the planner's answer.
+
 **A search is corrected for, whatever the planner thinks.** Once a hypothesis's `n_trials`
 — every card it has — reaches two, a plan includes the gate the toolbox says `deflates` its
 objective, with its threshold set: the subject a certificate judges is then the best of a
@@ -79,7 +86,7 @@ from kanso.certify.looks import looks as looks_at
 from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_params
 from kanso.criteria import plan_complaints, plannable, resolve_bound
-from kanso.criteria.library import SEARCH_TRIALS, deflation_gate
+from kanso.criteria.library import SEARCH_TRIALS, deflation_gate, required_cert_gates
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
 from kanso.hyp import Registration, show
@@ -363,7 +370,10 @@ def _finite(value: float) -> float | None:
 def _invariants(hyp: Hypothesis) -> dict[str, Any]:
     """The structural invariants, as the facts they are, rather than as prose to infer.
 
-    The search correction is stated as a rule over `n_trials` rather than folded into
+    A cert gate the toolbox declares `required_for` the hypothesis's objective — `entry_timing`
+    on a contribution or a Sharpe — is folded into `required_gates` and stated as a rule
+    beside it, since whether it is required follows from the objective alone. The search
+    correction is stated as a rule over `n_trials` rather than folded into
     `required_gates`: the gate it names follows from the hypothesis, which is the cached
     prefix, and whether it is required follows from the trial count, which is not. What its
     threshold bounds across the lineage's looks at the certification window is stated the
@@ -372,6 +382,19 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
+    guarding = [
+        found
+        for found in (() if hyp.objective is None else required_cert_gates(hyp.objective.id))
+        if found in offered
+    ]
+    guarded = [
+        f"{found} is required for this hypothesis's objective, {hyp.objective.id}, from the "
+        "first plan on, and may not be excluded: an absolute objective credits a drift held "
+        "as if it were timed, and this gate tells the two apart; set every one of its "
+        "parameters, whose values are yours to choose inside their ranges"
+        for found in guarding
+        if hyp.objective is not None
+    ]
     correction = (
         []
         if gate is None or hyp.objective is None
@@ -404,13 +427,16 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
         ]
     )
     return {
-        "required_gates": sorted(item.id for item in offered.values() if item.required),
+        "required_gates": sorted(
+            {*(item.id for item in offered.values() if item.required), *guarding}
+        ),
         "stages": list(PLAN_STAGES),
         "rules": [
             "every gate included is one of the toolbox gates above, at the stage the "
             "toolbox gives it",
             "every parameter value lies inside that parameter's stated range",
             "every required gate is included, and none of them is excluded",
+            *guarded,
             *correction,
             "the plan includes at least one gate at each of the cert, paper and live stages",
             "no gate is named twice, and no gate is both included and excluded",

@@ -986,3 +986,25 @@ def test_a_plan_asking_for_no_paper_window_at_all_is_not_warned_about(
 
     assert pinned.paper_window_s("30m") is None
     assert paper_window_note(ws, store, pinned) is None
+
+
+def test_a_sharpe_s_invariants_require_entry_timing_from_the_first_plan() -> None:
+    """Whether a contribution or a Sharpe carries the timing test follows from its objective
+    alone, so it is folded into `required_gates` and stated as a rule; a per-trade edge is told
+    nothing of it, and the gate stays in its toolbox to choose."""
+    from tests.criteria.builders import make_hyp
+
+    sharpe = make_hyp(
+        horizon="1d", objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    edge = make_hyp()
+
+    stated = plan_module._invariants(sharpe)
+    told = plan_module._invariants(edge)
+
+    assert "entry_timing" in stated["required_gates"]
+    (rule,) = [rule for rule in stated["rules"] if rule.startswith("entry_timing")]
+    assert "wf_sharpe_net" in rule and "may not be excluded" in rule
+    assert "entry_timing" not in told["required_gates"]
+    assert not any("entry_timing" in rule for rule in told["rules"])
+    assert "entry_timing" in {item["id"] for item in plan_module._toolbox(edge, 4)}

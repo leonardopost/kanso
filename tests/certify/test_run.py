@@ -13,6 +13,7 @@ one the planner would accept, since the runner reads it through the planner.
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from hashlib import sha256
@@ -74,7 +75,7 @@ from tests.research.test_attached import ALLOWING, DECLARING_HOST, FILTER, HOST,
 
 NOW = datetime(2024, 2, 1, tzinfo=UTC)
 
-CERT_GATES: list[dict[str, Any]] = [
+REQUIRED_GATES: list[dict[str, Any]] = [
     {
         "id": "embargoed_window",
         "stage": "cert",
@@ -95,6 +96,17 @@ CERT_GATES: list[dict[str, Any]] = [
     },
 ]
 """The three cert gates every plan must carry, since all three are structural invariants."""
+
+TIMING_GATE: dict[str, Any] = {
+    "id": "entry_timing",
+    "stage": "cert",
+    "params": {"max_p": 0.1},
+    "rationale": "required for a Sharpe: timing told from what holding the series earns",
+}
+"""The cert gate every plan for the demo's Sharpe carries beside them."""
+
+CERT_GATES: list[dict[str, Any]] = [*REQUIRED_GATES, TIMING_GATE]
+"""What a plan for the demo's Sharpe carries at the cert stage before it chooses anything."""
 
 SEARCHED: dict[str, Any] = {
     "id": "deflated_sharpe",
@@ -1122,7 +1134,11 @@ def test_a_plan_that_does_not_name_the_parity_gate_replays_nothing(
 
     made = certify(ws, store, HYP_ID)
 
-    assert [gate.id for gate in made.gates] == ["embargoed_window", "publication_lag"]
+    assert [gate.id for gate in made.gates] == [
+        "embargoed_window",
+        "publication_lag",
+        "entry_timing",
+    ]
     assert sessions(ws) == [], "nothing replayed, so no session was written"
 
 
@@ -1590,7 +1606,13 @@ def test_the_evidence_gates_are_shown_the_window_and_never_the_prefix(
 
     made = certify(ws, store, HYP_ID)
 
-    assert made.verdict == "pass"
+    failed = [gate for gate in made.gates if gate.skipped is None and not gate.passed]
+    assert [gate.id for gate in failed] == ["entry_timing"], (
+        "warmed, the sleeve trades every cycle of the window, so a shift by whole cycles "
+        "trades each of them again: a tie with what it made, which counts against it"
+    )
+    (timing,) = failed
+    assert timing.evidence["null_max"] == timing.evidence["observed_bps_per_trade"]
     opens = midnight_ns(CERTIFICATION[0])
     assert min(handed) < opens, "the subject's run was handed its prefix through the fold"
     assert len([stamp for stamp in handed if stamp >= opens]) == (
@@ -1672,3 +1694,182 @@ def test_a_sleeve_without_a_benchmark_runs_no_hold(ws: Workspace, store: StateSt
     measured = run._measure(run._subject(ws, store, HYP_ID, None))
 
     assert (measured.benchmark_certification, measured.benchmark_research) == (None, None)
+
+
+# --- entry timing -------------------------------------------------------------
+
+MIRROR = REVERTING.replace(
+    b"first > second > third and not", b"first < second < third and not"
+).replace(b"first < second < third and self.long", b"first > second > third and self.long")
+"""The reverter the wrong way round: it buys the peak and sells the trough, so it loses out of
+sample and `embargoed_window` refuses it."""
+
+
+def timing_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[date, date]]:
+    """The window of every read `entry_timing`'s reader makes, as it makes it."""
+    read: list[tuple[date, date]] = []
+    original = backtest.window_chunks
+
+    def counted(request: backtest.RunRequest, catalog: Any) -> Any:
+        if sys._getframe(1).f_code is run._session_prices.__code__:
+            read.append(request.window)
+        return original(request, catalog)
+
+    monkeypatch.setattr(run.backtest, "window_chunks", counted)
+    return read
+
+
+def test_the_reverting_sleeve_s_timing_is_told_from_the_same_trades_a_cycle_later(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every shift by whole cycles lands one of its trades on the window's shallow first cycle,
+    and every other shift buys off the trough, so no draw earns what it did: the smallest p the
+    window can resolve, one read of the window, and its own value the runner's."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws)
+    read = timing_reads(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    (timing,) = [gate for gate in made.gates if gate.id == "entry_timing"]
+    assert made.verdict == "pass" and timing.skipped is None and timing.passed
+    assert read == [CERTIFICATION], "one more read of the certification window, for the gate"
+    evidence = timing.evidence
+    assert (evidence["sessions"], evidence["min_offset"], evidence["draws"]) == (24, 3, 19)
+    assert evidence["p"] == evidence["min_attainable_p"] == 1 / 20
+    assert evidence["null_max"] < evidence["observed_bps_per_trade"]
+    assert evidence["observed_bps_per_trade"] == pytest.approx(
+        evidence["observed_runner_bps_per_trade"]
+    )
+
+
+def test_offset_zero_charges_a_real_run_s_fills_what_the_runner_charged_them(
+    ws: Workspace, store: StateStore
+) -> None:
+    from kanso.criteria.timing import draw, keys_of, place
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    subject = run._subject(ws, store, HYP_ID, None)
+    window = run._measure(subject).certification
+
+    prices = run._session_prices(subject, keys_of(window))
+    own = draw([place(t, prices) for t in window.trades], prices, window.venue_model, 0)
+
+    assert own.costs == tuple(tuple(f.cost for f in t.fills) for t in window.trades)
+    assert own.kept == len(window.trades) == 5
+
+
+def test_a_failed_window_spares_the_read_and_says_what_it_spared(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    classify(ws, store, DOCUMENT, MIRROR)
+    a_card(ws, store, MIRROR)
+    write_plan(ws)
+    read = timing_reads(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    (window,) = [gate for gate in made.gates if gate.id == "embargoed_window"]
+    (timing,) = [gate for gate in made.gates if gate.id == "entry_timing"]
+    assert window.skipped is None and not window.passed
+    assert (timing.skipped, timing.passed, timing.evidence) == (run.TIMING_SPARED, True, {})
+    assert read == [], "the window was not read again"
+    assert len(run.TIMING_SPARED) <= 200
+
+
+def test_a_plan_that_does_not_name_entry_timing_reads_the_window_no_more(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Sharpe against a hold is not held to the gate; a plan that leaves it out pays nothing."""
+    classify(ws, store, HELD, REVERTING)
+    a_card(ws, store, REVERTING, document=HELD)
+    write_plan(ws, gates=REQUIRED_GATES)
+    read = timing_reads(monkeypatch)
+
+    made = certify(ws, store, HYP_ID)
+
+    assert "entry_timing" not in [gate.id for gate in made.gates]
+    assert read == []
+
+
+def test_a_pinned_plan_for_a_sharpe_without_entry_timing_is_refused_with_the_replan(
+    ws: Workspace, store: StateStore
+) -> None:
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=REQUIRED_GATES)
+
+    with pytest.raises(ValidationError) as refused:
+        certify(ws, store, HYP_ID)
+
+    assert refused.value.message == (
+        "the plan pinned for demo_mr is not one this kanso can run: gates: entry_timing is "
+        "required for wf_sharpe_net, its objective, and every plan for it includes the gate "
+        "with every parameter set; the values are yours, inside their ranges"
+    )
+    assert refused.value.remedy == "run `kanso cert plan demo_mr --replan` to plan again"
+
+
+def test_the_reader_folds_bars_prints_and_quotes_and_nothing_before_the_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bar is read at its close, a print at its price and a quote at its bid and ask, each
+    name from the first series it has, and a point of the prefix belongs to no session."""
+    from nautilus_trader.model.enums import AggressorSide
+    from nautilus_trader.model.identifiers import TradeId
+
+    from kanso.criteria.timing import BAR, PRINT, QUOTE, Reading, instant_at
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    subject = run._subject(ws, store, HYP_ID, None)
+    day = CERTIFICATION[0]
+    at = instant_at(day, 16 * 3_600 * 1_000_000_000)
+    early = midnight_ns(day) - 1
+    printed, quoted = InstrumentId.from_str("P.XNAS"), InstrumentId.from_str("Q.XNAS")
+    bar = Bar(
+        BarType.from_str(f"{INSTRUMENT}-1-DAY-LAST-EXTERNAL"),
+        *(Price.from_str("10.00"),) * 4,
+        Quantity.from_int(1),
+        ts_event=at,
+        ts_init=at,
+    )
+    stale = Bar(bar.bar_type, *(Price.from_str("99.00"),) * 4, Quantity.from_int(1), early, early)
+    trade_tick = TradeTick(
+        printed,
+        Price.from_str("20.00"),
+        Quantity.from_int(1),
+        AggressorSide.BUYER,
+        TradeId("T-1"),
+        ts_event=at,
+        ts_init=at,
+    )
+    quote = QuoteTick(
+        quoted,
+        Price.from_str("29.90"),
+        Price.from_str("30.10"),
+        Quantity.from_int(1),
+        Quantity.from_int(1),
+        ts_event=at,
+        ts_init=at,
+    )
+    monkeypatch.setattr(
+        run.backtest,
+        "window_chunks",
+        lambda *_: ((), iter([((stale,), (bar,), (trade_tick,), (quote,), (object(),))])),
+    )
+    wall = 16 * 3_600 * 1_000_000_000
+    keys = [(INSTRUMENT, wall), (str(printed), wall), (str(quoted), wall)]
+
+    prices = run._session_prices(subject, keys)
+
+    assert prices.sessions == (day,)
+    assert prices.source == {INSTRUMENT: BAR, str(printed): PRINT, str(quoted): QUOTE}
+    assert [prices.marks[key][0] for key in keys] == [
+        Reading(at, 10.0, 10.0),
+        Reading(at, 20.0, 20.0),
+        Reading(at, 29.9, 30.1),
+    ]
+    assert prices.schedules == {}

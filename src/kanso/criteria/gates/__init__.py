@@ -19,8 +19,9 @@ the simulated venue.
 A gate whose test is more than arithmetic on the run in hand lives in a module of its own
 beside this one, because it needs machinery the rest do not: `param_plateau` re-runs the
 subject once per perturbation and so reads the re-run the certification runner hands it,
-`parity_replay` compares two code paths' order intents, which is a replay's record rather
-than a run's, and the four paper and live gates — `paper_forward`, `live_drift`,
+`entry_timing` prices the run's trades at other sessions and so reads the window's prices the
+runner hands it, `parity_replay` compares two code paths' order intents, which is a replay's
+record rather than a run's, and the four paper and live gates — `paper_forward`, `live_drift`,
 `daily_loss_kill` and `fill_quality_drift` — read the stage record the monitor assembles,
 because a run says nothing about the deployment that produced it.
 

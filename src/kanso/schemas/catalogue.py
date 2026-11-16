@@ -41,6 +41,9 @@ Kind = Literal["objective", "gate"]
 GateStage = Literal["card", "cert", "paper", "live"]
 ParamType = Literal["int", "float", "bool", "str", "duration", "instrument", "hours", "zone"]
 
+GUARDING_STAGES: Final = ("card", "cert")
+"""The stages a gate `required_for` an objective may run at."""
+
 RANGE_ATTRS: Final = ("horizon", "resolution", "history_days", "folds")
 NUMERIC_PARAM_TYPES: Final = ("int", "float", "duration")
 
@@ -152,11 +155,16 @@ class CriteriaItem(KansoModel):
     has reached two includes that gate with its threshold set
     (`kanso.criteria.library.deflation_gate`).
 
-    `required_for` is a card gate's claim to guard these objectives against a flaw of their
-    own: a hypothesis scored on one of them carries the gate among its card gates, with
-    every parameter it declares set (`kanso.criteria.library.required_card_gates`), so such
-    a gate declares `together` too. Whether it is carried is not a decision; the values it
-    is carried at are.
+    `required_for` is a card or cert gate's claim to guard these objectives against a flaw of
+    their own, with every parameter it declares set, so such a gate declares `together` too.
+    A card gate is carried among the card gates of every hypothesis scored on one of them
+    (`kanso.criteria.library.required_card_gates`): `edge_per_trade`, since a contribution
+    rewards trading less once every trade loses. A cert gate is carried by every
+    certification plan for such a hypothesis (`kanso.criteria.library.required_cert_gates`)
+    and never among its card gates: `entry_timing`, since an absolute objective credits a
+    drift held as if it were timed. A paper or live gate guards nothing, because what it
+    judges is a deployment and not what the objective scores. Whether it is carried is not a
+    decision; the values it is carried at are.
 
     `together` says the gate's parameters mean nothing apart: wherever it is named, every
     one it declares is set, since a gate given half its rule judges nothing and a gate that
@@ -195,10 +203,10 @@ class CriteriaItem(KansoModel):
             raise ValueError("priority: only objectives are prioritised")
         if self.meaningful_when is None:
             raise ValueError("meaningful_when: a gate tells the planner when it is informative")
-        if self.required_for is not None and self.stage != "card":
+        if self.required_for is not None and self.stage not in GUARDING_STAGES:
             raise ValueError(
-                "required_for: only a card gate guards an objective, since a card is what "
-                "the objective scores"
+                "required_for: only a card or a cert gate guards an objective, since a card is "
+                "what the objective scores and a certificate what it is judged by"
             )
         if self.required_for is not None and not self.together:
             raise ValueError(
