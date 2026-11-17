@@ -37,7 +37,7 @@ from tests.certify.test_run import a_card, write_plan
 from tests.processes import CARDING, card_of, carding, children, ends, holding, running
 
 from .conftest import DOCUMENT, FLAT, PROGRAM, RESEARCH, REVERTING, classify, document
-from .mocked import ALIGNED, SEED, proposal, scripted, write_script
+from .mocked import ALIGNED, SEED, proposal, scripted, tuned, write_script
 from .test_scheduler import open_run
 
 
@@ -377,6 +377,52 @@ def test_a_run_ended_while_its_card_runs_frees_the_lane_and_records_no_card(
     assert records.cards_of(store, hyp_id) == baseline, "a card was recorded for the ended run"
     assert daemon.LANE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
     assert records.active(store, hyp_id) is None and not (ws.root / run.dir).exists()
+    assert scheduler.queued(store) == [] and scheduler.claimed(store, waiting)
+
+
+def test_a_run_ended_between_a_keep_and_its_check_frees_the_lane_and_records_no_failure(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`kanso research end` after the lane's card recorded a keep and before the keep's check.
+    The check would refuse a run with none active as a precondition, which the lane records as
+    its failure and puts the hypothesis back in the queue for — the opposite of what an end
+    promises. The lane asks whether the run is still open first, and lets it go."""
+    workspace = tuned(ws, align_every=1)
+    hyp_id = classify(workspace, store, DOCUMENT, SEED)
+    waiting = classify(workspace, store, document(id="demo_two"))
+    run = research_loop.begin(workspace, store, hyp_id, lane="l1")
+    scheduler.enqueue(store, waiting)
+    scripted(workspace, propose=[proposal("revert")], align_check=[ALIGNED])
+    card = research_loop.card
+
+    def ended_once_kept(*args: Any, **kwargs: Any) -> Any:
+        made = card(*args, **kwargs)
+        with StateStore(workspace.path("state.db")) as operator:
+            research_loop.end(workspace, operator, hyp_id)  # what `kanso research end` does
+        return made
+
+    drive = research_driver.run
+    driven: list[str] = []
+
+    def driving(opened_ws: Workspace, opened: StateStore, subject: str, **kwargs: Any) -> Any:
+        driven.append(subject)
+        if subject == waiting:
+            daemon.request_stop()
+            return SimpleNamespace(ended=False)
+        return drive(opened_ws, opened, subject, **kwargs)
+
+    waited: list[float] = []
+    monkeypatch.setattr(research_loop, "card", ended_once_kept)
+    monkeypatch.setattr(research_driver, "run", driving)
+    monkeypatch.setattr(daemon, "_wait", waited.append)
+
+    assert daemon.worker(workspace, "l1", os.getppid()) == 0
+
+    assert driven == [hyp_id, waiting]
+    assert waited == [], "an end is the operator's word, not a failure to back off from"
+    assert [card.status for card in records.cards_of(store, hyp_id)] == ["keep", "keep"]
+    assert daemon.LANE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
+    assert records.active(store, hyp_id) is None and not (workspace.root / run.dir).exists()
     assert scheduler.queued(store) == [] and scheduler.claimed(store, waiting)
 
 

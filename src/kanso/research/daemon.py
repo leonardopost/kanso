@@ -741,8 +741,10 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
     The driver is asked for `CARDS_PER_TURN` cards rather than for the run, so the lane
     reaches this loop between cards and a stop request is answered there. Everything the
     driver needs to carry on — how many non-keeps in a row, how long since the last
-    alignment check, what the last diff was — it reads back out of the run, so a turn is
-    a resumption and the run is unaware it was interrupted.
+    alignment check, whether a keep is still owed its check, what the last diff was — it
+    reads back out of the run, so a turn is a resumption and the run is unaware it was
+    interrupted: a keep whose check a stop or a drain skipped is judged at the lane's next
+    turn on the run, before its first proposal.
 
     A failure is recorded with the remedy its error carried, because the message says which
     step gave up and only the remedy says why: a proposer's ladder names the models it

@@ -637,6 +637,107 @@ def test_both_pages_say_the_judge_reads_the_rewinds_of_earlier_runs() -> None:
     assert "the diff it was shown began from" not in alignment
 
 
+def test_the_pages_say_the_proposer_reads_the_rewinds_of_earlier_runs() -> None:
+    """Backlog row 300: the judge alone was shown the earlier runs' rewinds, and a proposal
+    back into one of those directions was carded, a trial, before a check could rewind it.
+    The pages say what the proposer is now shown, how much, and in which half of its prompt."""
+    row = prose(
+        next(
+            line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
+        )
+    )
+    assert "It is shown, as `rewound_in_earlier_runs`, the directions the hypothesis's" in row
+    assert "one line per direction" in row
+    assert "the newest ten, each once, in the prompt's cached system turn" in row
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "**The proposer is told the directions earlier runs were refused.**" in alignment
+    assert "as `rewound_in_earlier_runs`, the directions the hypothesis's earlier runs" in alignment
+    assert "one line per direction, the newest ten, each once, in the cached system turn" in (
+        alignment
+    )
+    assert "every earlier direction the judge is shown is one the proposer was told" in alignment
+    assert "the judge is never shown more of them than the proposer" in alignment
+    assert "the judge is shown fewer of them" not in alignment, "equal when few were refused"
+    assert "the proposals of the hypothesis's later runs" in alignment
+    card = prose(section(page("concepts.md"), "Card"))
+    assert "The stable half also carries `rewound_in_earlier_runs`" in card
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 300 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+    assert "**closed** on the operator's approval of 2026-11-17" in backlog
+
+
+def test_the_pages_say_a_keep_is_judged_as_it_is_made_and_what_it_costs() -> None:
+    """Backlog row 90: on the clock alone a drift keep was built on for up to `align_every`
+    cards, and a keep followed by a spell of misses stalled unjudged, was certified and became
+    the next run's base. The pages say when a check runs now, what it costs, and what is left:
+    a run ended by hand, whose remedy differs by lane — `kanso align check` refuses a run a
+    daemon lane owns, so no page offers it as the remedy there."""
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "on every keep the research driver makes, as it is made; every" in alignment
+    assert "**A keep is judged before it is built on.**" in alignment
+    assert "the clock is the backstop" in alignment
+    assert "one `align_check` call per keep the judge answers, and never more than one" in (
+        alignment
+    )
+    assert "`kanso research run ID --cards 0` makes it and proposes nothing" in alignment
+    assert "So is a keep you carded by hand in a run the driver then resumes, and it is judged" in (
+        alignment
+    )
+    assert "so the driver puts the best back in the lane first" in alignment
+    assert "A run ended by hand ends where you end it" in alignment
+    assert "For a run in lane `op`, `kanso align check ID` before `kanso research end ID`" in (
+        alignment
+    )
+    assert "For a run in a daemon lane it does not" in alignment
+    assert "row 90 of" not in prose(page("concepts.md"))
+    batch = prose(section(page("concepts.md"), "Card"))
+    assert "a turn that kept is judged once, on its kept slot" in batch
+    rows = {
+        name: prose(
+            next(
+                line for line in page("cli.md").splitlines() if line.startswith(f"| `kanso {name}")
+            )
+        )
+        for name in ("research run", "research end", "research stop")
+    }
+    assert (
+        "Every keep it makes — a card, or a turn's kept slot — is put to the alignment"
+        in (rows["research run"])
+    )
+    assert (
+        "A judge that cannot answer fails the command after the keep is recorded"
+        in (rows["research run"])
+    )
+    assert "`--cards 0` judges an owed keep and proposes nothing" in rows["research run"]
+    assert "on the run's best, which the driver puts back in the lane first" in rows["research run"]
+    assert "becomes the next run's base unjudged" in rows["research end"]
+    assert (
+        "For a run in lane `op`, `kanso align check ID` first; for a run in a daemon"
+        in (rows["research end"])
+    )
+    assert (
+        "let the lane work it once (`kanso research start`) before ending it"
+        in (rows["research end"])
+    )
+    assert "is owed, and judged when a lane next works the run" in rows["research stop"]
+    cli = prose(page("cli.md"))
+    assert "Every keep a run makes under the driver is checked as it is made" in cli
+    workspace = prose(page("workspace.md"))
+    assert "`[research] align_every` is the drift clock, and it is a backstop" in workspace
+    assert "one `align_check` call per keep and never more than one per card" in workspace
+    assert "for a run in a daemon lane, which `align check` refuses, the lane's own next turn" in (
+        workspace
+    )
+    for name, text in (("concepts", alignment), ("cli", cli), ("workspace", workspace)):
+        assert not re.search(r"daemon lane[^.]*`kanso align check ID` first", text), name
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "a periodic check" not in readme
+    assert "| alignment | a check, on every keep the research driver makes" in readme
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 90 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+    assert "by judging every keep the driver makes as it is made" in backlog
+
+
 def test_the_pages_say_a_closed_day_is_no_hole_and_an_answer_closes_nothing() -> None:
     """A chunk edge on a weekend split a series with no session missing, and the rule that
     first joined it counted an empty answer as coverage, a trading day the source lost

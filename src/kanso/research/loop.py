@@ -2057,13 +2057,13 @@ def ongoing(store: StateStore, run: RunRecord) -> RunRecord:
     whatever the lane working it is doing. The lane asks this before it writes a proposal
     into the directory, before every catalog read of a card's window, every
     `backtest.WANTED_POLL_S` while the card runs — the child is killed — once the child has
-    exited and before its output is read, once an alignment judge has answered
-    (`kanso.research.align.check`) and before the next proposal; so an end costs the card
-    or the answer in flight and nothing else, and is never read as the card's failure or
-    the lane's. Measured before this, on 0.16.0: a run ended while its card ran left the card
-    running to its end, and the lane then died with a `FileNotFoundError` reading the card's
-    output from the directory the end had removed. What the lane cached for the run goes
-    with it.
+    exited and before its output is read, before the driver's every alignment check and once
+    the judge has answered (`kanso.research.align.check`), and before the next proposal; so
+    an end costs the card or the answer in flight and nothing else, and is never read as the
+    card's failure or the lane's. Measured before this, on 0.16.0: a run ended while its card
+    ran left the card running to its end, and the lane then died with a `FileNotFoundError`
+    reading the card's output from the directory the end had removed. What the lane cached
+    for the run goes with it.
     """
     current = records.active(store, run.hyp_id)
     if current is not None and current.run_id == run.run_id:

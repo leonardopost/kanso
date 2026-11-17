@@ -14,7 +14,7 @@ from kanso.criteria import catalogue, check_params
 from kanso.nautilus.clock import NEW_YORK, session_of
 from kanso.schemas import CardStatus
 from tests.criteria.builders import make_hyp
-from tests.docs.test_pages import scope_names
+from tests.docs.test_pages import page, prose, scope_names, section
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGED = ROOT / "src" / "kanso" / "skills"
@@ -160,6 +160,68 @@ def test_the_align_skill_names_the_rewinds_of_earlier_runs() -> None:
     assert "the reasons the hypothesis was rewound for in its earlier runs" in text
     assert "(`same_program`, `same_thesis`)" in text
     assert "Earlier rewinds bear on new proposals only" in text
+    assert "The proposer is shown the earlier runs' directions too" in text
+
+
+def test_the_align_skill_says_every_keep_is_judged_and_which_lane_it_checks() -> None:
+    """An agent asked to check a run before it is ended reads here when the driver checks and
+    which run this command can check: told only of the clock, it would take a keep for one no
+    check had judged, and told nothing of the lane, it would offer a command that refuses."""
+    text = skill(PACKAGED, "kanso-align")
+    assert "The driver runs this check on every keep as it is made, and every `align_every`" in (
+        text
+    )
+    assert "The loop runs this check every `align_every` cards" not in text
+    assert "refuses a run a daemon lane owns: that lane's next turn judges it" in text
+
+
+def test_the_research_skill_says_every_keep_is_judged_and_the_proposer_reads_earlier_rewinds() -> (
+    None
+):
+    """An agent explaining why a driven run steers clear of a direction, or asked why a lane
+    keeps walking into one, reads this file: drift is judged on every keep, an end calls no
+    model and how a keep it would carry is judged in either kind of lane, and both lists the
+    proposer is shown, the earlier runs' among them."""
+    text = skill(PACKAGED, "kanso-research")
+    rules = text.split("## Rules", 1)[1]
+    assert "drift is judged on every keep as it is made" in rules
+    assert "and every `align_every` cards besides" in rules
+    assert "by `kanso align check <id>` in lane `op`, or by the lane's next turn in a daemon" in (
+        rules
+    )
+    assert (
+        "A `program.md` written from the template since this release makes a filter, gate, "
+        "entry condition or exit the thesis does not state drift unless the program names it; "
+        "an older one permits what it permits."
+    ) in rules
+    assert "`rewound_for`, the newest reasons this run was rewound for" in rules
+    assert (
+        "`rewound_in_earlier_runs`, one line per direction the hypothesis's earlier runs were "
+        "rewound for, the newest ten"
+    ) in rules
+
+
+def test_no_page_or_skill_says_an_unstated_filter_is_drift_whatever_the_program_says() -> None:
+    """An unstated filter, gate, entry condition or exit is drift only where the run's
+    `program.md` says so: the judge's own instruction says a thesis that does not mention a
+    filter does not forbid one, and a program written from the earlier template permits them.
+    So every sentence that calls such a change drift names the program or the template."""
+    texts = {
+        "concepts": prose(section(page("concepts.md"), "Alignment")),
+        "kanso-research": prose(skill(PACKAGED, "kanso-research")),
+        "kanso-align": prose(skill(PACKAGED, "kanso-align")),
+    }
+    for name, text in texts.items():
+        for sentence in re.split(r"(?<=[.;])\s", text):
+            if "does not state" in sentence and ("drift" in sentence or "rewinds" in sentence):
+                assert "program" in sentence or "template" in sentence, (name, sentence)
+    assert "a `program.md` written from the template since this release says that fair game" in (
+        texts["concepts"].lower()
+    )
+    assert (
+        "one written from an earlier template, which called filters and entry and exit"
+        in (texts["concepts"])
+    )
 
 
 def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> None:

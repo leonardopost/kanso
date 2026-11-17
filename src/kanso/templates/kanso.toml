@@ -17,7 +17,7 @@ account = "margin"        # margin | cash. margin with default_leverage = risk_l
 currency = "USD"          # account currency of every venue the broker does not override; a universe whose venues carry more than one account currency, or an instrument settling or booked in another currency, is refused at `kanso hyp validate`
 return_period = "1d"      # the period a return is measured over, for every objective and drawdown
 annualisation = "auto"    # observed periods per year in the window; set a number to force one
-align_every = 10          # alignment check cadence (cards)
+align_every = 10          # cards between alignment checks; every keep is also checked as it is made
 stall_k = 30              # consecutive non-keeps before the run ends (certify if a keep exists, else requeue)
 context_cards = 20        # last cards shown to the proposer under the run's pins, and as many from earlier pins by idea alone, times cards_per_turn: as many turns at any width
 redundant_pct = 97        # a card holding a stored book on this share of sessions, and scoring it within the objective's noise floor, is redundant

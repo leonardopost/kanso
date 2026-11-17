@@ -49,8 +49,9 @@ crashes as any other card does. Before this a kill was owed two repairs like any
 and the proposer was shown the word `memory` or `budget` as the end of its traceback.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
-hypothesis, the objective's definition, and what the hypothesis tried under earlier pins —
-is byte-identical on every call of a run, so a provider cache hits; the moving half is the
+hypothesis, the objective's definition, what the hypothesis tried under earlier pins, and
+the directions its earlier runs were rewound for — is byte-identical on every call of a run,
+so a provider cache hits; the moving half is the
 current file, the last `context_cards` times `cards_per_turn` cards of the hypothesis under
 the run's pins — so a proposer asked for eight diffs a turn remembers as many turns as one
 asked for one, where twenty cards were two and a half turns of eight — across runs, so a
@@ -78,10 +79,12 @@ number is one comparison only with numbers struck under the same pins, and each 
 struck under others, so none is a number this run can beat. Their ideas count and their
 numbers do not, and they reach nothing that judges. They are fixed for the life of the run —
 a hypothesis has one active run, and every card it adds is under that run's own pins — which
-is why they sit in the half a provider caches rather than beside the recent cards. Nothing
-else of the hypothesis's history reaches the proposer, however much of it exists: no card
-asked under another hypothesis file, no number an earlier card was scored with, and no
-number measured on the certification window.
+is why they sit in the half a provider caches rather than beside the recent cards. So do the
+directions the hypothesis's earlier runs were rewound for, one line each — the run's tag,
+whether it pinned other files than this run, and the reason the check gave — for the same
+reason (`align.directions_before`). Nothing else of the hypothesis's history reaches the
+proposer, however much of it exists: no card asked under another hypothesis file, no number
+an earlier card was scored with, and no number measured on the certification window.
 
 **The search has a phase, and the phase is a rule, not a mood.** Misses since the last
 keep drive it: for the first `[research] local_cards` the proposer is asked for local
@@ -91,12 +94,30 @@ the syntax tree of `strategy.py` with every constant blanked. Then local again, 
 until a keep or a stall. The rule is stated in the instruction and the phase is a fact of
 every call, because a refusal the proposer was never told about is a wasted ladder.
 
-**Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
-asked whether it still tests the idea, and a drift rewinds it and carries on — carrying the
-reasons with it. A rewound run told nothing walks back into the drift it was rewound for:
+**Drift is checked on every keep and on a clock, never on suspicion.** Every keep — a card
+that kept, or a turn on its kept slot — is put to the alignment check as it is made, and
+every `align_every` cards the run is asked again whether it still tests the idea; a drift
+rewinds it and carries on — carrying the reasons with it. On the clock alone a drift keep
+was built on for up to `align_every` cards, each a trial `n_trials` counts, before a check
+rewound it — counted in a live workspace on 2026-11-17, 37 `misaligned` rewinds against 61
+keeps past the baseline — and a keep followed by a spell of misses could stall unjudged, be
+certified and become the next run's base, which no check judges. After a keep's check the lane
+holds bytes a check answered for, and every card that does not keep restores it to them, so
+the clock asks no model unless the lane was written by hand: one `align_check` call per keep
+the judge answers, never more than one per card. A keep whose check did not happen — a stop
+came first, which ends the invocation there, or the judge could not answer — is owed
+(`align.owed`), and the next invocation makes that check before it proposes anything; one
+carded by hand and then written over with the base is judged on the run's best, which the
+loop would have put back in the lane at its next card that does not keep. Each
+check first asks whether the run is still open (`loop.ongoing`), so a `research end` that
+landed between a keep and its check lets the lane go rather than failing it.
+
+A rewound run told nothing walks back into the drift it was rewound for:
 measured in a live workspace, one hypothesis was rewound four times in six hours for the
 same complaint, because the file it resumed from said nothing about why the last one went.
-So every drift this run was rewound for reaches the next proposal, newest first.
+So the drifts this run was rewound for reach the next proposal, the newest `DRIFT_LINES`
+first, and the newest `EARLIER_DRIFT_LINES` directions the hypothesis's earlier runs were
+rewound for reach every proposal, in the stable half above.
 
 **A run ends on a stall, and a stall is not an ending.** `stall_k` consecutive non-keeps
 close the run and hand the hypothesis to the scheduler, which certifies what is worth
@@ -131,12 +152,15 @@ from kanso.research import loop as research_loop
 from kanso.schemas import Card, Hypothesis, RunRecord, Tag, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from pathlib import Path
+
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
 __all__ = [
     "CRASH_TAIL_LINES",
     "DRIFT_LINES",
+    "EARLIER_DRIFT_LINES",
     "GATE_LINES",
     "LOCAL",
     "REDUNDANT_LINES",
@@ -174,6 +198,15 @@ GATE_LINES: Final = 10
 DRIFT_LINES: Final = 3
 """How many of a run's drift reasons are fed back into the next proposal, newest first, each
 once (`align.rewound_for`)."""
+
+EARLIER_DRIFT_LINES: Final = align.REWOUND_LINES
+"""How many directions the hypothesis's earlier runs were rewound for are fed to every proposal
+of a run, newest first, each once (`align.directions_before`).
+
+The judge's bound and not one of its own: the judge is shown the earlier runs' directions
+inside `align.REWOUND_LINES`, after this run's, so with the same bound here every one it is
+shown is one the proposer was told. Each line is a tag and a reason of at most
+`align.REASON_LIMIT` characters, so the ten cost about 2.5 kB of the cached half."""
 
 REDUNDANT_LINES: Final = 10
 """How many books already measured are fed back into the next proposal, newest first.
@@ -305,17 +338,30 @@ def run(
     previous call left behind do not count. `None` researches until the run stalls, which
     is what a daemon lane asks for.
 
+    Every keep is put to the alignment check as it is made, before anything else, and the
+    clock's check falls due every `align_every` cards; a keep that falls on the clock is one
+    check. A keep a stop or a judge that could not answer left unjudged, or one carded by
+    hand, is owed (`align.owed`), and is judged before this invocation proposes anything —
+    with `cards=0` too, which then proposes nothing — on the run's best when the lane holds
+    bytes a check has answered for (`_onto_best`). A judge that cannot answer raises the
+    router's refusal after the keep is recorded, and the keep stays owed.
+
     `stop` is asked before every proposal, again before the card a proposal produced, and
-    before an alignment check falls due. A daemon lane passes its own stop request, so a
-    lane told to stop while a model was answering starts neither the card nor another
-    call: the answer in hand is dropped, the lane directory is left as it was, and the run
-    resumes at its next turn. The baseline is a card too, and the runner itself refuses to
-    start one in a process told to stop (`kanso.nautilus.backtest.run_subprocess`).
+    before every alignment check — at the start, only when a check is owed. A daemon lane
+    passes its own stop request, so a lane told to stop while a model was answering starts
+    neither the card nor another call: the answer in hand is dropped, the lane directory is
+    left as it was, and the run resumes at its next turn. A stop asked before a check ends
+    the invocation there, `stopped`, with the check owed, so a `stop` that answers false
+    again later cannot build on a keep no check has judged; only a stall the same card
+    reached ends the run instead, as it would have. The baseline is a card too, and the
+    runner itself refuses to start one in a process told to stop
+    (`kanso.nautilus.backtest.run_subprocess`).
 
     A run the operator ends meanwhile (`research end`) is let go with `TakenError`: asked
     once a proposal is in hand, before it is written into the lane directory the end
-    removed, while its card runs (`research_loop.card`), and before the next proposal. The
-    answer or the card in flight is dropped and nothing is recorded for it.
+    removed, while its card runs (`research_loop.card`), before every alignment check, and
+    before the next proposal. The answer or the card in flight is dropped and nothing is
+    recorded for it.
     """
     lane = lanes.check_lane(lane)
     if records.active(store, hyp_id) is None:
@@ -330,7 +376,25 @@ def run(
     previous = _last_diff(store, active)
     reason = CARDS
 
-    while cards is None or proposed < cards:
+    def judge(*, owed: bool = False) -> None:
+        """One alignment check of a run `research end` has not closed, counted; an owed one
+        on the run's best when the lane was written back by hand (`_onto_best`)."""
+        nonlocal active, checks, drifts, waiting
+        active = research_loop.ongoing(store, active)
+        if owed:
+            _onto_best(store, active, directory)
+        aligned, _ = align.check(ws, store, hyp_id, lane)
+        checks += 1
+        drifts += 0 if aligned else 1
+        waiting = 0
+
+    if align.owed(store, active):
+        if stop():
+            reason = STOPPED
+        else:
+            judge(owed=True)
+
+    while reason == CARDS and (cards is None or proposed < cards):
         if stop():
             reason = STOPPED
             break
@@ -397,13 +461,14 @@ def run(
                 },
             )
             misses = 0 if kept else misses + 1
-            if waiting >= settings.align_every and not stop():
-                aligned, _ = align.check(ws, store, hyp_id, lane)
-                checks += 1
-                drifts += 0 if aligned else 1
-                waiting = 0
+            due = kept or waiting >= settings.align_every
+            if due and stop():
+                reason = STOPPED
+            elif due:
+                judge()
             if misses >= settings.stall_k:
                 reason = STALLED
+            if reason != CARDS:
                 break
             active = research_loop.ongoing(store, active)
             continue
@@ -443,13 +508,14 @@ def run(
         else:
             tally[made.status] += 1
             misses = 0 if made.status == "keep" else misses + 1
-        if waiting >= settings.align_every and not stop():
-            aligned, _ = align.check(ws, store, hyp_id, lane)
-            checks += 1
-            drifts += 0 if aligned else 1
-            waiting = 0
+        due = (made is not None and made.status == "keep") or waiting >= settings.align_every
+        if due and stop():
+            reason = STOPPED
+        elif due:
+            judge()
         if misses >= settings.stall_k:
             reason = STALLED
+        if reason != CARDS:
             break
         active = research_loop.ongoing(store, active)
 
@@ -683,8 +749,8 @@ def _batched_repair(
 
 
 def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, object]:
-    """The facts that do not move for the life of a run: the blobs it pinned, and what the
-    hypothesis tried under earlier pins.
+    """The facts that do not move for the life of a run: the blobs it pinned, what the
+    hypothesis tried under earlier pins, and the directions its earlier runs were rewound for.
 
     The earlier cards are as fixed as the blobs. They are cards of runs other than this
     one, a hypothesis has at most one active run, and every card it records is under that
@@ -697,6 +763,12 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     `cards_per_turn` mid-run moves this half once. A hypothesis with no earlier cards is
     sent neither key, and its stable facts are the bytes they were before earlier cards
     existed; the instruction above them describes the two keys whether or not they are sent.
+
+    The earlier runs' directions are fixed for the same reason: a drift is recorded only for
+    the active run, so none of another run's can join while this one is open, and the pins
+    their markers compare never move. They keep a reason this run is rewound for too, which
+    this run's own list already carries in the user turn, because dropping it would move this
+    half at every rewind (`align.directions_before`). A hypothesis with none is sent no key.
     """
     hyp = _pinned(store, active)
     settings = ws.config.research
@@ -713,6 +785,9 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     tried = _earlier_coverage(store, active)
     if tried:
         facts["earlier_coverage"] = tried
+    refused = align.directions_before(store, active, EARLIER_DRIFT_LINES)
+    if refused:
+        facts["rewound_in_earlier_runs"] = refused
     return facts
 
 
@@ -1267,6 +1342,24 @@ def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.R
         (*_pins(active), hashlib.sha256(candidate).hexdigest()),
     ).fetchone()
     return row
+
+
+def _onto_best(store: StateStore, run: RunRecord, directory: Path) -> None:
+    """Put the run's best back in the lane when a keep is owed and the lane holds bytes a check
+    has answered for: the run's base, or the bytes the last check left it on.
+
+    A check that finds the lane on those judges nothing and leaves the keep owed
+    (`align.check`), and only a hand puts the lane there with a keep past the checkpoint — an
+    operator who cards a file and writes the base back over it. The loop itself leaves the
+    lane on the run's best after every card that does not keep, so the first such card would
+    put the keep back, and a stall at the next could certify it before any check had judged
+    it. So the lane goes where that card would have put it, before the check, and the check
+    judges the keep. A file written by hand that no check has seen stays: it is what the
+    check judges, as `kanso align check` would.
+    """
+    source = align.lane_strategy(store, run, directory)
+    if hashlib.sha256(source).hexdigest() in (run.base_sha, align.checkpoint(store, run).sha):
+        lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
 
 
 def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:
