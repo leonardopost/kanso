@@ -1,4 +1,5 @@
-"""How many times a hypothesis's lineage has already looked at a certification window.
+"""How many times a hypothesis's lineage has already looked at a hold-out window: at a
+certification window, and at its forward window.
 
 A certification window is the one sample research never saw, and every certificate reads it:
 pass or fail, the verdict is a look, and a lineage that looks again — a new best, a replan,
@@ -47,12 +48,44 @@ Nothing here is stored. The count is struck from the certificates table each tim
 asked for, so certificates written before kanso counted looks count at once, and the one a
 certificate records (`Certificate.holdout`) is what stood when it was written: certification
 counts under the write lock its row is written under (`kanso.certify.run`).
+
+**A look at the forward window.** The forward window — the days from a hypothesis's
+`windows.forward.start` on — is the one no research or certification run reads, and every act
+that shows someone a day of it is a read of it, recorded as a `forward_read` event whose subject
+is the hypothesis whose window it read (`record_read`, the one writer): how the read was made —
+by a paper or live stage (`STAGE`) or a replay (`REPLAY`) — what it was of — a composed version
+`S@V`, or a replay's session — the target, the stage or replay mode, the session, the forward
+start it was judged against, and the forward days it read, from the later of its range's start
+and that forward start through its range's end. A stage read also records `shown`, the days on
+which the stage released the version's own decisions, which is what a read is exempted by; a
+read recorded `exempt` counts nothing. The looks are struck from the reads each time they are
+asked for (`forward_looks`) and nothing else about a look is stored:
+
+* the lineage is `kanso.research.records.lineage` as it stands when counted, the one the
+  certification looks are counted over, so a re-pin that drops a `derived_from` link splits
+  the lineage and its looks alike;
+* every read of a lineage member that is not exempt and whose last day is on or after the
+  forward start asked about counts — it shares a day with the window — and a read whose days
+  do not parse cannot be shown to have read elsewhere, so it counts at every start, as a
+  certificate whose window does not read counts at every window;
+* reads are grouped by what they were of: every read of one version `S@V` is that version's
+  one look, however many windows its stages close and however many passes judge it, as one
+  certificate is one look however many gates read its window; every read of one replay is
+  that replay's one look, however many members of the lineage it read;
+* looks are ordered by when their first read was recorded, so a version's place never moves
+  when later looks arrive; a re-pin that joins or splits the lineage can move it, as it moves
+  a certificate's.
+
+The count judges nothing. A read is read back totally (`ForwardRead.of_event`): a detail kanso
+did not write — a key missing, a value of another type, a day that does not parse — reads as an
+empty text, no day and no `shown`, never as an exception, so one corrupt event never ends the
+pass that counts it.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, MutableMapping, Set
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Final
@@ -64,16 +97,26 @@ from kanso.research import records
 from kanso.schemas import DateWindow, Holdout
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
-    from kanso.state import StateStore
+    from kanso.state import Event, StateStore
 
 __all__ = [
+    "EXEMPT_STAGE",
+    "FORWARD_READ",
     "INADMISSIBLE",
+    "REPLAY",
+    "STAGE",
+    "ForwardLook",
+    "ForwardLooks",
+    "ForwardRead",
     "Look",
     "Looks",
     "Window",
     "certification_window",
+    "forward_looks",
     "looks",
     "read_no_window",
+    "reads",
+    "record_read",
     "subject_pin",
     "window_of",
 ]
@@ -83,6 +126,17 @@ INADMISSIBLE: Final = "inadmissible"
 reasons under: a certificate whose every gate carries it read no window."""
 
 Window = tuple[date, date]
+
+FORWARD_READ: Final = "forward_read"
+"""The event a read of a forward window is recorded as, its subject the hypothesis whose
+window it read."""
+
+STAGE: Final = "stage"
+REPLAY: Final = "replay"
+"""How a forward read was made: a paper or live stage realising a window, or a replay."""
+
+EXEMPT_STAGE: Final = "stage"
+"""Why a read counts nothing: a stage's own look had already read, and shown, its days."""
 
 
 @dataclass(frozen=True)
@@ -227,3 +281,189 @@ def read_no_window(evidence: Iterable[Mapping[str, object]]) -> bool:
     snapshot that cannot support a claim, so it ran no window and is no look. A certificate
     names at least one gate."""
     return all(INADMISSIBLE in recorded for recorded in evidence)
+
+
+# --- the forward window -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ForwardRead:
+    """One act that showed someone days of a hypothesis's forward window, as its event holds it.
+
+    `of` is what the read was of — `S@V` for a stage's, the node session's id for a replay's —
+    and every read sharing it is one look. `first` and `last` are the forward days it read,
+    `forward_start` the day they were judged against, and each is `None` where the recorded
+    day does not parse. `shown` is, for a stage read, the days the stage released the
+    version's own decisions on, which is what an exemption reads, and `None` for a replay or
+    a stage window that showed none. `exempt` names why a read counts nothing, and is `None`
+    for every read that counts. `event_id` and `at` are the event's, and zero and empty on a
+    read not yet recorded."""
+
+    hyp_id: str
+    via: str
+    of: str
+    target: str
+    where: str
+    session: str
+    forward_start: date | None
+    first: date | None
+    last: date | None
+    shown: Window | None = None
+    exempt: str | None = None
+    event_id: int = 0
+    at: str = ""
+
+    def payload(self) -> dict[str, object]:
+        """The read as its event's detail: every day as an ISO string, `shown` as two."""
+        return {
+            "via": self.via,
+            "of": self.of,
+            "target": self.target,
+            "where": self.where,
+            "session": self.session,
+            "forward_start": _iso(self.forward_start),
+            "from": _iso(self.first),
+            "to": _iso(self.last),
+            "shown": None if self.shown is None else [day.isoformat() for day in self.shown],
+            "exempt": self.exempt,
+        }
+
+    @classmethod
+    def of_event(cls, event: Event) -> ForwardRead:
+        """The read one `forward_read` event records, read totally: a text missing or of
+        another type is empty, a day that does not parse is `None`, a `shown` that is not two
+        days in order is `None` and so exempts nothing, an exemption kanso does not grant is
+        none, and a `via` kanso does not write is a replay's, which is a look of its own."""
+        detail = event.detail
+        via = _text(detail, "via")
+        return cls(
+            hyp_id=event.subject,
+            via=via if via in (STAGE, REPLAY) else REPLAY,
+            of=_text(detail, "of"),
+            target=_text(detail, "target"),
+            where=_text(detail, "where"),
+            session=_text(detail, "session"),
+            forward_start=_day(detail.get("forward_start")),
+            first=_day(detail.get("from")),
+            last=_day(detail.get("to")),
+            shown=_span(detail.get("shown")),
+            exempt=EXEMPT_STAGE if detail.get("exempt") == EXEMPT_STAGE else None,
+            event_id=event.event_id,
+            at=event.ts,
+        )
+
+
+@dataclass(frozen=True)
+class ForwardLook:
+    """One look at a forward window: a version's, every stage read of it together, or a
+    replay's, every read it made together — whose, how, of what, over which forward days
+    and when it was first taken; never what it showed."""
+
+    hyp_id: str
+    via: str
+    of: str
+    target: str
+    first: date | None
+    last: date | None
+    at: str
+
+
+@dataclass(frozen=True)
+class ForwardLooks:
+    """The looks a lineage has taken at the forward window that opens on `start`, oldest
+    first."""
+
+    start: date
+    lineage: tuple[str, ...]
+    taken: tuple[ForwardLook, ...]
+
+    def place(self, of: str) -> int | None:
+        """Which look, counting from one, the look of `of` is; `None` where none is counted."""
+        return next((index for index, look in enumerate(self.taken, 1) if look.of == of), None)
+
+
+def record_read(store: StateStore, read: ForwardRead) -> int:
+    """Record one read of a forward window, and return its event's id."""
+    return store.event(FORWARD_READ, read.hyp_id, read.payload())
+
+
+def reads(store: StateStore, hyp_id: str) -> tuple[ForwardRead, ...]:
+    """Every read of `hyp_id`'s forward window recorded, oldest first."""
+    return tuple(
+        ForwardRead.of_event(event) for event in store.events(kind=FORWARD_READ, subject=hyp_id)
+    )
+
+
+def forward_looks(
+    store: StateStore,
+    hyp_id: str,
+    start: date,
+    *,
+    linked: Mapping[str, Set[str]] | None = None,
+) -> ForwardLooks:
+    """The looks `hyp_id`'s lineage has taken at the forward window that opens on `start`.
+
+    Every read of a member that is not exempt and whose last day is on or after `start`, or
+    does not parse, counts; the reads are grouped by what they were of, each group one look
+    placed at its first read. A caller asking about many hypotheses passes the graph
+    `records.links` read once as `linked`."""
+    lineage = records.lineage(store, hyp_id, linked)
+    counted = sorted(
+        (
+            read
+            for member in lineage
+            for read in reads(store, member)
+            if read.exempt is None and (read.last is None or read.last >= start)
+        ),
+        key=lambda read: read.event_id,
+    )
+    grouped: dict[tuple[str, int], list[ForwardRead]] = {}
+    for read in counted:
+        grouped.setdefault((read.of, 0 if read.of else read.event_id), []).append(read)
+    return ForwardLooks(
+        start=start, lineage=lineage, taken=tuple(_look(group) for group in grouped.values())
+    )
+
+
+def _look(group: Sequence[ForwardRead]) -> ForwardLook:
+    """One look from the reads that make it: placed at the first, over all their days."""
+    first = group[0]
+    return ForwardLook(
+        hyp_id=first.hyp_id,
+        via=first.via,
+        of=first.of,
+        target=first.target,
+        first=min((read.first for read in group if read.first is not None), default=None),
+        last=max((read.last for read in group if read.last is not None), default=None),
+        at=first.at,
+    )
+
+
+def _iso(day: date | None) -> str | None:
+    return None if day is None else day.isoformat()
+
+
+def _text(detail: Mapping[str, object], key: str) -> str:
+    """A text a detail records, or empty where it records none."""
+    value = detail.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _day(value: object) -> date | None:
+    """A day a detail records as an ISO string, or `None` where it does not parse."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _span(value: object) -> Window | None:
+    """Two days in order a detail records, or `None` where it records anything else."""
+    if not isinstance(value, list) or len(value) != 2:
+        return None
+    first, last = _day(value[0]), _day(value[1])
+    if first is None or last is None or last < first:
+        return None
+    return first, last
