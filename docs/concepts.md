@@ -1701,7 +1701,16 @@ a hypothesis whose program said "one side only if the evidence says one side pay
 rewound for trading one side, the run's best at the time, and for an entry filter its
 program listed; and another run's identical Friday skip was judged drift twice and then
 aligned, a verdict that stood, since no later check asks again about a file a check passed.
-So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs.
+So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs. A
+`program.md` written from the template since this release says that fair game is what the
+thesis leaves open, and that a filter, gate, entry condition or exit the thesis does not
+state and the program does not name is another idea, which the judge rewinds; the judge reads
+the program before the thesis, and the proposer reads the same program, so such a program
+forbids the change to both, and naming a direction in it permits it. That is the program's
+rule, not the judge's: one written from an earlier template, which called filters and entry
+and exit rules fair game, permits what it permits. Counted in a live workspace on
+2026-11-17, under programs written from that earlier template: 22 of 37 `misaligned`
+rewinds were filters, gates or exits.
 
 **A direction refused in one run is not met fresh in the next.** Observed in a live workspace
 on 2026-11-15: a run was rewound for a trend filter and then for a volatility filter, and the
