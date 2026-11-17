@@ -59,7 +59,7 @@ reports how many intents it compared, so a gate reading it can tell agreement fr
 **A parity is one look, and a parity of a version over days a stage showed it is none.** The
 two paths read the same days, so the node path records the one read of the forward window the
 parity made (`kanso.replay.run.count`), `where: parity`, of its own session, and the engine path
-records none; the read is written as soon as the node session is on disk, so a parity whose
+records none; the read is written just before the node session's files are, so a parity whose
 engine path then fails has still read the window. A `--strategy S@V` parity whose forward days
 lie wholly inside the days the paper and live stages showed that same version — their reads'
 `shown`, merged, adjacent days joined (`kanso.certify.looks.ran_on_stage`) — reads nothing the

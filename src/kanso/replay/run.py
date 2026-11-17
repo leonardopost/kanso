@@ -18,11 +18,14 @@ which is the window nothing is allowed to backtest, and that is exactly why noth
 here may become evidence for a decision the research loop makes — and why a replay that read
 any day of it is counted: whoever ran it read what it showed.
 
-**The read is recorded as soon as the session's files are on disk.** A session is readable
+**The read is recorded just before the session's files are written.** A session is readable
 from the moment `record.write` returns — `kanso replay show` reads its files — so the read is
-in the store before the session's row or its `replayed` event, and a store that fails between
-them leaves no readable session uncounted. A replay refused, or failed before it wrote its
-session, showed nothing and records nothing.
+in the store first, of the id the files will be filed under (`record.free`), and then the
+files, the session's row and its `replayed` event. A store that refuses the read leaves nothing
+on disk, and a write that fails after it leaves a read whose session was never written, which
+counts a look nobody took rather than missing one somebody did: no session on disk is ever
+uncounted. A replay refused, or failed before it reached its session, showed nothing and
+records nothing.
 """
 
 from __future__ import annotations
@@ -123,13 +126,14 @@ def replay_session(
     exempt: str | None = None,
 ) -> Session:
     """Run one resolved target over `window` on one code path and record what it produced:
-    its session's files, then — where `where` names the replay that read it — its read of the
-    forward window, then the session's row and its `replayed` event.
+    where `where` names the replay that read it, its read of the forward window, then its
+    session's files, row and `replayed` event.
 
-    The read comes between the files and the row because the session is readable from the
-    moment its files are written, so nothing after them may fail with the read not yet in the
-    store. `where` is `None` for a path whose read another path of the same replay records —
-    the engine half of a parity — and `exempt` names why the read counts nothing.
+    The read comes first because the session is readable from the moment its files are
+    written, so nothing may fail between them with the read not yet in the store; it is of the
+    id the files are then filed under. `where` is `None` for a path whose read another path of
+    the same replay records — the engine half of a parity — and `exempt` names why the read
+    counts nothing.
     """
     request = target.request(window)
     instruments, chunks = backtest.window_chunks(request, target.catalog)
@@ -156,9 +160,10 @@ def replay_session(
             "ended_at": record.now(),
         }
     )
-    written = record.write(ws, made, stream, (Intent.of(row) for row in result.intents))
+    filed = record.free(ws, made)
     if where is not None:
-        count(ws, store, target, written, where=where, exempt=exempt)
+        count(ws, store, target, filed, where=where, exempt=exempt)
+    written = record.write(ws, filed, stream, (Intent.of(row) for row in result.intents))
     record.insert(store, written)
     store.event(
         REPLAYED,

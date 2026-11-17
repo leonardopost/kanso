@@ -2256,3 +2256,24 @@ def test_the_pages_say_a_stage_showed_a_version_only_as_far_as_its_series_were_s
         "less the days past the last on which the catalog served every series the version reads "
         "when the window ran" in prose(page("cli.md"))
     )
+
+
+def test_the_pages_say_a_replay_s_read_is_written_before_its_session_s_files() -> None:
+    """A store that refuses the read leaves no session, and one that fails after it counts a look
+    rather than missing one."""
+    concepts = prose(page("concepts.md"))
+    cli = prose(page("cli.md"))
+    assert "A replay's read is recorded just before its session's files are written" in concepts
+    assert (
+        "a write that fails after the read leaves a look nobody took, counted rather than missed"
+        in concepts
+    )
+    assert "recorded as soon as its session's files are on disk" not in concepts
+    for anchor in (
+        "a store that refuses the read leaves nothing in `sessions/`, and no session on disk is "
+        "uncounted",
+        "a write that fails after it leaves a read with no session, which counts a look rather "
+        "than missing one",
+    ):
+        assert anchor in cli, anchor
+    assert "recorded as soon as the session's files are written" not in cli

@@ -2968,10 +2968,11 @@ monitoring pass has judged it. And a replay that reads any day on or after its t
 paths are one look. A card's replay reads the forward window of the file its run pinned, a
 version's its sleeve's, and an attached construct's card, which runs on its host version, reads
 its host sleeve's forward days too and is a look of that lineage as well. A replay's read is
-recorded as soon as its session's files are on disk, where `kanso replay show` reads them, so
-a parity whose engine path then fails has still read the window; a replay refused, or one that
-failed before it wrote its session, showed nothing and is no look. A warmed target's prefix is
-not read: its orders are dropped and it shows nothing.
+recorded just before its session's files are written, where `kanso replay show` reads them, so
+no session on disk is uncounted and a parity whose engine path then fails has still read the
+window; a write that fails after the read leaves a look nobody took, counted rather than missed,
+and a replay refused, or one that failed before it reached its session, showed nothing and is
+no look. A warmed target's prefix is not read: its orders are dropped and it shows nothing.
 
 `kanso replay parity` of a version inside the days a stage already ran it over is no look. A
 `--strategy S@V` parity whose forward days, from the later of `--from` and the forward start

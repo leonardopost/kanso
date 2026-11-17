@@ -310,6 +310,65 @@ def test_a_session_on_disk_is_never_uncounted(
     assert [found.where for found in reads(store, HYP_ID)] == ["node", "parity"]
 
 
+def test_a_read_the_store_refuses_leaves_no_session_and_one_whose_write_fails_still_counts(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read is recorded before the session's files are written: a store that refuses it —
+    locked past its busy timeout by a daemon holding the write lock — leaves nothing `kanso
+    replay show` can read, for a replay and a parity alike, and a write that fails after it
+    leaves a read whose session was never written, which counts a look rather than missing
+    one."""
+    import sqlite3
+    from importlib import import_module
+
+    runner = import_module("kanso.replay.run")
+    carded(ws, store)
+
+    def locked(*_: object, **__: object) -> int:
+        raise sqlite3.OperationalError("database is locked")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(runner, "record_read", locked)
+        for attempt in (
+            lambda: replay.run(ws, store, hyp=HYP_ID),
+            lambda: replay.parity(ws, store, hyp=HYP_ID),
+        ):
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                attempt()
+
+    assert replay.sessions(ws) == []
+    assert reads(store, HYP_ID) == ()
+
+    def full(*_: object, **__: object) -> object:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(record, "write", full)
+    with pytest.raises(OSError, match="no space left on device"):
+        replay.run(ws, store, hyp=HYP_ID)
+
+    assert replay.sessions(ws) == []
+    (unwritten,) = reads(store, HYP_ID)
+    assert looks_of(store) == [unwritten.of]
+
+
+def test_a_read_is_of_the_id_its_session_is_filed_under(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two replays of one target stamped in one second take two ids, the second with a counter;
+    each read, recorded before its files, is of the id they were then filed under."""
+    from datetime import UTC, datetime
+
+    carded(ws, store)
+    monkeypatch.setattr(record, "now", lambda: datetime(2024, 4, 2, 9, 30, tzinfo=UTC))
+
+    first = replay.run(ws, store, hyp=HYP_ID)
+    second = replay.run(ws, store, hyp=HYP_ID)
+
+    assert second.session_id == f"{first.session_id}-2"
+    assert [found.of for found in reads(store, HYP_ID)] == [first.session_id, second.session_id]
+    assert looks_of(store) == [first.session_id, second.session_id]
+
+
 # --- the one exemption --------------------------------------------------------
 
 

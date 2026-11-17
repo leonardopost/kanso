@@ -67,6 +67,7 @@ __all__ = [
     "Session",
     "Stream",
     "digest",
+    "free",
     "insert",
     "intents_of",
     "list_sessions",
@@ -279,7 +280,7 @@ def write(
     twice.
     """
     hashed = points.sha256 if isinstance(points, Stream) else digest(points)
-    resolved = _free(ws, session).model_copy(update={"stream_sha256": hashed})
+    resolved = free(ws, session).model_copy(update={"stream_sha256": hashed})
     directory = session_dir(ws, resolved.session_id)
     directory.mkdir(parents=True)
     write_yaml(resolved, directory / SESSION_FILE)
@@ -359,8 +360,9 @@ def insert(store: StateStore, session: Session) -> Session:
     return session
 
 
-def _free(ws: Workspace, session: Session) -> Session:
-    """The session with the first id whose directory does not exist yet."""
+def free(ws: Workspace, session: Session) -> Session:
+    """The session with the first id whose directory does not exist yet: the id `write` files
+    it under, so long as no other session is written first."""
     base = session.session_id
     identifier, counter = base, 1
     while session_dir(ws, identifier).exists():
