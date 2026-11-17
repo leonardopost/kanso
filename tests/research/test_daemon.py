@@ -172,17 +172,23 @@ def test_a_worker_researches_what_it_claims_and_stops_when_asked(
 def test_a_turn_that_stalled_asks_whether_to_explore_after_the_driver_returned(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Outside the driver, so the parent is requeued before any model writes anything."""
+    """Outside the driver, so the parent is requeued before any model writes anything; and
+    with the lane's own stop request, so a stop or a drain while its seed is measured is the
+    operator's word and spends no spell (`kanso.research.explore`)."""
     hyp_id = classify(ws, store, DOCUMENT)
     scheduler.enqueue(store, hyp_id)
     asked: list[tuple[str, str, bool]] = []
+    stops: list[object] = []
 
     def stalled(_ws: Workspace, opened: StateStore, subject: str, **_: Any) -> Any:
         scheduler.requeue(opened, subject, scheduler.STALL_PRIORITY)
         return SimpleNamespace(ended=True)
 
-    def after_stall(_ws: Workspace, opened: StateStore, subject: str, lane: str) -> None:
+    def after_stall(
+        _ws: Workspace, opened: StateStore, subject: str, lane: str, *, stop: object
+    ) -> None:
         asked.append((subject, lane, bool(scheduler.queued(opened))))
+        stops.append(stop)
         daemon.request_stop()
 
     monkeypatch.setattr(research_driver, "run", stalled)
@@ -190,6 +196,7 @@ def test_a_turn_that_stalled_asks_whether_to_explore_after_the_driver_returned(
 
     assert daemon.worker(ws, "l1", os.getppid()) == 0
     assert asked == [(hyp_id, "l1", True)]
+    assert stops == [daemon.stopping]
     assert daemon.LANE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
 
 

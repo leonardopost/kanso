@@ -198,6 +198,17 @@ so a budget raised under a running daemon reaches its lanes after `kanso researc
 `kanso research start`. A stall's certification is the exception: its plan, its precheck and
 the child that certifies read the file again at the stall (`docs/cli.md`, Certification).
 
+`[research] explore_mechanisms` lists the mechanisms a draft `kanso hyp explore` writes may
+state besides its parent's own: any of `mean_reversion`, `momentum`, `microstructure`,
+`stat_arb`, `event`, `carry`, `vol` and `other`, the values a hypothesis's `mechanism` takes.
+The template writes `[]`, and a file without the key reads the same: a draft states the
+mechanism of its parent's newest pin and no other. The key widens and never narrows — the
+parent's own is always admissible, so `["momentum"]` under a `mean_reversion` parent admits
+both — and it is your statement of what a draft may move to, not a search rule an agent sets.
+A name outside the eight is a validation failure naming `research.explore_mechanisms` (exit
+3, from every command that opens the workspace). The rule binds the field a draft declares,
+not what its `strategy.py` does (`docs/concepts.md`, exploring).
+
 `[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
 many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.

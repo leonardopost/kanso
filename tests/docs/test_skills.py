@@ -63,6 +63,39 @@ def test_the_hypothesis_skill_states_a_grid_in_the_keys_the_schema_reads() -> No
     assert "take N from the operator, never from your own reading of the file" in text
 
 
+def test_the_hypothesis_skill_says_a_draft_states_its_parent_s_mechanism() -> None:
+    """The agent an `explored` entry lands in front of reads here that the mechanism is the
+    parent's unless the workspace widens it, and that the rule binds the field, not the code."""
+    text = skill(PACKAGED, "kanso-hypothesis")
+    assert (
+        "It states its parent's `mechanism` unless `[research] explore_mechanisms` widens it;"
+        " the rule reads the field and not the code"
+    ) in text
+
+
+def test_the_hypothesis_skill_reads_a_draft_s_seed_beside_the_parent_s_best_and_its_trials() -> (
+    None
+):
+    """The agent recommending `hyp add` is told the score is the seed's as the parent's card,
+    and to read it beside the two numbers that make it mean something — named as the summary
+    `kanso inbox` shows spells them, since no command shows the rest of the event they are also
+    on. `T` is what the draft is priced from, traded cards and declared grids, which the skill
+    once said of every card of the family; and the rationale the summary cuts is in the inbox."""
+    from tests.docs.test_pages import SUMMARY
+
+    text = skill(PACKAGED, "kanso-hypothesis")
+    assert f"`{SUMMARY}`" in text
+    assert "Its seed was measured once as one more card of the parent" in text
+    assert "`B` is `parent_best`" in text and "`T` is `inherited_trials`" in text
+    assert "which every result it reaches is priced against" not in text
+    assert (
+        "the cards of the families its `derived_from` names that ran and traded, plus the "
+        "settings their `prior_trials` grids declared"
+    ) in text
+    assert "`kanso inbox` prints the whole rationale beneath the entry" in text
+    assert "is the operator's to write with `kanso hyp new`" in text
+
+
 def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
     """A plan carries its correction, a pinned one is refused without it and a search is
     priced over its draws, a declared grid's settings among them: a skill counting cards alone

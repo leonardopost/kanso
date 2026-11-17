@@ -58,6 +58,7 @@ def test_the_unread_are_listed_with_what_to_do_about_them(
     assert entry["subject"] == HYP_ID
     assert entry["acked_at"] is None
     assert f"kanso align check {HYP_ID}" in entry["actions"]
+    assert "rationale" not in entry, "only an `explored` entry names a draft with one"
 
 
 def test_the_human_list_is_the_entry_then_its_actions(runner: CliRunner, escalated: Path) -> None:

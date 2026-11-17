@@ -771,9 +771,15 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
     `lane_failed`. The lane itself is held while it explores, and claims nothing: the
     `explore` class is routed to the top tier, so its ladder is two attempts, each waiting up
     to `REQUEST_TIMEOUT_S` (420 s) for an answer — about fourteen minutes at worst, once per
-    spell — and a supervisor that died meanwhile is noticed only when the call returns. A
+    spell — and a supervisor that died meanwhile is noticed only when the call returns. Each
+    answer that passes the static checks adds one probe, its seed run once as the parent's
+    card under the parent's newest run's `card_budget_s` and memory cap, and the parent's
+    host-alone or hold run is computed once beside them where its objective reads one. A
     `research stop` is not delayed by it: the lane is killed after the shared grace and the
-    call with it.
+    call with it, and a probe's child with it. The lane passes `stopping` to the exploration:
+    a drain arriving mid-probe lets the child finish, as every child under a drain does, and
+    the model is then not asked again; a stop or a drain that arrives first starts no probe.
+    None of these leaves an event, so the spell of stalls is not spent.
 
     A lane told to stop starts nothing more: the driver asks before every proposal and
     every card, and an exploration is not begun either. The same holds once `supervisor`,
@@ -808,7 +814,7 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
                 _wait(BACKOFF_S)
             else:
                 if outcome.ended and not stopping():
-                    explore.after_stall(ws, store, subject, lane)
+                    explore.after_stall(ws, store, subject, lane, stop=stopping)
     return 0
 
 

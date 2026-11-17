@@ -205,10 +205,17 @@ def _explore(ws: Workspace, hyp_id: str) -> Report:
         # Exploring by hand is the operator's own act, so its spend is the interactive lane's.
         written = explore(ws, opened, hyp_id, lane=DEFAULT_LANE)
     path = written.directory / hyp.HYPOTHESIS_FILE
+    seed = written.seed
+    start, end = seed.window
+    measured = (
+        f"{seed.metric:.6g} ± {seed.se:.3g} · {seed.trades} trades · {seed.objective} as a card "
+        f"of {written.parent} over {start}..{end} · {seed.books} book(s) compared"
+    )
     lines = (
         field("explored", f"{written.hyp_id} · from {written.parent}"),
         field("dir", written.directory),
         field("tags", ", ".join(written.tags)),
+        field("seed", measured),
         indent(written.rationale),
         field("inbox", written.escalation_id),
         field("next", f"kanso hyp validate {path}"),

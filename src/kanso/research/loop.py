@@ -77,6 +77,22 @@ the strategy replaced (`backtest.benchmark`) — in a child of the lane, as a ca
 the baseline, and every card of the run is differenced against the same one, exactly as an
 attached construct's cards are against one host-alone run. The lane keeps the run the
 child reported and none of what producing it cost.
+
+**A probe is a card nobody records.** `probe` runs one strategy as a card of a run — the
+run's pinned file, snapshot and host version (`setup_of`), its card budget and memory cap,
+its research window and nothing else, in a child with no path to the catalog — by the same
+steps a card runs it by (`_card_run`), and scores it with the installed objective as a card
+of a resumed run is scored. It reads what a card reads of the store: the books stored under
+the run's pins and the probe's reading, which it is matched against by the redundancy rule's
+two clauses (`records.matched_book`), and how many there were (`records.books`). It writes
+nothing: no card, no signature, no measurement, no trial, no event, and it moves no best and
+no stall. The signature above all, because a stored book is an anchor every later card of
+the run is judged against: a probe's book on record would make the run's own cards
+redundant against a book none of its cards held, and `kanso research show --sha` would find
+no card of it. A probe executes only bytes its caller scanned under the same setup: the
+static half of `strategy_integrity` is its caller's to run first, as a card runs it first,
+because the order is the embargo. `kanso hyp explore` is the caller, measuring a draft's
+seed as one more card of its parent before the draft is written.
 """
 
 from __future__ import annotations
@@ -154,6 +170,7 @@ __all__ = [
     "INPUTS",
     "MIN_CARD_BUDGET_S",
     "OverBudgetError",
+    "Probe",
     "REDUNDANT",
     "RESEARCHABLE",
     "RESOURCES",
@@ -168,6 +185,8 @@ __all__ = [
     "end",
     "mem_cap",
     "ongoing",
+    "probe",
+    "setup_of",
 ]
 
 BASELINE: Final = "baseline"
@@ -517,6 +536,17 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         prefix=backtest.warmup_prefix(hyp, window, catalog, grains),
         extensions=extensions,
     )
+
+
+def setup_of(ws: Workspace, store: StateStore, run: RunRecord) -> Setup:
+    """The setup every card of `run` is judged under: its pinned `hypothesis.yaml`, parsed
+    from the blob it stored, at the host version it pinned.
+
+    The one way a card, a turn of cards and a probe set themselves up, so the three cannot
+    read one run two ways. Refused, as `_setup` refuses, when the pins can no longer be set
+    up: a host that is gone, venues that resolve to two models, a definition missing.
+    """
+    return _setup(ws, store, _pinned(ws, store, run), run.host_version)
 
 
 def _sleeve_budget(
@@ -1564,6 +1594,111 @@ def _refuse_baseline(
     raise refusal(f"the baseline card of {hyp_id} did not run: {why}", remedy=remedy)
 
 
+def _card_run(
+    ws: Workspace,
+    setup: Setup,
+    run: RunRecord,
+    source: bytes,
+    directory: Path,
+    *,
+    cache: dict[str, CardRun],
+) -> tuple[backtest.RunRequest, backtest.RunResult, CardRun | None, CardRun | None]:
+    """A card's backtest: the host-alone and benchmark runs it reads, each computed once per
+    `cache`, then `source` under the run's card budget and memory cap over the research
+    window, in a child of `directory`. The request, the result and the two runs beside it.
+
+    Shared by `card` and `probe`, so one strategy is never run two ways as a card of a run.
+    """
+    host_run = _host_run(
+        setup,
+        snapshot_id=run.snapshot_id,
+        budget_s=run.card_budget_s,
+        directory=directory,
+        cache=cache,
+    )
+    benchmark_run = _benchmark_run(
+        setup, snapshot_id=run.snapshot_id, directory=directory, cache=cache
+    )
+    request = _request(
+        setup,
+        source,
+        run.snapshot_id,
+        budget_s=run.card_budget_s,
+        mem_cap_gb=mem_cap(ws, run),
+    )
+    result = backtest.run_subprocess(request, setup.catalog, directory, setup.extensions)
+    return request, result, host_run, benchmark_run
+
+
+@dataclass(frozen=True)
+class Probe:
+    """One strategy run as a card of a run and recorded as nothing (`probe`).
+
+    `measured` is what it was scored from, `None` when the run crashed or its sizing refused
+    an order; `metric` and `se` are that score, zero without one. `like` is the stored book
+    it matched under the run's pins and its reading, with whether its number agreed, and
+    `books` how many stored books there were to match: a check against none is reported as
+    none rather than read as a pass. `floor` is the noise floor the two numbers were
+    compared on. `killed` is the failed `RESOURCES` verdict a card killed for its memory or
+    its clock carries, and empty for every other run.
+    """
+
+    request: backtest.RunRequest
+    result: backtest.RunResult
+    measured: records.Measurement | None
+    metric: float = 0.0
+    se: float = 0.0
+    like: records.Match | None = None
+    books: int = 0
+    floor: float = 0.0
+    killed: tuple[GateResult, ...] = ()
+
+
+def probe(
+    ws: Workspace,
+    store: StateStore,
+    run: RunRecord,
+    setup: Setup,
+    source: bytes,
+    *,
+    directory: Path,
+    cache: dict[str, CardRun],
+) -> Probe:
+    """Run `source` as one more card of `run` and record nothing.
+
+    `setup` is `setup_of(run)`, and the run is the card's own: the pinned file, snapshot and
+    host version, the card budget and memory cap, the research window, and the host-alone
+    or hold run computed once per `cache`. It is scored by the installed kanso, as a card of
+    a run resumed across an upgrade is (`_measure`), and matched by both clauses of the
+    redundancy rule against the books stored under the run's pins and the probe's reading.
+    Nothing is written: no card, signature, measurement, trial or event.
+
+    A probe executes only bytes its caller scanned under the same setup — the static half of
+    `strategy_integrity` is not run here, and the caller runs it first, as a card does —
+    and in a directory of the caller's that is never a lane directory a card is running in,
+    whose transfer room the child empties.
+    """
+    request, result, host_run, benchmark_run = _card_run(
+        ws, setup, run, source, directory, cache=cache
+    )
+    if result.refused is not None or result.crashed:
+        return Probe(request, result, None, killed=tuple(_killed(result, request)))
+    measured = _measure(setup, result.run, host_run, benchmark_run)
+    metric, se = measured.compute()
+    floor = _noise_floor(setup, se)
+    like = records.matched_book(
+        store,
+        run,
+        records.signature(result.run, setup.hourly),
+        ws.config.research.redundant_pct,
+        metric,
+        floor,
+        setup.measured_under,
+    )
+    books = records.books(store, run, setup.measured_under)
+    return Probe(request, result, measured, metric, se, like, books, floor)
+
+
 def card(
     ws: Workspace,
     store: StateStore,
@@ -1589,7 +1724,7 @@ def card(
     nothing is recorded (`ongoing`).
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
-    setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
+    setup = setup_of(ws, store, run)
     directory = ws.root / run.dir
     source = _lane_source(store, run, directory)
     strategy_sha = store.put_blob(source)
@@ -1618,27 +1753,9 @@ def card(
         )
     still = partial(ongoing, store, run)
     with backtest.wanted(still):
-        host_run = _host_run(
-            setup,
-            snapshot_id=run.snapshot_id,
-            budget_s=run.card_budget_s,
-            directory=directory,
-            cache=_HOST_RUNS.setdefault(run.run_id, {}),
+        request, result, host_run, benchmark_run = _card_run(
+            ws, setup, run, source, directory, cache=_HOST_RUNS.setdefault(run.run_id, {})
         )
-        benchmark_run = _benchmark_run(
-            setup,
-            snapshot_id=run.snapshot_id,
-            directory=directory,
-            cache=_HOST_RUNS.setdefault(run.run_id, {}),
-        )
-        request = _request(
-            setup,
-            source,
-            run.snapshot_id,
-            budget_s=run.card_budget_s,
-            mem_cap_gb=mem_cap(ws, run),
-        )
-        result = backtest.run_subprocess(request, setup.catalog, directory, setup.extensions)
     still()  # the card's last poll may have come before the end did
     return _judge(
         ws,
@@ -1705,7 +1822,7 @@ def run_batch(
     recorded, in slot order, and a redundant one does not refuse the rest of the turn.
     """
     run = records.require_active(store, hyp_id, lanes.check_lane(lane))
-    setup = _setup(ws, store, _pinned(ws, store, run), run.host_version)
+    setup = setup_of(ws, store, run)
     directory = ws.root / run.dir
     frozen = run
     prior = records.prior_trials(store, hyp_id)

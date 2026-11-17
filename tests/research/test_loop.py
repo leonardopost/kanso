@@ -1636,6 +1636,91 @@ def test_a_card_killed_for_its_memory_says_so_and_one_that_raised_does_not(
     assert verdict.evidence["slots"] == 1
 
 
+RECORDED: Final = ("cards", "signatures", "blobs", "events", "runs")
+"""Every table a card writes to: the card, its book, its bytes and measurement, its event, and
+the run whose best and budget it may move."""
+
+
+def rows_of(store: StateStore) -> dict[str, list[tuple[object, ...]]]:
+    return {
+        table: [tuple(row) for row in store.connection.execute(f"SELECT * FROM {table}")]
+        for table in RECORDED
+    }
+
+
+def test_a_probe_measures_what_a_card_of_the_run_records_and_records_nothing(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A repeat check means something only if the probe's number and book are the ones a card
+    of the run would have recorded, and the probe leaves no trace a card would: otherwise it
+    is a card by another name (`docs/backlog.md` row 85)."""
+    run = loop.begin(ws, store, registered)
+    room = lanes.prepare(ws.path("runs", "op", ".probe"))
+    setup = loop.setup_of(ws, store, run)
+    before = rows_of(store)
+
+    found = loop.probe(ws, store, run, setup, REVERTING, directory=room, cache={})
+    respelt = REVERTING + b"# spelt otherwise\n"
+    again = loop.probe(ws, store, run, setup, respelt, directory=room, cache={})
+
+    assert rows_of(store) == before
+    assert (found.books, found.like) == (1, None), "the flat baseline's book, and no match"
+    assert found.measured is not None and found.measured.compute() == (found.metric, found.se)
+    edit(ws, run, REVERTING)
+    carded = loop.card(ws, store, registered, "the trough rule")
+    assert carded.status == "keep"
+    assert (found.metric, found.se) == (carded.metric, carded.metric_se)
+    (stored,) = store.connection.execute(
+        "SELECT signature FROM signatures WHERE strategy_sha = ?", (carded.strategy_sha,)
+    ).fetchone()
+    assert records.signature(found.result.run, setup.hourly) == json.loads(stored)
+    # The respelling was matched before the card it repeats was stored, so it matched
+    # nothing; once that card's book is on record the probe's answer is the card's own.
+    assert again.like is None
+    edit(ws, run, respelt)
+    with pytest.raises(loop.RedundantError):
+        loop.card(ws, store, registered, "the trough rule, spelt otherwise")
+    (event,) = store.events(kind=loop.REDUNDANT, subject=registered)
+    setup = loop.setup_of(ws, store, run)
+    after = loop.probe(ws, store, run, setup, respelt, directory=room, cache={})
+    assert after.like is not None and after.like.agreed
+    assert after.like.like[:7] == event.detail["like"] == carded.strategy_sha[:7]
+    assert (after.like.matched, after.like.shared) == (
+        event.detail["matched"],
+        event.detail["sessions"],
+    )
+    assert (after.metric, after.floor, after.like.earned) == (
+        event.detail["metric"],
+        event.detail["floor"],
+        event.detail["like_metric"],
+    )
+    assert after.books == 3, "the baseline, the keep and the redundant card"
+
+
+def test_a_probe_s_kill_carries_the_resources_verdict_a_card_s_would(
+    ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A probe killed for its memory measured nothing, and says what killed it in the
+    numbers a card's `resources` verdict carries, so its caller reads no private of the loop."""
+    monkeypatch.setattr("kanso.nautilus.backtest.MEMORY_POLL_S", 0.0)
+    run = loop.begin(ws, store, registered)
+    room = lanes.prepare(ws.path("runs", "op", ".probe"))
+    monkeypatch.setattr(loop, "mem_cap", lambda *args, **kwargs: 1e-6)
+    setup = loop.setup_of(ws, store, run)
+
+    found = loop.probe(ws, store, run, setup, REVERTING, directory=room, cache={})
+    edit(ws, run, REVERTING)
+    carded = loop.card(ws, store, registered, "outgrows its share")
+
+    assert found.result.crashed and found.measured is None
+    assert found.killed == tuple(loop._killed(found.result, found.request))
+    (verdict,) = found.killed
+    (card_s,) = [gate for gate in carded.gate_results if gate.id == loop.RESOURCES]
+    assert (verdict.id, verdict.passed) == (loop.RESOURCES, False)
+    shared = ("killed", "cap_gb", "slots")
+    assert [verdict.evidence[key] for key in shared] == [card_s.evidence[key] for key in shared]
+
+
 def test_one_card_is_costed_with_one_venue_model() -> None:
     from kanso.schemas import VenueOverride, resolve_venue_model
 
