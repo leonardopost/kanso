@@ -1798,12 +1798,15 @@ next run's base, which no check judges. A keep whose check did not happen — th
 told to stop first, which ends the invocation there, or the judge could not answer — is
 owed, and the run's next driver invocation, a daemon lane's next turn included, makes that
 check before it proposes anything; `kanso research run ID --cards 0` makes it and proposes
-nothing. So is a keep you carded by hand in a run the driver then resumes. It costs one
-`align_check` call per keep the judge answers, and never more than one per card; a judge
-that cannot answer is asked again at every invocation, with no card between. After a keep's
-check the lane holds bytes a check answered for, and every card that does not keep restores
-it to them, so the clock's checks find nothing new and ask no model — `judged: false` —
-unless the lane was written by hand: the clock is the backstop.
+nothing. So is a keep you carded by hand in a run the driver then resumes, and it is judged
+on the run's best: a lane you wrote the base, or the file the last check left it on, back
+over holds nothing a check would judge, so the driver puts the best back in the lane first,
+where its next card that does not keep would have put it. It costs one `align_check` call
+per keep the judge answers, and never more than one per card; a judge that cannot answer is
+asked again at every invocation, with no card between. After a keep's check the lane holds
+bytes a check answered for, and every card that does not keep restores it to them, so the
+clock's checks find nothing new and ask no model — `judged: false` — unless the lane was
+written by hand: the clock is the backstop.
 
 A run ended by hand ends where you end it, and that is what is left uncovered: a keep you
 carded by hand, one a stop or a judge that could not answer left owed, or one whose check is

@@ -106,7 +106,9 @@ holds bytes a check answered for, and every card that does not keep restores it 
 the clock asks no model unless the lane was written by hand: one `align_check` call per keep
 the judge answers, never more than one per card. A keep whose check did not happen — a stop
 came first, which ends the invocation there, or the judge could not answer — is owed
-(`align.owed`), and the next invocation makes that check before it proposes anything. Each
+(`align.owed`), and the next invocation makes that check before it proposes anything; one
+carded by hand and then written over with the base is judged on the run's best, which the
+loop would have put back in the lane at its next card that does not keep. Each
 check first asks whether the run is still open (`loop.ongoing`), so a `research end` that
 landed between a keep and its check lets the lane go rather than failing it.
 
@@ -150,6 +152,8 @@ from kanso.research import loop as research_loop
 from kanso.schemas import Card, Hypothesis, RunRecord, Tag, parse_yaml
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from pathlib import Path
+
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
@@ -338,7 +342,8 @@ def run(
     clock's check falls due every `align_every` cards; a keep that falls on the clock is one
     check. A keep a stop or a judge that could not answer left unjudged, or one carded by
     hand, is owed (`align.owed`), and is judged before this invocation proposes anything —
-    with `cards=0` too, which then proposes nothing. A judge that cannot answer raises the
+    with `cards=0` too, which then proposes nothing — on the run's best when the lane holds
+    bytes a check has answered for (`_onto_best`). A judge that cannot answer raises the
     router's refusal after the keep is recorded, and the keep stays owed.
 
     `stop` is asked before every proposal, again before the card a proposal produced, and
@@ -371,10 +376,13 @@ def run(
     previous = _last_diff(store, active)
     reason = CARDS
 
-    def judge() -> None:
-        """One alignment check of a run `research end` has not closed, counted."""
+    def judge(*, owed: bool = False) -> None:
+        """One alignment check of a run `research end` has not closed, counted; an owed one
+        on the run's best when the lane was written back by hand (`_onto_best`)."""
         nonlocal active, checks, drifts, waiting
         active = research_loop.ongoing(store, active)
+        if owed:
+            _onto_best(store, active, directory)
         aligned, _ = align.check(ws, store, hyp_id, lane)
         checks += 1
         drifts += 0 if aligned else 1
@@ -384,7 +392,7 @@ def run(
         if stop():
             reason = STOPPED
         else:
-            judge()
+            judge(owed=True)
 
     while reason == CARDS and (cards is None or proposed < cards):
         if stop():
@@ -1334,6 +1342,24 @@ def _carded(store: StateStore, active: RunRecord, candidate: bytes) -> sqlite3.R
         (*_pins(active), hashlib.sha256(candidate).hexdigest()),
     ).fetchone()
     return row
+
+
+def _onto_best(store: StateStore, run: RunRecord, directory: Path) -> None:
+    """Put the run's best back in the lane when a keep is owed and the lane holds bytes a check
+    has answered for: the run's base, or the bytes the last check left it on.
+
+    A check that finds the lane on those judges nothing and leaves the keep owed
+    (`align.check`), and only a hand puts the lane there with a keep past the checkpoint — an
+    operator who cards a file and writes the base back over it. The loop itself leaves the
+    lane on the run's best after every card that does not keep, so the first such card would
+    put the keep back, and a stall at the next could certify it before any check had judged
+    it. So the lane goes where that card would have put it, before the check, and the check
+    judges the keep. A file written by hand that no check has seen stays: it is what the
+    check judges, as `kanso align check` would.
+    """
+    source = align.lane_strategy(store, run, directory)
+    if hashlib.sha256(source).hexdigest() in (run.base_sha, align.checkpoint(store, run).sha):
+        lanes.restore(store, directory, {STRATEGY_FILE: run.best_sha or run.base_sha})
 
 
 def _trailing_non_keeps(store: StateStore, active: RunRecord) -> int:

@@ -42,7 +42,7 @@ from .mocked import (  # noqa: F401
     scripted,
     tuned,
 )
-from .test_driver_align import ended_run
+from .test_driver_align import REVERTING, ended_run, lane_file, write_lane
 from .test_scheduler import open_run
 
 NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+here\n"
@@ -2062,3 +2062,68 @@ def test_an_invocation_asked_for_no_cards_judges_an_owed_keep(
     assert (outcome.checks, outcome.proposed, outcome.reason) == (1, 0, "cards")
     assert len(recorded.of("align_check")) == 1
     assert not align.owed(store, records.require_active(store, prepared_hyp))
+
+
+@pytest.mark.parametrize("verdict", [ALIGNED, DRIFTED], ids=["aligned", "drifted"])
+def test_a_keep_written_back_over_by_hand_is_judged_on_the_best_before_the_run_proposes(
+    ws: Workspace,
+    store: StateStore,
+    prepared_hyp: str,
+    recorded: Recorder,
+    verdict: dict[str, Any],
+) -> None:
+    """A keep carded by hand, then taken back out of the lane by writing the base over it, is
+    owed a check that a lane on the base cannot give: a check there judges nothing. Left there,
+    the first card that does not keep put the keep back in the lane, and a stall at the second
+    certified a keep no check had judged. The owed check now puts the run's best back in the
+    lane first, where that card would have put it, and judges the keep before any proposal."""
+    workspace = tuned(ws, stall_k=2, align_every=10)
+    scripted(workspace, propose=[proposal("boom"), proposal("boom")], align_check=[verdict])
+    research_loop.begin(workspace, store, prepared_hyp)
+    write_lane(workspace, prepared_hyp, REVERTING)
+    kept = research_loop.card(workspace, store, prepared_hyp, "trade the trough")
+    assert kept.status == "keep"
+    write_lane(workspace, prepared_hyp, SEED)
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert outcome.reason == "stalled"
+    assert [call.task_class for call in recorded.calls][:2] == ["align_check", "propose"]
+    (call,) = recorded.of("align_check")
+    assert json.loads(call.user)[STRATEGY_FILE] == REVERTING.decode("utf-8")
+    judged = [
+        event
+        for event in store.events(subject=prepared_hyp)
+        if event.kind in (align.ALIGNED, align.DRIFTED) and event.detail.get("judged", True)
+    ]
+    kinds = [event.kind for event in store.events(subject=prepared_hyp)]
+    assert len(judged) == 1
+    assert kinds.index(judged[0].kind) < kinds.index(scheduler.STALLED)
+    run = records.runs_of(store, prepared_hyp)[0]
+    assert not align.owed(store, run)
+    (stalled,) = store.events(kind=scheduler.STALLED, subject=prepared_hyp)
+    if verdict is ALIGNED:
+        assert stalled.detail["best_sha"] == kept.strategy_sha
+    else:
+        assert stalled.detail["best_sha"] == run.base_sha
+        assert certificate.latest(store, prepared_hyp) is None
+
+
+def test_a_keep_s_owed_check_leaves_a_lane_written_by_hand_where_it_is(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Guard: only a lane on bytes a check answered for is put back on the run's best. A file
+    written by hand that no check has seen is what the owed check judges, as `kanso align
+    check` would, and the lane keeps it."""
+    scripted(ws, propose=[proposal("weak")], align_check=[ALIGNED])
+    research_loop.begin(ws, store, prepared_hyp)
+    write_lane(ws, prepared_hyp, REVERTING)
+    assert research_loop.card(ws, store, prepared_hyp, "trade the trough").status == "keep"
+    edited = REVERTING.replace(b"5_000.0", b"2_500.0")
+    write_lane(ws, prepared_hyp, edited)
+
+    driver.run(ws, store, prepared_hyp, cards=0)
+
+    (call,) = recorded.of("align_check")
+    assert json.loads(call.user)[STRATEGY_FILE] == edited.decode("utf-8")
+    assert lane_file(ws, prepared_hyp) == edited

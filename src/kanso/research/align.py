@@ -58,9 +58,11 @@ which no check judges. On a clock alone a keep followed by a spell of misses —
 toward `stall_k` and not toward `align_every` — could stall unjudged and be certified. A keep
 whose check did not happen — the driver was told to stop first, or the judge could not answer
 — is `owed`, and so is one carded by hand, and the driver's next invocation on the run makes
-that check before it proposes. A run ended by hand ends where the operator ends it, and a keep
-owed then is carried as the next run's base unjudged: `kanso align check` judges a run of lane
-`op` before its end, and refuses one a daemon lane owns, whose own next turn judges it.
+that check before it proposes, on the run's best where a hand wrote the base or the
+checkpoint's bytes back over the keep. A run ended by hand ends where the operator ends it,
+and a keep owed then is carried as the next run's base unjudged: `kanso align check` judges a
+run of lane `op` before its end, and refuses one a daemon lane owns, whose own next turn
+judges it.
 
 The syntax tree still reads the base and the checkpoint's bytes. What it finds is a fact
 about the bytes rather than an opinion of them: it costs nothing, it says the same thing
@@ -442,7 +444,9 @@ def owed(store: StateStore, run: RunRecord) -> bool:
     The driver judges every keep as it is made, so this is true only where that check did not
     happen — a stop came first, or the judge could not answer — or where the keep was carded by
     hand, and the driver's next invocation makes the check before it proposes. A check that
-    judged nothing stops short of such a keep (`_unanswered_keep`), so it leaves it owed.
+    judged nothing stops short of such a keep (`_unanswered_keep`), so it leaves it owed —
+    which is why the driver puts the run's best back in a lane on those bytes before it makes
+    an owed check.
     """
     return _unanswered_keep(store, run, checkpoint(store, run)) is not None
 

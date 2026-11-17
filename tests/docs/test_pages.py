@@ -584,6 +584,10 @@ def test_the_pages_say_a_keep_is_judged_as_it_is_made_and_what_it_costs() -> Non
         alignment
     )
     assert "`kanso research run ID --cards 0` makes it and proposes nothing" in alignment
+    assert "So is a keep you carded by hand in a run the driver then resumes, and it is judged" in (
+        alignment
+    )
+    assert "so the driver puts the best back in the lane first" in alignment
     assert "A run ended by hand ends where you end it" in alignment
     assert "For a run in lane `op`, `kanso align check ID` before `kanso research end ID`" in (
         alignment
@@ -609,6 +613,7 @@ def test_the_pages_say_a_keep_is_judged_as_it_is_made_and_what_it_costs() -> Non
         in (rows["research run"])
     )
     assert "`--cards 0` judges an owed keep and proposes nothing" in rows["research run"]
+    assert "on the run's best, which the driver puts back in the lane first" in rows["research run"]
     assert "becomes the next run's base unjudged" in rows["research end"]
     assert (
         "For a run in lane `op`, `kanso align check ID` first; for a run in a daemon"
