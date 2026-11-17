@@ -68,8 +68,10 @@ forward window is a look of its sleeve's lineage there, and every replay that re
 (`kanso.certify.looks`); the monitor counts them and hands the count in (`GateContext.looks`),
 and the gate copies it into its evidence — `look`, which look this version is, `null` where no
 read of it is counted; `looks`, how many the lineage has taken, this version's included; and
-`lineage` — and nothing else reads it. It judges by the `resolve` and `min_fraction` the plan
-pins at any look, and a caller that counted nothing gets the evidence without the three keys.
+`lineage` — and nothing else reads it. It is copied whether the gate judged or skipped, since a
+skip passes and a version it passes is promotable at its look like any other. It judges by the
+`resolve` and `min_fraction` the plan pins at any look, and a caller that counted nothing gets
+the evidence without the three keys.
 """
 
 from __future__ import annotations
@@ -104,6 +106,18 @@ class _ForwardHoldout:
     id: ClassVar[str] = "forward_holdout"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
+        found = self._judge(ctx)
+        if ctx.looks is None:
+            return found
+        counted = {
+            "look": ctx.looks.look,
+            "looks": ctx.looks.looks,
+            "lineage": list(ctx.looks.lineage),
+        }
+        return found.model_copy(update={"evidence": {**found.evidence, **counted}})
+
+    def _judge(self, ctx: GateContext) -> GateResult:
+        """The verdict, or the skip, before the look is copied in."""
         resolve, fraction = number(ctx, "resolve"), number(ctx, "min_fraction")
         if resolve is None or fraction is None:
             return skipped(self.id, NO_PARAMS)
@@ -146,15 +160,6 @@ class _ForwardHoldout:
                 _forward(ctx.benchmark_run, start),
             )[0]
         )
-        counted = (
-            {}
-            if ctx.looks is None
-            else {
-                "look": ctx.looks.look,
-                "looks": ctx.looks.looks,
-                "lineage": list(ctx.looks.lineage),
-            }
-        )
         return verdict(
             self.id,
             judged and realised is not None and realised > bar,
@@ -172,7 +177,6 @@ class _ForwardHoldout:
                 "bar": bar,
                 "se_fwd": se_fwd,
                 **_power(expected, bar, se_fwd),
-                **counted,
             },
         )
 

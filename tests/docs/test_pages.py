@@ -2277,3 +2277,11 @@ def test_the_pages_say_a_replay_s_read_is_written_before_its_session_s_files() -
     ):
         assert anchor in cli, anchor
     assert "recorded as soon as the session's files are written" not in cli
+
+
+def test_the_pages_say_forward_holdout_carries_its_look_on_a_skip() -> None:
+    """A skip passes, so the version it passes is promotable at a look the evidence must name."""
+    assert (
+        "whether the gate judged or skipped, since a skip passes and its version is promotable "
+        "at its look" in prose(page("cli.md"))
+    )

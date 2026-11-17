@@ -350,7 +350,7 @@ def test_the_promote_skill_reports_a_promotable_version_with_its_forward_look() 
     """A version is promotable at any look, so the agent reports which look it was, and offers
     the parity that is no look rather than the replay that is one."""
     text = re.sub(r"\s+", " ", skill(PACKAGED, "kanso-promote"))
-    assert "Its evidence also carries `look`, `looks` and `lineage`" in text
+    assert "Its evidence also carries `look`, `looks` and `lineage`, a skip's too" in text
     assert 'Report a `promotable` version with "look k of n" beside it' in text
     assert "offer `kanso replay run --strategy <id>@<v>` over the paper period" not in text
     assert "`kanso replay parity --strategy <id>@<v> --from … --to …`" in text

@@ -527,6 +527,29 @@ def test_the_evidence_carries_the_look_its_caller_counted_and_nothing_when_it_co
     assert {key: counted.evidence[key] for key in uncounted.evidence} == uncounted.evidence
 
 
+def test_a_skip_carries_the_look_its_caller_counted_too() -> None:
+    """A skip passes, so a version it passes is promotable at its look like any other: the look
+    the monitor counted is in the evidence whatever the gate lacked, and nothing else is."""
+    looks = LookCount(look=1, looks=2, lineage=("demo_mr",))
+    no_objective = hypothesis().model_copy(update={"objective": None})
+    unrecorded = replace(
+        gate_context(params=PARAMS, record=stage_record()),
+        expectation={"objective_id": "wf_sharpe_net", "value": 1.0, "ci90": [0.5, 1.5]},
+    )
+    cases = {
+        NO_PARAMS: gate_context(params={"resolve": 1.0}, record=stage_record()),
+        NO_STAGE: gate_context(params=PARAMS),
+        NO_EXPECTATION: gate_context(params=PARAMS, record=stage_record(), value=None),
+        NO_OBJECTIVE: gate_context(params=PARAMS, record=stage_record(), hyp=no_objective),
+        NO_DISPERSION: unrecorded,
+    }
+
+    for reason, ctx in cases.items():
+        result = gate.evaluate(replace(ctx, looks=looks))
+        assert result.passed and result.skipped == reason, reason
+        assert result.evidence == {"look": 1, "looks": 2, "lineage": ["demo_mr"]}, reason
+
+
 @settings(max_examples=40, deadline=None)
 @given(
     count=st.builds(

@@ -459,8 +459,9 @@ the forward start of the sleeve's registered pin, and `forward_holdout`'s eviden
 `look`, which look this version is — `null` where none of its windows recorded a read, as for
 one whose every window was realised before this release — `looks`, how many the lineage has
 taken, this version's included, and `lineage`, the registered hypotheses joined to the sleeve
-by `derived_from`, either way. The count moves no verdict: the gate judges by the `resolve` and
-`min_fraction` the sleeve's plan pins at that pass, at any look.
+by `derived_from`, either way — whether the gate judged or skipped, since a skip passes and its
+version is promotable at its look. The count moves no verdict: the gate judges by the `resolve`
+and `min_fraction` the sleeve's plan pins at that pass, at any look.
 
 ## Models
 
