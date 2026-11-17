@@ -3012,8 +3012,12 @@ reads and its `--strategy` replays are charged to its sleeve's lineage alone.
 The count judges nothing. At every monitoring pass `forward_holdout` judges a paper version by
 the `resolve` and `min_fraction` of the plan its sleeve has pinned at that pass, whatever look
 it is, and its evidence says which look the version is and how many the lineage has taken
-(`look`, `looks`, `lineage`; *Promotion and demotion*). `kanso replay run` and `kanso replay
-parity` say which look they were (`forward_look`, and the `forward` line):
+(`look`, `looks`, `lineage`; *Promotion and demotion*). What the count should do to `resolve`
+or `min_fraction` stays the planner's answer, and the operator's, as for the certification
+looks: the planner is shown it (`forward_looks`, beside `n_trials` and `looks`) when a
+hypothesis is planned — a new lineage member's first plan — or replanned with `kanso cert plan
+ID --replan`, and a pinned plan is not asked again as looks accrue. `kanso replay run` and
+`kanso replay parity` say which look they were (`forward_look`, and the `forward` line):
 
 ```
 $ kanso replay run --hyp demo_mr          # after the sequence in README.md; every line but forward is elided

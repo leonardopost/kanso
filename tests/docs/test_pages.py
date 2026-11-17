@@ -2191,6 +2191,10 @@ def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar()
     assert "whatever look it is" in concepts
     assert "`forward_holdout`'s evidence records `look`, which look this version is" in cli
     assert "`looks`, how many the lineage has taken" in cli
+    assert "`inputs.forward_looks`" in cli
+    assert "a pinned plan is not asked again as looks accrue" in concepts
+    assert "replanned with `kanso cert plan ID --replan`" in concepts
+    assert "the planner is shown `forward_looks` beside `n_trials` and `looks`" in changelog
     assert (
         "**Looks at the forward window are counted per lineage and shown; they move no bar.**"
         in changelog

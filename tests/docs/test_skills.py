@@ -351,3 +351,13 @@ def test_the_promote_skill_reports_a_promotable_version_with_its_forward_look() 
     assert "offer `kanso replay run --strategy <id>@<v>` over the paper period" not in text
     assert "`kanso replay parity --strategy <id>@<v> --from … --to …`" in text
     assert "is a counted look at the forward window" in text
+
+
+def test_the_certify_skill_names_the_forward_looks_and_that_they_move_no_bar() -> None:
+    """The planner is shown the forward looks; the agent reading its plan is told what they
+    count, that they judge nothing and that what they do to the bar is never the agent's."""
+    text = re.sub(r"\s+", " ", skill(PACKAGED, "kanso-certify"))
+    assert "at its forward window (`inputs.forward_looks`)" in text
+    assert "`inputs.forward_looks` counts the looks at the hypothesis's **forward window**" in text
+    assert "a pinned plan is not asked again as looks accrue" in text
+    assert "is the planner's answer at a plan or a replan" in text

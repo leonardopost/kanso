@@ -716,6 +716,37 @@ def test_a_replan_is_told_the_looks_its_lineage_has_taken(
     assert (first["inputs"]["looks"], second["inputs"]["looks"]) == (0, 1)
 
 
+def test_a_plan_carries_the_forward_looks_its_lineage_has_taken(
+    runner: CliRunner, researched: Path
+) -> None:
+    """`cert plan --json` prints the count the planner was shown; a replan after a replay of
+    the forward window is shown one more."""
+    from datetime import date
+
+    from kanso.certify.looks import ForwardRead, record_read
+
+    first = payload(at(runner, researched, "cert", "plan", HYP_ID, "--json"))
+    with StateStore(researched / "state.db") as store:
+        record_read(
+            store,
+            ForwardRead(
+                hyp_id=HYP_ID,
+                via="replay",
+                of="session-1",
+                target=f"{HYP_ID}@abcdef0",
+                where="node",
+                session="session-1",
+                forward_start=date(2024, 6, 3),
+                first=date(2024, 6, 3),
+                last=date(2024, 6, 28),
+            ),
+        )
+
+    second = payload(at(runner, researched, "cert", "plan", HYP_ID, "--replan", "--json"))
+
+    assert (first["inputs"]["forward_looks"], second["inputs"]["forward_looks"]) == (0, 1)
+
+
 def test_status_and_the_planner_count_where_a_carried_best_is_certified(
     runner: CliRunner, researched: Path
 ) -> None:

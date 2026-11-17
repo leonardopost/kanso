@@ -66,6 +66,16 @@ thresholds earlier looks were judged by, nor which of them skipped, and is told 
 count judges nothing, and whether it moves the threshold, at a plan or a replan, is the
 planner's answer like the threshold itself.
 
+**The planner is told how many looks the lineage has taken at the forward window, too.** Each
+composed version of a lineage member a paper or live stage ran over a day of the hypothesis's
+forward window — from the `windows.forward.start` of its registered pin, the window the
+monitor's `forward_holdout` judges — is one look there, and each replay that read one another
+(`kanso.certify.looks.forward_looks`); the plan records the count (`PlanInputs.forward_looks`)
+and the planner is shown it beside `n_trials` and `looks`, with the fact of what it is, in
+every plan, since `forward_holdout` is in every plan. It judges nothing: what the count does to
+`resolve` and `min_fraction` is the planner's answer at a plan or a replan, and a pinned plan
+is not asked again as looks accrue.
+
 **The plan is pinned and changes only by replanning.** It lives at
 `certificates/<hyp>/plan.yaml`; reading it again returns it rather than paying for a
 second opinion, and a pinned plan this version can no longer run is refused with the
@@ -85,6 +95,7 @@ from datetime import UTC, date, datetime, timedelta
 from math import ceil, isfinite, sqrt
 from typing import TYPE_CHECKING, Any, Final, TypeGuard, cast
 
+from kanso.certify.looks import forward_looks as forward_looks_at
 from kanso.certify.looks import looks as looks_at
 from kanso.certify.looks import subject_pin, window_of
 from kanso.certify.power import power, window_days, window_params
@@ -259,6 +270,7 @@ def plan(
         n_trials=trials,
         prior_trials=prior,
         looks=len(looks_at(store, hyp_id, window).prior),
+        forward_looks=len(forward_looks_at(store, hyp_id, hyp.windows.forward.start).taken),
     )
     accepted: list[Answered] = []
 
@@ -318,7 +330,7 @@ def _call_inputs(hyp: Hypothesis, inputs: PlanInputs, folds: int, check: Check) 
     The hypothesis, its construct, the toolbox and the invariants do not change while one
     hypothesis is planned, so they are the cached prefix; what the workspace holds, how many
     trials the search has spent and how many looks its lineage has taken at its certification
-    window are what a replan sees differently.
+    window and at its forward window are what a replan sees differently.
     """
     return CallInputs(
         subject=hyp.id,
@@ -333,6 +345,7 @@ def _call_inputs(hyp: Hypothesis, inputs: PlanInputs, folds: int, check: Check) 
             "n_trials": inputs.n_trials,
             "prior_trials": inputs.prior_trials,
             "looks": inputs.looks,
+            "forward_looks": inputs.forward_looks,
         },
         check=check,
     )
@@ -399,7 +412,10 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
     the criteria version every run records, so the rule says how to read those words over a
     declared grid. What its threshold bounds across the lineage's looks at the certification
     window is stated the same way, over `looks`: a fact for the planner to weigh, since no
-    rule moves the threshold with the count.
+    rule moves the threshold with the count. How many looks the lineage has taken at the
+    forward window is stated beside it, unconditionally since `forward_holdout` is in every
+    plan, as a fact that states no bound: what it does to `resolve` and `min_fraction` is the
+    planner's answer.
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
@@ -465,10 +481,30 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "every required gate is included, and none of them is excluded",
             *guarded,
             *correction,
+            FORWARD_LOOKS,
             "the plan includes at least one gate at each of the cert, paper and live stages",
             "no gate is named twice, and no gate is both included and excluded",
         ],
     }
+
+
+FORWARD_LOOKS: Final = (
+    "forward_looks is how many looks this hypothesis's lineage — every registered hypothesis "
+    "joined to it by derived_from, either way — has already taken at its forward window, the "
+    "days from its windows.forward.start on: each composed version of a lineage member that a "
+    "paper or live stage has run over any of those days, once however many windows and passes "
+    "it has had, and each kanso replay of a lineage member — a version, a card, or an attached "
+    "construct's card run on a member's version — that read any of them, save a replay parity "
+    "of a version over days a stage already showed it. forward_holdout judges a version on "
+    "paper, at every monitoring pass, by the resolve and min_fraction of the plan its sleeve "
+    "hypothesis has pinned at that pass; a replay judges nothing, but whoever ran it read what "
+    "it showed, and it can have shaped the research that came after. You are shown no look's "
+    "result and no earlier plan's values. Each look at the same forward days is another chance "
+    "for something with no edge to pass forward_holdout on them or to be chosen from them; the "
+    "count moves neither resolve nor min_fraction by itself, and what it should do to them is "
+    "yours to answer inside their ranges, at a plan or a replan"
+)
+"""The invariant stating the forward looks, stated in every plan since `forward_holdout` is."""
 
 
 # -- what the answer must satisfy ---------------------------------------------

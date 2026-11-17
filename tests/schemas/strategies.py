@@ -675,6 +675,7 @@ def plans(draw: st.DrawFn) -> CertificationPlan:
             n_trials=draw(st.integers(0, 5000)),
             prior_trials=draw(st.integers(0, 500)),
             looks=draw(st.integers(0, 50)),
+            forward_looks=draw(st.integers(0, 50)),
         ),
         gates=[
             PlannedGate(id=gid, stage=stage, params=draw(PARAMS), rationale=draw(SAFE_TEXT))
