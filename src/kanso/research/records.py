@@ -70,7 +70,11 @@ stands still. So the number is stored with a digest of what it was measured unde
 nothing — and kept beside it rather than replaced by it, because a reading the selection
 cannot reach is still the only anchor a run under that reading has. Signatures are stored
 for every judged run, a redundant one included, so the third spelling of one idea is
-refused against the second as well as the first. The comparison is
+refused against the second as well as the first — and for nothing that is not a card: a
+probe (`loop.probe`) is matched against them and stores none. `books` counts the pool a
+match was chosen from, so a check against an empty one says so, and `stored_metric` reads
+one strategy's number under one reading, which is what a number struck under that reading
+is set beside. The comparison is
 by day rather than by instant because it is a fact about sessions, and a day is what two
 runs over the same window share. For a hypothesis held under a day, what a day held is read
 by the hour, because a lane that holds one name on one side every session gives every
@@ -143,6 +147,7 @@ __all__ = [
     "active",
     "best_measurement",
     "best_of",
+    "books",
     "candidates",
     "family",
     "cards_of",
@@ -168,6 +173,7 @@ __all__ = [
     "runs_of",
     "set_best",
     "signature",
+    "stored_metric",
     "strike_budget",
     "superseded",
     "trial_metrics",
@@ -1025,6 +1031,47 @@ def matched_book(
         (within if abs(metric - float(row["metric"])) <= floor else beyond).append(row)
     agreeing = _closest(held, within, pct, agreed=True)
     return agreeing if agreeing is not None else _closest(held, beyond, pct, agreed=False)
+
+
+_UNDER_PINS: Final = (
+    " hyp_id = ? AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?"
+    " AND measured_under = ?"
+)
+"""The selection `matched_book` reads its pool by: a run's four pins and one reading."""
+
+
+def _under(run: RunRecord, measured: str) -> tuple[str, ...]:
+    return (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version, measured)
+
+
+def books(store: StateStore, run: RunRecord, measured: str) -> int:
+    """How many stored books under this run's pins and the reading `measured` carry a
+    number: the pool `matched_book` chooses an anchor from.
+
+    A repeat check made against an empty pool matched nothing because there was nothing to
+    match, and a caller reporting that check says so with this count rather than letting
+    "matched nothing" read as a pass.
+    """
+    row = store.connection.execute(
+        f"SELECT COUNT(*) FROM signatures WHERE{_UNDER_PINS} AND metric IS NOT NULL",
+        _under(run, measured),
+    ).fetchone()
+    return int(row[0])
+
+
+def stored_metric(store: StateStore, run: RunRecord, sha: str, measured: str) -> float | None:
+    """The number `sha`'s book was stored with under this run's pins and the reading
+    `measured`, or `None` when it was not judged under both.
+
+    What a number struck under that reading is set beside: the same strategy measured under
+    another reading — other folds, capital, cost model or host version — is another number
+    and is not this one.
+    """
+    row = store.connection.execute(
+        f"SELECT metric FROM signatures WHERE strategy_sha = ? AND{_UNDER_PINS}",
+        (sha, *_under(run, measured)),
+    ).fetchone()
+    return None if row is None or row["metric"] is None else float(row["metric"])
 
 
 def _closest(held: Signature, rows: list[sqlite3.Row], pct: int, *, agreed: bool) -> Match | None:

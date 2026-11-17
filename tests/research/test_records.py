@@ -925,6 +925,52 @@ def test_the_same_bytes_under_two_readings_are_two_anchors(
     )
 
 
+def test_books_counts_the_pool_matched_book_chooses_from(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A repeat check against an empty pool matched nothing because there was nothing, and
+    is reported as such rather than read as a pass: the count is the rows the matcher reads,
+    under the run's four pins and one reading, with a number on record."""
+    run = loop.begin(ws, store, registered)
+    held = {"2024-01-01": [["A.X", 1, True]]}
+    assert records.books(store, run, UNDER) == 0, "the baseline was stored under its own reading"
+    counted, unread = store.put_blob(b"counted"), store.put_blob(b"no number")
+    records.record_signature(store, run, counted, held, 1.0, UNDER)
+    records.record_signature(store, run, unread, held, 1.0, UNDER)
+    store.connection.execute(
+        "UPDATE signatures SET metric = NULL WHERE strategy_sha = ?", (unread,)
+    )
+    records.record_signature(store, run, store.put_blob(b"read otherwise"), held, 1.0, "other")
+    other = run.model_copy(update={"snapshot_id": "another"})
+    records.record_signature(store, other, store.put_blob(b"pinned otherwise"), held, 1.0, UNDER)
+
+    assert records.books(store, run, UNDER) == 1
+    assert records.books(store, run, "other") == 1
+    assert records.books(store, other, UNDER) == 1
+    assert records.matched_book(store, run, held, 100, 1.0, 0.0, UNDER) is not None
+
+
+def test_stored_metric_reads_one_strategy_under_one_reading(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The number a strategy's book was stored with, and only under the pins and the
+    reading asked: the same bytes under another reading are another number."""
+    run = loop.begin(ws, store, registered)
+    held = {"2024-01-01": [["A.X", 1, True]]}
+    sha = store.put_blob(b"a")
+    records.record_signature(store, run, sha, held, 1.5, UNDER)
+    records.record_signature(store, run, sha, held, 9.0, "three folds")
+
+    assert records.stored_metric(store, run, sha, UNDER) == 1.5
+    assert records.stored_metric(store, run, sha, "three folds") == 9.0
+    assert records.stored_metric(store, run, sha, "never read") is None
+    other = run.model_copy(update={"hypothesis_sha": "f" * 64})
+    assert records.stored_metric(store, other, sha, UNDER) is None, "another pin"
+    assert records.stored_metric(store, run, store.put_blob(b"b"), UNDER) is None, "no row"
+    store.connection.execute("UPDATE signatures SET metric = NULL WHERE strategy_sha = ?", (sha,))
+    assert records.stored_metric(store, run, sha, UNDER) is None, "no number on record"
+
+
 def test_a_card_keeps_the_tags_its_proposer_gave_it(
     ws: Workspace, store: StateStore, registered: str
 ) -> None:
