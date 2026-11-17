@@ -206,6 +206,16 @@ carry a keep no check has judged into the next run as its base (`docs/concepts.m
 Alignment): `kanso align check ID` before `kanso research end ID` judges it for a run in lane
 `op`, and for a run in a daemon lane, which `align check` refuses, the lane's own next turn
 does.
+`[research] explore_mechanisms` lists the mechanisms a draft `kanso hyp explore` writes may
+state besides its parent's own: any of `mean_reversion`, `momentum`, `microstructure`,
+`stat_arb`, `event`, `carry`, `vol` and `other`, the values a hypothesis's `mechanism` takes.
+The template writes `[]`, and a file without the key reads the same: a draft states the
+mechanism of its parent's newest pin and no other. The key widens and never narrows — the
+parent's own is always admissible, so `["momentum"]` under a `mean_reversion` parent admits
+both — and it is your statement of what a draft may move to, not a search rule an agent sets.
+A name outside the eight is a validation failure naming `research.explore_mechanisms` (exit
+3, from every command that opens the workspace). The rule binds the field a draft declares,
+not what its `strategy.py` does (`docs/concepts.md`, exploring).
 
 `[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
 many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses

@@ -1189,8 +1189,9 @@ hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_afte
 stalls on one best have passed since the last exploration (5 in the template; 0 is never) —
 calls the `explore` task class with what the hypothesis's research learned: its pinned
 `hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
-tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
-the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
+tag, its keeps and their scores, its stalls, each certificate's verdict with the ids of
+the gates that failed and nothing they measured, and the mechanisms the candidate may state.
+The answer is one new hypothesis, whole,
 judged on the ladder: an id nothing holds, a file that parses with that id and no
 classification, naming the parent in `derived_from` so the parent's cards are the
 candidate's trials too — and its declared grid, so the candidate states no `prior_trials` of
@@ -1201,10 +1202,69 @@ the candidate certify inside its own embargo counted from the last day the *pare
 researched — the latest research end of any pin the parent's runs held — rather than from
 the end of the research window the candidate declares: the idea was chosen by scores
 measured on the parent's research, so that is the last day it saw, and one certified sooner
-would be certified on data within the embargo of the data that chose it. It is written as a
-draft to `hypotheses/<id>/`, a directory that did not exist, and registered by nothing: an
-`explored` escalation offers `hyp validate` and `hyp add`, and whether it gets a lane is
-yours. Every attempt, by hand or by a lane, leaves an event under the parent — `explored`
+would be certified on data within the embargo of the data that chose it. A candidate also
+*states* its parent's `mechanism` — the one the parent's newest pin declares — or one
+`[research] explore_mechanisms` lists (`[]` in the template, so the parent's own only): the
+key adds mechanisms a draft may move to and never removes the parent's, and any other is a
+complaint on the ladder like the rest. An explored draft tests another idea inside the
+mechanism its parent's research measured, not another mechanism. The rule reads the field the
+draft declares, and nothing reads its code for a mechanism, so a draft that declares the
+parent's and implements another passes it: its thesis is still yours to read, and once it is
+researched its own alignment check judges it against that thesis.
+
+An answer that passes every one of those checks is **measured once, as its parent's card**,
+before anything is written: its `strategy.py` runs as one more card of the parent's newest
+run, under that run's pinned `hypothesis.yaml` — its universe, resolution, construct,
+objective and costs — its snapshot and host version, over the parent's research window and no
+other, which the runner refuses in code as it does for every card, in a child with no path to
+the catalog, under the run's card budget and memory cap. It is scored by the installed kanso,
+as a card of a run resumed across an upgrade is, and compared with the books the parent
+stored under those pins and the probe's reading: where there are none — a `kanso.toml` edit
+that moved what a number is measured under, or an upgrade since that run whose superseded
+books `kanso state prune` has deleted — the seed says `0` books rather than read an empty
+comparison as a pass. Because it runs under
+the parent's file, the seed is held to what that file loads, statically and before it runs:
+it passes the integrity scan every card of the parent passes, and the candidate's file keeps
+or narrows the parent's `universe` and `data_requirements` and keeps its `resolution` and
+`bar_resolution` — each departure one complaint naming the field, so a draft that needs
+another name, bar size or data type is yours to write with `kanso hyp new`. With those held,
+the candidate's own alignment check implies the parent's, so a seed line is refused once; only
+where the candidate's file does not parse are the seed's lines read against the parent's. A
+seed that holds a book the parent already stored on `redundant_pct` of their shared sessions
+*and* scores within the parent's noise floor of it is that card again, and is a wrong answer
+naming it ("it repeats the parent's card …"), the redundancy rule's two clauses; a seed that
+places no order holds the empty book every flat card holds, at a flat run's zero, so it is
+refused wherever the parent stored one, with a complaint of its own, and written with `0`
+trades where it did not. A book matched whose number moved further than the floor is a
+measurement and is admitted, the match on record. A seed that raised, was killed for its clock
+or its memory, or whose order the parent's sizing refused is a wrong answer too — a draft
+whose seed cannot run as its parent's card would be a baseline that refuses its own run —
+while a fault the workspace owns fails the attempt with its remedy and asks no model again: a
+crash carrying kanso's remedy, a window the catalog can no longer give, pins that can no
+longer be set up (checked before any model is asked), a host or hold that does not run. A
+`research stop` or a drain during an exploration is neither: it is your word, so it leaves no
+event, the spell is not spent, and no model is asked again once the lane has been told. The
+probe is not a card: it writes no card, no signature and no trial, and moves no best, no stall
+and no `n_trials`; it runs in `runs/<lane>/.explore-<parent>/`, which it removes, never in the
+parent's lane directory. Each answer that passes the static checks costs one probe, held to
+the parent run's card budget — at most two an exploration on the top tier's ladder, where
+`explore` is routed, three where a workspace routes it lower — and an objective that reads a
+host-alone or hold run computes it once for all of them.
+
+It is written as a draft to `hypotheses/<id>/`, a directory that did not exist, with what its
+seed scored, and registered by nothing: an `explored` escalation, whose summary leads with that
+score, offers `hyp validate` and `hyp add`, and whether it gets a lane is yours. A summary is
+capped at a line, so the rationale after the score is cut there, and `kanso inbox` prints the
+whole rationale beneath the entry, off the `explored` event that names it. The `explored`
+event and `kanso hyp explore --json` carry the score whole as `seed` — the metric, its error,
+the trades, the objective, the window, the snapshot and run, the measurement's sha, how many
+books it was compared with, a book it matched without repeating, `parent_best`, the parent's
+best measured under the same pins and reading or `null` where it was not, and
+`inherited_trials`, the draws every number the draft's search is priced by starts from: the
+cards of the families its `derived_from` names that ran and traded, plus the settings their
+`prior_trials` grids declared — not `n_trials`, which counts crashes and cards that placed no
+order and no grid — so a draft's first card that trades is priced at one more. Every
+attempt, by hand or by a lane, leaves an event under the parent — `explored`
 when it wrote a candidate, `explored_failed` with the error and its remedy when it did not —
 and the stalls a lane counts are the ones since the newest of them, so a provider that is
 down costs one call per spell. A hypothesis not registered or never researched is refused
@@ -3518,7 +3578,9 @@ kanso escalates six things and nothing else: `misaligned`, `cert_failed`, `promo
 `demoted`, `deploy_blocked`, `explored`. Each entry names its subject and the commands that
 kind offers over it. An `explored` entry's subject is a hypothesis kanso wrote and did not
 register — `hypotheses/<id>/` as a draft — and it offers `hyp validate` and `hyp add` and
-nothing further: whether a model's idea deserves a lane is yours to say.
+nothing further: whether a model's idea deserves a lane is yours to say. Its summary leads
+with what the draft's seed scored as one more card of its parent, beside the parent's best
+measured the same way.
 
 ```
 $ kanso inbox

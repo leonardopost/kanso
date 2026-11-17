@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from hypothesis import given
@@ -12,6 +14,7 @@ from pydantic import ValidationError as PydanticValidationError
 from kanso import __version__
 from kanso.config import Config, ResearchConfig, load_config, render_config
 from kanso.errors import Exit, PreconditionError, ValidationError
+from kanso.schemas import Mechanism
 
 MINIMAL = 'kanso_version = "0.1.0"\nschema_version = 1\n'
 
@@ -47,6 +50,7 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.research.structural_cards == 10
     assert config.research.reseed_after_stalls == 2
     assert config.research.explore_after_stalls == 5
+    assert config.research.explore_mechanisms == []
     assert config.research.folds == 4
     assert config.research.max_lines_per_keep == 40
     assert config.research.baseline_budget_s == 1800
@@ -73,6 +77,7 @@ def test_omitted_sections_take_their_defaults(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, MINIMAL))
     assert config.research.folds == 4
     assert config.research.explore_after_stalls == 5  # a file without the key explores too
+    assert config.research.explore_mechanisms == []  # and a draft keeps its parent's mechanism
     assert config.data.reference == "none"
     assert config.monitor.interval == "5m"
 
@@ -247,3 +252,32 @@ def test_a_currency_outside_that_grammar_is_refused_at_load(tmp_path: Path, code
     with pytest.raises(ValidationError) as caught:
         load_config(write(tmp_path, MINIMAL + f'[research]\ncurrency = "{code}"\n'))
     assert "currency" in caught.value.message
+
+
+def test_a_mechanism_outside_the_eight_is_refused_naming_the_key(tmp_path: Path) -> None:
+    """Exit 3 from every command that opens the workspace, as any bad value is."""
+    with pytest.raises(ValidationError) as caught:
+        load_config(write(tmp_path, MINIMAL + '[research]\nexplore_mechanisms = ["trend"]\n'))
+    assert "research.explore_mechanisms" in caught.value.message
+    assert "unknown key" not in caught.value.message, "a key the parser declares, with a bad value"
+    assert caught.value.code is Exit.VALIDATION
+
+
+@given(mechanisms=st.lists(st.sampled_from(get_args(Mechanism))))
+def test_every_list_of_mechanisms_parses_and_nothing_else_does(
+    tmp_path_factory: pytest.TempPathFactory, mechanisms: list[str]
+) -> None:
+    """Any list of the eight a hypothesis may declare, duplicates included, loads as written."""
+    path = tmp_path_factory.mktemp("ws") / "kanso.toml"
+    path.write_text(
+        MINIMAL + f"[research]\nexplore_mechanisms = {json.dumps(mechanisms)}\n", encoding="utf-8"
+    )
+    assert load_config(path).research.explore_mechanisms == mechanisms
+    assert ResearchConfig(explore_mechanisms=mechanisms).explore_mechanisms == mechanisms
+
+
+@given(name=st.text(min_size=1).filter(lambda name: name not in get_args(Mechanism)))
+def test_a_name_outside_the_mechanisms_a_hypothesis_declares_is_refused(name: str) -> None:
+    """Refused as the list's item, a key the parser declares, never as an unknown key."""
+    with pytest.raises(PydanticValidationError, match=r"explore_mechanisms\.0\n"):
+        ResearchConfig(explore_mechanisms=[name])
