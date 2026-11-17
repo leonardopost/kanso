@@ -20,30 +20,67 @@ from kanso.research import explore
 from kanso.state import StateStore
 
 from . import mocked
-from .conftest import DRAFT, FLAT, HYP_ID, at, payload
+from .conftest import DRAFT, HYP_ID, at, payload
 
-CANDIDATE_ID = "demo_breakout"
+CANDIDATE_ID = "demo_dip"
+
+DIP = '''from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    notional: float = 1_000.0
+
+
+class Strategy(KansoStrategy):
+    """Buys a close under the lowest of the six before it, and sells back above their mean."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.closes: list[float] = []
+        self.long = False
+
+    def on_bar(self, bar) -> None:
+        close = float(bar.close)
+        before = self.closes[-6:]
+        self.closes.append(close)
+        if len(before) < 6:
+            return
+        if close < min(before) and not self.long:
+            self.submit_entry(
+                bar.bar_type.instrument_id, "BUY", notional=self.kanso_config.notional
+            )
+            self.long = True
+        elif close > sum(before) / 6 and self.long:
+            self.submit_exit(bar.bar_type.instrument_id)
+            self.long = False
+'''
 
 
 def answer() -> dict[str, Any]:
-    """The explorer's scripted candidate: the parent's windows and universe, a new idea."""
+    """The explorer's scripted candidate: the parent's file, mechanism included, a new idea.
+
+    Its seed trades. The parent's baseline is the flat seed, which places no order, so the
+    parent's books hold the empty one, and a seed that placed no order would be refused as
+    that card when it is measured as one more card of the parent before it is written.
+    """
     return {
         "id": CANDIDATE_ID,
         "hypothesis_yaml": yaml.safe_dump(
             {
                 **DRAFT,
                 "id": CANDIDATE_ID,
-                "title": "Demo: hourly breakout on a synthetic OU series",
-                "thesis": "A close through the session's range continues for an hour.",
+                "title": "Demo: hourly dip-buy on a synthetic OU series",
+                "thesis": "A close under the last six hours' low reverts to their mean.",
                 "mechanism": DRAFT["mechanism"],
                 "derived_from": [HYP_ID],
             },
             sort_keys=False,
         ),
-        "program_md": "# program\n\nEdit strategy.py; keep the breakout.\n",
-        "strategy_py": FLAT.replace("pass", "notional: float = 1_000.0", 1),
-        "rationale": "the parent only faded deviations; this trades the break instead",
-        "tags": ["signal_breakout"],
+        "program_md": "# program\n\nEdit strategy.py; keep the dip-buy.\n",
+        "strategy_py": DIP,
+        "rationale": "the parent only faded deviations from a mean; this buys a new six-hour low",
+        "tags": ["signal_mean_reversion"],
     }
 
 
@@ -66,12 +103,16 @@ def test_explore_writes_a_draft_that_validate_admits_and_add_registers(
     assert (written["parent"], written["id"]) == (HYP_ID, CANDIDATE_ID)
     assert Path(written["dir"]) == path.parent
     assert written["files"] == ["hypothesis.yaml", "program.md", "strategy.py"]
-    assert written["tags"] == ["signal_breakout"]
+    assert written["tags"] == ["signal_mean_reversion"]
+    seed = written["seed"]
+    assert {"metric", "se", "trades", "objective", "window", "books"} <= set(seed)
+    assert seed["trades"] > 0 and seed["objective"] == "net_edge_bps"
 
     inbox = payload(at(runner, mocked_ws, "inbox", "--json"))
     assert [(entry["kind"], entry["subject"]) for entry in inbox["entries"]] == [
         ("explored", CANDIDATE_ID)
     ]
+    assert "as its card the seed scored" in inbox["entries"][0]["summary"]
     assert at(runner, mocked_ws, "hyp", "validate", path).exit_code == Exit.OK
     added = at(runner, mocked_ws, "hyp", "add", path, "--json")
     assert added.exit_code == Exit.OK, added.stdout
@@ -88,6 +129,9 @@ def test_explore_reads_as_what_was_written_and_the_next_command(
     assert result.exit_code == Exit.OK, result.stdout
     assert f"{CANDIDATE_ID} · from {HYP_ID}" in result.stdout
     assert "the parent only faded deviations" in result.stdout
+    [seed] = [line for line in result.stdout.splitlines() if line.lstrip().startswith("seed")]
+    assert f"trades · net_edge_bps as a card of {HYP_ID} over " in seed
+    assert "book(s) compared" in seed
     assert f"kanso hyp validate {mocked_ws / 'hypotheses' / CANDIDATE_ID}" in result.stdout
 
 

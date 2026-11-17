@@ -16,6 +16,7 @@ import re
 import sys
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Final
 
 import pytest
 import yaml
@@ -31,6 +32,7 @@ from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.nautilus.clock import NEW_YORK, segment_of, session_of
 from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
+from kanso.research.explore import Seed
 from kanso.schemas import CostsOverride
 from tests.cli.test_doctor import CHECKS
 
@@ -114,6 +116,45 @@ def test_the_pages_say_a_draft_states_its_parent_s_mechanism() -> None:
     assert "`[research] explore_mechanisms` lists the mechanisms" in toml
     assert "The template writes `[]`, and a file without the key reads the same" in toml
     assert "naming `research.explore_mechanisms` (exit 3" in toml
+
+
+SUMMARY: Final = "as its card the seed scored M ± SE on N trades (best B), T trials inherited"
+"""The head of an `explored` entry's summary as the pages spell it, its numbers named."""
+
+
+def test_the_pages_say_a_draft_is_measured_once_as_its_parent_s_card() -> None:
+    """Sixteen drafts reached the operator with no number, and the pages promised none; the
+    pages now say a seed is run once as the parent's card before the draft is written, what
+    refuses it, and that the inbox entry leads with its score, spelt as the code spells it."""
+    seed = Seed(
+        metric=1.5,
+        se=0.25,
+        trades=7,
+        objective="wf_sharpe_net",
+        window=(date(2024, 1, 1), date(2024, 1, 31)),
+        snapshot="s",
+        run_tag="t",
+        measured_sha="m",
+        books=3,
+        same_book=None,
+        parent_best=2.5,
+        inherited_trials=9,
+    )
+    spelt = {"M": "1.5", "SE": "0.25", "N": "7", "B": "2.5", "T": "9"}
+    assert re.sub(r"\b(M|SE|N|B|T)\b", lambda m: spelt[m.group(1)], SUMMARY) == seed.said()
+    concepts = prose(page("concepts.md"))
+    assert "is **measured once, as its parent's card**, before anything is written" in concepts
+    assert "The probe is not a card: it writes no card, no signature and no trial" in concepts
+    assert "Its summary leads with what the draft's seed scored" in concepts
+    row = explore_row()
+    assert "**measured once as one more card of `ID`** before anything is written" in row
+    assert f"`{SUMMARY}`" in row
+    assert "keeps or narrows the parent's `universe` and `data_requirements`" in row
+    assert "leaves no event and asks the model nothing more" in row
+    inbox = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso inbox` |")
+    )
+    assert "an `explored` entry's summary leads with what the draft's seed scored" in inbox
 
 
 def test_the_cli_page_says_explore_mechanisms_is_no_search_rule() -> None:
@@ -1077,8 +1118,10 @@ def scanning() -> tuple[set[str], set[str]]:
 def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> None:
     """Of a card's or a version's stored bytes, only the baseline a research run begins from is
     scanned again: the scans are imported by the research loop, by the `strategy_integrity`
-    gate — which skips without a lane directory, and only the research loop hands it one — and
-    by the two commands that read the workspace's own files. So certification, composition, a
+    gate — which skips without a lane directory, and only the research loop hands it one — by
+    the two commands that read the workspace's own files, and by exploration, which scans an
+    answer's seed before it runs as the parent's card and refuses bytes the workspace already
+    stores, so it runs none of them. So certification, composition, a
     deploy's measurement, a replay, a stage and a construct's research on its host run them as
     stored. The concepts page and the release note name each of those steps, what bytes made
     before `session` was the base's do there, and the way back: `kanso research end` first
@@ -1090,6 +1133,7 @@ def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> N
         "kanso.cli.doctor",
         "kanso.criteria.gates",
         "kanso.hyp.validate",
+        "kanso.research.explore",
         "kanso.research.loop",
     }
     assert lanes == {"kanso.research.loop"}

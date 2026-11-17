@@ -73,6 +73,21 @@ def test_the_hypothesis_skill_says_a_draft_states_its_parent_s_mechanism() -> No
     ) in text
 
 
+def test_the_hypothesis_skill_reads_a_draft_s_seed_beside_the_parent_s_best_and_its_trials() -> (
+    None
+):
+    """The agent recommending `hyp add` is told the score is the seed's as the parent's card,
+    and to read it beside the two numbers that make it mean something — named as the summary
+    `kanso inbox` shows spells them, since no command shows the event they are also on."""
+    from tests.docs.test_pages import SUMMARY
+
+    text = skill(PACKAGED, "kanso-hypothesis")
+    assert f"`{SUMMARY}`" in text
+    assert "Its seed was measured once as one more card of the parent" in text
+    assert "`B` is `parent_best`" in text and "`T` is `inherited_trials`" in text
+    assert "is the operator's to write with `kanso hyp new`" in text
+
+
 def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
     """A plan carries its correction, a pinned one is refused without it and a search is
     priced over its draws, a declared grid's settings among them: a skill counting cards alone
