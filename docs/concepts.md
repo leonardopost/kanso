@@ -1121,7 +1121,8 @@ rules: they bound the search and choose nothing within it. A miss is one turn. W
 `[research] cards_per_turn` above one — the default is one, and eight is the most — a turn
 asks for that many diffs in one call and runs the ones that apply, together, from one read
 of the window. Each card is a trial, so `n_trials` and the margin `edge_per_trade` holds
-the turn to both grow by every card of it, and `align_every` still counts cards. The stall
+the turn to both grow by every card of it, and `align_every` still counts cards; a turn that
+kept is judged once, on its kept slot. The stall
 and the phase count the turn: no keep in it is one miss. Every card is judged against the
 best the turn started from, and the keep is the highest metric that clears that floor; a
 tie keeps the earlier slot. Every other card that cleared it is a `runner_up`: it beat the
@@ -1676,7 +1677,8 @@ A run optimises a number, and the cheapest way to move a number is often to stop
 the hypothesis: trade an instrument outside the universe, read a finer bar than the idea is
 about, exploit something the thesis never claimed. None of that breaks `strategy_integrity`
 — the code is well-behaved, it answers a different question — so it is checked separately:
-every `[research] align_every` cards, and whenever `kanso align check ID` asks.
+on every keep the research driver makes, as it is made; every `[research] align_every`
+cards; and whenever `kanso align check ID` asks.
 
 The syntax tree is read first. An instrument literal outside `universe`, a bar whose step or
 aggregation is not `resolution`, and a subscription or handler for a type outside
@@ -1775,10 +1777,35 @@ has answered for: its checkpoint stops short of the keep, and the next check tha
 model marks it. Nor does a drift ever rewind onto the bytes it found drifted: every card of
 the run that carried them is marked, not only the cards since the last check.
 
-A keep an earlier run made was that run's to judge, and a run can end before the check that
-would have judged it: ended by hand, or stalled on a spell of misses, which count toward
-`stall_k` and not toward `align_every`. Such a keep becomes the next run's base unjudged,
-and row 90 of `docs/backlog.md` says what closing that would take.
+**A keep is judged before it is built on.** Under `kanso research run` and the daemon every
+keep the driver makes — a card that kept, or a turn of several on its kept slot — is put to
+the check as it is made: before the next proposal, and so before a stall can certify it or
+hand it to the next run as its base. Counted in a live workspace on 2026-11-17, when the
+check ran on the clock alone: 37 `misaligned` rewinds against 61 keeps past the baseline, each
+drift keep built on for up to `align_every` cards — every one a trial `n_trials` counts —
+before a check rewound it; and a keep followed by a spell of misses, which count toward
+`stall_k` and not toward `align_every`, could stall unjudged, be certified and become the
+next run's base, which no check judges. A keep whose check did not happen — the driver was
+told to stop first, which ends the invocation there, or the judge could not answer — is
+owed, and the run's next driver invocation, a daemon lane's next turn included, makes that
+check before it proposes anything; `kanso research run ID --cards 0` makes it and proposes
+nothing. So is a keep you carded by hand in a run the driver then resumes. It costs one
+`align_check` call per keep the judge answers, and never more than one per card; a judge
+that cannot answer is asked again at every invocation, with no card between. After a keep's
+check the lane holds bytes a check answered for, and every card that does not keep restores
+it to them, so the clock's checks find nothing new and ask no model — `judged: false` —
+unless the lane was written by hand: the clock is the backstop.
+
+A run ended by hand ends where you end it, and that is what is left uncovered: a keep you
+carded by hand, one a stop or a judge that could not answer left owed, or one whose check is
+in flight, whose verdict is then dropped, becomes the next run's base unjudged, and a base
+is never judged. For a run in lane `op`, `kanso align check ID` before `kanso research end
+ID` judges it. For a run in a daemon lane it does not: `kanso align check` checks the run of
+lane `op` and refuses one another lane owns, so let the lane work the run once — `kanso
+research start`; its first check comes before its first proposal — before you end it. A
+`research stop --drain` that lands during a keep's card leaves that keep owed in the same
+way. And `kanso cert run ID` by hand while a keep is owed certifies the best unjudged, as it
+could between two checks of the clock.
 
 The syntax tree still reads the base and the file the last check left the lane on. What it
 finds is a fact about the bytes rather than an opinion of them, and a check that answered

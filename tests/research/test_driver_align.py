@@ -1,9 +1,10 @@
 """Alignment: the cheap half first, the model second, and what a drift costs a run.
 
 Drift is the one failure the loop cannot measure, because a strategy that stopped testing
-the idea can score beautifully. So it is checked on a clock and answered by rewinding: the
-run goes back to ground a check already passed, the cards in between are marked, and
-research carries on rather than stopping for a judgement call.
+the idea can score beautifully. So it is checked on every keep the driver makes and on a
+clock, and answered by rewinding: the run goes back to ground a check already passed, the
+cards in between are marked, and research carries on rather than stopping for a judgement
+call.
 
 A clock that finds nothing new is not a question. A lane on the run's base, or on the bytes
 the last check left it on, holds nothing the loop proposed since anything answered for it,
@@ -79,7 +80,7 @@ def test_the_deterministic_checks_run_first_and_no_model_is_asked(
     ws: Workspace, store: StateStore
 ) -> None:
     """The cheap tier is scripted with nothing, so a call would fail the whole ladder."""
-    scripted(ws, align_check=None)
+    scripted(ws, align_check=[])
     hyp_id = started(ws, store)
     write_lane(ws, hyp_id, FOREIGN)
 
@@ -180,6 +181,7 @@ def test_a_check_that_judges_nothing_never_counts_a_keep_it_did_not_judge(
     assert align.check(ws, store, hyp_id) == (True, None)
     assert align.checkpoint(store, run) == align.Checkpoint(cards=1, sha=run.base_sha)
     assert spend(store, lane="op").calls == 0
+    assert align.owed(store, run), "the keep is still owed the check that judged nothing"
 
     write_lane(ws, hyp_id, WEAK)
     assert research.card(ws, store, hyp_id, "react to every step").status == "discard"
@@ -192,6 +194,26 @@ def test_a_check_that_judges_nothing_never_counts_a_keep_it_did_not_judge(
     assert lane_file(ws, hyp_id) == SEED
     assert records.best_of(store, hyp_id)[0] == run.base_sha
     assert [entry.kind for entry in inbox.unread(store)] == ["misaligned"]
+
+
+@pytest.mark.parametrize("verdict", [ALIGNED, DRIFTED], ids=["aligned", "drifted"])
+def test_a_run_owes_a_check_for_a_keep_none_has_judged(
+    ws: Workspace, store: StateStore, verdict: dict[str, Any]
+) -> None:
+    """What the driver reads before it proposes: a keep past the last checkpoint whose bytes
+    no check answered for is owed its check, and a check that judged it, whatever it said,
+    pays the debt. A run's only keep at its start is its base, which no check judges."""
+    scripted(ws, align_check=[verdict])
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    assert not align.owed(store, run)
+    write_lane(ws, hyp_id, REVERTING)
+    assert research.card(ws, store, hyp_id, "trade the trough").status == "keep"
+
+    assert align.owed(store, run)
+
+    align.check(ws, store, hyp_id)
+    assert not align.owed(store, run)
 
 
 def test_a_drift_never_rewinds_onto_the_bytes_it_found_drifted(
@@ -879,7 +901,7 @@ def test_a_drift_on_the_bytes_it_rewound_to_shows_the_next_run_no_change(
     one would read as a direction refused for nothing: the reason goes with none. No model was
     shown a diff either, so `from` is the bytes the last check left the lane on — the base,
     before any check — and not where a diff began."""
-    scripted(ws, align_check=None)
+    scripted(ws, align_check=[])
     hyp_id = classify(ws, store, DOCUMENT, FOREIGN)
     research.begin(ws, store, hyp_id)
     first = records.require_active(store, hyp_id)

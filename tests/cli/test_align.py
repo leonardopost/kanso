@@ -41,7 +41,8 @@ def test_a_drift_is_reported_with_exit_zero_and_the_lane_rewound(
 ) -> None:
     mocked.scripted(mocked_ws, align_check=[mocked.DRIFTED])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
-    assert at(runner, mocked_ws, "research", "run", HYP_ID, "--cards", 1).exit_code == Exit.OK
+    # Edited by hand: a keep the driver makes is judged, and rewound, as it is made.
+    edit(mocked_ws, mocked.EDITED)
     wandered = (lane(mocked_ws) / "strategy.py").read_bytes()
 
     result = at(runner, mocked_ws, "align", "check", HYP_ID, "--json")

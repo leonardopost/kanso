@@ -130,12 +130,32 @@ def test_the_align_skill_names_the_rewinds_of_earlier_runs() -> None:
     assert "The proposer is shown the earlier runs' directions too" in text
 
 
-def test_the_research_skill_says_the_proposer_reads_earlier_rewinds() -> None:
+def test_the_align_skill_says_every_keep_is_judged_and_which_lane_it_checks() -> None:
+    """An agent asked to check a run before it is ended reads here when the driver checks and
+    which run this command can check: told only of the clock, it would take a keep for one no
+    check had judged, and told nothing of the lane, it would offer a command that refuses."""
+    text = skill(PACKAGED, "kanso-align")
+    assert "The driver runs this check on every keep as it is made, and every `align_every`" in (
+        text
+    )
+    assert "The loop runs this check every `align_every` cards" not in text
+    assert "refuses a run a daemon lane owns: that lane's next turn judges it" in text
+
+
+def test_the_research_skill_says_every_keep_is_judged_and_the_proposer_reads_earlier_rewinds() -> (
+    None
+):
     """An agent explaining why a driven run steers clear of a direction, or asked why a lane
-    keeps walking into one, reads this file; it names both lists the proposer is shown, the
-    earlier runs' among them, and what a change back into one of them meets."""
+    keeps walking into one, reads this file: drift is judged on every keep, an end calls no
+    model and how a keep it would carry is judged in either kind of lane, and both lists the
+    proposer is shown, the earlier runs' among them."""
     text = skill(PACKAGED, "kanso-research")
     rules = text.split("## Rules", 1)[1]
+    assert "drift is judged on every keep as it is made" in rules
+    assert "and every `align_every` cards besides" in rules
+    assert "by `kanso align check <id>` in lane `op`, or by the lane's next turn in a daemon" in (
+        rules
+    )
     assert "`rewound_for`, the newest reasons this run was rewound for" in rules
     assert (
         "`rewound_in_earlier_runs`, one line per direction the hypothesis's earlier runs were "

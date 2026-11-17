@@ -198,6 +198,15 @@ so a budget raised under a running daemon reaches its lanes after `kanso researc
 `kanso research start`. A stall's certification is the exception: its plan, its precheck and
 the child that certifies read the file again at the stall (`docs/cli.md`, Certification).
 
+`[research] align_every` is the drift clock, and it is a backstop: under `kanso research run`
+and the daemon every keep is checked as it is made, one `align_check` call per keep and
+never more than one per card, and the clock's checks then find the lane on bytes a check
+answered for and ask no model unless the lane was written by hand. A run ended by hand can
+carry a keep no check has judged into the next run as its base (`docs/concepts.md`,
+Alignment): `kanso align check ID` before `kanso research end ID` judges it for a run in lane
+`op`, and for a run in a daemon lane, which `align check` refuses, the lane's own next turn
+does.
+
 `[screen] draws` is how many session sign flips, or for a `condition` judged by `circular` how
 many shifts, a screen's null is drawn from (`docs/concepts.md`, Screen): a precision rule like `[research] folds`, which bounds the measurement and chooses
 nothing; it is recorded on every result, and a smaller p than `1 / (draws + 1)` cannot be read.

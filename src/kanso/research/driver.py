@@ -94,9 +94,23 @@ the syntax tree of `strategy.py` with every constant blanked. Then local again, 
 until a keep or a stall. The rule is stated in the instruction and the phase is a fact of
 every call, because a refusal the proposer was never told about is a wasted ladder.
 
-**Drift is checked on a clock, not on suspicion.** Every `align_every` cards the run is
-asked whether it still tests the idea, and a drift rewinds it and carries on — carrying the
-reasons with it. A rewound run told nothing walks back into the drift it was rewound for:
+**Drift is checked on every keep and on a clock, never on suspicion.** Every keep — a card
+that kept, or a turn on its kept slot — is put to the alignment check as it is made, and
+every `align_every` cards the run is asked again whether it still tests the idea; a drift
+rewinds it and carries on — carrying the reasons with it. On the clock alone a drift keep
+was built on for up to `align_every` cards, each a trial `n_trials` counts, before a check
+rewound it — counted in a live workspace on 2026-11-17, 37 `misaligned` rewinds against 61
+keeps past the baseline — and a keep followed by a spell of misses could stall unjudged, be
+certified and become the next run's base, which no check judges. After a keep's check the lane
+holds bytes a check answered for, and every card that does not keep restores it to them, so
+the clock asks no model unless the lane was written by hand: one `align_check` call per keep
+the judge answers, never more than one per card. A keep whose check did not happen — a stop
+came first, which ends the invocation there, or the judge could not answer — is owed
+(`align.owed`), and the next invocation makes that check before it proposes anything. Each
+check first asks whether the run is still open (`loop.ongoing`), so a `research end` that
+landed between a keep and its check lets the lane go rather than failing it.
+
+A rewound run told nothing walks back into the drift it was rewound for:
 measured in a live workspace, one hypothesis was rewound four times in six hours for the
 same complaint, because the file it resumed from said nothing about why the last one went.
 So the drifts this run was rewound for reach the next proposal, the newest `DRIFT_LINES`
@@ -320,17 +334,29 @@ def run(
     previous call left behind do not count. `None` researches until the run stalls, which
     is what a daemon lane asks for.
 
+    Every keep is put to the alignment check as it is made, before anything else, and the
+    clock's check falls due every `align_every` cards; a keep that falls on the clock is one
+    check. A keep a stop or a judge that could not answer left unjudged, or one carded by
+    hand, is owed (`align.owed`), and is judged before this invocation proposes anything —
+    with `cards=0` too, which then proposes nothing. A judge that cannot answer raises the
+    router's refusal after the keep is recorded, and the keep stays owed.
+
     `stop` is asked before every proposal, again before the card a proposal produced, and
-    before an alignment check falls due. A daemon lane passes its own stop request, so a
-    lane told to stop while a model was answering starts neither the card nor another
-    call: the answer in hand is dropped, the lane directory is left as it was, and the run
-    resumes at its next turn. The baseline is a card too, and the runner itself refuses to
-    start one in a process told to stop (`kanso.nautilus.backtest.run_subprocess`).
+    before every alignment check — at the start, only when a check is owed. A daemon lane
+    passes its own stop request, so a lane told to stop while a model was answering starts
+    neither the card nor another call: the answer in hand is dropped, the lane directory is
+    left as it was, and the run resumes at its next turn. A stop asked before a check ends
+    the invocation there, `stopped`, with the check owed, so a `stop` that answers false
+    again later cannot build on a keep no check has judged; only a stall the same card
+    reached ends the run instead, as it would have. The baseline is a card too, and the
+    runner itself refuses to start one in a process told to stop
+    (`kanso.nautilus.backtest.run_subprocess`).
 
     A run the operator ends meanwhile (`research end`) is let go with `TakenError`: asked
     once a proposal is in hand, before it is written into the lane directory the end
-    removed, while its card runs (`research_loop.card`), and before the next proposal. The
-    answer or the card in flight is dropped and nothing is recorded for it.
+    removed, while its card runs (`research_loop.card`), before every alignment check, and
+    before the next proposal. The answer or the card in flight is dropped and nothing is
+    recorded for it.
     """
     lane = lanes.check_lane(lane)
     if records.active(store, hyp_id) is None:
@@ -345,7 +371,22 @@ def run(
     previous = _last_diff(store, active)
     reason = CARDS
 
-    while cards is None or proposed < cards:
+    def judge() -> None:
+        """One alignment check of a run `research end` has not closed, counted."""
+        nonlocal active, checks, drifts, waiting
+        active = research_loop.ongoing(store, active)
+        aligned, _ = align.check(ws, store, hyp_id, lane)
+        checks += 1
+        drifts += 0 if aligned else 1
+        waiting = 0
+
+    if align.owed(store, active):
+        if stop():
+            reason = STOPPED
+        else:
+            judge()
+
+    while reason == CARDS and (cards is None or proposed < cards):
         if stop():
             reason = STOPPED
             break
@@ -412,13 +453,14 @@ def run(
                 },
             )
             misses = 0 if kept else misses + 1
-            if waiting >= settings.align_every and not stop():
-                aligned, _ = align.check(ws, store, hyp_id, lane)
-                checks += 1
-                drifts += 0 if aligned else 1
-                waiting = 0
+            due = kept or waiting >= settings.align_every
+            if due and stop():
+                reason = STOPPED
+            elif due:
+                judge()
             if misses >= settings.stall_k:
                 reason = STALLED
+            if reason != CARDS:
                 break
             active = research_loop.ongoing(store, active)
             continue
@@ -458,13 +500,14 @@ def run(
         else:
             tally[made.status] += 1
             misses = 0 if made.status == "keep" else misses + 1
-        if waiting >= settings.align_every and not stop():
-            aligned, _ = align.check(ws, store, hyp_id, lane)
-            checks += 1
-            drifts += 0 if aligned else 1
-            waiting = 0
+        due = (made is not None and made.status == "keep") or waiting >= settings.align_every
+        if due and stop():
+            reason = STOPPED
+        elif due:
+            judge()
         if misses >= settings.stall_k:
             reason = STALLED
+        if reason != CARDS:
             break
         active = research_loop.ongoing(store, active)
 

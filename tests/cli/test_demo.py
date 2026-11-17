@@ -175,8 +175,9 @@ def test_the_demo_classifies_and_researches_itself_with_no_human_in_the_loop(
     assert entry["status"] == "researching"
     assert entry["best_metric"] == outcome["best_metric"]
     assert entry["cards"] == CARDS + 1
-    # One `classify` call and one `propose` per card, every one of them ledgered.
-    assert found["spend_today"]["calls"] - before == CARDS + 1
+    # One `classify` call, one `propose` per card and one `align_check` for the keep, which is
+    # judged as it is made, every one of them ledgered.
+    assert found["spend_today"]["calls"] - before == CARDS + 2
     assert found["spend_today"]["by_lane"] == {"op": 0.0}
     working = next(row for row in found["lanes"] if row["id"] == DEMO_ID)
     assert working["best_sha"] == outcome["best_sha"]

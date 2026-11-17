@@ -22,6 +22,7 @@ from kanso.errors import PreconditionError
 from kanso.hyp import STRATEGY_FILE
 from kanso.models import INSTRUCTIONS, Call, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
+from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
 from kanso.schemas import CardDigest, Commands, RunRecord
 from kanso.schemas.models import ROUTING_DEFAULTS
@@ -107,9 +108,10 @@ def test_thirty_cards_exercise_a_keep_a_crash_and_a_discard(
     # redundant results included: thirty proposals and one baseline.
     assert records.n_trials(store, prepared_hyp) == 31
     assert statuses(store, prepared_hyp)[:4] == ["keep", "keep", "crash", "discard"]
-    # align_every is 10 and the baseline is the run's first card, so the checks land on
-    # the ninth, nineteenth and twenty-ninth card proposed: every card advances the clock,
-    # and here every proposal is one.
+    # The keep, the first card proposed, is checked as it is made, which resets the clock;
+    # align_every is 10, so the clock falls on the eleventh and twenty-first: every card
+    # advances it, and here every proposal is one. Its checks find the lane on the keep the
+    # first check answered for, so the judge is asked once in thirty cards.
     assert (outcome.checks, outcome.drifts) == (3, 0)
     assert records.active(store, prepared_hyp) is not None
     assert outcome.best_sha == records.cards_of(store, prepared_hyp)[1].strategy_sha
@@ -129,7 +131,7 @@ def test_a_diff_that_does_not_apply_is_invalid_output_and_takes_the_retry(
     outcome = driver.run(ws, store, prepared_hyp, cards=1)
 
     assert outcome.proposed == 1
-    assert spend(store, lane="op").calls == 2
+    assert spend(store, lane="op").calls == 3, "two answers, and the keep's alignment check"
     assert statuses(store, prepared_hyp) == ["keep", "keep"]
 
 
@@ -144,7 +146,7 @@ def test_a_diff_that_changes_nothing_is_refused_before_it_costs_a_card(
     outcome = driver.run(ws, store, prepared_hyp, cards=1)
 
     assert outcome.proposed == 1
-    assert spend(store, lane="op").calls == 2
+    assert spend(store, lane="op").calls == 3, "two answers, and the keep's alignment check"
 
 
 def test_a_diff_that_reproduces_carded_bytes_is_refused_with_the_card_it_repeats(
@@ -332,15 +334,16 @@ def test_a_redundant_card_advances_the_drift_clock_and_the_next_turn_s_last_diff
     and would hand the next proposal the diff of the card before last while showing it the
     redundant card as the newest thing tried.
     """
-    workspace = tuned(ws, align_every=3)
+    workspace = tuned(ws, align_every=2)
     scripted(workspace, propose=[proposal("revert")], align_check=[ALIGNED])
 
-    outcome = driver.run(workspace, store, prepared_hyp, cards=3)
+    outcome = driver.run(workspace, store, prepared_hyp, cards=4)
 
-    assert (outcome.keeps, outcome.redundant) == (1, 2)
-    # The baseline is the run's first card, so the third card proposed is the tenth
-    # counted here: the check lands on the second redundant result.
-    assert (outcome.checks, outcome.drifts) == (1, 0)
+    assert (outcome.keeps, outcome.redundant) == (1, 3)
+    # The keep is checked as it is made, which resets the clock; the two redundant results
+    # after it are the two cards the clock counts, so it falls on the second of them, and the
+    # third is the one card it has counted since.
+    assert (outcome.checks, outcome.drifts) == (2, 0)
     active = records.require_active(store, prepared_hyp)
     assert align.since(store, active) == 1, "the persisted clock is the driver's own"
     repeat = records.cards_of(store, prepared_hyp)[2]
@@ -887,18 +890,33 @@ def test_a_stop_that_lands_during_a_proposal_drops_it_before_its_card(
 
 
 def test_a_stop_that_lands_during_a_card_skips_the_alignment_check_it_made_due(
-    ws: Workspace, store: StateStore, prepared_hyp: str
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
-    """The check is owed to the run, which is asked again at its next turn."""
+    """The check is owed to the run, which is asked again at its next turn: the invocation the
+    stop skipped it in ends there, one told to stop at once ends before it, and the next one
+    makes it before it proposes — so a drift keep is rewound before anything is built on it."""
     workspace = tuned(ws, align_every=1)
     scripted(workspace, propose=[proposal("revert")])
     asked = iter([False, False, True])
 
     outcome = driver.run(workspace, store, prepared_hyp, cards=1, stop=lambda: next(asked))
 
-    assert (outcome.proposed, outcome.checks) == (1, 0)
+    assert (outcome.reason, outcome.proposed, outcome.checks) == ("stopped", 1, 0)
     assert statuses(store, prepared_hyp) == ["keep", "keep"]
     assert spend(store, lane="op").calls == 1, "no alignment call was made"
+    held = driver.run(workspace, store, prepared_hyp, cards=1, stop=lambda: True)
+    assert (held.reason, held.proposed, held.checks) == ("stopped", 0, 0)
+    assert spend(store, lane="op").calls == 1, "a stop before the owed check asks nothing"
+    reset_mock()
+    scripted(workspace, propose=[proposal("weak")], align_check=[DRIFTED])
+    before = len(recorded.calls)
+
+    resumed = driver.run(workspace, store, prepared_hyp, cards=1)
+
+    assert resumed.drifts == 1
+    assert [call.task_class for call in recorded.calls[before:]] == ["align_check", "propose"]
+    proposed = json.loads(recorded.of("propose")[-1].user)
+    assert proposed[STRATEGY_FILE] == SEED.decode("utf-8"), "rewound before it was built on"
 
 
 def test_a_stall_ends_the_run_and_requeues_the_hypothesis(
@@ -1412,7 +1430,7 @@ def test_a_batch_keeps_the_best_slot_and_counts_every_card(
     for ran in (baseline, kept, discarded):
         measured_as_scored(store, ran)
     assert crashed.measured_sha is None
-    assert spend(store, lane="op").calls == 1
+    assert spend(store, lane="op").calls == 2, "one call for the turn, one for its keep's check"
     assert records.active(store, prepared_hyp) is not None
 
 
@@ -1544,7 +1562,7 @@ def test_a_crashed_slot_is_repaired_alone_on_the_next_turn(
     assert outcome.crashes == 1
     assert records.n_trials(store, prepared_hyp) == 6
     assert statuses(store, prepared_hyp).count("crash") == 1
-    assert spend(store, lane="op").calls == 3
+    assert spend(store, lane="op").calls == 4, "three turns, and the first turn's keep's check"
 
 
 def test_a_batch_with_two_keeps_keeps_the_higher_and_one_miss_stalls(
@@ -1822,3 +1840,225 @@ def test_a_file_that_trades_fewer_names_than_its_parent_keeps_the_rows_of_its_ow
 
     assert [kept.instrument for kept in child.costs.dated or ()] == [leg]
     assert pyyaml.safe_load(driver.restored(unlisted, pinned))["costs"]["dated"] == rows
+
+
+# --- a keep is judged as it is made -----------------------------------------
+
+
+def test_a_keep_is_judged_before_the_next_proposal_whatever_the_clock_says(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Counted in a live workspace on 2026-11-17: 37 `misaligned` rewinds against 61 keeps past
+    the baseline, each drift keep built on for up to `align_every` cards — every one a trial —
+    before the clock's check rewound it. Now the keep is judged before anything is built on it,
+    at the default clock of ten."""
+    scripted(ws, propose=[proposal("revert"), proposal("weak")], align_check=[DRIFTED])
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=2)
+
+    assert (outcome.checks, outcome.drifts) == (1, 1)
+    assert [call.task_class for call in recorded.calls] == ["propose", "align_check", "propose"]
+    second = json.loads(recorded.of("propose")[1].user)
+    assert second[STRATEGY_FILE] == SEED.decode("utf-8"), "rewound to the run's base"
+    assert second["rewound_for"] == [DRIFTED["reason"]]
+    kept = records.cards_of(store, prepared_hyp)[1]
+    assert (kept.status, kept.aligned) == ("keep", False)
+
+
+@pytest.mark.parametrize("verdict", [ALIGNED, DRIFTED], ids=["aligned", "drifted"])
+def test_a_keep_followed_by_a_spell_of_misses_stalls_on_a_judged_best(
+    ws: Workspace, store: StateStore, prepared_hyp: str, verdict: dict[str, Any]
+) -> None:
+    """Backlog row 90: misses count toward `stall_k` and not toward `align_every`, so a keep
+    followed by a spell of them stalled with no check after it, was certified, and became the
+    next run's base, which no check judges. Now the stall comes after the keep's verdict: an
+    aligned keep is certified as judged, and a drifted one is rewound before the stall reads
+    the best, which is back on the base and certifies nothing."""
+    workspace = tuned(ws, stall_k=2, align_every=100)
+    scripted(
+        workspace,
+        propose=[proposal("revert"), proposal("boom"), proposal("boom")],
+        align_check=[verdict],
+    )
+
+    outcome = driver.run(workspace, store, prepared_hyp)
+
+    assert outcome.reason == "stalled"
+    kept = records.cards_of(store, prepared_hyp)[1]
+    assert kept.status == "keep"
+    kinds = [event.kind for event in store.events(subject=prepared_hyp)]
+    judged = [
+        event
+        for event in store.events(subject=prepared_hyp)
+        if event.kind in (align.ALIGNED, align.DRIFTED)
+    ]
+    assert len(judged) == 1 and judged[0].detail.get("judged", True) is True
+    assert kinds.index(judged[0].kind) < kinds.index(scheduler.STALLED)
+    (stalled,) = store.events(kind=scheduler.STALLED, subject=prepared_hyp)
+    base = records.runs_of(store, prepared_hyp)[0].base_sha
+    if verdict is ALIGNED:
+        assert stalled.detail["best_sha"] == kept.strategy_sha
+    else:
+        assert stalled.detail["best_sha"] == base
+        assert stalled.detail["certifiable"] is False
+        assert certificate.latest(store, prepared_hyp) is None
+
+
+def test_a_keep_on_the_clock_is_one_check(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Guard: a keep that falls on the clock is checked once, not once for the keep and once
+    for the clock."""
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=[proposal("revert"), proposal("weak")], align_check=[ALIGNED])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    assert outcome.checks == 2, "one check a card: the keep's, then the clock's"
+    assert len(recorded.of("align_check")) == 1
+
+
+def test_after_a_keep_s_check_the_clock_asks_no_model(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """One `align_check` call per keep, and the clock a backstop: after the keep's check the
+    lane is on bytes a check answered for, and every card that does not keep puts it back
+    there, so the clock's check finds nothing new and records that it judged nothing."""
+    workspace = tuned(ws, align_every=3)
+    scripted(
+        workspace,
+        propose=[proposal("revert"), proposal("weak"), proposal("weak"), proposal("weak")],
+        align_check=[ALIGNED],
+    )
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=4)
+
+    assert outcome.checks == 2
+    assert [call.task_class for call in recorded.calls] == [
+        "propose",
+        "align_check",
+        "propose",
+        "propose",
+        "propose",
+    ]
+    checks = [event for event in store.events(kind=align.ALIGNED, subject=prepared_hyp)]
+    assert [event.detail["judged"] for event in checks] == [True, False]
+
+
+def test_a_keep_whose_judge_failed_is_judged_when_the_run_resumes(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A judge that cannot answer fails the invocation after the keep is recorded; the keep is
+    owed its check, and the next invocation makes it before it proposes anything."""
+    scripted(ws, propose=[proposal("revert"), proposal("weak")], align_check=[{}])
+
+    with pytest.raises(PreconditionError, match="align_check"):
+        driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert statuses(store, prepared_hyp) == ["keep", "keep"]
+    reset_mock()
+    scripted(ws, propose=[proposal("weak")], align_check=[ALIGNED])
+    before = len(recorded.calls)
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert recorded.calls[before].task_class == "align_check"
+    assert [call.task_class for call in recorded.calls[before:]] == ["align_check", "propose"]
+    assert (outcome.checks, outcome.proposed) == (1, 1)
+
+
+def test_a_turn_that_kept_is_judged_once_on_its_kept_slot(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    workspace = tuned(ws, cards_per_turn=2, align_every=100)
+    scripted(
+        workspace,
+        propose=[{"proposals": [proposal("revert"), proposal("weak")]}],
+        align_check=[ALIGNED],
+    )
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=1)
+
+    assert outcome.checks == 1
+    (call,) = recorded.of("align_check")
+    kept = next(card for card in records.cards_of(store, prepared_hyp)[1:] if card.status == "keep")
+    assert json.loads(call.user)["diff_since_last_check"] == diffs.unified(
+        SEED, store.get_blob(kept.strategy_sha)
+    )
+
+
+def test_a_resume_that_owes_nothing_asks_no_judge(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """Guard: a keep its own check judged is not judged again by the next invocation."""
+    scripted(ws, propose=[proposal("revert"), proposal("weak")], align_check=[ALIGNED])
+    driver.run(ws, store, prepared_hyp, cards=1)
+    before = len(recorded.calls)
+
+    outcome = driver.run(ws, store, prepared_hyp, cards=1)
+
+    assert outcome.checks == 0
+    assert [call.task_class for call in recorded.calls[before:]] == ["propose"]
+
+
+def test_an_end_between_a_keep_and_its_check_lets_the_lane_go(
+    ws: Workspace,
+    store: StateStore,
+    prepared_hyp: str,
+    recorded: Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`research end` lands after the card recorded its keep and before the check: the lane is
+    let go with `TakenError`, which a daemon lane records as nothing, and not refused with
+    'has no active run', which it records as its failure and puts the hypothesis back for."""
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=[proposal("revert")], align_check=[ALIGNED])
+    card = research_loop.card
+
+    def ending(*args: Any, **kwargs: Any) -> Any:
+        made = card(*args, **kwargs)
+        research_loop.end(workspace, store, prepared_hyp)
+        return made
+
+    monkeypatch.setattr(research_loop, "card", ending)
+
+    with pytest.raises(PreconditionError) as raised:
+        driver.run(workspace, store, prepared_hyp, cards=1)
+
+    assert type(raised.value) is research_loop.TakenError
+    assert recorded.of("align_check") == []
+
+
+@pytest.mark.parametrize("width", [1, 2], ids=["card", "turn"])
+def test_a_stop_that_skips_a_keep_s_check_ends_the_invocation(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder, width: int
+) -> None:
+    """The `stop` a driver is given may answer false again after it answered true; the
+    daemon's never does. A keep whose check a stop skipped ends the invocation there, rather
+    than falling through to the next proposal's own ask, so a stop that changed its mind
+    cannot build on a keep no check has judged."""
+    workspace = tuned(ws, align_every=1, cards_per_turn=width)
+    turn = [proposal("revert")] if width == 1 else [{"proposals": [proposal("revert")]}]
+    scripted(workspace, propose=turn, align_check=[ALIGNED])
+    asked = iter([False, False, True, False, False, False, False])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2, stop=lambda: next(asked))
+
+    assert (outcome.reason, outcome.proposed, outcome.checks) == ("stopped", 1, 0)
+    assert [call.task_class for call in recorded.calls] == ["propose"]
+    assert align.owed(store, records.require_active(store, prepared_hyp))
+
+
+def test_an_invocation_asked_for_no_cards_judges_an_owed_keep(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=[proposal("revert")], align_check=[ALIGNED])
+    asked = iter([False, False, True])
+    driver.run(workspace, store, prepared_hyp, cards=1, stop=lambda: next(asked))
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=0)
+
+    assert (outcome.checks, outcome.proposed, outcome.reason) == (1, 0, "cards")
+    assert len(recorded.of("align_check")) == 1
+    assert not align.owed(store, records.require_active(store, prepared_hyp))

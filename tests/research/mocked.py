@@ -227,10 +227,15 @@ def scripted(
     align_check: list[Any] | None = None,
     certify_plan: list[Any] | None = None,
 ) -> None:
-    """Point the register at mock models and script the tiers the task classes route to."""
+    """Point the register at mock models and script the tiers the task classes route to.
+
+    Every keep the driver makes is judged as it is made, so the judge answers `ALIGNED` unless
+    told otherwise; `align_check=[]` scripts it with nothing, which the mock answers with an
+    empty object that fails the ladder.
+    """
     write_register(ws)
     write_script(ws, "mid", {"propose": propose if propose is not None else CYCLE})
-    write_script(ws, "cheap", {"align_check": align_check} if align_check is not None else {})
+    write_script(ws, "cheap", {"align_check": [ALIGNED] if align_check is None else align_check})
     write_script(ws, "frontier", {"certify_plan": [PLAN] if certify_plan is None else certify_plan})
 
 

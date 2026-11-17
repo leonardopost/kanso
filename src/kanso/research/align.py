@@ -52,10 +52,15 @@ that keep would leave it under no verdict at all, standing as the ground a later
 rewinds to. So the checkpoint stops short of it, and the next check that asks the model
 marks it.
 
-A keep an earlier run made was that run's to judge, and a run can end before the check that
-would have judged it: by hand, or on a spell of misses, which count toward `stall_k` and not
-toward `align_every`. Such a keep is carried as the next run's base unjudged; row 90 of
-`docs/backlog.md` says what closing that would take.
+Every keep the driver makes is judged as it is made (`kanso.research.driver`): before the
+next proposal, and so before a stall can certify it or hand it to the next run as its base,
+which no check judges. On a clock alone a keep followed by a spell of misses — which count
+toward `stall_k` and not toward `align_every` — could stall unjudged and be certified. A keep
+whose check did not happen — the driver was told to stop first, or the judge could not answer
+— is `owed`, and so is one carded by hand, and the driver's next invocation on the run makes
+that check before it proposes. A run ended by hand ends where the operator ends it, and a keep
+owed then is carried as the next run's base unjudged: `kanso align check` judges a run of lane
+`op` before its end, and refuses one a daemon lane owns, whose own next turn judges it.
 
 The syntax tree still reads the base and the checkpoint's bytes. What it finds is a fact
 about the bytes rather than an opinion of them: it costs nothing, it says the same thing
@@ -157,6 +162,7 @@ __all__ = [
     "checkpoint",
     "directions_before",
     "lane_strategy",
+    "owed",
     "problems",
     "rewound_before",
     "rewound_for",
@@ -427,6 +433,18 @@ def checkpoint(store: StateStore, run: RunRecord) -> Checkpoint:
             judged=bool(event.detail.get("judged", True)),
         )
     return found
+
+
+def owed(store: StateStore, run: RunRecord) -> bool:
+    """Whether this run holds a keep no check has answered for: one past its last checkpoint
+    whose bytes are neither its base nor the bytes that check left the lane on.
+
+    The driver judges every keep as it is made, so this is true only where that check did not
+    happen — a stop came first, or the judge could not answer — or where the keep was carded by
+    hand, and the driver's next invocation makes the check before it proposes. A check that
+    judged nothing stops short of such a keep (`_unanswered_keep`), so it leaves it owed.
+    """
+    return _unanswered_keep(store, run, checkpoint(store, run)) is not None
 
 
 def since(store: StateStore, run: RunRecord) -> int:
