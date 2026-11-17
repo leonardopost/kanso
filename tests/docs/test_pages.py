@@ -91,6 +91,40 @@ def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() ->
     assert stated in prose(page("concepts.md"))
 
 
+def explore_row() -> str:
+    return next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp explore")
+    )
+
+
+def test_the_pages_say_a_draft_states_its_parent_s_mechanism() -> None:
+    """Three drafts declared momentum under mean-reversion parents, as the instruction then
+    invited. The pages say a draft states its parent's mechanism or one the workspace lists,
+    that the key widens and never narrows, and that the rule reads the field, not the code."""
+    assert ResearchConfig().explore_mechanisms == []
+    concepts = prose(page("concepts.md"))
+    assert "A candidate also *states* its parent's `mechanism`" in concepts
+    assert "never removes the parent's" in concepts
+    assert "nothing reads its code for a mechanism" in concepts
+    assert (
+        "states the parent's `mechanism` or one `[research] explore_mechanisms` lists"
+        in explore_row()
+    )
+    toml = prose(section(page("workspace.md"), "`kanso.toml`"))
+    assert "`[research] explore_mechanisms` lists the mechanisms" in toml
+    assert "The template writes `[]`, and a file without the key reads the same" in toml
+    assert "naming `research.explore_mechanisms` (exit 3" in toml
+
+
+def test_the_cli_page_says_explore_mechanisms_is_no_search_rule() -> None:
+    """The paragraph naming the `[research]` keys said all of them were search rules; the
+    mechanisms a draft may move to are the operator's scope, which no agent sets."""
+    rules = prose(page("cli.md")).split("## The daemon and the queue")[0]
+    assert "and all are framework search rules" not in rules
+    assert "all but `explore_mechanisms` are framework search rules" in rules
+    assert "which no agent sets" in rules
+
+
 def test_the_cli_page_says_research_begin_needs_no_register() -> None:
     row = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso research begin")

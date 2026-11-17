@@ -35,7 +35,7 @@ def answer() -> dict[str, Any]:
                 "id": CANDIDATE_ID,
                 "title": "Demo: hourly breakout on a synthetic OU series",
                 "thesis": "A close through the session's range continues for an hour.",
-                "mechanism": "momentum",
+                "mechanism": DRAFT["mechanism"],
                 "derived_from": [HYP_ID],
             },
             sort_keys=False,

@@ -1186,8 +1186,9 @@ hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_afte
 stalls on one best have passed since the last exploration (5 in the template; 0 is never) —
 calls the `explore` task class with what the hypothesis's research learned: its pinned
 `hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
-tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
-the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
+tag, its keeps and their scores, its stalls, each certificate's verdict with the ids of
+the gates that failed and nothing they measured, and the mechanisms the candidate may state.
+The answer is one new hypothesis, whole,
 judged on the ladder: an id nothing holds, a file that parses with that id and no
 classification, naming the parent in `derived_from` so the parent's cards are the
 candidate's trials too — and its declared grid, so the candidate states no `prior_trials` of
@@ -1198,7 +1199,15 @@ the candidate certify inside its own embargo counted from the last day the *pare
 researched — the latest research end of any pin the parent's runs held — rather than from
 the end of the research window the candidate declares: the idea was chosen by scores
 measured on the parent's research, so that is the last day it saw, and one certified sooner
-would be certified on data within the embargo of the data that chose it. It is written as a
+would be certified on data within the embargo of the data that chose it. A candidate also
+*states* its parent's `mechanism` — the one the parent's newest pin declares — or one
+`[research] explore_mechanisms` lists (`[]` in the template, so the parent's own only): the
+key adds mechanisms a draft may move to and never removes the parent's, and any other is a
+complaint on the ladder like the rest. An explored draft tests another idea inside the
+mechanism its parent's research measured, not another mechanism. The rule reads the field the
+draft declares, and nothing reads its code for a mechanism, so a draft that declares the
+parent's and implements another passes it: its thesis is still yours to read, and once it is
+researched its own alignment check judges it against that thesis. It is written as a
 draft to `hypotheses/<id>/`, a directory that did not exist, and registered by nothing: an
 `explored` escalation offers `hyp validate` and `hyp add`, and whether it gets a lane is
 yours. Every attempt, by hand or by a lane, leaves an event under the parent — `explored`

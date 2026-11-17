@@ -180,6 +180,21 @@ def test_an_exploration_owes_a_bounded_rationale_and_tags_from_the_vocabulary() 
     assert schema["properties"]["tags"]["items"]["enum"] == list(TAGS)  # type: ignore[index]
 
 
+def test_the_explorer_is_told_to_keep_its_parent_s_mechanism() -> None:
+    """The old sentences invited the three momentum drafts the operator rejected: an idea
+    that "tests a mechanism the parent's cards have not reached", in a file following the
+    parent's "with your `id`, your thesis and mechanism"."""
+    said = " ".join(INSTRUCTIONS["explore"].split())
+
+    assert (
+        "Keep the parent's `mechanism`, or take one listed in `mechanisms`; any other is refused."
+    ) in said
+    assert "State in `thesis` the entry, exit, filter or timing your seed tests" in said
+    assert "another entry, exit, filter, timing or reading of the effect its thesis names" in said
+    assert "tests a mechanism the parent's cards have not reached" not in said
+    assert "your thesis and mechanism" not in said
+
+
 def test_an_empty_dynamic_half_still_asks_for_an_answer() -> None:
     call = build("classify", ROUTE, inputs(dynamic={}))
     assert call.user == "Answer for the facts already given."

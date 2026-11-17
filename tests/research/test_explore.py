@@ -88,7 +88,7 @@ def candidate_yaml(**changes: Any) -> str:
             "id": CANDIDATE_ID,
             "title": "Demo: daily breakout on a synthetic saw-tooth",
             "thesis": "A close above the last two continues for a session.",
-            "mechanism": "momentum",
+            "mechanism": "mean_reversion",
             "derived_from": [HYP_ID],
             **changes,
         },
@@ -286,7 +286,9 @@ def test_the_explorer_is_shown_the_research_and_only_ids_of_the_certification(
         "stalls",
         "certificates",
         "taken_ids",
+        "mechanisms",
     }
+    assert facts["mechanisms"] == ["mean_reversion"], "the parent's own, and nothing declared"
     assert "Strategy.mode" in facts["strategy.py"]  # the best, which the keep wrote
     assert facts["coverage"]["signal_mean_reversion"]["count"] == 1
     assert [keep["desc"] for keep in facts["keeps"]] == ["run in revert mode", "baseline"]
@@ -572,10 +574,66 @@ def test_every_check_that_can_be_made_is_made_in_one_answer(
     complaints = judge(ws, store, wrong)
 
     assert [said.split(":")[0] for said in complaints] == ["id", "strategy_py", "hypothesis_yaml"]
+    elsewhere = candidate_yaml(mechanism="momentum")
+    complaints = judge(ws, store, {**wrong, "hypothesis_yaml": elsewhere})
+    assert [said.split(":")[0] for said in complaints] == [
+        "id",
+        "strategy_py",
+        "hypothesis_yaml",
+        "hypothesis_yaml",
+    ]
+    assert "declares id 'demo_breakout'" in complaints[2]
+    assert "mechanism 'momentum' is not" in complaints[3]
 
 
 def test_a_valid_candidate_earns_no_complaint(ws: Workspace, store: StateStore) -> None:
     assert judge(ws, store, answer()) == []
+
+
+# --- the parent's mechanism ----------------------------------------------------
+
+
+def test_a_candidate_outside_its_parent_s_mechanism_is_refused(
+    ws: Workspace, store: StateStore
+) -> None:
+    """smr_premarket_drift, smr_breadth_thrust and smr_close_flow_ride each declared momentum
+    under a mean-reversion parent, as the instruction invited, and the operator rejected all
+    three as outside the mandate."""
+    complaints = judge(ws, store, answer(hypothesis_yaml=candidate_yaml(mechanism="momentum")))
+
+    assert complaints == [
+        f"hypothesis_yaml: mechanism 'momentum' is not {HYP_ID}'s ('mean_reversion'); an "
+        "explored draft tests another idea inside the mechanism its parent's research "
+        "measured, so state mechanism: mean_reversion"
+    ]
+
+
+def test_a_mechanism_the_workspace_declares_is_admitted_and_another_is_named(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The key widens what a draft may move to; it is the operator's list, not a free choice."""
+    workspace = tuned(ws, explore_mechanisms=["momentum"])
+
+    assert (
+        judge(workspace, store, answer(hypothesis_yaml=candidate_yaml(mechanism="momentum"))) == []
+    )
+    (complaint,) = judge(
+        workspace, store, answer(hypothesis_yaml=candidate_yaml(mechanism="carry"))
+    )
+    assert (
+        f"mechanism 'carry' is not {HYP_ID}'s ('mean_reversion') nor one [research] "
+        "explore_mechanisms admits (momentum);"
+    ) in complaint
+    assert complaint.endswith("so state mechanism: mean_reversion or one of momentum")
+
+
+def test_the_parent_s_own_mechanism_is_admitted_whatever_the_workspace_declares(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The key adds mechanisms a draft may move to and never removes the parent's own."""
+    workspace = tuned(ws, explore_mechanisms=["stat_arb"])
+
+    assert judge(workspace, store, answer()) == []
 
 
 def test_a_candidate_may_certify_on_the_first_day_after_its_embargo_from_the_parent(

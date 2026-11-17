@@ -39,6 +39,17 @@ best and its stalls outlive a re-pin that moves the windows.
 Every one of these is a complaint the model is asked again with, and a ladder that runs
 out fails the step.
 
+**A draft states its parent's mechanism.** The candidate's `hypothesis.yaml` states the
+`mechanism` of the parent's newest pin, or one `[research] explore_mechanisms` lists: the
+key adds mechanisms a draft may move to and never removes the parent's, and `[]`, its
+default, is the parent's alone. An explored draft tests another idea inside the mechanism
+its parent's research measured; another mechanism is the operator's to write with `kanso
+hyp new`, and any other is a complaint on the ladder like the rest. The explorer is shown
+the admissible set as `mechanisms` in the moving half, because `kanso.toml` can change
+between two calls of one subject. The rule reads the field the draft declares and nothing
+reads the code for a mechanism, so it binds what a draft states and never proves what it
+tests: the thesis is still the operator's to read.
+
 **It writes a draft, and registers nothing.** The three files land in
 `hypotheses/<id>/` through a temporary file and a rename each, into a directory that did
 not exist — never over one that did, and never into the parent's, which a run has pinned.
@@ -210,7 +221,7 @@ def _attempt(ws: Workspace, store: StateStore, runs: list[RunRecord], lane: str)
             HYPOTHESIS_FILE: driver.shown(pinned),
             PROGRAM_FILE: _text(store, newest.program_sha),
         },
-        dynamic=_dynamic(ws, store, newest),
+        dynamic=_dynamic(ws, store, newest, parent),
         check=check,
     )
     route(ws, store, TASK, inputs, lane=lane)
@@ -261,8 +272,11 @@ def after_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str) -> Exp
 # --- what the explorer is shown ----------------------------------------------
 
 
-def _dynamic(ws: Workspace, store: StateStore, newest: RunRecord) -> dict[str, object]:
-    """The parent's research as it stands: its best, coverage, keeps, stalls, verdicts."""
+def _dynamic(
+    ws: Workspace, store: StateStore, newest: RunRecord, parent: Hypothesis
+) -> dict[str, object]:
+    """The parent's research as it stands: its best, coverage, keeps, stalls, verdicts, and
+    the mechanisms a candidate may state."""
     best, _ = records.best_of(store, newest.hyp_id)
     return {
         STRATEGY_FILE: _text(store, best or newest.base_sha),
@@ -271,7 +285,14 @@ def _dynamic(ws: Workspace, store: StateStore, newest: RunRecord) -> dict[str, o
         "stalls": _stalls(store, newest.hyp_id),
         "certificates": _verdicts(store, newest.hyp_id),
         "taken_ids": _taken(ws, store),
+        "mechanisms": sorted(_mechanisms(ws, parent)),
     }
+
+
+def _mechanisms(ws: Workspace, parent: Hypothesis) -> set[str]:
+    """What a candidate may state: the parent's own mechanism and every one the workspace
+    lists in `[research] explore_mechanisms`."""
+    return {parent.mechanism, *ws.config.research.explore_mechanisms}
 
 
 def _keeps(store: StateStore, newest: RunRecord) -> list[dict[str, object]]:
@@ -417,9 +438,26 @@ def _judge(
             "hypothesis_yaml: carries prior_trials; a candidate's search is its parent's, "
             "counted through `derived_from`, grids and cards alike, so leave it out"
         )
+    complaints.extend(_mechanism(ws, parent, hyp))
     complaints.extend(_embargo(parent, seen, hyp))
     complaints.extend(f"strategy_py: {problem}" for problem in align.problems(hyp, strategy))
     return complaints
+
+
+def _mechanism(ws: Workspace, parent: Hypothesis, hyp: Hypothesis) -> list[str]:
+    """A candidate states its parent's mechanism or one the workspace lists, and no other."""
+    if hyp.mechanism in _mechanisms(ws, parent):
+        return []
+    listed = sorted(_mechanisms(ws, parent) - {parent.mechanism})
+    admits = (
+        f" nor one [research] explore_mechanisms admits ({', '.join(listed)})" if listed else ""
+    )
+    others = f" or one of {', '.join(listed)}" if listed else ""
+    return [
+        f"hypothesis_yaml: mechanism {hyp.mechanism!r} is not {parent.id}'s "
+        f"({parent.mechanism!r}){admits}; an explored draft tests another idea inside the "
+        f"mechanism its parent's research measured, so state mechanism: {parent.mechanism}{others}"
+    ]
 
 
 def _embargo(parent: Hypothesis, seen: date, hyp: Hypothesis) -> list[str]:

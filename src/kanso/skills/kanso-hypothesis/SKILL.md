@@ -34,7 +34,7 @@ Deterministic procedure. The CLI validates; you only fill the fields.
 5. Tell the operator the id and run `kanso classify <id>` next (skill `kanso-classify`), unless they said otherwise.
 
 ## A hypothesis kanso wrote
-An inbox entry of kind `explored` names a draft kanso wrote under `hypotheses/<id>/` from a researched hypothesis that stopped learning (`kanso hyp explore <parent>`, or a daemon lane after `[research] explore_after_stalls` stalls). It is not registered. Read the three files, tell the operator the idea and the rationale, then run steps 3–5 on it only if they want it researched; otherwise leave the directory for them to delete.
+An inbox entry of kind `explored` names a draft kanso wrote under `hypotheses/<id>/` from a researched hypothesis that stopped learning (`kanso hyp explore <parent>`, or a daemon lane after `[research] explore_after_stalls` stalls). It is not registered. It states its parent's `mechanism` unless `[research] explore_mechanisms` widens it; the rule reads the field and not the code, so read the thesis and the strategy for what the idea is. Read the three files, tell the operator the idea and the rationale, then run steps 3–5 on it only if they want it researched; otherwise leave the directory for them to delete.
 
 ## Rules
 - Never edit `strategy.py` here; that is the research loop's surface.

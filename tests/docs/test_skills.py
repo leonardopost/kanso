@@ -63,6 +63,16 @@ def test_the_hypothesis_skill_states_a_grid_in_the_keys_the_schema_reads() -> No
     assert "take N from the operator, never from your own reading of the file" in text
 
 
+def test_the_hypothesis_skill_says_a_draft_states_its_parent_s_mechanism() -> None:
+    """The agent an `explored` entry lands in front of reads here that the mechanism is the
+    parent's unless the workspace widens it, and that the rule binds the field, not the code."""
+    text = skill(PACKAGED, "kanso-hypothesis")
+    assert (
+        "It states its parent's `mechanism` unless `[research] explore_mechanisms` widens it;"
+        " the rule reads the field and not the code"
+    ) in text
+
+
 def test_the_certify_skill_counts_a_declared_grid_where_kanso_does() -> None:
     """A plan carries its correction, a pinned one is refused without it and a search is
     priced over its draws, a declared grid's settings among them: a skill counting cards alone
