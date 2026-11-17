@@ -2186,6 +2186,11 @@ def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar()
     for name in ("`forward_look`", '`exempt: "stage"`', "`where: parity`"):
         assert name in cli, name
     assert "a replay that reads any day of it is counted as a look at it" in cli
+    assert "The judgements at the forward window are counted nowhere" not in concepts
+    assert "`forward_holdout`'s evidence says which look the version is" in concepts
+    assert "whatever look it is" in concepts
+    assert "`forward_holdout`'s evidence records `look`, which look this version is" in cli
+    assert "`looks`, how many the lineage has taken" in cli
     assert (
         "**Looks at the forward window are counted per lineage and shown; they move no bar.**"
         in changelog

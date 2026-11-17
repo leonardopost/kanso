@@ -10,10 +10,13 @@ from statistics import NormalDist
 from typing import Any
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from kanso.certify.power import RESOLVES
 from kanso.criteria import catalogue
 from kanso.criteria.band import Z, forward_error, prediction
+from kanso.criteria.context import LookCount
 from kanso.criteria.gates.forward_holdout import (
     NO_DISPERSION,
     NO_EXPECTATION,
@@ -499,3 +502,57 @@ def test_it_skips_naming_what_it_lacked() -> None:
     for reason, ctx in cases.items():
         result = gate.evaluate(ctx)
         assert result.passed and result.skipped == reason, reason
+
+
+# --- its look -----------------------------------------------------------------------------
+
+
+def test_the_evidence_carries_the_look_its_caller_counted_and_nothing_when_it_counted_none() -> (
+    None
+):
+    """The monitor counts which look at the forward window the version is and the gate, the one
+    writer of its evidence, copies it there; a caller that counted nothing gets the evidence it
+    always got."""
+    counted = gate.evaluate(
+        replace(
+            gate_context(params=PARAMS, record=stage_record(), run=rising_run(), value=RISING),
+            looks=LookCount(look=2, looks=3, lineage=("demo_mr", "demo_child")),
+        )
+    )
+    uncounted = judge()
+
+    assert (counted.evidence["look"], counted.evidence["looks"]) == (2, 3)
+    assert counted.evidence["lineage"] == ["demo_mr", "demo_child"]
+    assert not {"look", "looks", "lineage"} & set(uncounted.evidence)
+    assert {key: counted.evidence[key] for key in uncounted.evidence} == uncounted.evidence
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    count=st.builds(
+        LookCount,
+        look=st.none() | st.integers(min_value=1, max_value=1_000),
+        looks=st.integers(min_value=0, max_value=1_000),
+        lineage=st.lists(st.sampled_from(("demo_mr", "demo_child", "demo_x")), max_size=3).map(
+            tuple
+        ),
+    ),
+    se=st.sampled_from((0.1, RISING)),
+)
+def test_the_look_moves_no_verdict(count: LookCount, se: float) -> None:
+    """The count moves no bar by itself: at any look, of any number, the gate passes, judges and
+    sets its bar exactly as it does with none counted."""
+    plain = judge(se=se)
+    looked = gate.evaluate(
+        replace(
+            gate_context(
+                params=PARAMS, record=stage_record(), run=rising_run(), value=RISING, se=se
+            ),
+            looks=count,
+        )
+    )
+
+    assert looked.passed == plain.passed
+    for key in ("judged", "bar", "realised", "required_periods", "expected", "se_fwd"):
+        assert looked.evidence[key] == plain.evidence[key], key
+    assert looked.evidence["look"] == count.look and looked.evidence["looks"] == count.looks

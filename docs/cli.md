@@ -451,6 +451,17 @@ uncounted, so a per-trade objective's trade may have opened before that first da
 `forward_start`. It skips, naming why, where `paper_forward` does: no stage record, no
 expectation, no objective, or an expectation that records no error or period count.
 
+**The forward check says which look at the forward window the version is, and judges by the
+plan at any of them.** Each version a paper or live stage runs over its sleeve's forward window
+is one look of the sleeve's lineage there, however many windows and passes it has had, and
+each replay that reads it another (`docs/concepts.md`, *Hold-out looks*). A pass counts them at
+the forward start of the sleeve's registered pin, and `forward_holdout`'s evidence records
+`look`, which look this version is — `null` where none of its windows recorded a read, as for
+one whose every window was realised before this release — `looks`, how many the lineage has
+taken, this version's included, and `lineage`, the registered hypotheses joined to the sleeve
+by `derived_from`, either way. The count moves no verdict: the gate judges by the `resolve` and
+`min_fraction` the sleeve's plan pins at that pass, at any look.
+
 ## Models
 
 | command | what it does |

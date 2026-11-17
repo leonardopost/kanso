@@ -340,3 +340,14 @@ def test_the_research_skill_says_a_forward_replay_is_a_look() -> None:
     text = re.sub(r"\s+", " ", skill(PACKAGED, "kanso-research"))
     assert "Never read the forward window to decide a seed, a filter or a program edit" in text
     assert "is a counted look at the lineage's forward window" in text
+
+
+def test_the_promote_skill_reports_a_promotable_version_with_its_forward_look() -> None:
+    """A version is promotable at any look, so the agent reports which look it was, and offers
+    the parity that is no look rather than the replay that is one."""
+    text = re.sub(r"\s+", " ", skill(PACKAGED, "kanso-promote"))
+    assert "Its evidence also carries `look`, `looks` and `lineage`" in text
+    assert 'Report a `promotable` version with "look k of n" beside it' in text
+    assert "offer `kanso replay run --strategy <id>@<v>` over the paper period" not in text
+    assert "`kanso replay parity --strategy <id>@<v> --from … --to …`" in text
+    assert "is a counted look at the forward window" in text

@@ -59,6 +59,19 @@ class DatasetFacts:
 
 
 @dataclass(frozen=True)
+class LookCount:
+    """How many looks a subject's lineage has taken at the hold-out window a gate reads, as the
+    gate's caller counted them (`kanso.certify.looks`): which look the subject is — `None` where
+    none of its own is counted — how many the lineage has taken, the subject's included, and who
+    the lineage is. Plain data, so a gate copies it into its evidence without reaching the
+    counter; it judges nothing."""
+
+    look: int | None
+    looks: int
+    lineage: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class GateContext:
     """Everything one gate evaluation may read.
 
@@ -106,7 +119,10 @@ class GateContext:
       times of day it is asked for, session by session (`kanso.criteria.timing.SessionPrices`),
       with the split schedules the window's definitions carry — what a gate that moves the
       run's trades to other sessions needs, and the one thing here besides a re-run that
-      reads the window to use.
+      reads the window to use;
+    * `looks` is how many looks the subject's lineage has taken at the hold-out window the gate
+      reads, counted by its caller (`kanso.certify.looks`) and copied into the evidence of the
+      gate that reads that window; it judges nothing, and is `None` wherever no caller counted.
 
     A gate never runs anything itself: `rerun`, `rerun_costs` and `session_prices` are
     supplied by whoever ran the subject in the first place, so a perturbed run is measured,
@@ -143,6 +159,7 @@ class GateContext:
     rerun: Callable[[Mapping[str, float]], CardRun] | None = None
     rerun_costs: Callable[[Mapping[str, float]], CardRun] | None = None
     session_prices: Callable[[Sequence[PriceKey]], SessionPrices] | None = None
+    looks: LookCount | None = None
 
 
 class Gate(Protocol):

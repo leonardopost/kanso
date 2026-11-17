@@ -3009,8 +3009,11 @@ one hypothesis over days inside the forward window of another that trades the sa
 has no `derived_from` link to it among them; nor a version's attached constructs, for its stage
 reads and its `--strategy` replays are charged to its sleeve's lineage alone.
 
-The count judges nothing. `kanso replay run` and `kanso replay parity` say which look they were
-(`forward_look`, and the `forward` line):
+The count judges nothing. At every monitoring pass `forward_holdout` judges a paper version by
+the `resolve` and `min_fraction` of the plan its sleeve has pinned at that pass, whatever look
+it is, and its evidence says which look the version is and how many the lineage has taken
+(`look`, `looks`, `lineage`; *Promotion and demotion*). `kanso replay run` and `kanso replay
+parity` say which look they were (`forward_look`, and the `forward` line):
 
 ```
 $ kanso replay run --hyp demo_mr          # after the sequence in README.md; every line but forward is elided
@@ -3426,11 +3429,10 @@ and a version already `promotable` stays so, because a pass marks and never unma
 and `cert run` refuse such a plan too (exit 3), as they refuse any plan this toolbox can no
 longer run.
 
-The judgements at the forward window are counted nowhere: a lineage that fails it, certifies a
-sibling and deploys again looks at the same forward weeks again with no bar raised
-(`docs/backlog.md` row 330). A `kanso replay` of forward data is counted as a look of its
-lineage there (*Hold-out looks*), and read back into research it is still a look the gate does
-not see (row 331).
+Each version a stage runs over a forward day is a look of its sleeve's lineage, and so is each
+replay that reads one (*Hold-out looks*). `forward_holdout`'s evidence says which look the
+version is and how many the lineage has taken (`look`, `looks`, `lineage`), and it judges by
+the plan's `resolve` and `min_fraction` at any of them.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

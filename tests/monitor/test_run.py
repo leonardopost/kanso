@@ -796,3 +796,91 @@ def test_a_book_recorded_without_its_hold_is_skipped_naming_what_is_missing(
     judged = _version_outcome(outcomes)
     assert judged.skipped is not None and "benchmark's run" in judged.skipped
     assert judged.actions == ()
+
+
+# --- which forward look a version is ------------------------------------------
+
+
+SIBLING = "demo_sibling"
+
+
+def forward_read(hyp_id: str, of: str, *, via: str) -> Any:
+    """A read of `hyp_id`'s forward window over the default stage window, as a stage or a
+    replay records one."""
+    from datetime import timedelta
+
+    from kanso.certify.looks import ForwardRead
+
+    from .builders import DAYS, START
+
+    return ForwardRead(
+        hyp_id=hyp_id,
+        via=via,
+        of=of,
+        target=of,
+        where="paper" if via == "stage" else "node",
+        session=f"session-{of}",
+        forward_start=START,
+        first=START,
+        last=START + timedelta(days=DAYS - 1),
+    )
+
+
+def forward_holdout_of(outcome: monitor.Outcome) -> Any:
+    """The evidence `forward_holdout` gave for a judged version."""
+    return next(result for result in outcome.gates if result.id == "forward_holdout").evidence
+
+
+def test_forward_holdout_says_which_forward_look_the_version_is_and_how_many_its_lineage_took(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The version's stage window was the lineage's first look at the sleeve's forward window
+    and a sibling's replay of it the second: the evidence says so, and names the lineage."""
+    from kanso.certify.looks import record_read
+
+    deploy(ws, store, run=rising_run(), value=RISING)
+    pin_hypothesis(store, hypothesis(id=SIBLING, derived_from=[STRATEGY_ID]))
+    record_read(store, forward_read(STRATEGY_ID, "demo_mr@1", via="stage"))
+    record_read(store, forward_read(SIBLING, "replay-1", via="replay"))
+
+    evidence = forward_holdout_of(_version_outcome(monitor.run_once(ws, store, demote=Recorder())))
+
+    assert (evidence["look"], evidence["looks"]) == (1, 2)
+    assert evidence["lineage"] == [STRATEGY_ID, SIBLING]
+
+
+def test_a_version_whose_windows_were_realised_before_this_release_has_no_look(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Its windows are on record and no read of them is, as in a workspace upgraded from an
+    earlier kanso: it is no look, and the lineage's count is what the reads hold."""
+    from kanso.certify.looks import record_read
+
+    deploy(ws, store, run=rising_run(), value=RISING)
+    record_read(store, forward_read(STRATEGY_ID, "replay-1", via="replay"))
+
+    evidence = forward_holdout_of(_version_outcome(monitor.run_once(ws, store, demote=Recorder())))
+
+    assert (evidence["look"], evidence["looks"], evidence["lineage"]) == (None, 1, [STRATEGY_ID])
+
+
+@pytest.mark.parametrize("before", [0, 4], ids=["first", "fifth"])
+def test_a_version_promotable_at_its_first_look_is_promotable_at_its_fifth(
+    ws: Workspace, store: StateStore, before: int
+) -> None:
+    """The monitor acts on verdicts alone: four replays of the forward window before the
+    version's window reached the gate, and the version is promotable as it is at its first."""
+    from kanso.certify.looks import record_read
+
+    deploy(ws, store, run=rising_run(), value=RISING)
+    for seen in range(before):
+        record_read(store, forward_read(STRATEGY_ID, f"replay-{seen}", via="replay"))
+    record_read(store, forward_read(STRATEGY_ID, "demo_mr@1", via="stage"))
+
+    judged = _version_outcome(monitor.run_once(ws, store, demote=Recorder()))
+
+    evidence = forward_holdout_of(judged)
+    assert (evidence["look"], evidence["looks"]) == (before + 1, before + 1)
+    assert evidence["judged"] is True and judged.passed
+    assert judged.actions == ("promotable",)
+    assert strategy_files.require(ws, STRATEGY_ID).versions[0].state == "promotable"

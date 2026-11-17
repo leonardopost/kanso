@@ -40,6 +40,14 @@ percentage.
 re-escalated and a stage already halted is not halted again: the pass runs every few minutes,
 and an escalation repeated every few minutes is an inbox nobody reads.
 
+**`forward_holdout` is told which forward look the version is.** Each version a stage runs over
+its sleeve's forward window is one look of the sleeve's lineage there, and each replay that
+reads it another (`kanso.certify.looks`); the pass reads the lineage graph once, counts the
+looks at the forward start of the sleeve's registered pin — the window the gate reads — and
+hands every gate the version's place among them (`GateContext.looks`). The count judges
+nothing: the gate copies it into its evidence and judges by the plan's own parameters at any
+look, and the pass acts on verdicts alone.
+
 Demotion is the portfolio's act, not this module's, because it moves a version *and* redeploys
 the stages whose switch is off — so it is called through, and a caller that wants to observe a
 pass without one hands in its own. A pass makes it in a child (`kanso.portfolio.child`): each
@@ -49,12 +57,14 @@ monitor that runs all day never gives back what a node allocated in its own proc
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
+from kanso.certify.looks import forward_looks
 from kanso.certify.plan import read_plan
 from kanso.criteria import GateContext, gates
+from kanso.criteria.context import LookCount
 from kanso.criteria.library import stage_shortfall
 from kanso.criteria.run import day_of
 from kanso.errors import KansoError
@@ -64,6 +74,7 @@ from kanso.monitor.stage import UNKNOWN, StageRecord
 from kanso.portfolio import clients, files, records
 from kanso.portfolio.child import demote_in_child
 from kanso.portfolio.deploy import clock_of, restated
+from kanso.research import records as research_records
 from kanso.schemas import (
     CertificationPlan,
     GateResult,
@@ -218,8 +229,9 @@ def run_once(ws: Workspace, store: StateStore, *, demote: Demote | None = None) 
     work = [
         (stage, held) for stage in STAGES for held in files.stage_of(portfolio, stage).strategies
     ]
+    linked = research_records.links(store)
     for stage, deployment in work:
-        outcomes.append(_version_pass(ws, store, stage, deployment, move))
+        outcomes.append(_version_pass(ws, store, stage, deployment, move, linked))
     return outcomes
 
 
@@ -322,11 +334,16 @@ def _tenure(
 
 
 def _version_pass(
-    ws: Workspace, store: StateStore, stage: str, deployment: Deployment, move: Demote
+    ws: Workspace,
+    store: StateStore,
+    stage: str,
+    deployment: Deployment,
+    move: Demote,
+    linked: Mapping[str, Set[str]],
 ) -> Outcome:
     """Judge one deployed version, never letting one bad version end the pass."""
     try:
-        return _judge(ws, store, stage, deployment, move)
+        return _judge(ws, store, stage, deployment, move, linked)
     except KansoError as error:
         return Outcome(
             stage=stage,
@@ -337,9 +354,18 @@ def _version_pass(
 
 
 def _judge(
-    ws: Workspace, store: StateStore, stage: str, deployment: Deployment, move: Demote
+    ws: Workspace,
+    store: StateStore,
+    stage: str,
+    deployment: Deployment,
+    move: Demote,
+    linked: Mapping[str, Set[str]],
 ) -> Outcome:
-    """Evaluate this version's stage gates and take whatever the verdicts require."""
+    """Evaluate this version's stage gates and take whatever the verdicts require.
+
+    Every gate is told which look at the sleeve's forward window this version is, counted at
+    the forward start of the sleeve's registered pin — the one `forward_holdout` reads — over
+    the lineage graph the pass read once (`linked`)."""
     strategy = strategy_files.read(ws, deployment.id)
     version = None if strategy is None else _version_of(strategy, deployment.version)
     if version is None:
@@ -365,6 +391,12 @@ def _judge(
         )
     portfolio = files.read(ws)
     record = _record(ws, store, portfolio, stage, held, plan, hyp)
+    forward = forward_looks(store, hyp.id, hyp.windows.forward.start, linked=linked)
+    counted = LookCount(
+        look=forward.place(records.subject_of(deployment.id, deployment.version)),
+        looks=len(forward.taken),
+        lineage=forward.lineage,
+    )
     registry = gates()
     results: list[GateResult] = []
     for gate in planned:
@@ -389,6 +421,7 @@ def _judge(
                     expectation=version.expectation.model_dump(mode="json"),
                     session=record,
                     benchmark_run=held.benchmark,
+                    looks=counted,
                 )
             )
         )
