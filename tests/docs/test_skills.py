@@ -316,3 +316,27 @@ def test_the_screen_skill_names_what_the_screen_reads_and_refuses() -> None:
         assert f"`{member}`" in text, member
     assert "`followers`" in text and "never `on`" in text
     assert "kanso screen draft" in text and "--certify" in text
+
+
+def test_the_replay_skill_says_a_forward_replay_is_a_look_and_names_its_one_exemption() -> None:
+    """An agent told any window may be replayed spends looks at the forward window it cannot
+    take back; told the exemption, it checks parity on a stage's own days for free."""
+    text = re.sub(r"\s+", " ", skill(PACKAGED, "kanso-replay"))
+    assert "Any window may be replayed" not in text
+    assert "so a bare replay is a counted look at the forward window" in text
+    assert "is a counted look at its lineage's forward window" in text
+    assert "the look can never be taken back" in text
+    assert "A replay of a certification window reads the hold-out, and nothing counts it" in text
+    assert "never replay either window to choose or tune anything research does" in text
+    assert "`kanso replay parity --strategy <id>@<version>`" in text
+    assert "less the first day of a window that resumed past the stage's clock" in text
+    assert "less any window that halted" in text
+    assert "The `forward` line says `no look` when it was" in text
+    assert "report the look beside any number taken from forward days" in text
+
+
+def test_the_research_skill_says_a_forward_replay_is_a_look() -> None:
+    """Row 331's scenario is a research agent reading forward data back into a seed."""
+    text = re.sub(r"\s+", " ", skill(PACKAGED, "kanso-research"))
+    assert "Never read the forward window to decide a seed, a filter or a program edit" in text
+    assert "is a counted look at the lineage's forward window" in text

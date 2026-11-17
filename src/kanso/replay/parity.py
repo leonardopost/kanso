@@ -56,6 +56,18 @@ and stopped (`node_period_stops`, `engine_period_stops`), and nothing where neit
 A run whose intents are empty on both paths is identical and says nothing. Parity therefore
 reports how many intents it compared, so a gate reading it can tell agreement from silence.
 
+**A parity is one look, and a parity of a version over days a stage showed it is none.** The
+two paths read the same days, so the node path records the one read of the forward window the
+parity made (`kanso.replay.run.count`), `where: parity`, of its own session, and the engine path
+records none; the read is written as soon as the node session is on disk, so a parity whose
+engine path then fails has still read the window. A `--strategy S@V` parity whose forward days
+lie wholly inside the days the paper and live stages showed that same version — their reads'
+`shown`, merged, adjacent days joined (`kanso.certify.looks.ran_on_stage`) — reads nothing the
+stage's own look had not already read and shown, so its read is recorded `exempt` and counts
+nothing. The exemption is judged on the range before either path runs, which is the node
+session's range. A card is never exempt, whatever version shares its bytes: a stage runs
+versions. The target is resolved once and both paths run it.
+
 No divergence carries an explanation. One used to: while the node executed against the
 engine's own convenience venue, an order larger than a single book state was filled once and
 its remainder never revisited, so a quantity lower on the node path had a known cause and was
@@ -72,9 +84,11 @@ from dataclasses import dataclass, replace
 from datetime import date
 from typing import TYPE_CHECKING, Final
 
+from kanso.certify.looks import EXEMPT_STAGE, ran_on_stage
 from kanso.replay import record
 from kanso.replay import run as runner
 from kanso.replay.record import Intent, Session
+from kanso.replay.target import Target, resolve
 from kanso.schemas import Commands, PeriodStops
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -84,6 +98,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "COMMANDS",
     "FIELDS",
+    "PARITY",
     "PERIOD_STOPS",
     "RELEASED",
     "STREAM",
@@ -112,6 +127,9 @@ busiest 60 s only at zero."""
 
 MISSING: Final = "missing"
 """The field a divergence names when one path stopped submitting and the other did not."""
+
+PARITY: Final = "parity"
+"""What a parity's read of the forward window says made it: both paths, read once."""
 
 
 @dataclass(frozen=True)
@@ -314,35 +332,40 @@ def parity(
 ) -> Parity:
     """Replay a target on the node path, then on the engine path, and compare the two.
 
-    The engine run takes its range from the node session that was just written rather than
-    resolving it again, so the second path runs over the days the first one actually
-    covered even if the catalog grew between them.
+    The target is resolved once and both paths run it. The engine run takes its range from
+    the node session that was just written rather than resolving it again, so the second path
+    runs over the days the first one actually covered even if the catalog grew between them.
+    The node path records the parity's one read of the forward window, exempt where a stage
+    already showed the version those days (`_exempt`); the engine path records none.
     """
-    node = runner.run(
+    runner.check(runner.NODE, speed)
+    target = resolve(ws, store, strategy=strategy, version=version, hyp=hyp, sha=sha)
+    window = runner.range_of(ws, target, start, end)
+    node = runner.replay_session(
         ws,
         store,
-        strategy=strategy,
-        version=version,
-        hyp=hyp,
-        sha=sha,
-        start=start,
-        end=end,
+        target,
+        window,
         speed=speed,
         mode=runner.NODE,
+        where=PARITY,
+        exempt=_exempt(store, target, window),
     )
-    engine = runner.run(
-        ws,
-        store,
-        strategy=strategy,
-        version=version,
-        hyp=hyp,
-        sha=sha,
-        start=node.from_,
-        end=node.to,
-        speed=speed,
-        mode=runner.ENGINE,
+    engine = runner.replay_session(
+        ws, store, target, node.range, speed=speed, mode=runner.ENGINE, where=None
     )
     return of_sessions(ws, node, engine, ts_ns=ts_ns)
+
+
+def _exempt(store: StateStore, target: Target, window: tuple[date, date]) -> str | None:
+    """`EXEMPT_STAGE` for a composed version whose forward days in `window` lie wholly inside
+    the days a stage showed it, and `None` for anything else — a card above all, which no stage
+    runs."""
+    if target.strategy_id is None:
+        return None
+    start = max(window[0], target.hyp.windows.forward.start)
+    shown = ran_on_stage(store, target.hyp.id, target.label, (start, window[1]))
+    return EXEMPT_STAGE if shown else None
 
 
 def of_sessions(ws: Workspace, node: Session, engine: Session, *, ts_ns: int = 0) -> Parity:

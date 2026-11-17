@@ -302,14 +302,23 @@ def test_a_session_is_recorded_in_the_state_store(
     assert row["from_ts"] == FORWARD_START.isoformat()
 
 
-def test_a_replay_appends_one_event(ws: Workspace, store: StateStore, carded_hyp: str) -> None:
-    """The event log records that a replay happened and what it found."""
+def test_a_replay_appends_one_replayed_event_and_its_forward_read(
+    ws: Workspace, store: StateStore, carded_hyp: str
+) -> None:
+    """The event log records that a replay happened and what it found, and — its range
+    reaching the forward window — the read that counts it as a look there, written before
+    the session's row and its `replayed` event."""
+    from kanso.certify.looks import FORWARD_READ
+
     session = replay.run(ws, store, hyp=carded_hyp)
     events = store.events(kind=REPLAYED)
+    (read,) = store.events(kind=FORWARD_READ)
 
     assert [event.subject for event in events] == [session.session_id]
     assert events[0].detail["target"] == session.target
     assert events[0].detail["crashed"] is False
+    assert (read.subject, read.detail["of"]) == (carded_hyp, session.session_id)
+    assert read.event_id < events[0].event_id
 
 
 def test_a_replay_creates_no_card_and_moves_no_best(

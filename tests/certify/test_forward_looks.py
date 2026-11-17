@@ -7,9 +7,16 @@ and shares a day with the window, or whose days cannot be read — and how they 
 looks: every read of one version is that version's one look, every read of one replay that
 replay's one look, placed where its first read was taken.
 
+Then who reads: a replay whose range reaches its target's forward window — one look for a
+parity's two paths, recorded as soon as its session is on disk, and none for a replay refused
+before it wrote one — and the one exemption: a parity of a version over days a stage already
+showed it, which excludes the day a version joined a running stage, a window that halted, a
+`replay run`, a card and a day past the stage's.
+
 The workspace is the replay suite's synthetic saw-tooth, whose catalog reaches through March so
-its forward window has data. Reads are written by the writer, `record_read`, from reads built
-here where only the counting is under test.
+its forward window has data. Reads are written through the real writers — a replay, a parity, a
+stage's deploy — and by `record_read` from reads built here where only the counting is under
+test.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from kanso import replay
 from kanso.certify import looks as looks_module
 from kanso.certify.looks import (
     EXEMPT_STAGE,
@@ -29,16 +37,29 @@ from kanso.certify.looks import (
     STAGE,
     ForwardRead,
     forward_looks,
+    read_of,
     reads,
     record_read,
 )
+from kanso.data import catalog
+from kanso.errors import PreconditionError
 from kanso.hyp import add as register
+from kanso.portfolio import deploy
+from kanso.replay import record
 from kanso.state import Event, StateStore
 from kanso.workspace import Workspace
+from tests.portfolio.conftest import deployable
 from tests.replay.conftest import (
+    BLOCKING_FILTER,
+    CERTIFICATION,
     FORWARD,
     FORWARD_START,
     HYP_ID,
+    RAISING,
+    bars,
+    carded,
+    composed,
+    dataset,
     document,
     prepared,
     store,
@@ -53,6 +74,9 @@ CHILD, STRANGER = "demo_child", "demo_x"
 
 VERSION = f"{HYP_ID}@1"
 """The demo sleeve's first composed version, as a stage read names it."""
+
+APRIL = (date(2024, 4, 1), date(2024, 4, 30))
+"""A month past the forward window's data: what a stage resumed past its clock replays."""
 
 
 def registered(ws: Workspace, store: StateStore, hyp_id: str, *parents: str) -> str:
@@ -85,6 +109,321 @@ def read(
         shown=shown,
         exempt=exempt,
     )
+
+
+def april(ws: Workspace) -> None:
+    """The catalog grown by a month, as a `kanso data sync` after the stage ran would grow it."""
+    catalog.write(ws, bars(APRIL), ref=dataset(span=APRIL), source="synthetic")
+
+
+def looks_of(store: StateStore, hyp_id: str = HYP_ID) -> list[str]:
+    """What each look the lineage took at the demo's forward window was of, oldest first."""
+    return [look.of for look in forward_looks(store, hyp_id, FORWARD_START).taken]
+
+
+def the_read(store: StateStore, session_id: str) -> ForwardRead:
+    """The read a replay's session made, which it must have made."""
+    found = read_of(store, session_id)
+    assert found is not None, f"{session_id} recorded no read"
+    return found
+
+
+# --- a replay reads the forward window ----------------------------------------
+
+
+def test_a_replay_that_reads_the_forward_window_is_a_look_of_its_lineage(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A bare replay runs from the forward start, so it is a look of its hypothesis's lineage
+    there — a child's count includes it — and of no hypothesis outside it."""
+    carded(ws, store)
+    registered(ws, store, CHILD, HYP_ID)
+    registered(ws, store, STRANGER)
+
+    session = replay.run(ws, store, hyp=HYP_ID)
+
+    (made,) = reads(store, HYP_ID)
+    assert (made.via, made.of, made.where, made.session) == (
+        REPLAY,
+        session.session_id,
+        "node",
+        session.session_id,
+    )
+    assert made.target == session.target
+    assert (made.forward_start, made.first, made.last) == (FORWARD_START, *FORWARD)
+    assert made.exempt is None and made.shown is None
+    assert looks_of(store, CHILD) == looks_of(store) == [session.session_id]
+    assert looks_of(store, STRANGER) == []
+
+
+def test_a_replay_that_ends_before_the_forward_window_reads_none(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A replay of the certification window, and a sleeve's certification, whose parity replays
+    that window, read no forward day; the same target replayed through the forward start reads
+    exactly that one."""
+    from kanso.certify.run import certify
+    from tests.certify.test_run import a_card, write_plan
+    from tests.research.conftest import DOCUMENT as RESEARCHED
+    from tests.research.conftest import REVERTING as RESEARCHED_SLEEVE
+    from tests.research.conftest import classify
+
+    classify(ws, store, RESEARCHED, RESEARCHED_SLEEVE)
+    a_card(ws, store, RESEARCHED_SLEEVE)
+    write_plan(ws)
+
+    made = certify(ws, store, HYP_ID)
+    certification = replay.run(ws, store, hyp=HYP_ID, start=CERTIFICATION[0], end=CERTIFICATION[1])
+
+    (parity,) = [gate for gate in made.gates if gate.id == "parity_replay"]
+    assert parity.skipped is None, "the certification ran both paths"
+    assert read_of(store, str(parity.evidence["node"])) is None
+    assert read_of(store, certification.session_id) is None
+    assert [found for found in reads(store, HYP_ID) if found.via == REPLAY] == []
+
+    reaching = replay.run(ws, store, hyp=HYP_ID, start=CERTIFICATION[0], end=FORWARD_START)
+
+    (one,) = [found for found in reads(store, HYP_ID) if found.via == REPLAY]
+    assert (one.of, one.first, one.last) == (reaching.session_id, FORWARD_START, FORWARD_START)
+
+
+def test_a_replay_from_before_the_forward_start_reads_from_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Only the forward days are the read, so a span starting in the certification window is
+    the days from the forward start on."""
+    carded(ws, store)
+
+    session = replay.run(ws, store, hyp=HYP_ID, start=CERTIFICATION[0], end=date(2024, 3, 10))
+
+    found = the_read(store, session.session_id)
+    assert (found.first, found.last) == (FORWARD_START, date(2024, 3, 10))
+    assert session.from_ == CERTIFICATION[0], "the session ran the whole range"
+
+
+def test_parity_is_one_look_for_both_paths(ws: Workspace, store: StateStore) -> None:
+    """Two sessions, one read, of the node session."""
+    carded(ws, store)
+
+    found = replay.parity(ws, store, hyp=HYP_ID)
+
+    (made,) = reads(store, HYP_ID)
+    assert (made.of, made.session, made.where) == (found.node, found.node, "parity")
+    assert read_of(store, found.engine) is None
+    assert looks_of(store) == [found.node]
+
+
+def test_a_parity_whose_engine_path_fails_has_still_read_the_window(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A strategy that raises stops the node path and raises on the engine path, after the node
+    session was written: that session can be read, so its read stands."""
+    carded(ws, store, strategy=RAISING, doc=document(id="demo_raise"))
+
+    with pytest.raises(RuntimeError, match="the replay asked for the impossible"):
+        replay.parity(ws, store, hyp="demo_raise")
+
+    (node,) = replay.sessions(ws)
+    assert node.mode == "node"
+    assert the_read(store, node.session_id).where == "parity"
+    assert looks_of(store, "demo_raise") == [node.session_id]
+
+
+def test_a_refused_replay_reads_nothing(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window refused after three days were released wrote no session and records no read;
+    the same range, not refused, records one."""
+    from kanso.nautilus import backtest
+
+    carded(ws, store)
+    read_points = backtest._window_points
+    calls: list[int] = []
+
+    def refusing(*args: object) -> object:
+        calls.append(1)
+        if len(calls) > 3:
+            raise PreconditionError("the fourth day is not wanted", remedy="run nothing")
+        return read_points(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backtest, "_window_points", refusing)
+    for mode in replay.MODES:
+        calls.clear()
+        with pytest.raises(PreconditionError, match="the fourth day is not wanted"):
+            replay.run(ws, store, hyp=HYP_ID, mode=mode)
+    calls.clear()
+    with pytest.raises(PreconditionError, match="the fourth day is not wanted"):
+        replay.parity(ws, store, hyp=HYP_ID)
+
+    assert replay.sessions(ws) == []
+    assert store.events(kind=FORWARD_READ) == []
+
+    monkeypatch.setattr(backtest, "_window_points", read_points)
+    session = replay.run(ws, store, hyp=HYP_ID)
+
+    assert [found.of for found in reads(store, HYP_ID)] == [session.session_id]
+
+
+def test_a_session_on_disk_is_never_uncounted(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store that fails as the session's row is written leaves the session's files on disk,
+    where `kanso replay show` reads them, and its read already in the store — for a replay and
+    for a parity's node path alike."""
+    carded(ws, store)
+
+    def failing(*_: object, **__: object) -> object:
+        raise RuntimeError("the store went away")
+
+    monkeypatch.setattr(record, "insert", failing)
+    for attempt in (
+        lambda: replay.run(ws, store, hyp=HYP_ID),
+        lambda: replay.parity(ws, store, hyp=HYP_ID),
+    ):
+        with pytest.raises(RuntimeError, match="the store went away"):
+            attempt()
+
+    on_disk = [session.session_id for session in replay.sessions(ws)]
+    assert len(on_disk) == 2
+    assert [found.of for found in reads(store, HYP_ID)] == on_disk
+    assert [found.where for found in reads(store, HYP_ID)] == ["node", "parity"]
+
+
+# --- the one exemption --------------------------------------------------------
+
+
+def test_parity_of_a_version_inside_its_stage_days_is_recorded_exempt_and_is_no_look(
+    ws: Workspace, store: StateStore
+) -> None:
+    """Parity of a version over the days the paper stage showed it reads nothing the stage's
+    own look had not: its read is recorded, exempt, and the count does not move."""
+    deployable(ws, store)
+    deploy(ws, store, "paper")
+    before = looks_of(store)
+
+    found = replay.parity(ws, store, strategy=HYP_ID, version=1)
+
+    made = the_read(store, found.node)
+    assert (made.exempt, made.target, made.first, made.last) == (EXEMPT_STAGE, VERSION, *FORWARD)
+    assert looks_of(store) == before == [VERSION]
+
+
+def test_parity_reaching_one_day_past_its_stage_days_is_a_look(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The stage showed the version through 31 March; a parity through 1 April reads a day it
+    did not."""
+    deployable(ws, store)
+    deploy(ws, store, "paper")
+    april(ws)
+
+    found = replay.parity(ws, store, strategy=HYP_ID, end=APRIL[0])
+
+    assert the_read(store, found.node).exempt is None
+    assert looks_of(store) == [VERSION, found.node]
+
+
+def test_parity_over_the_day_a_version_joined_a_running_stage_is_a_look(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A version that joined the stage after it resumed past its clock on 31 March was shown
+    only the points after the clock that day: its parity over that day is a look, and from the
+    day after it is exempt. The version already on the stage had that day in its first window,
+    so its two windows join and its parity over both is exempt."""
+    deployable(ws, store)
+    deploy(ws, store, "paper")
+    april(ws)
+    deployable(ws, store, "late", doc=document(id="late"))
+    deploy(ws, store, "paper")
+
+    (joined,) = reads(store, "late")
+    assert (joined.first, joined.shown) == (FORWARD[1], APRIL)
+
+    over_the_day = replay.parity(ws, store, strategy="late", start=FORWARD[1])
+    after_it = replay.parity(ws, store, strategy="late", start=APRIL[0])
+    both = replay.parity(ws, store, strategy=HYP_ID)
+
+    assert the_read(store, over_the_day.node).exempt is None
+    assert the_read(store, after_it.node).exempt == EXEMPT_STAGE
+    assert the_read(store, both.node).first == FORWARD_START
+    assert the_read(store, both.node).exempt == EXEMPT_STAGE
+    assert looks_of(store, "late") == ["late@1", over_the_day.node]
+    assert looks_of(store) == [VERSION]
+
+
+def test_parity_over_a_window_that_halted_is_a_look(ws: Workspace, store: StateStore) -> None:
+    """A window that halted stopped releasing the version's decisions at the halt, so it showed
+    none of its days, though the window is the version's look: a parity over them is another."""
+    deployable(ws, store, "boomer", sleeve=RAISING, doc=document(id="boomer"))
+    made = deploy(ws, store, "paper")
+    assert made.halted is not None
+
+    (halted,) = reads(store, "boomer")
+    assert halted.shown is None
+    assert looks_of(store, "boomer") == ["boomer@1"]
+
+    with pytest.raises(RuntimeError, match="the replay asked for the impossible"):
+        replay.parity(ws, store, strategy="boomer")
+
+    (node,) = [session for session in replay.sessions(ws) if session.mode == replay.NODE]
+    assert the_read(store, node.session_id).exempt is None
+    assert looks_of(store, "boomer") == ["boomer@1", node.session_id]
+
+
+def test_a_replay_run_of_a_version_over_its_stage_days_is_a_look(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The exemption is parity's alone: a `replay run` over the same days is a look."""
+    deployable(ws, store)
+    deploy(ws, store, "paper")
+
+    session = replay.run(ws, store, strategy=HYP_ID)
+
+    assert the_read(store, session.session_id).exempt is None
+    assert looks_of(store) == [VERSION, session.session_id]
+
+
+def test_parity_of_a_card_is_a_look_whatever_version_shares_its_bytes(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The deployed version's sleeve is the card's bytes, and a stage runs versions, not cards."""
+    deployable(ws, store)
+    deploy(ws, store, "paper")
+
+    found = replay.parity(ws, store, hyp=HYP_ID)
+
+    assert the_read(store, found.node).exempt is None
+    assert looks_of(store) == [VERSION, found.node]
+
+
+def test_a_replay_of_an_attached_construct_s_card_is_a_look_of_its_host_sleeve_s_lineage(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The construct's card runs on its host version, so it shows the host sleeve's forward
+    days, which `forward_holdout` judges the sleeve on: two reads of one session, one look in
+    each lineage."""
+    carded(ws, store)
+    composed(ws, store, HYP_ID)
+    construct = carded(
+        ws,
+        store,
+        doc=document(
+            id="demo_filter",
+            construct={"id": "filter", "host": HYP_ID, "params": {"scope": "time"}},
+            objective={"id": "marginal_wf_sharpe", "params": {"min_delta": 0.0, "k_se": 0.5}},
+        ),
+        strategy=BLOCKING_FILTER,
+        host_version=1,
+    )
+
+    session = replay.run(ws, store, hyp=construct)
+
+    (own,) = reads(store, construct)
+    (host,) = reads(store, HYP_ID)
+    assert own.of == host.of == session.session_id
+    assert (host.forward_start, host.first, host.last) == (FORWARD_START, *FORWARD)
+    assert the_read(store, session.session_id) == own, "the target's own read comes first"
+    assert looks_of(store, construct) == looks_of(store) == [session.session_id]
 
 
 # --- which reads count --------------------------------------------------------

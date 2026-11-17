@@ -61,8 +61,14 @@ which the stage released the version's own decisions, which is what a read is ex
 read recorded `exempt` counts nothing. A paper or live stage records one read per version per
 window it closes (`kanso.portfolio.deploy`), of `S@V`, judged against the forward start of its
 sleeve's registered pin: every stage window reaches it, and its read is on record before the
-window's realised result is. The looks are struck from the reads each time they are
-asked for (`forward_looks`) and nothing else about a look is stored:
+window's realised result is. A replay whose range reaches its target's forward window records
+one read of its node session (`kanso.replay.run`) — a parity one for both its paths — charged
+to the target's hypothesis, and a second, of the same session, to its host sleeve's where the
+target is an attached construct's card run on its host version; a parity of a version `S@V`
+whose forward days lie wholly inside the days the stages showed that version (`ran_on_stage`)
+is recorded `exempt`, since the stage's own look read and showed them. The looks are struck
+from the reads each time they are asked for (`forward_looks`) and nothing else about a look is
+stored:
 
 * the lineage is `kanso.research.records.lineage` as it stands when counted, the one the
   certification looks are counted over, so a re-pin that drops a `derived_from` link splits
@@ -90,7 +96,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence, Set
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Final
 
 import yaml
@@ -117,9 +123,12 @@ __all__ = [
     "certification_window",
     "forward_looks",
     "looks",
+    "ran_on_stage",
     "read_no_window",
+    "read_of",
     "reads",
     "record_read",
+    "stage_days",
     "subject_pin",
     "window_of",
 ]
@@ -394,6 +403,42 @@ def reads(store: StateStore, hyp_id: str) -> tuple[ForwardRead, ...]:
     """Every read of `hyp_id`'s forward window recorded, oldest first."""
     return tuple(
         ForwardRead.of_event(event) for event in store.events(kind=FORWARD_READ, subject=hyp_id)
+    )
+
+
+def read_of(store: StateStore, session_id: str) -> ForwardRead | None:
+    """The read of a forward window a replay's session made, or `None` where it read none.
+    Where it made two — an attached construct's card, charged to its host's sleeve too — the
+    first recorded, which is its target's own where it read its own window."""
+    for event in store.events(kind=FORWARD_READ):
+        found = ForwardRead.of_event(event)
+        if found.via == REPLAY and found.of == session_id:
+            return found
+    return None
+
+
+def stage_days(store: StateStore, hyp_id: str, version: str) -> tuple[Window, ...]:
+    """The days the paper and live stages showed `version` (`S@V`) its own decisions on, as
+    its stage reads of `hyp_id`'s forward window record them in `shown`, merged and with
+    adjacent days joined. A window that showed none — one that halted — adds nothing."""
+    shown = sorted(
+        read.shown
+        for read in reads(store, hyp_id)
+        if read.via == STAGE and read.of == version and read.shown is not None
+    )
+    merged: list[Window] = []
+    for first, last in shown:
+        if merged and first <= merged[-1][1] + timedelta(days=1):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+        else:
+            merged.append((first, last))
+    return tuple(merged)
+
+
+def ran_on_stage(store: StateStore, hyp_id: str, version: str, span: Window) -> bool:
+    """Whether every day of `span` is a day a stage showed `version` its own decisions on."""
+    return any(
+        first <= span[0] and span[1] <= last for first, last in stage_days(store, hyp_id, version)
     )
 
 

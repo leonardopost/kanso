@@ -304,8 +304,8 @@ status and pins; runs and every card ever run; the blob store the cards' `strate
 live in, and what each card that ran was measured from; certification plans and the
 certificates of record; **approvals**; escalations and which of them have been acknowledged;
 the model spend ledger; the session and strategy-version indexes; every read of a
-hypothesis's forward window, a paper or live stage's, which the forward looks are counted
-from; and the queue.
+hypothesis's forward window, a paper or live stage's and a replay's, which the forward looks
+are counted from; and the queue.
 
 It is kanso's alone. There is no supported way to edit it and no need to: everything in it
 is reachable through a command, and every command that writes it does so through one code
