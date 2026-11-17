@@ -2199,6 +2199,17 @@ def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar()
     assert "demo_mr researching 9.986730 4 card(s) · 1 forward look(s)" in concepts
     assert "`forward_looks`, how many looks its lineage has taken at its own forward window" in cli
     assert "`· N forward look(s)`" in cli
+    assert "the passes within one version — each an open row in `docs/backlog.md`" in concepts
+    backlog = page("backlog.md")
+    for words in (
+        "A screen reads a forward window and nothing counts it.",
+        "Reads across windows are counted by neither counter.",
+        "A replay of a certification window reads the hold-out, and only certificates are "
+        "counted there.",
+        "`forward_holdout`'s judgement is sequential within one look.",
+    ):
+        (row,) = [line for line in backlog.splitlines() if words in line]
+        assert not row.split("|")[3].strip().startswith("~~"), words
     closed = backlog_row(330)
     assert closed.split("|")[3].strip().startswith("~~Looks at the forward window are counted")
     assert "**closed**: `kanso.certify.looks` counts them per lineage" in closed

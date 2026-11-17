@@ -3004,7 +3004,8 @@ made before this release recorded no read and are not counted. Nor are screens, 
 windows — a member's certificate, replay or stage window that reads days inside a sibling's
 forward window but before its own forward start, or a card replayed or certified under the file
 its run pinned where the registered file's forward start is earlier — replays of a
-certification window, and the passes within one version; nor looks across lineages, a replay of
+certification window, and the passes within one version — each an open row in
+`docs/backlog.md`; nor looks across lineages, a replay of
 one hypothesis over days inside the forward window of another that trades the same names and
 has no `derived_from` link to it among them; nor a version's attached constructs, for its stage
 reads and its `--strategy` replays are charged to its sleeve's lineage alone.
