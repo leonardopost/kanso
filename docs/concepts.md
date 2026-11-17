@@ -2978,15 +2978,21 @@ not read: its orders are dropped and it shows nothing.
 through `--to`, lie wholly inside the days the paper and live stages showed that same version
 its own decisions — merged across its windows, adjacent days joined — reads nothing the
 stage's own look had not already read and shown, so its read is recorded, exempt, and counts
-nothing. The days a stage showed a version are its windows' days, less two kinds. A window that
-resumed past the stage's clock opens on the clock's day but releases only the points after the
-clock, so it shows the version nothing on that day: a version that was on the stage before has
-the day in its earlier window, and its spans still join, but one that joined a stage already
+nothing. The days a stage showed a version are its windows' days, less three kinds. A window
+that resumed past the stage's clock opens on the clock's day but releases only the points after
+the clock, so it shows the version nothing on that day: a version that was on the stage before
+has the day in its earlier window, and its spans still join, but one that joined a stage already
 running was never shown that day's earlier part, and a parity of it over that day is a look.
-And a window that halted stops releasing at the halt while the version is marked to the
-window's end, on a book frozen at the halt, so the version decided nothing there that the stage
-showed: the window is still the version's look, since its marks are on record, but it exempts
-none of its days until a later window that did not halt covers them. Nothing else is exempt —
+A window closes on the latest day the catalog serves any version on the stage, so a version one
+of whose series it served only to an earlier day — a universe whose sync lagged its
+stage-mates', a pair's leg or a quote series behind its bars — was released nothing of that
+series past it, and since a later window releases nothing at or before the stage's clock, the
+stage never will: its days end on the last day the catalog served every series it reads when
+the window ran, and a parity past it, once a sync has filled those days, is a look. And a
+window that halted stops releasing at the halt while the version is marked to the window's end,
+on a book frozen at the halt, so the version decided nothing there that the stage showed: the
+window is still the version's look, since its marks are on record, but it exempts none of its
+days until a later window that did not halt covers them. Nothing else is exempt —
 not `kanso replay run` over the same days, not a `--hyp` card even with the same bytes as a
 deployed version, since a stage runs versions and never cards, and not a range one day past
 the stage's.

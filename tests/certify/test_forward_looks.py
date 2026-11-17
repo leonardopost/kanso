@@ -10,8 +10,9 @@ replay's one look, placed where its first read was taken.
 Then who reads: a replay whose range reaches its target's forward window — one look for a
 parity's two paths, recorded as soon as its session is on disk, and none for a replay refused
 before it wrote one — and the one exemption: a parity of a version over days a stage already
-showed it, which excludes the day a version joined a running stage, a window that halted, a
-`replay run`, a card and a day past the stage's.
+showed it, which excludes the day a version joined a running stage, the days past where the
+catalog served a version's series when its window ran, a window that halted, a `replay run`, a
+card and a day past the stage's.
 
 The workspace is the replay suite's synthetic saw-tooth, whose catalog reaches through March so
 its forward window has data. Reads are written through the real writers — a replay, a parity, a
@@ -41,7 +42,8 @@ from kanso.certify.looks import (
     reads,
     record_read,
 )
-from kanso.data import catalog
+from kanso.data import catalog, snapshot
+from kanso.data.instruments import resolve_universe
 from kanso.errors import PreconditionError
 from kanso.hyp import add as register
 from kanso.portfolio import deploy
@@ -55,7 +57,10 @@ from tests.replay.conftest import (
     FORWARD,
     FORWARD_START,
     HYP_ID,
+    INSTRUMENT,
     RAISING,
+    RESEARCH,
+    SPAN,
     bars,
     carded,
     composed,
@@ -64,6 +69,7 @@ from tests.replay.conftest import (
     prepared,
     store,
     write_hypothesis,
+    write_instruments,
     ws,
 )
 from tests.replay.test_run import _reachable
@@ -77,6 +83,10 @@ VERSION = f"{HYP_ID}@1"
 
 APRIL = (date(2024, 4, 1), date(2024, 4, 30))
 """A month past the forward window's data: what a stage resumed past its clock replays."""
+
+LAGGING = "LAGG.XNAS"
+SYNCED_TO = date(2024, 3, 20)
+"""Where a sync that lagged the demo's left a second universe: eleven days short of its end."""
 
 
 def registered(ws: Workspace, store: StateStore, hyp_id: str, *parents: str) -> str:
@@ -114,6 +124,17 @@ def read(
 def april(ws: Workspace) -> None:
     """The catalog grown by a month, as a `kanso data sync` after the stage ran would grow it."""
     catalog.write(ws, bars(APRIL), ref=dataset(span=APRIL), source="synthetic")
+
+
+def lagging(ws: Workspace, store: StateStore) -> None:
+    """A version beside the demo's whose universe the catalog serves only to `SYNCED_TO`, as a
+    sync that lagged the demo's leaves it, composed and ready for the paper stage."""
+    write_instruments(ws, ids=(INSTRUMENT, LAGGING))
+    resolve_universe(ws, [LAGGING], RESEARCH[0])
+    held = (SPAN[0], SYNCED_TO)
+    catalog.write(ws, bars(held, "LAGG"), ref=dataset(LAGGING, held), source="synthetic")
+    snapshot.freeze(ws)
+    deployable(ws, store, "lagging", doc=document(id="lagging", universe=[LAGGING]))
 
 
 def looks_of(store: StateStore, hyp_id: str = HYP_ID) -> list[str]:
@@ -349,6 +370,35 @@ def test_parity_over_the_day_a_version_joined_a_running_stage_is_a_look(
     assert the_read(store, both.node).exempt == EXEMPT_STAGE
     assert looks_of(store, "late") == ["late@1", over_the_day.node]
     assert looks_of(store) == [VERSION]
+
+
+def test_parity_over_days_a_lagging_series_was_synced_into_after_the_stage_passed_is_a_look(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The window closes on 31 March, where the demo's data ends, but the version beside it was
+    served only to the 20th: it was shown its decisions to the 20th and no further. Once a sync
+    fills the 21st to the 31st, the next window releases nothing at or before the stage's clock,
+    so the stage never shows them, and a parity over them is a look; one to the 20th is not."""
+    deployable(ws, store)
+    lagging(ws, store)
+    deploy(ws, store, "paper")
+
+    (behind,) = reads(store, "lagging")
+    assert (behind.first, behind.last) == FORWARD, "the window read every day it was marked"
+    assert behind.shown == (FORWARD_START, SYNCED_TO)
+    assert [found.shown for found in reads(store, HYP_ID)] == [FORWARD]
+
+    synced = (date(2024, 3, 21), FORWARD[1])
+    catalog.write(ws, bars(synced, "LAGG"), ref=dataset(LAGGING, synced), source="synthetic")
+    deploy(ws, store, "paper")
+
+    assert [found.shown for found in reads(store, "lagging")] == [behind.shown, None]
+    caught_up = replay.parity(ws, store, strategy="lagging", end=FORWARD[1])
+    shown = replay.parity(ws, store, strategy="lagging", end=SYNCED_TO)
+
+    assert the_read(store, caught_up.node).exempt is None
+    assert the_read(store, shown.node).exempt == EXEMPT_STAGE
+    assert looks_of(store, "lagging") == ["lagging@1", caught_up.node]
 
 
 def test_parity_over_a_window_that_halted_is_a_look(ws: Workspace, store: StateStore) -> None:

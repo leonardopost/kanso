@@ -331,6 +331,10 @@ def test_the_replay_skill_says_a_forward_replay_is_a_look_and_names_its_one_exem
     assert "`kanso replay parity --strategy <id>@<version>`" in text
     assert "less the first day of a window that resumed past the stage's clock" in text
     assert "less any window that halted" in text
+    assert (
+        "less the days past the last on which the catalog served every series the version reads "
+        "when its window ran" in text
+    )
     assert "The `forward` line says `no look` when it was" in text
     assert "report the look beside any number taken from forward days" in text
 

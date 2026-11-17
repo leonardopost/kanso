@@ -2236,3 +2236,23 @@ def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar()
         "nor any record of the forward window's reads, so every look it counted is forgotten"
         in (state)
     )
+
+
+def test_the_pages_say_a_stage_showed_a_version_only_as_far_as_its_series_were_served() -> None:
+    """A version whose series lagged its stage-mates' was shown its decisions only as far as the
+    catalog served them, and no later window shows it the rest, so a parity past that day is a
+    look."""
+    concepts = prose(page("concepts.md"))
+    for anchor in (
+        "The days a stage showed a version are its windows' days, less three kinds.",
+        "a universe whose sync lagged its stage-mates', a pair's leg or a quote series behind its "
+        "bars",
+        "its days end on the last day the catalog served every series it reads when the window "
+        "ran, and a parity past it, once a sync has filled those days, is a look",
+    ):
+        assert anchor in concepts, anchor
+    assert "less two kinds" not in concepts
+    assert (
+        "less the days past the last on which the catalog served every series the version reads "
+        "when the window ran" in prose(page("cli.md"))
+    )
