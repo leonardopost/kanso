@@ -127,6 +127,20 @@ def test_the_align_skill_names_the_rewinds_of_earlier_runs() -> None:
     assert "the reasons the hypothesis was rewound for in its earlier runs" in text
     assert "(`same_program`, `same_thesis`)" in text
     assert "Earlier rewinds bear on new proposals only" in text
+    assert "The proposer is shown the earlier runs' directions too" in text
+
+
+def test_the_research_skill_says_the_proposer_reads_earlier_rewinds() -> None:
+    """An agent explaining why a driven run steers clear of a direction, or asked why a lane
+    keeps walking into one, reads this file; it names both lists the proposer is shown, the
+    earlier runs' among them, and what a change back into one of them meets."""
+    text = skill(PACKAGED, "kanso-research")
+    rules = text.split("## Rules", 1)[1]
+    assert "`rewound_for`, the newest reasons this run was rewound for" in rules
+    assert (
+        "`rewound_in_earlier_runs`, one line per direction the hypothesis's earlier runs were "
+        "rewound for, the newest ten"
+    ) in rules
 
 
 def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> None:

@@ -49,8 +49,9 @@ crashes as any other card does. Before this a kill was owed two repairs like any
 and the proposer was shown the word `memory` or `budget` as the end of its traceback.
 
 **Context is bounded, not summarised.** The stable half of the prompt — the program, the
-hypothesis, the objective's definition, and what the hypothesis tried under earlier pins —
-is byte-identical on every call of a run, so a provider cache hits; the moving half is the
+hypothesis, the objective's definition, what the hypothesis tried under earlier pins, and
+the directions its earlier runs were rewound for — is byte-identical on every call of a run,
+so a provider cache hits; the moving half is the
 current file, the last `context_cards` times `cards_per_turn` cards of the hypothesis under
 the run's pins — so a proposer asked for eight diffs a turn remembers as many turns as one
 asked for one, where twenty cards were two and a half turns of eight — across runs, so a
@@ -78,10 +79,12 @@ number is one comparison only with numbers struck under the same pins, and each 
 struck under others, so none is a number this run can beat. Their ideas count and their
 numbers do not, and they reach nothing that judges. They are fixed for the life of the run —
 a hypothesis has one active run, and every card it adds is under that run's own pins — which
-is why they sit in the half a provider caches rather than beside the recent cards. Nothing
-else of the hypothesis's history reaches the proposer, however much of it exists: no card
-asked under another hypothesis file, no number an earlier card was scored with, and no
-number measured on the certification window.
+is why they sit in the half a provider caches rather than beside the recent cards. So do the
+directions the hypothesis's earlier runs were rewound for, one line each — the run's tag,
+whether it pinned other files than this run, and the reason the check gave — for the same
+reason (`align.directions_before`). Nothing else of the hypothesis's history reaches the
+proposer, however much of it exists: no card asked under another hypothesis file, no number
+an earlier card was scored with, and no number measured on the certification window.
 
 **The search has a phase, and the phase is a rule, not a mood.** Misses since the last
 keep drive it: for the first `[research] local_cards` the proposer is asked for local
@@ -96,7 +99,9 @@ asked whether it still tests the idea, and a drift rewinds it and carries on —
 reasons with it. A rewound run told nothing walks back into the drift it was rewound for:
 measured in a live workspace, one hypothesis was rewound four times in six hours for the
 same complaint, because the file it resumed from said nothing about why the last one went.
-So every drift this run was rewound for reaches the next proposal, newest first.
+So the drifts this run was rewound for reach the next proposal, the newest `DRIFT_LINES`
+first, and the newest `EARLIER_DRIFT_LINES` directions the hypothesis's earlier runs were
+rewound for reach every proposal, in the stable half above.
 
 **A run ends on a stall, and a stall is not an ending.** `stall_k` consecutive non-keeps
 close the run and hand the hypothesis to the scheduler, which certifies what is worth
@@ -137,6 +142,7 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "CRASH_TAIL_LINES",
     "DRIFT_LINES",
+    "EARLIER_DRIFT_LINES",
     "GATE_LINES",
     "LOCAL",
     "REDUNDANT_LINES",
@@ -174,6 +180,15 @@ GATE_LINES: Final = 10
 DRIFT_LINES: Final = 3
 """How many of a run's drift reasons are fed back into the next proposal, newest first, each
 once (`align.rewound_for`)."""
+
+EARLIER_DRIFT_LINES: Final = align.REWOUND_LINES
+"""How many directions the hypothesis's earlier runs were rewound for are fed to every proposal
+of a run, newest first, each once (`align.directions_before`).
+
+The judge's bound and not one of its own: the judge is shown the earlier runs' directions
+inside `align.REWOUND_LINES`, after this run's, so with the same bound here every one it is
+shown is one the proposer was told. Each line is a tag and a reason of at most
+`align.REASON_LIMIT` characters, so the ten cost about 2.5 kB of the cached half."""
 
 REDUNDANT_LINES: Final = 10
 """How many books already measured are fed back into the next proposal, newest first.
@@ -683,8 +698,8 @@ def _batched_repair(
 
 
 def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, object]:
-    """The facts that do not move for the life of a run: the blobs it pinned, and what the
-    hypothesis tried under earlier pins.
+    """The facts that do not move for the life of a run: the blobs it pinned, what the
+    hypothesis tried under earlier pins, and the directions its earlier runs were rewound for.
 
     The earlier cards are as fixed as the blobs. They are cards of runs other than this
     one, a hypothesis has at most one active run, and every card it records is under that
@@ -697,6 +712,12 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     `cards_per_turn` mid-run moves this half once. A hypothesis with no earlier cards is
     sent neither key, and its stable facts are the bytes they were before earlier cards
     existed; the instruction above them describes the two keys whether or not they are sent.
+
+    The earlier runs' directions are fixed for the same reason: a drift is recorded only for
+    the active run, so none of another run's can join while this one is open, and the pins
+    their markers compare never move. They keep a reason this run is rewound for too, which
+    this run's own list already carries in the user turn, because dropping it would move this
+    half at every rewind (`align.directions_before`). A hypothesis with none is sent no key.
     """
     hyp = _pinned(store, active)
     settings = ws.config.research
@@ -713,6 +734,9 @@ def _stable(ws: Workspace, store: StateStore, active: RunRecord) -> dict[str, ob
     tried = _earlier_coverage(store, active)
     if tried:
         facts["earlier_coverage"] = tried
+    refused = align.directions_before(store, active, EARLIER_DRIFT_LINES)
+    if refused:
+        facts["rewound_in_earlier_runs"] = refused
     return facts
 
 

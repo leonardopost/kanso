@@ -24,7 +24,7 @@ from kanso import inbox, research
 from kanso.errors import ValidationError
 from kanso.hyp import HYPOTHESIS_FILE
 from kanso.models import INSTRUCTIONS, Call, spend
-from kanso.research import align, lanes, records, scheduler
+from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import diff as diffs
 from kanso.research import loop as research_loop
 from kanso.schemas import Hypothesis, RunRecord, parse_yaml
@@ -938,6 +938,150 @@ def test_the_judge_is_told_how_to_read_earlier_runs_and_what_can_return() -> Non
     assert "`same_thesis: false` that its thesis, mechanism, universe or horizon, or" in said
     assert "the resolution or data it requires, has changed since" in said
     assert "Only a change in `diff_since_last_check` can return in such a direction" in said
+
+
+# --- what the proposer is shown of earlier runs -------------------------------
+
+
+def test_earlier_directions_are_one_line_each_newest_first_and_once(
+    store: StateStore, ws: Workspace
+) -> None:
+    """Backlog row 300: a proposal walked back into a direction an earlier run of its
+    hypothesis was rewound for and was carded, a trial, before a check could rewind it. The
+    proposer is shown each such direction as one line: a reason two earlier runs gave under the
+    newer run's tag; an empty reason, a drift whose run is not on record and this run's own
+    drifts not at all; and a run that pinned another `program.md`, a `hypothesis.yaml` stating
+    another thesis, or both, marked as such, while a re-pin that changes nothing a check reads
+    is not. Unlike the judge's list it keeps a reason this run was rewound for too."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    program = store.put_blob(b"# program.md\n\nAnother protocol.\n")
+    rethought = repinned(store, run, thesis="The series trends, so buying rises pays.")
+    retitled = repinned(store, run, title="Demo, re-pinned")
+    oldest = ended_run(store, run, "20261101-1", hypothesis_sha=retitled)
+    older = ended_run(store, run, "20261102-1", program_sha=program)
+    old = ended_run(store, run, "20261103-1", hypothesis_sha=rethought)
+    newest = ended_run(store, run, "20261104-1", program_sha=program, hypothesis_sha=rethought)
+    drifted(store, oldest, "adds a filter")
+    drifted(store, oldest, "skips Fridays")
+    drifted(store, older, "trades one side")
+    drifted(store, old, "holds overnight")
+    drifted(store, newest, "adds a filter")
+    drifted(store, newest, "")
+    store.event(
+        align.DRIFTED,
+        hyp_id,
+        {"run_id": "no such run", "cards": 0, "sha": run.base_sha, "reason": "nobody's"},
+    )
+    drifted(store, run, "skips Fridays")
+    drifted(store, run, "this run's own")
+
+    found = align.directions_before(store, run, align.REWOUND_LINES)
+
+    assert found == [
+        "20261104-1 (under another program.md and hypothesis.yaml): adds a filter",
+        "20261103-1 (under another hypothesis.yaml): holds overnight",
+        "20261102-1 (under another program.md): trades one side",
+        "20261101-1: skips Fridays",
+    ]
+    assert align.directions_before(store, run, 2) == found[:2]
+    assert align.directions_before(store, run, 0) == []
+    judged = [entry["reason"] for entry in align.rewound_before(store, run, align.REWOUND_LINES)]
+    assert "skips Fridays" not in judged, "the judge's list drops it; the proposer's does not"
+
+
+def test_an_earlier_reason_longer_than_a_check_writes_is_cut(
+    store: StateStore, ws: Workspace
+) -> None:
+    """Neither half of a check writes a reason longer than `REASON_LIMIT` — the model's is held
+    to it on the wire, the syntax tree's is cut — but an older kanso's event may carry one, and
+    a line in the cached half is bounded by the code that writes it, not by every writer."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    drifted(store, ended_run(store, run, "20261101-1"), "x" * 300)
+
+    (line,) = align.directions_before(store, run, 1)
+
+    tag, reason = line.split(": ", 1)
+    assert tag == "20261101-1"
+    assert len(reason) == align.REASON_LIMIT
+    assert reason.endswith("…")
+
+
+def test_every_earlier_direction_the_judge_is_shown_was_shown_to_the_proposer(
+    ws: Workspace, store: StateStore, recorded: Recorder
+) -> None:
+    """The judge is shown the earlier runs' directions in what this run's own leave of
+    `REWOUND_LINES`; the proposer, the newest `EARLIER_DRIFT_LINES` of them whatever this run
+    was rewound for. Read off the call the judge was sent, so a change to its budget fails
+    this: a direction it refuses again is one the proposer was told. With more of this run's
+    own than the bound, the judge is shown none."""
+    scripted(ws, align_check=[ALIGNED])
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    earlier = ended_run(store, run, "20261101-1")
+    for n in range(12):
+        drifted(store, earlier, f"earlier {n}")
+    for reason in ("this 0", "earlier 11", "this 1"):
+        drifted(store, run, reason)
+    write_lane(ws, hyp_id, REVERTING)
+
+    assert align.check(ws, store, hyp_id) == (True, None)
+
+    told = {
+        line.split(": ", 1)[1]
+        for line in align.directions_before(store, run, driver.EARLIER_DRIFT_LINES)
+    }
+    judged = [
+        entry["reason"]
+        for entry in shown(recorded.of("align_check")[-1])["rewound_in_earlier_runs"]
+    ]
+    assert len(judged) == align.REWOUND_LINES - 3
+    assert set(judged) <= told
+    for n in range(2, 10):
+        drifted(store, run, f"this {n}")
+    write_lane(ws, hyp_id, EDITED)
+
+    assert align.check(ws, store, hyp_id) == (True, None)
+
+    facts = shown(recorded.of("align_check")[-1])
+    assert len(facts["rewound_for"]) == align.REWOUND_LINES
+    assert "rewound_in_earlier_runs" not in facts
+
+
+def test_an_earlier_pin_is_read_once_per_call(
+    store: StateStore, ws: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The proposer's reader runs on every proposal, and a pinned `hypothesis.yaml` is parsed
+    by a pure-Python parser; one carrying a dated spread's table is a long file. So each pin
+    is read once a call, however many drifts were recorded under it — by the judge's reader
+    too, which shares it."""
+    scripted(ws)
+    hyp_id = started(ws, store)
+    run = records.require_active(store, hyp_id)
+    retitled = repinned(store, run, title="Demo, re-pinned")
+    longer = repinned(store, run, horizon="2d")
+    first = ended_run(store, run, "20261101-1", hypothesis_sha=retitled)
+    second = ended_run(store, run, "20261102-1", hypothesis_sha=longer)
+    for reason in ("adds a filter", "skips Fridays", "trades one side"):
+        drifted(store, first, reason)
+    drifted(store, second, "holds overnight")
+    read: list[str] = []
+    judged = align._judged
+
+    def counting(store: StateStore, pin: str) -> dict[str, object]:
+        read.append(pin)
+        return judged(store, pin)
+
+    monkeypatch.setattr(align, "_judged", counting)
+
+    assert len(align.directions_before(store, run, align.REWOUND_LINES)) == 4
+    assert sorted(read) == sorted([retitled, longer, run.hypothesis_sha])
+    read.clear()
+    assert len(align.rewound_before(store, run, align.REWOUND_LINES)) == 4
+    assert sorted(read) == sorted([retitled, longer, run.hypothesis_sha])
 
 
 # --- the inbox the escalation lands in ---------------------------------------

@@ -143,6 +143,23 @@ def test_a_proposal_owes_at_least_one_tag_from_the_vocabulary() -> None:
     assert "`structural` phase" in INSTRUCTIONS["propose"], "a refusal is never hidden"
 
 
+def test_the_proposer_is_told_how_to_read_an_earlier_direction() -> None:
+    """Backlog row 300: a proposal walked back into a direction an earlier run of its
+    hypothesis was rewound for and was carded, a trial, before any check could rewind it — one
+    hypothesis changed its exit in eight keeps across runs. The lines it is now shown are data
+    it reads as it likes unless it is told what each part means and what the check does with
+    such a change."""
+    said = INSTRUCTIONS["propose"]
+    assert "`rewound_in_earlier_runs`, when given, is one line for each direction" in said
+    assert "newest first and each once: the run's tag and the reason the alignment check" in said
+    assert "a change that returns in one of those directions is rewound again unless" in said
+    assert (
+        "a line marked `under another program.md` or `under another hypothesis.yaml` was "
+        "refused under files this run does not pin, and this run's may permit it"
+    ) in said
+    assert "do not spend one in a direction already refused" in said
+
+
 EXPLORATION: dict[str, Any] = {
     "id": "demo_breakout",
     "hypothesis_yaml": "id: demo_breakout\n",

@@ -20,10 +20,10 @@ from kanso.certify import certificate
 from kanso.config import ResearchConfig
 from kanso.errors import PreconditionError
 from kanso.hyp import STRATEGY_FILE
-from kanso.models import INSTRUCTIONS, reset_mock, spend
+from kanso.models import INSTRUCTIONS, Call, reset_mock, spend
 from kanso.research import align, driver, lanes, records, scheduler
 from kanso.research import loop as research_loop
-from kanso.schemas import CardDigest, Commands
+from kanso.schemas import CardDigest, Commands, RunRecord
 from kanso.schemas.models import ROUTING_DEFAULTS
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -41,6 +41,7 @@ from .mocked import (  # noqa: F401
     scripted,
     tuned,
 )
+from .test_driver_align import ended_run
 from .test_scheduler import open_run
 
 NOWHERE = "--- a/strategy.py\n+++ b/strategy.py\n@@ -1,1 +1,1 @@\n-nowhere\n+here\n"
@@ -571,6 +572,7 @@ def test_every_fact_the_proposer_is_sent_is_named_in_its_instruction() -> None:
         "objective",
         "earlier_cards",
         "earlier_coverage",
+        "rewound_in_earlier_runs",
     } <= keys, "the scan found them"
     assert [key for key in sorted(keys) if f"`{key}`" not in said] == []
     assert f"`{STRATEGY_FILE}`" in said, "the file itself, which is not a constant key"
@@ -1061,6 +1063,7 @@ def test_the_prompt_keeps_a_stable_prefix_and_carries_the_moving_half(
     assert len({call.system for call in proposals}) == 1
     assert "program.md" in proposals[0].system
     assert "wf_sharpe_net" in proposals[0].system
+    assert "rewound_in_earlier_runs" not in stable_facts(proposals[0]), "no earlier rewind"
     assert "recent_cards" in proposals[0].user
     # The third proposal follows the crash the second one caused.
     assert "crash_tail" in proposals[2].user
@@ -1177,35 +1180,115 @@ def test_a_run_whose_lane_never_leaves_its_base_puts_nothing_to_the_alignment_mo
     assert all("rewound_for" not in call.user for call in recorded.of("propose"))
 
 
-def test_only_this_run_s_rewinds_reach_it_and_only_the_newest_few(
+def stable_facts(call: Call) -> dict[str, Any]:
+    """The facts a call carried in its system turn, after the instruction and the schema —
+    which name every key whether or not it is sent, so a key is read here and not searched
+    for in the whole turn."""
+    _, facts = call.system.split("These facts do not change while you work on ", 1)
+    found: dict[str, Any] = json.loads(facts.split(":\n", 1)[1])
+    return found
+
+
+def again(mode: str) -> dict[str, Any]:
+    """A proposal for `mode` whose bytes no earlier run of a test carded: the mock's ordinal
+    starts over with each script, so `proposal(mode)` would repeat the first run's bytes."""
+    made = proposal(mode)
+    return {**made, "diff": str(made["diff"]).replace("# call", "# again")}
+
+
+def rewound_and_ended(ws: Workspace, store: StateStore, hyp_id: str) -> tuple[Workspace, RunRecord]:
+    """A run whose one keep a check rewound, then ended by hand: the workspace that drove it,
+    and the run as the store recorded it — its tag is dated, so it is read, never rebuilt."""
+    workspace = tuned(ws, align_every=1)
+    scripted(workspace, propose=[proposal("revert")], align_check=[DRIFTED])
+    assert driver.run(workspace, store, hyp_id, cards=1).drifts == 1
+    research_loop.end(workspace, store, hyp_id)
+    reset_mock()
+    (first,) = records.runs_of(store, hyp_id)
+    return workspace, first
+
+
+def test_a_direction_an_earlier_run_was_rewound_for_reaches_the_next_run_s_proposer(
     ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
 ) -> None:
+    """Backlog row 300: a proposal back into a direction an earlier run was refused was
+    carded, a trial, before a check could rewind it — counted in a live workspace on
+    2026-11-17, one hypothesis changed its exit in eight keeps across runs. The next run's
+    proposer is told the direction on every call, in the half a provider caches, and is told
+    nothing of it as this run's own."""
+    workspace, first = rewound_and_ended(ws, store, prepared_hyp)
+    scripted(workspace, propose=[again("weak")])
+
+    driver.run(workspace, store, prepared_hyp, cards=2)
+
+    later = recorded.of("propose")[1:]
+    assert len(later) == 2
+    for call in later:
+        told = stable_facts(call)["rewound_in_earlier_runs"]
+        assert told == [f"{first.tag}: {DRIFTED['reason']}"]
+        assert "rewound_for" not in json.loads(call.user)
+
+
+def test_this_run_s_rewinds_reach_the_user_turn_and_earlier_runs_the_system_turn(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """This run's newest few reasons, and none older, in the turn that moves; a real earlier
+    run's in the turn a provider caches and not the other; a drift of no run on record in
+    neither."""
     scripted(ws, propose=[proposal("revert")])
-    active = records.active(store, prepared_hyp)
     driver.run(ws, store, prepared_hyp, cards=1)
-    active = records.active(store, prepared_hyp)
-    assert active is not None
+    active = records.require_active(store, prepared_hyp)
     for n in range(driver.DRIFT_LINES + 1):
         store.event(
             align.DRIFTED,
             prepared_hyp,
             {"run_id": active.run_id, "cards": n, "sha": "a" * 64, "reason": f"drift {n}"},
         )
+    earlier = ended_run(store, active, "20261101-1")
     store.event(
         align.DRIFTED,
         prepared_hyp,
-        {"run_id": "another", "cards": 0, "sha": "a" * 64, "reason": "another run's drift"},
+        {"run_id": earlier.run_id, "cards": 0, "sha": "a" * 64, "reason": "an earlier run's"},
+    )
+    store.event(
+        align.DRIFTED,
+        prepared_hyp,
+        {"run_id": "another", "cards": 0, "sha": "a" * 64, "reason": "no run's on record"},
     )
     reset_mock()
     scripted(ws, propose=[proposal("weak")])
 
     driver.run(ws, store, prepared_hyp, cards=1)
 
-    user = recorded.of("propose")[-1].user
-    assert "another run's drift" not in user
-    assert "drift 0" not in user, "older than the newest few"
-    for n in range(1, driver.DRIFT_LINES + 1):
-        assert f"drift {n}" in user
+    call = recorded.of("propose")[-1]
+    assert json.loads(call.user)["rewound_for"] == [
+        f"drift {n}" for n in reversed(range(1, driver.DRIFT_LINES + 1))
+    ], "the newest few, newest first, and not drift 0"
+    assert stable_facts(call)["rewound_in_earlier_runs"] == ["20261101-1: an earlier run's"]
+    assert "an earlier run's" not in call.user
+    assert "no run's on record" not in call.system + call.user
+
+
+def test_the_earlier_directions_do_not_move_the_system_turn_when_this_run_is_rewound(
+    ws: Workspace, store: StateStore, prepared_hyp: str, recorded: Recorder
+) -> None:
+    """A provider caches the system turn by its exact bytes, so a list that dropped this run's
+    reasons, as the judge's does, would cost the cache at every rewind. The earlier run's line
+    for the reason this run is about to be rewound for is in the system turn from the first
+    call on, and stays; the reason reaches the user turn only once this run is rewound."""
+    workspace, first = rewound_and_ended(ws, store, prepared_hyp)
+    scripted(workspace, propose=[again("revert"), again("weak")], align_check=[DRIFTED, ALIGNED])
+
+    outcome = driver.run(workspace, store, prepared_hyp, cards=2)
+
+    assert outcome.drifts == 1
+    proposals = recorded.of("propose")[1:]
+    assert len(proposals) == 2
+    assert len({call.system for call in proposals}) == 1
+    told = stable_facts(proposals[0])["rewound_in_earlier_runs"]
+    assert told == [f"{first.tag}: {DRIFTED['reason']}"]
+    assert "rewound_for" not in json.loads(proposals[0].user)
+    assert json.loads(proposals[1].user)["rewound_for"] == [DRIFTED["reason"]]
 
 
 def test_the_gate_that_refused_a_card_reaches_the_next_proposal(

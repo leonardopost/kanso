@@ -1011,7 +1011,9 @@ fixed for the life of a run — a hypothesis has one active run, and every card 
 under that run's pins, written once when it began — so they travel in the stable half of the
 prompt, the system turn a provider caches by its exact bytes, and not beside the recent
 cards in the user turn, where they would be the same bytes resent on every call. An edit to
-`context_cards` or `cards_per_turn` during a run moves that half once.
+`context_cards` or `cards_per_turn` during a run moves that half once. The stable half also
+carries `rewound_in_earlier_runs`, the directions the hypothesis's earlier runs were rewound
+for, one line each (Alignment, below).
 
 A card that ran and did not keep is then compared by what it **held**: its signature, which
 is, for each session of the research window, the instruments and sides it held and whether
@@ -1724,8 +1726,28 @@ A drift is rewound rather than stopped: research is indefinite, and stopping it 
 judgement call would hand the model a veto. The lane and `best` go back to the newest keep of
 the run that no check has marked drifted, else to the run's base; the cards since the last
 check are marked not aligned, so no rewind or re-seed starts from them; the reason reaches
-the run's next proposals; and a `misaligned` escalation tells you. The run carries on from
-ground that was checked.
+the run's next proposals, and the proposals of the hypothesis's later runs; and a
+`misaligned` escalation tells you. The run carries on from ground that was checked.
+
+**The proposer is told the directions earlier runs were refused.** A run's proposals are
+shown the reasons this run was rewound for — the newest three, in the user turn — and, as
+`rewound_in_earlier_runs`, the directions the hypothesis's earlier runs were rewound for,
+one line per direction, the newest ten, each once, in the cached system turn. A line is the
+run's tag and the reason the check gave, marked `(under another program.md)`, `(under
+another hypothesis.yaml)` or both where that run pinned a `program.md` other than this
+run's, or a `hypothesis.yaml` stating other than what a check reads of this one's: those are
+the files by which you permit a direction, and this run's may permit what that run's did
+not. No diff: the judge must match a change, the proposer has only to avoid a direction.
+Counted in a live workspace on 2026-11-17: one hypothesis had changed its exit in eight
+keeps across runs, and once the judge alone was shown the earlier runs' rewinds, eight more
+rewinds came within seven hours, three of them named as repeats — each a card, and a trial
+`n_trials` counts, spent before a check could rewind it. The lines are fixed for the life of
+a run — a hypothesis has one active run, and a drift is recorded only for it — so they
+travel in the half a provider caches, and they keep a reason this run was rewound for too,
+which the judge's list drops, because dropping it would move that half at every rewind. So
+every earlier direction the judge is shown is one the proposer was told, and once this run
+has been rewound the judge is shown fewer of them than the proposer. Nothing measured travels
+with them, on any window. A hypothesis with no earlier rewind is sent no key.
 
 **The run's base is never judged.** A check judges what the loop proposed, and the bytes a
 run was handed — the workspace `strategy.py`, or a keep an earlier run made — are not this

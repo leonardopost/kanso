@@ -543,6 +543,33 @@ def test_both_pages_say_the_judge_reads_the_rewinds_of_earlier_runs() -> None:
     assert "the diff it was shown began from" not in alignment
 
 
+def test_the_pages_say_the_proposer_reads_the_rewinds_of_earlier_runs() -> None:
+    """Backlog row 300: the judge alone was shown the earlier runs' rewinds, and a proposal
+    back into one of those directions was carded, a trial, before a check could rewind it.
+    The pages say what the proposer is now shown, how much, and in which half of its prompt."""
+    row = prose(
+        next(
+            line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
+        )
+    )
+    assert "It is shown, as `rewound_in_earlier_runs`, the directions the hypothesis's" in row
+    assert "one line per direction" in row
+    assert "the newest ten, each once, in the prompt's cached system turn" in row
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "**The proposer is told the directions earlier runs were refused.**" in alignment
+    assert "as `rewound_in_earlier_runs`, the directions the hypothesis's earlier runs" in alignment
+    assert "one line per direction, the newest ten, each once, in the cached system turn" in (
+        alignment
+    )
+    assert "every earlier direction the judge is shown is one the proposer was told" in alignment
+    assert "the proposals of the hypothesis's later runs" in alignment
+    card = prose(section(page("concepts.md"), "Card"))
+    assert "The stable half also carries `rewound_in_earlier_runs`" in card
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 300 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+    assert "**closed** on the operator's approval of 2026-11-17" in backlog
+
+
 def test_the_pages_say_a_closed_day_is_no_hole_and_an_answer_closes_nothing() -> None:
     """A chunk edge on a weekend split a series with no session missing, and the rule that
     first joined it counted an empty answer as coverage, a trading day the source lost
