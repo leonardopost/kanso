@@ -252,11 +252,13 @@ def scripted(
     """Point the register at mock models and script the tiers the classes route to.
 
     `classify` and `certify_plan` share the frontier model, so they share one script and
-    are written together; each task class reads its own list from it.
+    are written together; each task class reads its own list from it. Every keep the driver
+    makes is judged as it is made, so the judge answers `ALIGNED` unless told otherwise;
+    `align_check=[]` scripts it with nothing, which the mock answers with an empty object.
     """
     write_register(root)
     write_script(root, "mid", {"propose": CYCLE if propose is None else propose})
-    write_script(root, "cheap", {} if align_check is None else {"align_check": align_check})
+    write_script(root, "cheap", {"align_check": [ALIGNED] if align_check is None else align_check})
     frontier: dict[str, list[Any]] = {
         "certify_plan": [PLAN] if certify_plan is None else certify_plan
     }

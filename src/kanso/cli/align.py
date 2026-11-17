@@ -1,7 +1,10 @@
 """`kanso align`: asking now whether a run still tests the idea it began with.
 
-The driver runs this check on a clock; this command runs the same one on demand, which is
-what an operator reaches for after editing the lane's `strategy.py` by hand. The
+The driver runs this check on every keep it makes and on a clock; this command runs the same
+one on demand, which is what an operator reaches for after editing the lane's `strategy.py`
+by hand, or before `kanso research end` would carry a keep the driver has not yet judged
+into the next run as its base. It checks the run of lane `op`: a run a daemon lane owns is
+refused, and that lane's next turn makes the check it owes. The
 deterministic checks come first and the model is asked only when they pass, so a drift the
 syntax tree can prove costs nothing. Nor is the model asked about a lane still on the run's
 base, which no check judges, or on the bytes the last check left it on, which one already

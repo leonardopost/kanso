@@ -1011,7 +1011,9 @@ fixed for the life of a run — a hypothesis has one active run, and every card 
 under that run's pins, written once when it began — so they travel in the stable half of the
 prompt, the system turn a provider caches by its exact bytes, and not beside the recent
 cards in the user turn, where they would be the same bytes resent on every call. An edit to
-`context_cards` or `cards_per_turn` during a run moves that half once.
+`context_cards` or `cards_per_turn` during a run moves that half once. The stable half also
+carries `rewound_in_earlier_runs`, the directions the hypothesis's earlier runs were rewound
+for, one line each (Alignment, below).
 
 A card that ran and did not keep is then compared by what it **held**: its signature, which
 is, for each session of the research window, the instruments and sides it held and whether
@@ -1119,7 +1121,8 @@ rules: they bound the search and choose nothing within it. A miss is one turn. W
 `[research] cards_per_turn` above one — the default is one, and eight is the most — a turn
 asks for that many diffs in one call and runs the ones that apply, together, from one read
 of the window. Each card is a trial, so `n_trials` and the margin `edge_per_trade` holds
-the turn to both grow by every card of it, and `align_every` still counts cards. The stall
+the turn to both grow by every card of it, and `align_every` still counts cards; a turn that
+kept is judged once, on its kept slot. The stall
 and the phase count the turn: no keep in it is one miss. Every card is judged against the
 best the turn started from, and the keep is the highest metric that clears that floor; a
 tie keeps the earlier slot. Every other card that cleared it is a `runner_up`: it beat the
@@ -1186,8 +1189,9 @@ hill. `kanso hyp explore ID` — or a daemon lane, once `[research] explore_afte
 stalls on one best have passed since the last exploration (5 in the template; 0 is never) —
 calls the `explore` task class with what the hypothesis's research learned: its pinned
 `hypothesis.yaml` and `program.md`, its best `strategy.py`, the coverage of its cards by
-tag, its keeps and their scores, its stalls, and each certificate's verdict with the ids of
-the gates that failed and nothing they measured. The answer is one new hypothesis, whole,
+tag, its keeps and their scores, its stalls, each certificate's verdict with the ids of
+the gates that failed and nothing they measured, and the mechanisms the candidate may state.
+The answer is one new hypothesis, whole,
 judged on the ladder: an id nothing holds, a file that parses with that id and no
 classification, naming the parent in `derived_from` so the parent's cards are the
 candidate's trials too — and its declared grid, so the candidate states no `prior_trials` of
@@ -1198,10 +1202,69 @@ the candidate certify inside its own embargo counted from the last day the *pare
 researched — the latest research end of any pin the parent's runs held — rather than from
 the end of the research window the candidate declares: the idea was chosen by scores
 measured on the parent's research, so that is the last day it saw, and one certified sooner
-would be certified on data within the embargo of the data that chose it. It is written as a
-draft to `hypotheses/<id>/`, a directory that did not exist, and registered by nothing: an
-`explored` escalation offers `hyp validate` and `hyp add`, and whether it gets a lane is
-yours. Every attempt, by hand or by a lane, leaves an event under the parent — `explored`
+would be certified on data within the embargo of the data that chose it. A candidate also
+*states* its parent's `mechanism` — the one the parent's newest pin declares — or one
+`[research] explore_mechanisms` lists (`[]` in the template, so the parent's own only): the
+key adds mechanisms a draft may move to and never removes the parent's, and any other is a
+complaint on the ladder like the rest. An explored draft tests another idea inside the
+mechanism its parent's research measured, not another mechanism. The rule reads the field the
+draft declares, and nothing reads its code for a mechanism, so a draft that declares the
+parent's and implements another passes it: its thesis is still yours to read, and once it is
+researched its own alignment check judges it against that thesis.
+
+An answer that passes every one of those checks is **measured once, as its parent's card**,
+before anything is written: its `strategy.py` runs as one more card of the parent's newest
+run, under that run's pinned `hypothesis.yaml` — its universe, resolution, construct,
+objective and costs — its snapshot and host version, over the parent's research window and no
+other, which the runner refuses in code as it does for every card, in a child with no path to
+the catalog, under the run's card budget and memory cap. It is scored by the installed kanso,
+as a card of a run resumed across an upgrade is, and compared with the books the parent
+stored under those pins and the probe's reading: where there are none — a `kanso.toml` edit
+that moved what a number is measured under, or an upgrade since that run whose superseded
+books `kanso state prune` has deleted — the seed says `0` books rather than read an empty
+comparison as a pass. Because it runs under
+the parent's file, the seed is held to what that file loads, statically and before it runs:
+it passes the integrity scan every card of the parent passes, and the candidate's file keeps
+or narrows the parent's `universe` and `data_requirements` and keeps its `resolution` and
+`bar_resolution` — each departure one complaint naming the field, so a draft that needs
+another name, bar size or data type is yours to write with `kanso hyp new`. With those held,
+the candidate's own alignment check implies the parent's, so a seed line is refused once; only
+where the candidate's file does not parse are the seed's lines read against the parent's. A
+seed that holds a book the parent already stored on `redundant_pct` of their shared sessions
+*and* scores within the parent's noise floor of it is that card again, and is a wrong answer
+naming it ("it repeats the parent's card …"), the redundancy rule's two clauses; a seed that
+places no order holds the empty book every flat card holds, at a flat run's zero, so it is
+refused wherever the parent stored one, with a complaint of its own, and written with `0`
+trades where it did not. A book matched whose number moved further than the floor is a
+measurement and is admitted, the match on record. A seed that raised, was killed for its clock
+or its memory, or whose order the parent's sizing refused is a wrong answer too — a draft
+whose seed cannot run as its parent's card would be a baseline that refuses its own run —
+while a fault the workspace owns fails the attempt with its remedy and asks no model again: a
+crash carrying kanso's remedy, a window the catalog can no longer give, pins that can no
+longer be set up (checked before any model is asked), a host or hold that does not run. A
+`research stop` or a drain during an exploration is neither: it is your word, so it leaves no
+event, the spell is not spent, and no model is asked again once the lane has been told. The
+probe is not a card: it writes no card, no signature and no trial, and moves no best, no stall
+and no `n_trials`; it runs in `runs/<lane>/.explore-<parent>/`, which it removes, never in the
+parent's lane directory. Each answer that passes the static checks costs one probe, held to
+the parent run's card budget — at most two an exploration on the top tier's ladder, where
+`explore` is routed, three where a workspace routes it lower — and an objective that reads a
+host-alone or hold run computes it once for all of them.
+
+It is written as a draft to `hypotheses/<id>/`, a directory that did not exist, with what its
+seed scored, and registered by nothing: an `explored` escalation, whose summary leads with that
+score, offers `hyp validate` and `hyp add`, and whether it gets a lane is yours. A summary is
+capped at a line, so the rationale after the score is cut there, and `kanso inbox` prints the
+whole rationale beneath the entry, off the `explored` event that names it. The `explored`
+event and `kanso hyp explore --json` carry the score whole as `seed` — the metric, its error,
+the trades, the objective, the window, the snapshot and run, the measurement's sha, how many
+books it was compared with, a book it matched without repeating, `parent_best`, the parent's
+best measured under the same pins and reading or `null` where it was not, and
+`inherited_trials`, the draws every number the draft's search is priced by starts from: the
+cards of the families its `derived_from` names that ran and traded, plus the settings their
+`prior_trials` grids declared — not `n_trials`, which counts crashes and cards that placed no
+order and no grid — so a draft's first card that trades is priced at one more. Every
+attempt, by hand or by a lane, leaves an event under the parent — `explored`
 when it wrote a candidate, `explored_failed` with the error and its remedy when it did not —
 and the stalls a lane counts are the ones since the newest of them, so a provider that is
 down costs one call per spell. A hypothesis not registered or never researched is refused
@@ -1674,7 +1737,8 @@ A run optimises a number, and the cheapest way to move a number is often to stop
 the hypothesis: trade an instrument outside the universe, read a finer bar than the idea is
 about, exploit something the thesis never claimed. None of that breaks `strategy_integrity`
 — the code is well-behaved, it answers a different question — so it is checked separately:
-every `[research] align_every` cards, and whenever `kanso align check ID` asks.
+on every keep the research driver makes, as it is made; every `[research] align_every`
+cards; and whenever `kanso align check ID` asks.
 
 The syntax tree is read first. An instrument literal outside `universe`, a bar whose step or
 aggregation is not `resolution`, and a subscription or handler for a type outside
@@ -1697,7 +1761,16 @@ a hypothesis whose program said "one side only if the evidence says one side pay
 rewound for trading one side, the run's best at the time, and for an entry filter its
 program listed; and another run's identical Friday skip was judged drift twice and then
 aligned, a verdict that stood, since no later check asks again about a file a check passed.
-So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs.
+So to widen or narrow what a hypothesis's search may do, edit `program.md` between runs. A
+`program.md` written from the template since this release says that fair game is what the
+thesis leaves open, and that a filter, gate, entry condition or exit the thesis does not
+state and the program does not name is another idea, which the judge rewinds; the judge reads
+the program before the thesis, and the proposer reads the same program, so such a program
+forbids the change to both, and naming a direction in it permits it. That is the program's
+rule, not the judge's: one written from an earlier template, which called filters and entry
+and exit rules fair game, permits what it permits. Counted in a live workspace on
+2026-11-17, under programs written from that earlier template: 22 of 37 `misaligned`
+rewinds were filters, gates or exits.
 
 **A direction refused in one run is not met fresh in the next.** Observed in a live workspace
 on 2026-11-15: a run was rewound for a trend filter and then for a volatility filter, and the
@@ -1724,8 +1797,30 @@ A drift is rewound rather than stopped: research is indefinite, and stopping it 
 judgement call would hand the model a veto. The lane and `best` go back to the newest keep of
 the run that no check has marked drifted, else to the run's base; the cards since the last
 check are marked not aligned, so no rewind or re-seed starts from them; the reason reaches
-the run's next proposals; and a `misaligned` escalation tells you. The run carries on from
-ground that was checked.
+the run's next proposals, and the proposals of the hypothesis's later runs; and a
+`misaligned` escalation tells you. The run carries on from ground that was checked.
+
+**The proposer is told the directions earlier runs were refused.** A run's proposals are
+shown the reasons this run was rewound for — the newest three, in the user turn — and, as
+`rewound_in_earlier_runs`, the directions the hypothesis's earlier runs were rewound for,
+one line per direction, the newest ten, each once, in the cached system turn. A line is the
+run's tag and the reason the check gave, marked `(under another program.md)`, `(under
+another hypothesis.yaml)` or both where that run pinned a `program.md` other than this
+run's, or a `hypothesis.yaml` stating other than what a check reads of this one's: those are
+the files by which you permit a direction, and this run's may permit what that run's did
+not. No diff: the judge must match a change, the proposer has only to avoid a direction.
+Counted in a live workspace on 2026-11-17: one hypothesis had changed its exit in eight
+keeps across runs, and once the judge alone was shown the earlier runs' rewinds, eight more
+rewinds came within seven hours, three of them named as repeats — each a card, and a trial
+`n_trials` counts, spent before a check could rewind it. The lines are fixed for the life of
+a run — a hypothesis has one active run, and a drift is recorded only for it — so they
+travel in the half a provider caches, and they keep a reason this run was rewound for too,
+which the judge's list drops, because dropping it would move that half at every rewind. So
+every earlier direction the judge is shown is one the proposer was told, and the judge is
+never shown more of them than the proposer: this run's own reasons take part of the judge's
+ten, so once this run has been rewound the proposer may be told earlier directions the judge
+is not. Nothing measured travels with them, on any window. A hypothesis with no earlier
+rewind is sent no key.
 
 **The run's base is never judged.** A check judges what the loop proposed, and the bytes a
 run was handed — the workspace `strategy.py`, or a keep an earlier run made — are not this
@@ -1753,10 +1848,38 @@ has answered for: its checkpoint stops short of the keep, and the next check tha
 model marks it. Nor does a drift ever rewind onto the bytes it found drifted: every card of
 the run that carried them is marked, not only the cards since the last check.
 
-A keep an earlier run made was that run's to judge, and a run can end before the check that
-would have judged it: ended by hand, or stalled on a spell of misses, which count toward
-`stall_k` and not toward `align_every`. Such a keep becomes the next run's base unjudged,
-and row 90 of `docs/backlog.md` says what closing that would take.
+**A keep is judged before it is built on.** Under `kanso research run` and the daemon every
+keep the driver makes — a card that kept, or a turn of several on its kept slot — is put to
+the check as it is made: before the next proposal, and so before a stall can certify it or
+hand it to the next run as its base. Counted in a live workspace on 2026-11-17, when the
+check ran on the clock alone: 37 `misaligned` rewinds against 61 keeps past the baseline, each
+drift keep built on for up to `align_every` cards — every one a trial `n_trials` counts —
+before a check rewound it; and a keep followed by a spell of misses, which count toward
+`stall_k` and not toward `align_every`, could stall unjudged, be certified and become the
+next run's base, which no check judges. A keep whose check did not happen — the driver was
+told to stop first, which ends the invocation there, or the judge could not answer — is
+owed, and the run's next driver invocation, a daemon lane's next turn included, makes that
+check before it proposes anything; `kanso research run ID --cards 0` makes it and proposes
+nothing. So is a keep you carded by hand in a run the driver then resumes, and it is judged
+on the run's best: a lane you wrote the base, or the file the last check left it on, back
+over holds nothing a check would judge, so the driver puts the best back in the lane first,
+where its next card that does not keep would have put it. It costs one `align_check` call
+per keep the judge answers, and never more than one per card; a judge that cannot answer is
+asked again at every invocation, with no card between. After a keep's check the lane holds
+bytes a check answered for, and every card that does not keep restores it to them, so the
+clock's checks find nothing new and ask no model — `judged: false` — unless the lane was
+written by hand: the clock is the backstop.
+
+A run ended by hand ends where you end it, and that is what is left uncovered: a keep you
+carded by hand, one a stop or a judge that could not answer left owed, or one whose check is
+in flight, whose verdict is then dropped, becomes the next run's base unjudged, and a base
+is never judged. For a run in lane `op`, `kanso align check ID` before `kanso research end
+ID` judges it. For a run in a daemon lane it does not: `kanso align check` checks the run of
+lane `op` and refuses one another lane owns, so let the lane work the run once — `kanso
+research start`; its first check comes before its first proposal — before you end it. A
+`research stop --drain` that lands during a keep's card leaves that keep owed in the same
+way. And `kanso cert run ID` by hand while a keep is owed certifies the best unjudged, as it
+could between two checks of the clock.
 
 The syntax tree still reads the base and the file the last check left the lane on. What it
 finds is a fact about the bytes rather than an opinion of them, and a check that answered
@@ -3536,7 +3659,9 @@ kanso escalates six things and nothing else: `misaligned`, `cert_failed`, `promo
 `demoted`, `deploy_blocked`, `explored`. Each entry names its subject and the commands that
 kind offers over it. An `explored` entry's subject is a hypothesis kanso wrote and did not
 register — `hypotheses/<id>/` as a draft — and it offers `hyp validate` and `hyp add` and
-nothing further: whether a model's idea deserves a lane is yours to say.
+nothing further: whether a model's idea deserves a lane is yours to say. Its summary leads
+with what the draft's seed scored as one more card of its parent, beside the parent's best
+measured the same way.
 
 ```
 $ kanso inbox

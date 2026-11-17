@@ -97,6 +97,49 @@ def test_the_program_states_the_repair_budget_the_driver_enforces() -> None:
     assert spelled(stated.group(1)) == driver.REPAIRS
 
 
+def fair_game() -> str:
+    """The Scope bullet that says what the search may change, which the alignment judge and the
+    proposer both read in the run's pinned `program.md`."""
+    return next(
+        line
+        for line in template("program.md").splitlines()
+        if line.startswith("- Fair game inside `strategy.py`")
+    )
+
+
+def test_the_program_says_a_filter_the_thesis_does_not_state_is_drift() -> None:
+    """Counted in a live workspace on 2026-11-17: 22 of 37 `misaligned` rewinds were filters,
+    gates or exits, directions the template's Scope line called fair game. The judge reads the
+    run's `program.md` before the thesis, and so does the proposer, so the line is an
+    instruction to both: it now says fair game is what the thesis leaves open, that a filter,
+    gate, entry condition or exit the thesis does not state is drift the judge rewinds, and
+    that the program may name one."""
+    bullet = fair_game()
+    assert "Fair game inside `strategy.py` is what the thesis leaves open" in bullet
+    assert "any filter, gate, entry condition or exit the thesis states or this program names" in (
+        bullet
+    )
+    assert (
+        "A filter, gate, entry condition or exit the thesis does not state, and this program "
+        "does not name, is not a refinement of the idea but another idea: it is drift, and the "
+        "alignment judge rewinds it."
+    ) in bullet
+    assert "filters, entry/exit rules" not in template("program.md")
+
+
+def test_the_program_says_every_keep_is_judged_and_the_clock_besides() -> None:
+    """The line said drift was detected every `align_every` cards, which was false of the
+    interactive path the same file describes — `research card` runs no check — and is false of
+    the driver, which judges every keep as it is made."""
+    bullet = fair_game()
+    assert (
+        "Under `kanso research run` and the daemon every keep is judged as it is made, and the "
+        "run every `align_every` cards besides"
+    ) in bullet
+    assert "`kanso align check {{hyp_id}}` asks the same question by hand" in bullet
+    assert "Drift is detected every `align_every` cards" not in template("program.md")
+
+
 def test_the_program_says_a_stall_s_certification_can_be_spared() -> None:
     """An interactive proposer reads what a stall leads to here; told only that a keep above
     zero is certified, it would take a spared stall's missing certificate for a fault."""

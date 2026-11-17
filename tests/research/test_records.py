@@ -389,6 +389,39 @@ def test_one_evidence_file_named_two_ways_is_counted_once(store: StateStore) -> 
     assert records.prior_trials(store, "demo_aliased") == 27
 
 
+def test_a_hypothesis_not_yet_registered_inherits_the_draws_its_parents_are_priced_by(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """What a draft naming `parents` will be priced from once registered, before a card of its
+    own: each parent's family's cards that ran and traded, plus their grids, each member and
+    each grid once — so the count is the one `candidates` plus `prior_trials` strike for the
+    draft once it is registered and has carded nothing. A crash, a card that placed no order
+    and a parent nothing registered count nothing."""
+    a_hypothesis(store, "demo_grid", a_grid(400, "evidence/grid.md", "3f" * 32, registered))
+    a_hypothesis(store, "demo_twin", a_grid(400, "evidence/grid.md", "3f" * 32, registered))
+    parent_run = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    grid_run = pinned_run(store, "demo_grid", 2, b"objective: {id: net_edge_bps}\n")
+    for metric in (40.0, 55.0):
+        scored(store, parent_run, metric)
+    scored(store, parent_run, 0.0, n_trades=0)
+    scored(store, grid_run, 30.0)
+    store.connection.execute(
+        "UPDATE cards SET status = 'crash' WHERE run_id = ? AND metric = 30.0", (grid_run.run_id,)
+    )
+    scored(store, grid_run, 20.0)
+
+    parents = ["demo_grid", "demo_twin", registered, "demo_unregistered"]
+    assert records.n_trials(store, registered) == 3
+    assert records.inherited(store, [registered]) == 2, "the card that placed no order is none"
+    assert records.inherited(store, parents) == 2 + 1 + 400, "one grid, each member once"
+    assert records.inherited(store, ["demo_unregistered"]) == 0
+    assert records.inherited(store, []) == 0
+    a_hypothesis(store, "demo_draft", yaml.safe_dump({"derived_from": parents}).encode())
+    assert records.inherited(store, parents) == (
+        records.candidates(store, "demo_draft") + records.prior_trials(store, "demo_draft")
+    )
+
+
 def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     store: StateStore, registered: str
 ) -> None:
@@ -923,6 +956,52 @@ def test_the_same_bytes_under_two_readings_are_two_anchors(
         ).fetchone()[0]
         == 2
     )
+
+
+def test_books_counts_the_pool_matched_book_chooses_from(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A repeat check against an empty pool matched nothing because there was nothing, and
+    is reported as such rather than read as a pass: the count is the rows the matcher reads,
+    under the run's four pins and one reading, with a number on record."""
+    run = loop.begin(ws, store, registered)
+    held = {"2024-01-01": [["A.X", 1, True]]}
+    assert records.books(store, run, UNDER) == 0, "the baseline was stored under its own reading"
+    counted, unread = store.put_blob(b"counted"), store.put_blob(b"no number")
+    records.record_signature(store, run, counted, held, 1.0, UNDER)
+    records.record_signature(store, run, unread, held, 1.0, UNDER)
+    store.connection.execute(
+        "UPDATE signatures SET metric = NULL WHERE strategy_sha = ?", (unread,)
+    )
+    records.record_signature(store, run, store.put_blob(b"read otherwise"), held, 1.0, "other")
+    other = run.model_copy(update={"snapshot_id": "another"})
+    records.record_signature(store, other, store.put_blob(b"pinned otherwise"), held, 1.0, UNDER)
+
+    assert records.books(store, run, UNDER) == 1
+    assert records.books(store, run, "other") == 1
+    assert records.books(store, other, UNDER) == 1
+    assert records.matched_book(store, run, held, 100, 1.0, 0.0, UNDER) is not None
+
+
+def test_stored_metric_reads_one_strategy_under_one_reading(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """The number a strategy's book was stored with, and only under the pins and the
+    reading asked: the same bytes under another reading are another number."""
+    run = loop.begin(ws, store, registered)
+    held = {"2024-01-01": [["A.X", 1, True]]}
+    sha = store.put_blob(b"a")
+    records.record_signature(store, run, sha, held, 1.5, UNDER)
+    records.record_signature(store, run, sha, held, 9.0, "three folds")
+
+    assert records.stored_metric(store, run, sha, UNDER) == 1.5
+    assert records.stored_metric(store, run, sha, "three folds") == 9.0
+    assert records.stored_metric(store, run, sha, "never read") is None
+    other = run.model_copy(update={"hypothesis_sha": "f" * 64})
+    assert records.stored_metric(store, other, sha, UNDER) is None, "another pin"
+    assert records.stored_metric(store, run, store.put_blob(b"b"), UNDER) is None, "no row"
+    store.connection.execute("UPDATE signatures SET metric = NULL WHERE strategy_sha = ?", (sha,))
+    assert records.stored_metric(store, run, sha, UNDER) is None, "no number on record"
 
 
 def test_a_card_keeps_the_tags_its_proposer_gave_it(

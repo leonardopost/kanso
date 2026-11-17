@@ -16,6 +16,7 @@ import re
 import sys
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Final
 
 import pytest
 import yaml
@@ -31,6 +32,7 @@ from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.nautilus.clock import NEW_YORK, segment_of, session_of
 from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
+from kanso.research.explore import Seed
 from kanso.schemas import CostsOverride
 from tests.cli.test_doctor import CHECKS
 
@@ -89,6 +91,98 @@ def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() ->
     stated = f"({ResearchConfig().explore_after_stalls} in the template; 0 is never)"
     assert stated in prose(page("cli.md"))
     assert stated in prose(page("concepts.md"))
+
+
+def explore_row() -> str:
+    return next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp explore")
+    )
+
+
+def test_the_pages_say_a_draft_states_its_parent_s_mechanism() -> None:
+    """Three drafts declared momentum under mean-reversion parents, as the instruction then
+    invited. The pages say a draft states its parent's mechanism or one the workspace lists,
+    that the key widens and never narrows, and that the rule reads the field, not the code."""
+    assert ResearchConfig().explore_mechanisms == []
+    concepts = prose(page("concepts.md"))
+    assert "A candidate also *states* its parent's `mechanism`" in concepts
+    assert "never removes the parent's" in concepts
+    assert "nothing reads its code for a mechanism" in concepts
+    assert (
+        "states the parent's `mechanism` or one `[research] explore_mechanisms` lists"
+        in explore_row()
+    )
+    toml = prose(section(page("workspace.md"), "`kanso.toml`"))
+    assert "`[research] explore_mechanisms` lists the mechanisms" in toml
+    assert "The template writes `[]`, and a file without the key reads the same" in toml
+    assert "naming `research.explore_mechanisms` (exit 3" in toml
+
+
+SUMMARY: Final = "as its card the seed scored M ± SE on N trades (best B), T trials inherited"
+"""The head of an `explored` entry's summary as the pages spell it, its numbers named."""
+
+
+def test_the_pages_say_a_draft_is_measured_once_as_its_parent_s_card() -> None:
+    """Sixteen drafts reached the operator with no number, and the pages promised none; the
+    pages now say a seed is run once as the parent's card before the draft is written, what
+    refuses it, and that the inbox entry leads with its score, spelt as the code spells it."""
+    seed = Seed(
+        metric=1.5,
+        se=0.25,
+        trades=7,
+        objective="wf_sharpe_net",
+        window=(date(2024, 1, 1), date(2024, 1, 31)),
+        snapshot="s",
+        run_tag="t",
+        measured_sha="m",
+        books=3,
+        same_book=None,
+        parent_best=2.5,
+        inherited_trials=9,
+    )
+    spelt = {"M": "1.5", "SE": "0.25", "N": "7", "B": "2.5", "T": "9"}
+    assert re.sub(r"\b(M|SE|N|B|T)\b", lambda m: spelt[m.group(1)], SUMMARY) == seed.said()
+    concepts = prose(page("concepts.md"))
+    assert "is **measured once, as its parent's card**, before anything is written" in concepts
+    assert "The probe is not a card: it writes no card, no signature and no trial" in concepts
+    assert "Its summary leads with what the draft's seed scored" in concepts
+    row = explore_row()
+    assert "**measured once as one more card of `ID`** before anything is written" in row
+    assert f"`{SUMMARY}`" in row
+    assert "keeps or narrows the parent's `universe` and `data_requirements`" in row
+    assert "leaves no event and asks the model nothing more" in row
+    inbox = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso inbox` |")
+    )
+    assert "an `explored` entry's summary leads with what the draft's seed scored" in inbox
+
+
+def test_the_pages_say_what_a_draft_s_trials_and_rationale_are() -> None:
+    """`T` was every card of the parent's family, crashes and flat cards in, and no grid, while
+    the draft is priced on the traded cards and the grids, so the pages named a count off by a
+    grid; and the summary's cap cut a rationale after the score, which no command then showed."""
+    row = explore_row()
+    assert (
+        "the cards of the families its `derived_from` names that ran and traded, plus the "
+        "settings their `prior_trials` grids declared"
+    ) in row
+    assert "with the whole rationale, which `kanso inbox` shows" in row
+    inbox = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso inbox` |")
+    )
+    assert "carries the draft's whole rationale beneath it (`rationale` under `--json`" in inbox
+    concepts = prose(page("concepts.md"))
+    assert "`kanso inbox` prints the whole rationale beneath the entry" in concepts
+    assert "not `n_trials`, which counts crashes and cards that placed no order" in concepts
+
+
+def test_the_cli_page_says_explore_mechanisms_is_no_search_rule() -> None:
+    """The paragraph naming the `[research]` keys said all of them were search rules; the
+    mechanisms a draft may move to are the operator's scope, which no agent sets."""
+    rules = prose(page("cli.md")).split("## The daemon and the queue")[0]
+    assert "and all are framework search rules" not in rules
+    assert "all but `explore_mechanisms` are framework search rules" in rules
+    assert "which no agent sets" in rules
 
 
 def test_the_cli_page_says_research_begin_needs_no_register() -> None:
@@ -541,6 +635,107 @@ def test_both_pages_say_the_judge_reads_the_rewinds_of_earlier_runs() -> None:
     # a drift the syntax tree finds shows no model a diff, and records `from` all the same
     assert "`from`, the bytes the run's last check left the lane on" in alignment
     assert "the diff it was shown began from" not in alignment
+
+
+def test_the_pages_say_the_proposer_reads_the_rewinds_of_earlier_runs() -> None:
+    """Backlog row 300: the judge alone was shown the earlier runs' rewinds, and a proposal
+    back into one of those directions was carded, a trial, before a check could rewind it.
+    The pages say what the proposer is now shown, how much, and in which half of its prompt."""
+    row = prose(
+        next(
+            line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
+        )
+    )
+    assert "It is shown, as `rewound_in_earlier_runs`, the directions the hypothesis's" in row
+    assert "one line per direction" in row
+    assert "the newest ten, each once, in the prompt's cached system turn" in row
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "**The proposer is told the directions earlier runs were refused.**" in alignment
+    assert "as `rewound_in_earlier_runs`, the directions the hypothesis's earlier runs" in alignment
+    assert "one line per direction, the newest ten, each once, in the cached system turn" in (
+        alignment
+    )
+    assert "every earlier direction the judge is shown is one the proposer was told" in alignment
+    assert "the judge is never shown more of them than the proposer" in alignment
+    assert "the judge is shown fewer of them" not in alignment, "equal when few were refused"
+    assert "the proposals of the hypothesis's later runs" in alignment
+    card = prose(section(page("concepts.md"), "Card"))
+    assert "The stable half also carries `rewound_in_earlier_runs`" in card
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 300 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+    assert "**closed** on the operator's approval of 2026-11-17" in backlog
+
+
+def test_the_pages_say_a_keep_is_judged_as_it_is_made_and_what_it_costs() -> None:
+    """Backlog row 90: on the clock alone a drift keep was built on for up to `align_every`
+    cards, and a keep followed by a spell of misses stalled unjudged, was certified and became
+    the next run's base. The pages say when a check runs now, what it costs, and what is left:
+    a run ended by hand, whose remedy differs by lane — `kanso align check` refuses a run a
+    daemon lane owns, so no page offers it as the remedy there."""
+    alignment = prose(section(page("concepts.md"), "Alignment"))
+    assert "on every keep the research driver makes, as it is made; every" in alignment
+    assert "**A keep is judged before it is built on.**" in alignment
+    assert "the clock is the backstop" in alignment
+    assert "one `align_check` call per keep the judge answers, and never more than one" in (
+        alignment
+    )
+    assert "`kanso research run ID --cards 0` makes it and proposes nothing" in alignment
+    assert "So is a keep you carded by hand in a run the driver then resumes, and it is judged" in (
+        alignment
+    )
+    assert "so the driver puts the best back in the lane first" in alignment
+    assert "A run ended by hand ends where you end it" in alignment
+    assert "For a run in lane `op`, `kanso align check ID` before `kanso research end ID`" in (
+        alignment
+    )
+    assert "For a run in a daemon lane it does not" in alignment
+    assert "row 90 of" not in prose(page("concepts.md"))
+    batch = prose(section(page("concepts.md"), "Card"))
+    assert "a turn that kept is judged once, on its kept slot" in batch
+    rows = {
+        name: prose(
+            next(
+                line for line in page("cli.md").splitlines() if line.startswith(f"| `kanso {name}")
+            )
+        )
+        for name in ("research run", "research end", "research stop")
+    }
+    assert (
+        "Every keep it makes — a card, or a turn's kept slot — is put to the alignment"
+        in (rows["research run"])
+    )
+    assert (
+        "A judge that cannot answer fails the command after the keep is recorded"
+        in (rows["research run"])
+    )
+    assert "`--cards 0` judges an owed keep and proposes nothing" in rows["research run"]
+    assert "on the run's best, which the driver puts back in the lane first" in rows["research run"]
+    assert "becomes the next run's base unjudged" in rows["research end"]
+    assert (
+        "For a run in lane `op`, `kanso align check ID` first; for a run in a daemon"
+        in (rows["research end"])
+    )
+    assert (
+        "let the lane work it once (`kanso research start`) before ending it"
+        in (rows["research end"])
+    )
+    assert "is owed, and judged when a lane next works the run" in rows["research stop"]
+    cli = prose(page("cli.md"))
+    assert "Every keep a run makes under the driver is checked as it is made" in cli
+    workspace = prose(page("workspace.md"))
+    assert "`[research] align_every` is the drift clock, and it is a backstop" in workspace
+    assert "one `align_check` call per keep and never more than one per card" in workspace
+    assert "for a run in a daemon lane, which `align check` refuses, the lane's own next turn" in (
+        workspace
+    )
+    for name, text in (("concepts", alignment), ("cli", cli), ("workspace", workspace)):
+        assert not re.search(r"daemon lane[^.]*`kanso align check ID` first", text), name
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "a periodic check" not in readme
+    assert "| alignment | a check, on every keep the research driver makes" in readme
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 90 |"))
+    assert backlog.split("|")[3].strip().startswith("~~")
+    assert "by judging every keep the driver makes as it is made" in backlog
 
 
 def test_the_pages_say_a_closed_day_is_no_hole_and_an_answer_closes_nothing() -> None:
@@ -1043,8 +1238,10 @@ def scanning() -> tuple[set[str], set[str]]:
 def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> None:
     """Of a card's or a version's stored bytes, only the baseline a research run begins from is
     scanned again: the scans are imported by the research loop, by the `strategy_integrity`
-    gate — which skips without a lane directory, and only the research loop hands it one — and
-    by the two commands that read the workspace's own files. So certification, composition, a
+    gate — which skips without a lane directory, and only the research loop hands it one — by
+    the two commands that read the workspace's own files, and by exploration, which scans an
+    answer's seed before it runs as the parent's card and refuses bytes the workspace already
+    stores, so it runs none of them. So certification, composition, a
     deploy's measurement, a replay, a stage and a construct's research on its host run them as
     stored. The concepts page and the release note name each of those steps, what bytes made
     before `session` was the base's do there, and the way back: `kanso research end` first
@@ -1056,6 +1253,7 @@ def test_the_pages_name_every_step_that_runs_older_stored_bytes_unscanned() -> N
         "kanso.cli.doctor",
         "kanso.criteria.gates",
         "kanso.hyp.validate",
+        "kanso.research.explore",
         "kanso.research.loop",
     }
     assert lanes == {"kanso.research.loop"}

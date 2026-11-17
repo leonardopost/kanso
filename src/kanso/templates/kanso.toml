@@ -17,7 +17,7 @@ account = "margin"        # margin | cash. margin with default_leverage = risk_l
 currency = "USD"          # account currency of every venue the broker does not override; a universe whose venues carry more than one account currency, or an instrument settling or booked in another currency, is refused at `kanso hyp validate`
 return_period = "1d"      # the period a return is measured over, for every objective and drawdown
 annualisation = "auto"    # observed periods per year in the window; set a number to force one
-align_every = 10          # alignment check cadence (cards)
+align_every = 10          # cards between alignment checks; every keep is also checked as it is made
 stall_k = 30              # consecutive non-keeps before the run ends (certify if a keep exists, else requeue)
 context_cards = 20        # last cards shown to the proposer under the run's pins, and as many from earlier pins by idea alone, times cards_per_turn: as many turns at any width
 redundant_pct = 97        # a card holding a stored book on this share of sessions, and scoring it within the objective's noise floor, is redundant
@@ -25,6 +25,7 @@ local_cards = 10          # misses since the last keep during which the proposer
 structural_cards = 10     # the misses after those during which a change that moves no structure is refused; then local again
 reseed_after_stalls = 2   # consecutive stalls on the same best after which the next run starts from the best other aligned keep under the pins
 explore_after_stalls = 5  # stalls on the same best, since the last exploration, after which a daemon lane writes a draft hypothesis (`kanso hyp explore`); 0 = never
+explore_mechanisms = []   # mechanisms an explored draft may state besides its parent's own (mean_reversion|momentum|microstructure|stat_arb|event|carry|vol|other); [] = the parent's only
 folds = 4                 # contiguous folds the metric is a mean of; metric_se is read off the per-period series
 max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more lines must clear twice the keep rule's k_se
 baseline_budget_s = 1800  # wall-clock cap for the baseline card; card_budget_s = max(60, 3 × the wall of the run's first card that traded), the baseline's until one has

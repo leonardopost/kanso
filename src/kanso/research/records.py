@@ -70,7 +70,11 @@ stands still. So the number is stored with a digest of what it was measured unde
 nothing — and kept beside it rather than replaced by it, because a reading the selection
 cannot reach is still the only anchor a run under that reading has. Signatures are stored
 for every judged run, a redundant one included, so the third spelling of one idea is
-refused against the second as well as the first. The comparison is
+refused against the second as well as the first — and for nothing that is not a card: a
+probe (`loop.probe`) is matched against them and stores none. `books` counts the pool a
+match was chosen from, so a check against an empty one says so, and `stored_metric` reads
+one strategy's number under one reading, which is what a number struck under that reading
+is set beside. The comparison is
 by day rather than by instant because it is a fact about sessions, and a day is what two
 runs over the same window share. For a hypothesis held under a day, what a day held is read
 by the hour, because a lane that holds one name on one side every session gives every
@@ -143,12 +147,14 @@ __all__ = [
     "active",
     "best_measurement",
     "best_of",
+    "books",
     "candidates",
     "family",
     "cards_of",
     "close",
     "declared_prior",
     "encode_measurement",
+    "inherited",
     "insert",
     "lineage",
     "links",
@@ -168,6 +174,7 @@ __all__ = [
     "runs_of",
     "set_best",
     "signature",
+    "stored_metric",
     "strike_budget",
     "superseded",
     "trial_metrics",
@@ -509,8 +516,14 @@ def prior_trials(store: StateStore, hyp_id: str) -> int:
     the workspace has not registered states nothing, as it counts no card. A card's and a
     certificate's `n_trials` stay kanso's own cards, so this is never part of a filename.
     """
+    return _grids(store, family(store, hyp_id))
+
+
+def _grids(store: StateStore, members: Sequence[str]) -> int:
+    """The settings `members` declared tried outside kanso, each grid once at the larger count
+    any member states for it."""
     grids: dict[str, int] = {}
-    for member in family(store, hyp_id):
+    for member in members:
         block = declared_prior(store, member)
         if block is not None:
             grids[block.grid] = max(grids.get(block.grid, 0), block.count)
@@ -592,13 +605,35 @@ def candidates(store: StateStore, hyp_id: str) -> int:
     card to, and of the candidates a deflation's expected maximum is taken over. A re-pin to
     another objective continues the search, so the cards before it still count.
     """
-    ids = family(store, hyp_id)
+    return _traded(store, family(store, hyp_id))
+
+
+def _traded(store: StateStore, members: Sequence[str]) -> int:
+    """How many cards of `members` ran to a result and traded."""
     row = store.connection.execute(
-        f"SELECT COUNT(*) FROM cards WHERE hyp_id IN ({_placeholders(ids)})"
+        f"SELECT COUNT(*) FROM cards WHERE hyp_id IN ({_placeholders(members)})"
         " AND status != 'crash' AND n_trades > 0",
-        ids,
+        tuple(members),
     ).fetchone()
     return int(row[0])
+
+
+def inherited(store: StateStore, parents: Sequence[str]) -> int:
+    """The draws a hypothesis whose `derived_from` names `parents` is priced from before it has
+    a card of its own: `candidates` plus `prior_trials` over the families those parents head.
+
+    Every count by which a search is priced — `edge_per_trade`'s margin, the deflation gates'
+    draws, the rule from which a plan carries its correction — is `candidates` plus
+    `prior_trials` over the hypothesis's family, and that family is the hypothesis and the
+    families its parents head. One with no card and no grid of its own — an explored draft,
+    which may state no `prior_trials` — adds nothing to either, so this is the count it starts
+    from, and every card of its own that runs and trades adds one: a crash or a card that
+    placed no order is no draw, and a declared grid is, as each is for `candidates` and
+    `prior_trials`. A parent the workspace has not registered counts nothing, as in `family`,
+    and a grid two families state is counted once.
+    """
+    members = tuple(dict.fromkeys(member for name in parents for member in family(store, name)))
+    return _traded(store, members) + _grids(store, members)
 
 
 def objective_of(store: StateStore, pin: str) -> str | None:
@@ -1025,6 +1060,47 @@ def matched_book(
         (within if abs(metric - float(row["metric"])) <= floor else beyond).append(row)
     agreeing = _closest(held, within, pct, agreed=True)
     return agreeing if agreeing is not None else _closest(held, beyond, pct, agreed=False)
+
+
+_UNDER_PINS: Final = (
+    " hyp_id = ? AND hypothesis_sha = ? AND snapshot_id = ? AND criteria_version = ?"
+    " AND measured_under = ?"
+)
+"""The selection `matched_book` reads its pool by: a run's four pins and one reading."""
+
+
+def _under(run: RunRecord, measured: str) -> tuple[str, ...]:
+    return (run.hyp_id, run.hypothesis_sha, run.snapshot_id, run.criteria_version, measured)
+
+
+def books(store: StateStore, run: RunRecord, measured: str) -> int:
+    """How many stored books under this run's pins and the reading `measured` carry a
+    number: the pool `matched_book` chooses an anchor from.
+
+    A repeat check made against an empty pool matched nothing because there was nothing to
+    match, and a caller reporting that check says so with this count rather than letting
+    "matched nothing" read as a pass.
+    """
+    row = store.connection.execute(
+        f"SELECT COUNT(*) FROM signatures WHERE{_UNDER_PINS} AND metric IS NOT NULL",
+        _under(run, measured),
+    ).fetchone()
+    return int(row[0])
+
+
+def stored_metric(store: StateStore, run: RunRecord, sha: str, measured: str) -> float | None:
+    """The number `sha`'s book was stored with under this run's pins and the reading
+    `measured`, or `None` when it was not judged under both.
+
+    What a number struck under that reading is set beside: the same strategy measured under
+    another reading — other folds, capital, cost model or host version — is another number
+    and is not this one.
+    """
+    row = store.connection.execute(
+        f"SELECT metric FROM signatures WHERE strategy_sha = ? AND{_UNDER_PINS}",
+        (sha, *_under(run, measured)),
+    ).fetchone()
+    return None if row is None or row["metric"] is None else float(row["metric"])
 
 
 def _closest(held: Signature, rows: list[sqlite3.Row], pct: int, *, agreed: bool) -> Match | None:

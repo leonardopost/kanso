@@ -52,10 +52,17 @@ that keep would leave it under no verdict at all, standing as the ground a later
 rewinds to. So the checkpoint stops short of it, and the next check that asks the model
 marks it.
 
-A keep an earlier run made was that run's to judge, and a run can end before the check that
-would have judged it: by hand, or on a spell of misses, which count toward `stall_k` and not
-toward `align_every`. Such a keep is carried as the next run's base unjudged; row 90 of
-`docs/backlog.md` says what closing that would take.
+Every keep the driver makes is judged as it is made (`kanso.research.driver`): before the
+next proposal, and so before a stall can certify it or hand it to the next run as its base,
+which no check judges. On a clock alone a keep followed by a spell of misses — which count
+toward `stall_k` and not toward `align_every` — could stall unjudged and be certified. A keep
+whose check did not happen — the driver was told to stop first, or the judge could not answer
+— is `owed`, and so is one carded by hand, and the driver's next invocation on the run makes
+that check before it proposes, on the run's best where a hand wrote the base or the
+checkpoint's bytes back over the keep. A run ended by hand ends where the operator ends it,
+and a keep owed then is carried as the next run's base unjudged: `kanso align check` judges a
+run of lane `op` before its end, and refuses one a daemon lane owns, whose own next turn
+judges it.
 
 The syntax tree still reads the base and the checkpoint's bytes. What it finds is a fact
 about the bytes rather than an opinion of them: it costs nothing, it says the same thing
@@ -100,6 +107,20 @@ none to show. This buys consistency across runs, not a stricter judge, and it ne
 run's base: a keep an earlier run made and its checks passed is not re-judged by becoming the
 next run's base, whatever a later rewind refused, and the judge is told that only the change
 since the last check can return in a refused direction.
+
+The proposer is shown them too (`directions_before`), or it spends a card — a trial
+`n_trials` counts — walking back into a direction an earlier run was refused before any
+check can rewind it: in a live workspace on 2026-11-17, one hypothesis changed its exit in
+eight keeps across runs, and once the judge alone was shown the earlier runs' rewinds, eight
+more came within seven hours, three named as repeats. It is shown one line per direction, the
+run's tag, whether that run pinned other files than this one, and the reason, with no diff:
+the judge must match a change and the proposer has only to avoid a direction. The lines are
+fixed for the life of a run, so they travel in its cached system turn, and they never drop a
+reason this run was rewound for too, as the judge's list does, since that would move the
+system turn the moment this run was rewound. So every earlier direction the judge is shown is
+one the proposer was told, and the judge is never shown more of them: this run's own reasons
+take part of its `REWOUND_LINES`, so once this run has been rewound the proposer may be told
+earlier directions the judge is not.
 """
 
 from __future__ import annotations
@@ -107,7 +128,9 @@ from __future__ import annotations
 import ast
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -141,7 +164,9 @@ __all__ = [
     "align_static",
     "check",
     "checkpoint",
+    "directions_before",
     "lane_strategy",
+    "owed",
     "problems",
     "rewound_before",
     "rewound_for",
@@ -326,10 +351,14 @@ def align_static(hyp: Hypothesis, source: bytes) -> tuple[bool, str | None]:
     found = problems(hyp, source)
     if not found:
         return True, None
-    reason = "; ".join(found)
+    return False, _cut("; ".join(found))
+
+
+def _cut(reason: str) -> str:
+    """A reason no longer than `REASON_LIMIT`, a longer one cut to it on an ellipsis."""
     if len(reason) > REASON_LIMIT:
-        reason = reason[: REASON_LIMIT - 1].rstrip() + "…"
-    return False, reason
+        return reason[: REASON_LIMIT - 1].rstrip() + "…"
+    return reason
 
 
 # --- the model half, and what a drift costs ----------------------------------
@@ -353,11 +382,15 @@ REWOUND_LINES: Final = 10
 """How many drift reasons a check is shown, newest first: this run's, and then, in what is
 left, the hypothesis's earlier runs'.
 
-More than the proposer is shown, because the two read them for different things: the
-proposer needs the directions it should not take next, and the judge needs every direction it
-has refused, so that it answers the same change the same way when it returns. A hypothesis
-that drifts more often than this repeats itself, and the newest reasons are the ones a
-returning change is likeliest to meet."""
+The judge needs every direction it has refused, so that it answers the same change the same
+way when it returns. A hypothesis that drifts more often than this repeats itself, and the
+newest reasons are the ones a returning change is likeliest to meet. The proposer is shown
+this run's newest few in its user turn (`driver.DRIFT_LINES`) and, in its system turn, up to
+this many of the earlier runs' directions (`directions_before`, `driver.EARLIER_DRIFT_LINES`):
+the same bound, because the judge's earlier list is the first `REWOUND_LINES − r` of the
+earlier runs' directions once this run's own reasons are taken out, `r` the number of this
+run's it is shown, and each of those lies within the first `REWOUND_LINES` of the earlier
+runs' directions — so every one the judge is shown is among the proposer's."""
 
 REWOUND_DIFF_LINES: Final = 40
 """How many lines of the change an earlier run was rewound for a check is shown at most. A
@@ -404,6 +437,20 @@ def checkpoint(store: StateStore, run: RunRecord) -> Checkpoint:
             judged=bool(event.detail.get("judged", True)),
         )
     return found
+
+
+def owed(store: StateStore, run: RunRecord) -> bool:
+    """Whether this run holds a keep no check has answered for: one past its last checkpoint
+    whose bytes are neither its base nor the bytes that check left the lane on.
+
+    The driver judges every keep as it is made, so this is true only where that check did not
+    happen — a stop came first, or the judge could not answer — or where the keep was carded by
+    hand, and the driver's next invocation makes the check before it proposes. A check that
+    judged nothing stops short of such a keep (`_unanswered_keep`), so it leaves it owed —
+    which is why the driver puts the run's best back in a lane on those bytes before it makes
+    an owed check.
+    """
+    return _unanswered_keep(store, run, checkpoint(store, run)) is not None
 
 
 def since(store: StateStore, run: RunRecord) -> int:
@@ -569,14 +616,8 @@ def rewound_before(
     the bytes the run was rewound to, at most `diff_lines` lines (`_refused`), or `None` where
     there is none to show. Like `rewound_for` it carries nothing measured, on any window.
     """
-    rows = store.connection.execute(
-        "SELECT e.event_id, e.subject, e.detail, r.run_id, r.tag, r.program_sha,"
-        " r.hypothesis_sha FROM events e"
-        " JOIN runs r ON r.run_id = json_extract(e.detail, '$.run_id') AND r.hyp_id = e.subject"
-        " WHERE e.kind = ? AND e.subject = ? ORDER BY e.event_id DESC",
-        (DRIFTED, run.hyp_id),
-    ).fetchall()
-    events = [(row, json.loads(str(row["detail"]))) for row in rows]
+    events = _earlier_drifts(store, run)
+    same = _same_files(store, run)
     said = {
         str(detail.get("reason") or "") for row, detail in events if row["run_id"] == run.run_id
     }
@@ -588,18 +629,97 @@ def rewound_before(
         if not reason or reason in said:
             continue
         said.add(reason)
-        pin = str(row["hypothesis_sha"])
+        same_program, same_thesis = same(row)
         found.append(
             {
                 "reason": reason,
                 "run": str(row["tag"]),
-                "same_program": row["program_sha"] == run.program_sha,
-                "same_thesis": pin == run.hypothesis_sha
-                or _judged(store, pin) == _judged(store, run.hypothesis_sha),
+                "same_program": same_program,
+                "same_thesis": same_thesis,
                 "diff": _refused(store, row, detail, diff_lines),
             }
         )
     return found
+
+
+def directions_before(store: StateStore, run: RunRecord, limit: int) -> list[str]:
+    """Why the hypothesis was rewound in its other runs, as its proposer is shown it: one line
+    per direction, newest first, each once, at most `limit`.
+
+    A line is `<tag>: <reason>`, the tag of the newest run refused in that direction, and
+    `<tag> (under another program.md): <reason>`, `… (under another hypothesis.yaml)` or `…
+    (under another program.md and hypothesis.yaml)` where that run pinned a `program.md`
+    other than this run's, or a `hypothesis.yaml` stating other than what a check reads of
+    this run's (`_judged`), as `rewound_before` decides `same_program` and `same_thesis`: the
+    operator permits a direction by editing one of them. A reason longer than `REASON_LIMIT`,
+    which only an older kanso wrote, is cut to it as `align_static` cuts one, so the bound is
+    the code's and not the writers'.
+
+    It walks what `rewound_before` walks, the drifts of runs on record, newest first, each
+    reason once as recorded, but it keeps a reason this run was rewound for too: dropping it
+    would move the proposer's system turn the moment this run was rewound. So the judge's
+    earlier list, read with `limit = REWOUND_LINES` here, is always a subset of this one. No
+    diff and nothing measured, on any window: a reason states a direction and carries no
+    number. Fixed for the life of the run — a hypothesis has one active run, a drift is
+    recorded only for it, and the pins the markers read never move — so the proposer reads
+    it in the half a provider caches.
+    """
+    same = _same_files(store, run)
+    said: set[str] = set()
+    found: list[str] = []
+    for row, detail in _earlier_drifts(store, run):
+        if len(found) >= limit:
+            break
+        reason = str(detail.get("reason") or "")
+        if row["run_id"] == run.run_id or not reason or reason in said:
+            continue
+        said.add(reason)
+        same_program, same_thesis = same(row)
+        other = [
+            name
+            for name, kept in ((PROGRAM_FILE, same_program), (HYPOTHESIS_FILE, same_thesis))
+            if not kept
+        ]
+        marker = f" (under another {' and '.join(other)})" if other else ""
+        found.append(f"{row['tag']}{marker}: {_cut(reason)}")
+    return found
+
+
+def _earlier_drifts(
+    store: StateStore, run: RunRecord
+) -> list[tuple[sqlite3.Row, dict[str, object]]]:
+    """Every `drifted` event of this hypothesis whose run is on record, newest first, with that
+    run's tag and pins: the one sequence `rewound_before` and `directions_before` both walk, so
+    the judge's earlier list and the proposer's are read off the same rows in the same order.
+    This run's own drifts are among them; each reader decides what it does with them."""
+    rows = store.connection.execute(
+        "SELECT e.event_id, e.subject, e.detail, r.run_id, r.tag, r.program_sha,"
+        " r.hypothesis_sha FROM events e"
+        " JOIN runs r ON r.run_id = json_extract(e.detail, '$.run_id') AND r.hyp_id = e.subject"
+        " WHERE e.kind = ? AND e.subject = ? ORDER BY e.event_id DESC",
+        (DRIFTED, run.hyp_id),
+    ).fetchall()
+    return [(row, json.loads(str(row["detail"]))) for row in rows]
+
+
+def _same_files(store: StateStore, run: RunRecord) -> Callable[[sqlite3.Row], tuple[bool, bool]]:
+    """Whether a drift's run pinned this run's `program.md`, and a `hypothesis.yaml` stating
+    what a check reads of this run's (`_judged`).
+
+    Each pin is parsed at most once a call, however many drifts share it: a reader runs on
+    every proposal, the parser is pure Python, and a pin carrying a dated spread's table is a
+    long file, so a parse per drift would make every proposal pay for the table again and
+    again."""
+    judged = cache(partial(_judged, store))
+
+    def same(row: sqlite3.Row) -> tuple[bool, bool]:
+        pin = str(row["hypothesis_sha"])
+        return (
+            row["program_sha"] == run.program_sha,
+            pin == run.hypothesis_sha or judged(pin) == judged(run.hypothesis_sha),
+        )
+
+    return same
 
 
 def _judged(store: StateStore, pin: str) -> dict[str, object]:

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from pydantic import ValidationError as PydanticValidationError
 
 from kanso.errors import PreconditionError, ValidationError
+from kanso.schemas.hypothesis import Mechanism
 from kanso.schemas.venue import Currency
 
 CONFIG_NAME = "kanso.toml"
@@ -52,6 +53,7 @@ class ResearchConfig(BaseModel):
     structural_cards: int = Field(default=10, gt=0)
     reseed_after_stalls: int = Field(default=2, gt=0)
     explore_after_stalls: int = Field(default=5, ge=0)
+    explore_mechanisms: list[Mechanism] = Field(default_factory=list)
     folds: int = Field(default=4, ge=2)
     max_lines_per_keep: int = Field(default=40, gt=0)
     baseline_budget_s: int = Field(default=1800, gt=0)

@@ -32,7 +32,7 @@ prompt.
 | run, lane | a run is one research session on one hypothesis; a lane is a concurrent worker with its own directory |
 | card | one experiment: the lane's `strategy.py`, backtested and recorded as kept, discarded or crashed |
 | keep rule | when a card counts as an improvement: it must beat the best by more than its own noise |
-| alignment | a periodic check that research still tests the thesis rather than something easier |
+| alignment | a check, on every keep the research driver makes and every `align_every` cards, that research still tests the thesis rather than something easier |
 | snapshot | an immutable, content-addressed set of datasets a run is pinned to |
 | embargo | the gap between the research and certification windows; research can never read the certification window |
 | certification | the gates a model planned for the hypothesis, judged on the certification window; a pass is a certificate |
