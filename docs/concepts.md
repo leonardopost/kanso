@@ -1756,9 +1756,11 @@ rewinds came within seven hours, three of them named as repeats — each a card,
 a run — a hypothesis has one active run, and a drift is recorded only for it — so they
 travel in the half a provider caches, and they keep a reason this run was rewound for too,
 which the judge's list drops, because dropping it would move that half at every rewind. So
-every earlier direction the judge is shown is one the proposer was told, and once this run
-has been rewound the judge is shown fewer of them than the proposer. Nothing measured travels
-with them, on any window. A hypothesis with no earlier rewind is sent no key.
+every earlier direction the judge is shown is one the proposer was told, and the judge is
+never shown more of them than the proposer: this run's own reasons take part of the judge's
+ten, so once this run has been rewound the proposer may be told earlier directions the judge
+is not. Nothing measured travels with them, on any window. A hypothesis with no earlier
+rewind is sent no key.
 
 **The run's base is never judged.** A check judges what the loop proposed, and the bytes a
 run was handed — the workspace `strategy.py`, or a keep an earlier run made — are not this

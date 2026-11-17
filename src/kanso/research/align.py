@@ -118,7 +118,9 @@ the judge must match a change and the proposer has only to avoid a direction. Th
 fixed for the life of a run, so they travel in its cached system turn, and they never drop a
 reason this run was rewound for too, as the judge's list does, since that would move the
 system turn the moment this run was rewound. So every earlier direction the judge is shown is
-one the proposer was told, and not the other way round once this run has been rewound.
+one the proposer was told, and the judge is never shown more of them: this run's own reasons
+take part of its `REWOUND_LINES`, so once this run has been rewound the proposer may be told
+earlier directions the judge is not.
 """
 
 from __future__ import annotations

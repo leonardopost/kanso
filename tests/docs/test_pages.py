@@ -562,6 +562,8 @@ def test_the_pages_say_the_proposer_reads_the_rewinds_of_earlier_runs() -> None:
         alignment
     )
     assert "every earlier direction the judge is shown is one the proposer was told" in alignment
+    assert "the judge is never shown more of them than the proposer" in alignment
+    assert "the judge is shown fewer of them" not in alignment, "equal when few were refused"
     assert "the proposals of the hypothesis's later runs" in alignment
     card = prose(section(page("concepts.md"), "Card"))
     assert "The stable half also carries `rewound_in_earlier_runs`" in card
