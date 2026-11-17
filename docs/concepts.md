@@ -3017,11 +3017,15 @@ or `min_fraction` stays the planner's answer, and the operator's, as for the cer
 looks: the planner is shown it (`forward_looks`, beside `n_trials` and `looks`) when a
 hypothesis is planned — a new lineage member's first plan — or replanned with `kanso cert plan
 ID --replan`, and a pinned plan is not asked again as looks accrue. `kanso replay run` and
-`kanso replay parity` say which look they were (`forward_look`, and the `forward` line):
+`kanso replay parity` say which look they were (`forward_look`, and the `forward` line), and
+`kanso status` gives each hypothesis the looks its lineage has taken at its own forward window
+(`forward_looks`):
 
 ```
 $ kanso replay run --hyp demo_mr          # after the sequence in README.md; every line but forward is elided
 forward    look 1 of 1 at demo_mr's forward window from 2025-06-02 · by demo_mr
+$ kanso status                            # the hypothesis's line
+demo_mr             researching  9.986730      4 card(s) · 1 forward look(s)
 ```
 
 **A failing verdict is not an error, and it ends nothing.** `cert run` exits 0 and says

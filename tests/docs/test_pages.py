@@ -2195,6 +2195,14 @@ def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar()
     assert "a pinned plan is not asked again as looks accrue" in concepts
     assert "replanned with `kanso cert plan ID --replan`" in concepts
     assert "the planner is shown `forward_looks` beside `n_trials` and `looks`" in changelog
+    assert "`kanso status` prints `N forward look(s)`" in changelog
+    assert "demo_mr researching 9.986730 4 card(s) · 1 forward look(s)" in concepts
+    assert "`forward_looks`, how many looks its lineage has taken at its own forward window" in cli
+    assert "`· N forward look(s)`" in cli
+    closed = backlog_row(330)
+    assert closed.split("|")[3].strip().startswith("~~Looks at the forward window are counted")
+    assert "**closed**: `kanso.certify.looks` counts them per lineage" in closed
+    assert "on `kanso status`; they move no bar" in closed
     assert (
         "**Looks at the forward window are counted per lineage and shown; they move no bar.**"
         in changelog

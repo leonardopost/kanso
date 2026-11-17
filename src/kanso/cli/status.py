@@ -20,13 +20,14 @@ and safe to run in a loop.
 from __future__ import annotations
 
 from collections.abc import Mapping, Set
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Final
 
 import typer
 
 from kanso import inbox, models
-from kanso.certify.looks import Window, subject_pin, window_of
+from kanso.certify.looks import Declared, Window, forward_start, subject_pin, window_of
+from kanso.certify.looks import forward_looks as forward_looks_at
 from kanso.certify.looks import looks as looks_at
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
@@ -146,9 +147,10 @@ def _cards_per_hour(opened: StateStore) -> float:
 def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
     """Every registered hypothesis with its status, its best metric, its card count, its
     newest stall — whether it certified, and the search correction that decided it — and how
-    many looks its lineage has taken at the certification window its best is read on, counted
-    over a lineage graph and pinned windows read once for every row, and once for each lineage
-    and window rather than once for each member that shares them."""
+    many looks its lineage has taken at the certification window its best is read on and at
+    its own forward window, counted over a lineage graph and pinned windows read once for
+    every row, and once for each lineage and window rather than once for each member that
+    shares them."""
     rows = opened.connection.execute(
         "SELECT h.hyp_id, h.status, h.best_sha, h.best_metric, h.hypothesis_sha,"
         " h.consecutive_cert_failures AS cert_failures,"
@@ -158,6 +160,8 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
     linked = records.links(opened)
     pinned: dict[object, Window | None] = {}
     counted: dict[tuple[frozenset[str], Window], int] = {}
+    forward: dict[tuple[frozenset[str], date], int] = {}
+    declared: Declared = {}
     return [
         {
             "id": str(row["hyp_id"]),
@@ -174,6 +178,10 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
                 linked,
                 pinned,
                 counted,
+                declared,
+            ),
+            "forward_looks": _forward_looks(
+                opened, str(row["hyp_id"]), row["hypothesis_sha"], linked, forward, declared
             ),
         }
         for row in rows
@@ -187,6 +195,7 @@ def _holdout_looks(
     linked: Mapping[str, Set[str]],
     pinned: dict[object, Window | None],
     counted: dict[tuple[frozenset[str], Window], int],
+    declared: Declared,
 ) -> int | None:
     """The certificates this hypothesis's lineage has made at a window intersecting the
     certification window the next certificate of its best reads — that of `pin`, the file
@@ -197,12 +206,36 @@ def _holdout_looks(
     The count is the lineage's, whichever member asks, so a member whose window another has
     already asked about takes the count from `counted` rather than reading every
     certificate of the lineage again."""
-    window = window_of(opened, pin, pinned)
+    window = window_of(opened, pin, pinned, declared)
     if window is None:
         return None
     key = (frozenset(records.lineage(opened, hyp_id, linked)), window)
     if key not in counted:
-        counted[key] = len(looks_at(opened, hyp_id, window, linked=linked, pinned=pinned).prior)
+        counted[key] = len(
+            looks_at(opened, hyp_id, window, linked=linked, pinned=pinned, declared=declared).prior
+        )
+    return counted[key]
+
+
+def _forward_looks(
+    opened: StateStore,
+    hyp_id: str,
+    pin: object,
+    linked: Mapping[str, Set[str]],
+    counted: dict[tuple[frozenset[str], date], int],
+    declared: Declared,
+) -> int | None:
+    """The looks this hypothesis's lineage has taken at its own forward window — the one its
+    registered pin declares, which `forward_holdout` judges its versions on
+    (`kanso.certify.looks.forward_looks`); `None` where that file is not held or declares no
+    forward start that reads. Counted once for each lineage and start, as `_holdout_looks`,
+    and the file read once with its certification window (`declared`)."""
+    start = forward_start(opened, pin, declared)
+    if start is None:
+        return None
+    key = (frozenset(records.lineage(opened, hyp_id, linked)), start)
+    if key not in counted:
+        counted[key] = len(forward_looks_at(opened, hyp_id, start, linked=linked).taken)
     return counted[key]
 
 
@@ -282,6 +315,8 @@ def _hypothesis_line(row: dict[str, Any]) -> str:
     line = f"{row['id']:<20}{row['status']:<13}{best:<14}{row['cards']} card(s)"
     if row["holdout_looks"]:
         line += f" · {row['holdout_looks']} hold-out look(s)"
+    if row["forward_looks"]:
+        line += f" · {row['forward_looks']} forward look(s)"
     stall = row["last_stall"]
     spared = None if stall is None else spared_by(stall["precheck"])
     return line if spared is None else f"{line} · stall spared: {spared}"

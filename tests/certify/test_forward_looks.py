@@ -597,6 +597,30 @@ def test_reads_kanso_did_not_write_are_each_a_look_of_their_own(
     assert len(forward_looks(store, HYP_ID, FORWARD_START).taken) == 2
 
 
+@pytest.mark.parametrize(
+    ("windows", "start"),
+    [
+        ({"forward": {"start": "2024-03-01"}}, FORWARD_START),
+        ({"forward": {"start": "2024-03-01T00:00:00Z"}}, FORWARD_START),
+        ({"forward": {"start": "soon"}}, None),
+        ({"forward": "2024-03-01"}, None),
+        ({}, None),
+    ],
+    ids=["day", "midnight", "unparsed", "not-a-window", "none"],
+)
+def test_a_pinned_file_s_forward_start_is_read_as_the_schema_reads_it(
+    store: StateStore, windows: dict[str, Any], start: date | None
+) -> None:
+    """A pin is read as a plain mapping, so one written under an older schema still reads, and
+    one declaring no forward start that reads is `None` rather than an error."""
+    import yaml
+
+    pin = store.put_blob(yaml.safe_dump({"id": HYP_ID, "windows": windows}).encode("utf-8"))
+
+    assert looks_module.forward_start(store, pin) == start
+    assert looks_module.forward_start(store, None) is None
+
+
 # --- what the counter can reach -----------------------------------------------
 
 

@@ -85,10 +85,12 @@ stored:
   when later looks arrive; a re-pin that joins or splits the lineage can move it, as it moves
   a certificate's.
 
-The count judges nothing. A read is read back totally (`ForwardRead.of_event`): a detail kanso
-did not write — a key missing, a value of another type, a day that does not parse — reads as an
-empty text, no day and no `shown`, never as an exception, so one corrupt event never ends the
-pass that counts it.
+The count judges nothing. It is shown on `forward_holdout`'s evidence, to the planner
+(`PlanInputs.forward_looks`), on `kanso status` — at the forward start of each hypothesis's
+registered pin (`forward_start`) — and by `kanso replay`. A read is read back totally
+(`ForwardRead.of_event`): a detail kanso did not write — a key missing, a value of another
+type, a day that does not parse — reads as an empty text, no day and no `shown`, never as an
+exception, so one corrupt event never ends the pass that counts it.
 """
 
 from __future__ import annotations
@@ -103,7 +105,7 @@ import yaml
 
 from kanso.errors import ValidationError
 from kanso.research import records
-from kanso.schemas import DateWindow, Holdout
+from kanso.schemas import DateWindow, Holdout, OpenWindow
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.state import Event, StateStore
@@ -114,6 +116,7 @@ __all__ = [
     "INADMISSIBLE",
     "REPLAY",
     "STAGE",
+    "Declared",
     "ForwardLook",
     "ForwardLooks",
     "ForwardRead",
@@ -122,6 +125,7 @@ __all__ = [
     "Window",
     "certification_window",
     "forward_looks",
+    "forward_start",
     "looks",
     "ran_on_stage",
     "read_no_window",
@@ -138,6 +142,11 @@ INADMISSIBLE: Final = "inadmissible"
 reasons under: a certificate whose every gate carries it read no window."""
 
 Window = tuple[date, date]
+
+Declared = MutableMapping[object, Mapping[str, object] | None]
+"""The `windows` each pinned file declares, by pin, as the files were read: a caller reading
+several windows of one file — `kanso status`, its certification window and its forward start —
+passes one, so the file is parsed once."""
 
 FORWARD_READ: Final = "forward_read"
 """The event a read of a forward window is recorded as, its subject the hypothesis whose
@@ -191,6 +200,7 @@ def looks(
     *,
     linked: Mapping[str, Set[str]] | None = None,
     pinned: MutableMapping[object, Window | None] | None = None,
+    declared: Declared | None = None,
 ) -> Looks:
     """The certificates `hyp_id`'s lineage has made at a certification window intersecting
     `window` that read one, oldest first.
@@ -198,7 +208,8 @@ def looks(
     A caller asking about many hypotheses at once — `kanso status`, one row each — passes the
     graph `records.links` read once as `linked`, and one `pinned` for every call, which holds
     the windows already read by pin and gains those read here, so each registered file is
-    parsed once rather than once per hypothesis asked about."""
+    parsed once rather than once per hypothesis asked about — and one `declared`, where it reads
+    other windows of the same files, so a file is parsed once for all of them."""
     lineage = records.lineage(store, hyp_id, linked)
     marks = ", ".join("?" for _ in lineage)
     pins = {
@@ -217,7 +228,9 @@ def looks(
     for row in rows:
         if read_no_window(gate.get("evidence") or {} for gate in json.loads(str(row["gates"]))):
             continue
-        seen = window_of(store, row["hypothesis_sha"] or pins.get(str(row["hyp_id"])), windows)
+        seen = window_of(
+            store, row["hypothesis_sha"] or pins.get(str(row["hyp_id"])), windows, declared
+        )
         if seen is not None and not _intersect(seen, window):
             continue
         prior.append(
@@ -248,15 +261,20 @@ def subject_pin(store: StateStore, hyp_id: str, sha: object, pin: object) -> obj
 
 
 def window_of(
-    store: StateStore, pin: object, pinned: MutableMapping[object, Window | None]
+    store: StateStore,
+    pin: object,
+    pinned: MutableMapping[object, Window | None],
+    declared: Declared | None = None,
 ) -> Window | None:
     """`certification_window` of `pin`, read once into `pinned` and from it after."""
     if pin not in pinned:
-        pinned[pin] = certification_window(store, pin)
+        pinned[pin] = certification_window(store, pin, declared)
     return pinned[pin]
 
 
-def certification_window(store: StateStore, pin: object) -> Window | None:
+def certification_window(
+    store: StateStore, pin: object, declared: Declared | None = None
+) -> Window | None:
     """The certification window a pinned hypothesis file declares.
 
     The file is read as a plain mapping, so a pin written under an older schema is still read,
@@ -266,6 +284,47 @@ def certification_window(store: StateStore, pin: object) -> Window | None:
     does not read, and one that declares no certification window or one `DateWindow` refuses:
     none of them shows where its certificate looked.
     """
+    span = _window(store, pin, "certification", declared)
+    if span is None:
+        return None
+    try:
+        read = DateWindow.model_validate({"start": span.get("start"), "end": span.get("end")})
+    except ValidationError:
+        return None
+    return read.start, read.end
+
+
+def forward_start(store: StateStore, pin: object, declared: Declared | None = None) -> date | None:
+    """The day the forward window a pinned hypothesis file declares opens on, read as
+    `certification_window` reads its window — the file as a plain mapping, the day by the
+    schema's own `OpenWindow` — and `None` wherever that reads none."""
+    span = _window(store, pin, "forward", declared)
+    if span is None:
+        return None
+    try:
+        return OpenWindow.model_validate({"start": span.get("start")}).start
+    except ValidationError:
+        return None
+
+
+def _window(
+    store: StateStore, pin: object, name: str, declared: Declared | None
+) -> Mapping[str, object] | None:
+    """The window `name` a pinned hypothesis file declares, as a plain mapping, its file read
+    once into `declared` where one is passed; `None` for no pin, a file the store does not hold
+    or that does not read, and one declaring none."""
+    if declared is None:
+        windows = _windows(store, pin)
+    else:
+        if pin not in declared:
+            declared[pin] = _windows(store, pin)
+        windows = declared[pin]
+    span = None if windows is None else windows.get(name)
+    return span if isinstance(span, dict) else None
+
+
+def _windows(store: StateStore, pin: object) -> Mapping[str, object] | None:
+    """The `windows` a pinned hypothesis file declares, read as a plain mapping."""
     if not pin or not store.has_blob(str(pin)):
         return None
     try:
@@ -273,14 +332,7 @@ def certification_window(store: StateStore, pin: object) -> Window | None:
     except (UnicodeDecodeError, yaml.YAMLError):
         return None
     windows = found.get("windows") if isinstance(found, dict) else None
-    span = windows.get("certification") if isinstance(windows, dict) else None
-    if not isinstance(span, dict):
-        return None
-    try:
-        read = DateWindow.model_validate({"start": span.get("start"), "end": span.get("end")})
-    except ValidationError:
-        return None
-    return read.start, read.end
+    return windows if isinstance(windows, dict) else None
 
 
 def _intersect(one: Window, other: Window) -> bool:
