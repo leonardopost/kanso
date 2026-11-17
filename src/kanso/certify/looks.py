@@ -58,7 +58,10 @@ by a paper or live stage (`STAGE`) or a replay (`REPLAY`) — what it was of —
 start it was judged against, and the forward days it read, from the later of its range's start
 and that forward start through its range's end. A stage read also records `shown`, the days on
 which the stage released the version's own decisions, which is what a read is exempted by; a
-read recorded `exempt` counts nothing. The looks are struck from the reads each time they are
+read recorded `exempt` counts nothing. A paper or live stage records one read per version per
+window it closes (`kanso.portfolio.deploy`), of `S@V`, judged against the forward start of its
+sleeve's registered pin: every stage window reaches it, and its read is on record before the
+window's realised result is. The looks are struck from the reads each time they are
 asked for (`forward_looks`) and nothing else about a look is stored:
 
 * the lineage is `kanso.research.records.lineage` as it stands when counted, the one the

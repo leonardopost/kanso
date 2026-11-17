@@ -303,7 +303,9 @@ SQLite in WAL mode, and the only database kanso keeps. It holds hypothesis regis
 status and pins; runs and every card ever run; the blob store the cards' `strategy.py` bytes
 live in, and what each card that ran was measured from; certification plans and the
 certificates of record; **approvals**; escalations and which of them have been acknowledged;
-the model spend ledger; the session and strategy-version indexes; and the queue.
+the model spend ledger; the session and strategy-version indexes; every read of a
+hypothesis's forward window, a paper or live stage's, which the forward looks are counted
+from; and the queue.
 
 It is kanso's alone. There is no supported way to edit it and no need to: everything in it
 is reachable through a command, and every command that writes it does so through one code
@@ -363,8 +365,9 @@ cards of that size; 1,409,471 for the same run beside a host-alone run of its si
 database, reports it behind by every migration this kanso ships, and after `kanso migrate`
 the workspace has no
 registered hypotheses, no cards, no best pointer, no certificate of record and no approvals —
-nor any record of what a source answered empty, so a backfill asks a source again for a gap
-it already answered. Coverage is untouched: it is read off the manifests and the market's
+nor any record of the forward window's reads, so every look it counted is forgotten, nor any
+record of what a source answered empty, so a backfill asks a source again for a gap it already
+answered. Coverage is untouched: it is read off the manifests and the market's
 calendar, never off an answer.
 What survives is what is file-backed: `catalog/` still serves its data, `certificates/<hyp>/`
 still holds the certificate YAML and the certified `<sha7>.py`, `strategies/<id>/` still holds

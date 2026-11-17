@@ -2139,3 +2139,15 @@ def test_the_pages_say_a_second_exit_past_the_rate_leaves_an_exit_rule_s_owed_ex
         said = prose(page(name))
         assert "replaces it rather than adding to it" in said, name
         assert "unless the first was an exit rule's, which its host's ask neither" in said, name
+
+
+def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar() -> None:
+    """Every read of a forward window is in `state.db`, which the forward looks are counted
+    from, so deleting it forgets every look it counted."""
+    state = prose(section(page("workspace.md"), "`state.db`"))
+    assert "every read of a hypothesis's forward window, a paper or live stage's" in state
+    assert "which the forward looks are counted from" in state
+    assert (
+        "nor any record of the forward window's reads, so every look it counted is forgotten"
+        in (state)
+    )

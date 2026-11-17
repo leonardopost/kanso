@@ -63,17 +63,23 @@ keeps no position across a restart, and the alternative — a record claiming a 
 node does not hold — loses positions silently. Each redeploy therefore closes a window and
 realises its result into the record the paper and live gates read, which is also why a
 redeploy shortens the window those gates have to work with.
+
+**Every window is a read of each version's forward window.** Every stage window reaches each
+version's forward window — deploy refuses one that does not — so every window is a read of it,
+and the version a look of its sleeve's lineage there (`kanso.certify.looks`); the read is on
+record before the window's result is, so no realised P&L is ever on record without it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from math import isclose
 from typing import TYPE_CHECKING, Final
 
 from kanso import strategy as strategies
+from kanso.certify.looks import STAGE, ForwardRead, record_read
 from kanso.criteria.run import day_of
 from kanso.env.envelope import engine_version
 from kanso.errors import ApprovalError, KansoError, PreconditionError
@@ -599,11 +605,58 @@ def _restart(
         )
     )
     session = _session(ws, store, stage, configured, placements, ran)
+    _forward_reads(store, stage, session, placements, ran, clock)
     return _Ran(
         session=session,
         results=tuple(records.record_stage_run(store, stage, session.session_id, ran.realised)),
         halted=ran.halted,
     )
+
+
+def _forward_reads(
+    store: StateStore,
+    stage: str,
+    session: Session,
+    placements: tuple[Placement, ...],
+    ran: StageRun,
+    clock: int | None,
+) -> None:
+    """Record each version's window as a read of its sleeve's forward window, before the
+    window's result is on record.
+
+    The read is of the version `S@V`, judged against the forward start of the file the stage
+    placed it under — its sleeve's registered pin — and over the window's days from that start
+    on. Every window reaches it: `_check_data` refused any candidate whose universe the catalog
+    does not serve on or after its forward start, and the window closes at the latest day any
+    placement's universe is served, so no window is left out for ending before it.
+
+    `shown` is the days on which the stage released the version's own decisions, which is what
+    a parity is exempted by: a window that resumed past the stage's clock opens on the clock's
+    day but releases only the points after it, so its `shown` starts the day after; a window
+    that halted stopped releasing at the halt while the version is marked to its end, so it
+    shows nothing, though the read counts."""
+    placed = {(one.strategy_id, one.version): one for one in placements}
+    for one in ran.realised:
+        version = records.subject_of(one.strategy_id, one.version)
+        sleeve = placed[(one.strategy_id, one.version)].hyp
+        start = sleeve.windows.forward.start
+        opens, closes = one.run.window
+        released = max(start, opens if clock is None else opens + timedelta(days=1))
+        record_read(
+            store,
+            ForwardRead(
+                hyp_id=sleeve.id,
+                via=STAGE,
+                of=version,
+                target=version,
+                where=stage,
+                session=session.session_id,
+                forward_start=start,
+                first=max(opens, start),
+                last=closes,
+                shown=None if ran.halted is not None or released > closes else (released, closes),
+            ),
+        )
 
 
 def _opens(placements: tuple[Placement, ...], clock: int | None) -> date:

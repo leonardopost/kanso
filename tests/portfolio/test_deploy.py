@@ -528,3 +528,105 @@ def test_a_stage_session_stream_omits_flush_markers(ws: Workspace, store: StateS
     assert len(points) > len(market) == written.released == 2
     assert written.stream_sha256 == record.digest(Point.of(point) for point in (first, second))
     assert written.stream_sha256 != record.digest(Point.of(point) for point in points)
+
+
+# --- a read of the forward window ---------------------------------------------
+
+
+def test_a_stage_window_reaching_the_forward_start_is_a_read_of_its_sleeve(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """The window is a read of the sleeve's forward window, of the version, over the days from
+    its forward start, every one of them shown: a version judged on the forward weeks is
+    counted."""
+    from datetime import date
+
+    from kanso.certify.looks import STAGE, reads
+
+    made = deploy(ws, store, "paper")
+
+    assert made.session is not None
+    version = f"{composed_strategy.id}@1"
+    (read,) = reads(store, composed_strategy.id)
+    assert (read.via, read.of, read.target, read.where) == (STAGE, version, version, "paper")
+    assert read.session == made.session.session_id
+    assert read.forward_start == read.first == FORWARD_START
+    assert read.last == made.results[0].run.window[1] == date(2024, 3, 31)
+    assert read.shown == (FORWARD_START, date(2024, 3, 31))
+    assert read.exempt is None
+
+
+def test_a_version_is_one_look_however_many_windows_its_stages_close(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """Two paper deploys, a promotion that redeploys both stages, and a live window: one read
+    per window the version closed, on every stage, and one look."""
+    from datetime import date
+
+    from kanso.certify.looks import STAGE, forward_looks, reads
+    from kanso.portfolio import promote
+    from tests.portfolio.test_promote import make_promotable
+
+    deploy(ws, store, "paper")
+    deploy(ws, store, "paper")
+    reconfigure(ws, "live", capital=50_000.0)
+    make_promotable(ws, store, composed_strategy.id)
+    promote(ws, store, composed_strategy.id, operator="Ada Lovelace")
+
+    windows = records.stage_results(store, strategy_id=composed_strategy.id, version=1)
+    staged = [read for read in reads(store, composed_strategy.id) if read.via == STAGE]
+    assert {result.stage for result in windows} == {"paper", "live"}
+    assert len(staged) == len(windows) > 2
+    assert [read.session for read in staged] == [result.session_id for result in windows]
+    assert staged[0].shown == (FORWARD_START, date(2024, 3, 31))
+    assert staged[1].shown is None, (
+        "the second paper window resumed past its clock on the last day and released nothing"
+    )
+    found = forward_looks(store, composed_strategy.id, FORWARD_START)
+    assert [look.of for look in found.taken] == [f"{composed_strategy.id}@1"]
+
+
+def test_a_version_beside_an_earlier_forward_start_reads_from_its_own(
+    ws: Workspace, store: StateStore, composed_strategy: StrategyFile
+) -> None:
+    """The stage opens at the earliest forward start it holds; a version whose own opens two
+    weeks later read, and was shown, only the days from its own."""
+    from datetime import date
+
+    from kanso.certify.looks import reads
+    from tests.replay.conftest import DOCUMENT, document
+
+    later = date(2024, 3, 15)
+    windows = {**DOCUMENT["windows"], "forward": {"start": later}}
+    deployable(ws, store, "late", doc=document(id="late", windows=windows))
+
+    made = deploy(ws, store, "paper")
+
+    by_id = {result.strategy_id: result for result in made.results}
+    assert by_id["late"].run.window[0] == FORWARD_START, "the stage opened at the earlier start"
+    (late,) = reads(store, "late")
+    assert (late.forward_start, late.first, late.last) == (later, later, date(2024, 3, 31))
+    assert late.shown == (later, date(2024, 3, 31))
+    (early,) = reads(store, composed_strategy.id)
+    assert (early.first, early.shown) == (FORWARD_START, (FORWARD_START, date(2024, 3, 31)))
+
+
+def test_a_window_s_realised_result_is_never_on_record_without_its_read(
+    ws: Workspace,
+    store: StateStore,
+    composed_strategy: StrategyFile,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A store that fails as the window's result is written has the window's read already: a
+    realised P&L `portfolio show` prints is never on record without it."""
+    from kanso.certify.looks import reads
+
+    def failing(*_: object, **__: object) -> object:
+        raise RuntimeError("the store went away")
+
+    monkeypatch.setattr(records, "record_stage_run", failing)
+    with pytest.raises(RuntimeError, match="the store went away"):
+        deploy(ws, store, "paper")
+
+    assert records.stage_results(store, strategy_id=composed_strategy.id) == []
+    assert [read.of for read in reads(store, composed_strategy.id)] == [f"{composed_strategy.id}@1"]
