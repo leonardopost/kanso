@@ -12,7 +12,11 @@ orders at prices unrelated to the data that triggered them.
 
 Nothing here writes a card, moves a hypothesis's `best` or certifies anything. Replay is
 evaluation over the one window nothing may backtest, and its numbers are for a person to
-read rather than for the research loop to select on.
+read rather than for the research loop to select on. A replay whose range reaches its
+target's forward window records the read that counts it as a look of its lineage there
+(`kanso.certify.looks`), and `run` and `parity` each say which look it was — `forward_look`
+under `--json`, a `forward` line otherwise — or that it was none: a range that read no forward
+day, or a parity of a version over days a stage already showed it.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
+from kanso.certify.looks import forward_looks, read_of
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.data import as_date
 from kanso.cli.render import Report, emit, field, indent, stopped
@@ -35,6 +40,7 @@ from kanso.replay import show as read_session
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from kanso.replay import Session
     from kanso.schemas import PeriodStops
+    from kanso.state import StateStore
     from kanso.workspace import Workspace
 
 app = typer.Typer(
@@ -168,8 +174,14 @@ def _run(
             speed=speed,
             mode=mode,
         )
-    data: dict[str, Any] = {**_dumped(made), "path": str(_session_dir(ws, made))}
-    return Report(data=data, lines=(*_session_lines(ws, made), field("next", "kanso replay show")))
+        look, said = _forward(opened, made.session_id)
+    data: dict[str, Any] = {
+        **_dumped(made),
+        "path": str(_session_dir(ws, made)),
+        "forward_look": look,
+    }
+    lines = (*_session_lines(ws, made), field("forward", said), field("next", "kanso replay show"))
+    return Report(data=data, lines=lines)
 
 
 def _parity(
@@ -196,7 +208,8 @@ def _parity(
             speed=speed,
             ts_ns=ts_ns,
         )
-    data: dict[str, Any] = found.payload()
+        look, said = _forward(opened, found.node)
+    data: dict[str, Any] = {**found.payload(), "forward_look": look}
     lines = (
         field("parity", "identical" if found.divergence is None else found.divergence.render()),
         field("node", _path(found.node, found.node_released, len(found.node_orders))),
@@ -204,6 +217,7 @@ def _parity(
         field("compared", f"{found.compared} · tolerance {found.ts_ns} ns"),
         field("widest", f"{found.max_ts_delta_ns} ns apart"),
         *_stops_lines(found.node_period_stops, found.engine_period_stops),
+        field("forward", said),
     )
     return Report(data=data, lines=lines)
 
@@ -225,6 +239,33 @@ def _show(ws: Workspace, session: str | None) -> Report:
 
 
 # -- rendering --------------------------------------------------------------------
+
+
+def _forward(opened: StateStore, session_id: str) -> tuple[dict[str, Any] | None, str]:
+    """Which look at its lineage's forward window a replay's session was, as `--json` carries
+    it under `forward_look` and as the `forward` line says it: `null` where its range read no
+    forward day, and `look` `null` where the read was exempt."""
+    read = read_of(opened, session_id)
+    if read is None or read.forward_start is None:
+        return None, "no look: the range reads no day of its hypothesis's forward window"
+    found = forward_looks(opened, read.hyp_id, read.forward_start)
+    place = None if read.exempt is not None else found.place(read.of)
+    look: dict[str, Any] = {
+        "hyp": read.hyp_id,
+        "forward_start": read.forward_start.isoformat(),
+        "from": None if read.first is None else read.first.isoformat(),
+        "to": None if read.last is None else read.last.isoformat(),
+        "exempt": read.exempt,
+        "look": place,
+        "looks": len(found.taken),
+        "lineage": list(found.lineage),
+    }
+    if place is None:
+        return look, f"no look: the paper or live stage already ran {read.target} over these days"
+    return look, (
+        f"look {place} of {len(found.taken)} at {read.hyp_id}'s forward window from "
+        f"{read.forward_start} · by {', '.join(found.lineage)}"
+    )
 
 
 def _dumped(session: Session) -> dict[str, Any]:

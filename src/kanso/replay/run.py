@@ -11,20 +11,34 @@ with. A replay feeds historical data; a broker's paper account fills against cur
 pairing the two would fill an order at a price that has nothing to do with the data that
 triggered it, and the intents on the two paths could then never be compared.
 
-**Replay is evaluation only.** It writes a session and an event and nothing else: no card,
-no `best`, no certificate. The range it runs is the forward window onwards, which is the
-window nothing is allowed to backtest, and that is exactly why nothing measured here may
-become evidence for a decision the research loop makes.
+**Replay is evaluation only.** It writes a session, an event and, when its range reaches its
+target's forward window, the read that counts it as a look there (`kanso.certify.looks`). It
+writes no card, no `best` and no certificate. The range it runs is the forward window onwards,
+which is the window nothing is allowed to backtest, and that is exactly why nothing measured
+here may become evidence for a decision the research loop makes — and why a replay that read
+any day of it is counted: whoever ran it read what it showed.
+
+**The read is recorded just before the session's files are written.** A session is readable
+from the moment `record.write` returns — `kanso replay show` reads its files — so the read is
+in the store first, of the id the files will be filed under (`record.free`), and then the
+files, the session's row and its `replayed` event. A store that refuses the read leaves nothing
+on disk, and a write that fails after it leaves a read whose session was never written, which
+counts a look nobody took rather than missing one somebody did: no session on disk is ever
+uncounted. A replay refused, or failed before it reached its session, showed nothing and
+records nothing.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import date
 from typing import TYPE_CHECKING, Final
 
+from kanso.certify.looks import REPLAY, ForwardRead, record_read
 from kanso.data.manifest import manifests
 from kanso.errors import PreconditionError, ValidationError
+from kanso.hyp import hypothesis_of
 from kanso.nautilus import backtest, session
 from kanso.nautilus.session import Replayed
 from kanso.replay import record
@@ -33,6 +47,7 @@ from kanso.replay.target import Target, resolve
 from kanso.schemas.venue import SANDBOX
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
+    from kanso.schemas import Hypothesis
     from kanso.state import StateStore
     from kanso.workspace import Workspace
 
@@ -41,7 +56,11 @@ __all__ = [
     "MODES",
     "NODE",
     "REPLAYED",
+    "check",
+    "count",
     "last_day",
+    "range_of",
+    "replay_session",
     "run",
     "sessions",
     "show",
@@ -53,7 +72,8 @@ MODES: Final = (NODE, ENGINE)
 """The two code paths a replay runs on; a stage session is a node session with a stage."""
 
 REPLAYED: Final = "replayed"
-"""The event a finished replay appends; nothing else about a replay is recorded."""
+"""The event a finished replay appends; beside it a replay records its session and, when its
+range reaches its target's forward window, the read of it (`count`)."""
 
 
 def run(
@@ -74,16 +94,47 @@ def run(
     The range defaults to the target's forward window through the last day the catalog
     holds for its universe. Speed is wall-clock pacing on the node path and means nothing
     on the engine path, where there is no feed to pace; it is recorded either way, because
-    a session says what it was asked for.
+    a session says what it was asked for. A range that reaches the target's forward window
+    is a read of it, recorded with the session (`count`).
     """
+    check(mode, speed)
+    target = resolve(ws, store, strategy=strategy, version=version, hyp=hyp, sha=sha)
+    window = range_of(ws, target, start, end)
+    return replay_session(ws, store, target, window, speed=speed, mode=mode, where=mode)
+
+
+def check(mode: str, speed: float) -> None:
+    """Refuse a mode that is not a code path and a speed that is not a rate, before anything
+    is resolved."""
     if mode not in MODES:
         raise ValidationError(
             f"mode: {mode!r} is not a code path; one of {', '.join(MODES)} was expected"
         )
     if speed < 0:
         raise ValidationError(f"speed: {speed} is not a rate to replay at")
-    target = resolve(ws, store, strategy=strategy, version=version, hyp=hyp, sha=sha)
-    window = _range(ws, target, start, end)
+
+
+def replay_session(
+    ws: Workspace,
+    store: StateStore,
+    target: Target,
+    window: tuple[date, date],
+    *,
+    speed: float,
+    mode: str,
+    where: str | None,
+    exempt: str | None = None,
+) -> Session:
+    """Run one resolved target over `window` on one code path and record what it produced:
+    where `where` names the replay that read it, its read of the forward window, then its
+    session's files, row and `replayed` event.
+
+    The read comes first because the session is readable from the moment its files are
+    written, so nothing may fail between them with the read not yet in the store; it is of the
+    id the files are then filed under. `where` is `None` for a path whose read another path of
+    the same replay records — the engine half of a parity — and `exempt` names why the read
+    counts nothing.
+    """
     request = target.request(window)
     instruments, chunks = backtest.window_chunks(request, target.catalog)
     started = record.now()
@@ -109,7 +160,10 @@ def run(
             "ended_at": record.now(),
         }
     )
-    written = record.write(ws, made, stream, (Intent.of(row) for row in result.intents))
+    filed = record.free(ws, made)
+    if where is not None:
+        count(ws, store, target, filed, where=where, exempt=exempt)
+    written = record.write(ws, filed, stream, (Intent.of(row) for row in result.intents))
     record.insert(store, written)
     store.event(
         REPLAYED,
@@ -126,6 +180,38 @@ def run(
         },
     )
     return written
+
+
+def count(
+    ws: Workspace,
+    store: StateStore,
+    target: Target,
+    session: Session,
+    *,
+    where: str,
+    exempt: str | None = None,
+) -> ForwardRead | None:
+    """Record the session as a read of its target's forward window, where its range reaches it.
+
+    The read is charged to the target's hypothesis — for a card, the file its run pinned; for a
+    version, its sleeve — judged against that file's forward start, over the session's days
+    from it on, and is of the session. An attached construct's card runs on its host version,
+    so it shows that version's sleeve's forward days too: a second read, of the same session,
+    is charged to the host sleeve's hypothesis, judged against the forward start it is
+    registered under, where the range reaches that one. A card is never exempt, so neither
+    read of it is. The target's own read is returned, or the host's where only the host's was
+    reached, or `None` where neither was.
+    """
+    own = _read(target.hyp, target, session, where)
+    if own is not None:
+        own = replace(own, exempt=exempt)
+        record_read(store, own)
+    host = None
+    if target.version_hyp is not None:
+        host = _read(hypothesis_of(ws, store, target.version_hyp), target, session, where)
+        if host is not None:
+            record_read(store, host)
+    return own or host
 
 
 def _rated(request: backtest.RunRequest) -> bool:
@@ -168,7 +254,26 @@ def last_day(ws: Workspace, universe: tuple[str, ...]) -> date:
     return max(served)
 
 
-def _range(
+def _read(hyp: Hypothesis, target: Target, session: Session, where: str) -> ForwardRead | None:
+    """The read `session` made of `hyp`'s forward window, or `None` where its range ends before
+    the window opens."""
+    start = hyp.windows.forward.start
+    if session.to < start:
+        return None
+    return ForwardRead(
+        hyp_id=hyp.id,
+        via=REPLAY,
+        of=session.session_id,
+        target=target.label,
+        where=where,
+        session=session.session_id,
+        forward_start=start,
+        first=max(session.from_, start),
+        last=session.to,
+    )
+
+
+def range_of(
     ws: Workspace, target: Target, start: date | None, end: date | None
 ) -> tuple[date, date]:
     """The days this replay covers: the forward window through the end of the catalog."""

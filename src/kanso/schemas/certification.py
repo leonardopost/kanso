@@ -82,6 +82,13 @@ class PlanInputs(KansoModel):
     certification that made the plan names — pinned (`kanso.certify.looks.subject_pin`), so
     that subject's next certificate is look `looks + 1`; 0 on a plan made before kanso
     counted them."""
+    forward_looks: int = Field(default=0, ge=0)
+    """How many looks the hypothesis's lineage had already taken at its forward window, the
+    days from its registered `windows.forward.start` on, when the plan was made: each composed
+    version of a lineage member a paper or live stage ran over any of those days, once however
+    many windows and passes it had, and each replay that read any of them, save a parity of a
+    version over days a stage showed it (`kanso.certify.looks.forward_looks`); 0 on a plan made
+    before kanso counted them. It judges nothing, and no check of a pinned plan reads it."""
 
     @property
     def construct(self) -> ConstructRef:  # type: ignore[override]

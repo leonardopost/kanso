@@ -63,18 +63,25 @@ keeps no position across a restart, and the alternative — a record claiming a 
 node does not hold — loses positions silently. Each redeploy therefore closes a window and
 realises its result into the record the paper and live gates read, which is also why a
 redeploy shortens the window those gates have to work with.
+
+**Every window is a read of each version's forward window.** Every stage window reaches each
+version's forward window — deploy refuses one that does not — so every window is a read of it,
+and the version a look of its sleeve's lineage there (`kanso.certify.looks`); the read is on
+record before the window's result is, so no realised P&L is ever on record without it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from math import isclose
 from typing import TYPE_CHECKING, Final
 
 from kanso import strategy as strategies
+from kanso.certify.looks import STAGE, ForwardRead, record_read
 from kanso.criteria.run import day_of
+from kanso.data.manifest import Manifest, manifests
 from kanso.env.envelope import engine_version
 from kanso.errors import ApprovalError, KansoError, PreconditionError
 from kanso.inbox import escalate
@@ -599,11 +606,91 @@ def _restart(
         )
     )
     session = _session(ws, store, stage, configured, placements, ran)
+    _forward_reads(ws, store, stage, session, placements, ran, clock)
     return _Ran(
         session=session,
         results=tuple(records.record_stage_run(store, stage, session.session_id, ran.realised)),
         halted=ran.halted,
     )
+
+
+def _forward_reads(
+    ws: Workspace,
+    store: StateStore,
+    stage: str,
+    session: Session,
+    placements: tuple[Placement, ...],
+    ran: StageRun,
+    clock: int | None,
+) -> None:
+    """Record each version's window as a read of its sleeve's forward window, before the
+    window's result is on record.
+
+    The read is of the version `S@V`, judged against the forward start of the file the stage
+    placed it under — its sleeve's registered pin — and over the window's days from that start
+    on. Every window reaches it: `_check_data` refused any candidate whose universe the catalog
+    does not serve on or after its forward start, and the window closes at the latest day any
+    placement's universe is served, so no window is left out for ending before it.
+
+    `shown` is the days on which the stage released the version's own decisions, which is what
+    a parity is exempted by, and it is narrower than the window's forward days in three cases.
+    A window that resumed past the stage's clock opens on the clock's day but releases only the
+    points after it, so its `shown` starts the day after. A window ends at the latest day any
+    placement's data is served, so a version one of whose series the catalog serves only to an
+    earlier day was released nothing of that series past it — and a later window releases
+    nothing at or before its clock, so the stage never will — and its `shown` ends on the last
+    day every series it reads is served (`_served_through`). And a window that halted stopped
+    releasing at the halt while the version is marked to its end, so it shows nothing, though
+    the read counts."""
+    held = manifests(ws)
+    placed = {(one.strategy_id, one.version): one for one in placements}
+    for one in ran.realised:
+        version = records.subject_of(one.strategy_id, one.version)
+        placement = placed[(one.strategy_id, one.version)]
+        start = placement.hyp.windows.forward.start
+        opens, closes = one.run.window
+        released = max(start, opens if clock is None else opens + timedelta(days=1))
+        through = min(closes, _served_through(held, placement))
+        record_read(
+            store,
+            ForwardRead(
+                hyp_id=placement.hyp.id,
+                via=STAGE,
+                of=version,
+                target=version,
+                where=stage,
+                session=session.session_id,
+                forward_start=start,
+                first=max(opens, start),
+                last=closes,
+                shown=None if ran.halted is not None or released > through else (released, through),
+            ),
+        )
+
+
+def _served_through(held: Mapping[str, Manifest], placed: Placement) -> date:
+    """The last day the catalog serves every series a version reads, as `held` records it.
+
+    A series is one instrument of the version's universe, one type its hypothesis requires of
+    that instrument, and one resolution — none, as quotes and prints are held, or a size it
+    reads bars at — served to the end of its newest dataset; the earliest of those ends is the
+    day. A series served only to an earlier day than its stage-mates' — a universe whose sync
+    lagged, a leg or a quote series behind its bars — ends it there, and one held only through
+    the windows the version was certified on ends it before the forward window opens, so the
+    stage showed the version none of its forward days. `date.min` where the catalog serves none
+    of them."""
+    hyp = placed.hyp
+    sizes = {hyp.bar_size, *placed.grains}
+    tips: dict[tuple[str, str, str | None], date] = {}
+    for manifest in held.values():
+        if (
+            manifest.instrument in hyp.universe
+            and manifest.type in hyp.required_of(manifest.instrument)
+            and (manifest.resolution is None or manifest.resolution in sizes)
+        ):
+            series = manifest.filed_under
+            tips[series] = max(manifest.end, tips.get(series, manifest.end))
+    return min(tips.values(), default=date.min)
 
 
 def _opens(placements: tuple[Placement, ...], clock: int | None) -> date:

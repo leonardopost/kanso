@@ -174,6 +174,109 @@ def test_a_divergence_is_rendered_as_the_two_values_and_nothing_else() -> None:
     assert found.payload()["divergence"] == found.divergence.render()
 
 
+def test_a_replay_of_the_forward_window_says_which_look_it_was(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The paper stage's window was the lineage's first look at its forward window, so a
+    replay of the best card over the same days is the second."""
+    result = at(runner, deployed, "replay", "run", "--hyp", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result)["forward_look"] == {
+        "hyp": HYP_ID,
+        "forward_start": "2024-06-03",
+        "from": "2024-06-03",
+        "to": "2024-06-28",
+        "exempt": None,
+        "look": 2,
+        "looks": 2,
+        "lineage": [HYP_ID],
+    }
+    said = at(runner, deployed, "replay", "run", "--hyp", HYP_ID)
+    assert said.exit_code == Exit.OK
+    assert f"look 3 of 3 at {HYP_ID}'s forward window from 2024-06-03 · by {HYP_ID}" in (
+        said.stdout
+    )
+
+
+def test_a_replay_that_reads_no_forward_day_says_so(runner: CliRunner, deployed: Path) -> None:
+    result = at(
+        runner,
+        deployed,
+        "replay",
+        "run",
+        "--strategy",
+        HYP_ID,
+        "--from",
+        "2024-05-01",
+        "--to",
+        "2024-05-31",
+        "--json",
+    )
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert payload(result)["forward_look"] is None
+    said = at(
+        runner,
+        deployed,
+        "replay",
+        "run",
+        "--strategy",
+        HYP_ID,
+        "--from",
+        "2024-05-01",
+        "--to",
+        "2024-05-31",
+    )
+    assert said.exit_code == Exit.OK, said.stdout
+    assert "no look: the range reads no day of its hypothesis's forward window" in said.stdout
+
+
+def test_parity_carries_its_look_beside_a_payload_the_gate_reads_unchanged(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """A guard: `Parity.payload` is the `parity_replay` gate's evidence on certificates, so the
+    look goes beside it in the command's object and never inside it."""
+    result = at(runner, deployed, "replay", "parity", "--hyp", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    parity = payload(result)
+    look = parity.pop("forward_look")
+    assert look["look"] == 2 and look["exempt"] is None, "a card is never exempt"
+    assert set(parity) == {
+        "node",
+        "engine",
+        "ts_ns",
+        "identical",
+        "compared",
+        "node_intents",
+        "engine_intents",
+        "node_released",
+        "engine_released",
+        "node_stream",
+        "engine_stream",
+        "max_ts_delta_ns",
+        "divergence",
+    }
+
+
+def test_parity_inside_a_stage_s_days_says_it_was_no_look(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The paper stage showed the version every day of its forward window the catalog holds,
+    so a parity of it over them is recorded and counts nothing."""
+    result = at(runner, deployed, "replay", "parity", "--strategy", HYP_ID, "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    look = payload(result)["forward_look"]
+    assert (look["exempt"], look["look"], look["looks"]) == ("stage", None, 1)
+    said = at(runner, deployed, "replay", "parity", "--strategy", HYP_ID)
+    assert said.exit_code == Exit.OK
+    assert f"no look: the paper or live stage already ran {HYP_ID}@1 over these days" in (
+        said.stdout
+    )
+
+
 def test_show_lists_the_sessions_the_workspace_holds(runner: CliRunner, deployed: Path) -> None:
     made = payload(at(runner, deployed, "replay", "run", "--strategy", HYP_ID, "--json"))
 

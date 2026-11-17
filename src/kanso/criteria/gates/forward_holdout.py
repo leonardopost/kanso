@@ -62,6 +62,16 @@ version has closed on the stage since it first joined, joined into one
 
 It skips, saying so, where `paper_forward` does: no parameters chosen, no stage record, no
 expectation, no objective, or an expectation that records no error or period count.
+
+**Its look is in the evidence, and judges nothing.** Every version a stage runs over the
+forward window is a look of its sleeve's lineage there, and every replay that reads it another
+(`kanso.certify.looks`); the monitor counts them and hands the count in (`GateContext.looks`),
+and the gate copies it into its evidence — `look`, which look this version is, `null` where no
+read of it is counted; `looks`, how many the lineage has taken, this version's included; and
+`lineage` — and nothing else reads it. It is copied whether the gate judged or skipped, since a
+skip passes and a version it passes is promotable at its look like any other. It judges by the
+`resolve` and `min_fraction` the plan pins at any look, and a caller that counted nothing gets
+the evidence without the three keys.
 """
 
 from __future__ import annotations
@@ -96,6 +106,18 @@ class _ForwardHoldout:
     id: ClassVar[str] = "forward_holdout"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
+        found = self._judge(ctx)
+        if ctx.looks is None:
+            return found
+        counted = {
+            "look": ctx.looks.look,
+            "looks": ctx.looks.looks,
+            "lineage": list(ctx.looks.lineage),
+        }
+        return found.model_copy(update={"evidence": {**found.evidence, **counted}})
+
+    def _judge(self, ctx: GateContext) -> GateResult:
+        """The verdict, or the skip, before the look is copied in."""
         resolve, fraction = number(ctx, "resolve"), number(ctx, "min_fraction")
         if resolve is None or fraction is None:
             return skipped(self.id, NO_PARAMS)

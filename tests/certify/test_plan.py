@@ -554,6 +554,71 @@ def test_the_planner_is_told_the_looks_its_lineage_has_taken_and_what_its_thresh
     assert "over L looks at that window is at most L × (1 − threshold)" not in seen[0].system
 
 
+def a_forward_read(store: StateStore, of: str, last: date, *, via: str = "replay") -> None:
+    """A read of the demo's forward window from its start to `last`, as a replay or a stage
+    records one."""
+    from kanso.certify.looks import ForwardRead, record_read
+
+    record_read(
+        store,
+        ForwardRead(
+            hyp_id=HYP_ID,
+            via=via,
+            of=of,
+            target=of,
+            where="node",
+            session=of,
+            forward_start=date(2025, 6, 2),
+            first=date(2025, 6, 2),
+            last=last,
+        ),
+    )
+
+
+def test_the_planner_is_told_the_forward_looks_its_lineage_has_taken_and_that_they_move_no_bar(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A version's stage windows are one look and a replay another: the count is a dynamic
+    input beside the trial count and the hold-out looks, the plan records it, and the planner
+    is told, as the fact it is, that it moves neither of `forward_holdout`'s parameters by
+    itself."""
+    a_forward_read(store, "demo_mr@1", date(2025, 6, 20), via="stage")
+    a_forward_read(store, "demo_mr@1", date(2025, 7, 20), via="stage")
+    a_forward_read(store, "session-1", date(2025, 8, 1))
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    written = plan(ws, store, HYP_ID)
+
+    assert written.inputs.forward_looks == 2
+    assert '"forward_looks": 2' in seen[0].user
+    assert (
+        "forward_looks is how many looks this hypothesis's lineage — every registered hypothesis "
+        "joined to it by derived_from, either way — has already taken at its forward window"
+    ) in seen[0].system
+    assert (
+        "the count moves neither resolve nor min_fraction by itself, and what it should do to "
+        "them is yours to answer inside their ranges, at a plan or a replan"
+    ) in seen[0].system
+    assert read_plan(ws, HYP_ID) == written
+
+
+def test_the_forward_looks_are_counted_at_the_hypothesis_s_registered_forward_start(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window `forward_holdout` judges is the sleeve's registered pin's, not the file the
+    best's run pinned: a replay through 20 June reads the registered window, opening 2 June,
+    and none of one the run's file opens on 1 July."""
+    document = yaml.safe_load(ws.path("hypotheses", HYP_ID, "hypothesis.yaml").read_text())
+    document["windows"]["forward"] = {"start": date(2025, 7, 1)}
+    later = store.put_blob(yaml.safe_dump(document, sort_keys=False).encode("utf-8"))
+    a_card(store, metric=1.0, pinned=later)
+    a_forward_read(store, "session-1", date(2025, 6, 20))
+    script(ws, certify_plan=[answer()])
+
+    assert plan(ws, store, HYP_ID).inputs.forward_looks == 1
+
+
 def test_the_planner_is_told_which_gate_corrects_its_search_and_from_when(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -246,6 +246,16 @@ def test_a_hold_out_that_is_no_look_of_this_certificate_is_refused(
         Certificate.model_validate({**CERT, "holdout": {**HOLDOUT, **change}})
 
 
+def test_a_plan_counts_its_forward_looks_and_one_made_before_counts_none() -> None:
+    assert CertificationPlan.model_validate(PLAN).inputs.forward_looks == 0
+    counted = {**PLAN, "inputs": {**PLAN["inputs"], "forward_looks": 3}}
+    assert CertificationPlan.model_validate(counted).inputs.forward_looks == 3
+    with pytest.raises(ValidationError, match="forward_looks"):
+        CertificationPlan.model_validate(
+            {**PLAN, "inputs": {**PLAN["inputs"], "forward_looks": -1}}
+        )
+
+
 def test_a_plan_counts_the_looks_taken_before_it_and_one_made_before_counts_none() -> None:
     assert CertificationPlan.model_validate(PLAN).inputs.looks == 0
     counted = {**PLAN, "inputs": {**PLAN["inputs"], "looks": 3}}

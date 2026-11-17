@@ -43,6 +43,24 @@ def test_a_pass_judges_the_deployed_version_and_promotes_it(
     )
 
 
+def test_a_pass_shows_the_forward_look_on_forward_holdout(
+    runner: CliRunner, deployed: Path
+) -> None:
+    """The paper stage's window was the lineage's first look at the sleeve's forward window, and
+    a replay of the best card over those days the second: `forward_holdout`'s evidence says
+    which look the version is, how many the lineage has taken, and who the lineage is."""
+    assert at(runner, deployed, "replay", "run", "--hyp", HYP_ID).exit_code == Exit.OK
+
+    result = at(runner, deployed, "monitor", "run", "--json")
+
+    assert result.exit_code == Exit.OK, result.stdout
+    judged = next(one for one in payload(result)["outcomes"] if one["strategy"] == HYP_ID)
+    forward = next(gate for gate in judged["gates"] if gate["id"] == "forward_holdout")
+    assert (forward["evidence"]["look"], forward["evidence"]["looks"]) == (1, 2)
+    assert forward["evidence"]["lineage"] == [HYP_ID]
+    assert judged["actions"] == ["promotable"], "the count moved no verdict"
+
+
 def test_the_pass_reports_each_stage_exposure_against_its_limits(
     runner: CliRunner, deployed: Path
 ) -> None:

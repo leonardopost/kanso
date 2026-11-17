@@ -3075,8 +3075,89 @@ $ kanso status                            # the hypothesis's line
 demo_mr             certified    9.986730      4 card(s) · 2 hold-out look(s)
 ```
 
-Looks at the forward window (`docs/backlog.md` row 330), and looks across lineages, are not
-counted.
+Looks across lineages are not counted.
+
+**Looks at the forward window are counted and shown too, and they move no bar.** The forward
+window — the days from a hypothesis's `windows.forward.start` on — is the one no research or
+certification run reads, and the one `forward_holdout` judges a paper version on, so every act
+that shows someone a day of it is a look at it, and kanso counts them over the same lineage.
+Two acts read it. A paper or live stage that realises a window for a composed version reads
+its sleeve's forward window, judged against the forward start of the file the stage placed the
+version under, which is the sleeve's registered pin. Every stage window reaches that start —
+`deploy` refuses a stage whose catalog does not — so every window is a read, and it is recorded
+before the window's realised P&L is, which `kanso portfolio show` prints whether or not a
+monitoring pass has judged it. And a replay that reads any day on or after its target's
+`windows.forward.start` is a look: `kanso replay run`, and `kanso replay parity`, whose two
+paths are one look. A card's replay reads the forward window of the file its run pinned, a
+version's its sleeve's, and an attached construct's card, which runs on its host version, reads
+its host sleeve's forward days too and is a look of that lineage as well. A replay's read is
+recorded just before its session's files are written, where `kanso replay show` reads them, so
+no session on disk is uncounted and a parity whose engine path then fails has still read the
+window; a write that fails after the read leaves a look nobody took, counted rather than missed,
+and a replay refused, or one that failed before it reached its session, showed nothing and is
+no look. A warmed target's prefix is not read: its orders are dropped and it shows nothing.
+
+`kanso replay parity` of a version inside the days a stage already ran it over is no look. A
+`--strategy S@V` parity whose forward days, from the later of `--from` and the forward start
+through `--to`, lie wholly inside the days the paper and live stages showed that same version
+its own decisions — merged across its windows, adjacent days joined — reads nothing the
+stage's own look had not already read and shown, so its read is recorded, exempt, and counts
+nothing. The days a stage showed a version are its windows' days, less three kinds. A window
+that resumed past the stage's clock opens on the clock's day but releases only the points after
+the clock, so it shows the version nothing on that day: a version that was on the stage before
+has the day in its earlier window, and its spans still join, but one that joined a stage already
+running was never shown that day's earlier part, and a parity of it over that day is a look.
+A window closes on the latest day the catalog serves any version on the stage, so a version one
+of whose series it served only to an earlier day — a universe whose sync lagged its
+stage-mates', a pair's leg or a quote series behind its bars — was released nothing of that
+series past it, and since a later window releases nothing at or before the stage's clock, the
+stage never will: its days end on the last day the catalog served every series it reads when
+the window ran, and a parity past it, once a sync has filled those days, is a look. And a
+window that halted stops releasing at the halt while the version is marked to the window's end,
+on a book frozen at the halt, so the version decided nothing there that the stage showed: the
+window is still the version's look, since its marks are on record, but it exempts none of its
+days until a later window that did not halt covers them. Nothing else is exempt —
+not `kanso replay run` over the same days, not a `--hyp` card even with the same bytes as a
+deployed version, since a stage runs versions and never cards, and not a range one day past
+the stage's.
+
+A version is one look however many windows its stages close and however many passes judge it
+— paper, then live, then paper again after a demotion — placed at its first counted read, as a
+certificate is one look however many gates read its window; each replay that is not exempt is
+one look, however many of the lineage's members it read. A look counts at a forward window when
+it shares a day with it — its last day is on or after the window's start — and one whose days
+cannot be read counts at every window. Looks are ordered by when they were first taken, so a
+version's place never moves as later looks arrive; a re-pin that joins or splits the lineage
+can move it, as it moves a certificate's. Nothing about a look is stored but its reads, in
+`state.db`, struck into looks each time they are asked for. Stage windows realised and replays
+made before this release recorded no read and are not counted. Nor are screens, reads across
+windows — a member's certificate, replay or stage window that reads days inside a sibling's
+forward window but before its own forward start, or a card replayed or certified under the file
+its run pinned where the registered file's forward start is earlier — replays of a
+certification window, and the passes within one version — each an open row in
+`docs/backlog.md`; nor looks across lineages, a replay of
+one hypothesis over days inside the forward window of another that trades the same names and
+has no `derived_from` link to it among them; nor a version's attached constructs, for its stage
+reads and its `--strategy` replays are charged to its sleeve's lineage alone.
+
+The count judges nothing. At every monitoring pass `forward_holdout` judges a paper version by
+the `resolve` and `min_fraction` of the plan its sleeve has pinned at that pass, whatever look
+it is, and its evidence says which look the version is and how many the lineage has taken
+(`look`, `looks`, `lineage`; *Promotion and demotion*). What the count should do to `resolve`
+or `min_fraction` stays the planner's answer, and the operator's, as for the certification
+looks: the planner is shown it (`forward_looks`, beside `n_trials` and `looks`) when a
+hypothesis is planned — a new lineage member's first plan — or replanned with `kanso cert plan
+ID --replan`, and a pinned plan is not asked again as looks accrue. `kanso replay run` and
+`kanso replay parity` say which look they were (`forward_look`, and the `forward` line), and
+`kanso status` gives each hypothesis the looks its lineage has taken at its own forward window
+(`forward_looks`):
+
+```
+$ kanso replay run --hyp demo_mr          # after the sequence in README.md; every line but forward is elided
+forward    look 1 of 1 at demo_mr's forward window from 2025-06-02 · by demo_mr
+$ kanso status                            # the hypothesis's line
+demo_mr             researching  9.986730      4 card(s) · 1 forward look(s)
+```
 
 **A failing verdict is not an error, and it ends nothing.** `cert run` exits 0 and says
 `fail`, because the certificate is what the command produces and a fail is evidence: it
@@ -3487,10 +3568,10 @@ and a version already `promotable` stays so, because a pass marks and never unma
 and `cert run` refuse such a plan too (exit 3), as they refuse any plan this toolbox can no
 longer run.
 
-The judgements at the forward window are counted nowhere: a lineage that fails it, certifies a
-sibling and deploys again looks at the same forward weeks again with no bar raised
-(`docs/backlog.md` row 330), and a `kanso replay` of forward data read back into research is a
-look nothing sees (row 331).
+Each version a stage runs over a forward day is a look of its sleeve's lineage, and so is each
+replay that reads one (*Hold-out looks*). `forward_holdout`'s evidence says which look the
+version is and how many the lineage has taken (`look`, `looks`, `lineage`), and it judges by
+the plan's `resolve` and `min_fraction` at any of them.
 
 `--as NAME` is the whole of the approval. There is no environment fallback, no default and
 no way to configure one. The approval is recorded against that exact version before anything

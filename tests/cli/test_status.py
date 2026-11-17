@@ -147,11 +147,58 @@ def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
     assert unpinned["holdout_looks"] is None
 
 
+def test_a_hypothesis_says_how_many_forward_looks_its_lineage_has_taken(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """A version's stage windows are one look at the hypothesis's own forward window, however
+    many, and a replay of it another; a read wholly before the window opens is none; none at all
+    for a hypothesis whose pinned file the store does not hold, and no line where there are
+    none."""
+    from datetime import date
+
+    from kanso.certify.looks import ForwardRead, record_read
+
+    before = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"][0]
+    assert "forward look" not in at(runner, mocked_ws, "status").stdout
+    with StateStore(mocked_ws / "state.db") as store:
+        for of, via, last in (
+            (f"{HYP_ID}@1", "stage", date(2024, 6, 14)),
+            (f"{HYP_ID}@1", "stage", date(2024, 6, 28)),
+            ("session-1", "replay", date(2024, 6, 28)),
+            ("session-2", "replay", date(2024, 5, 31)),
+        ):
+            record_read(
+                store,
+                ForwardRead(
+                    hyp_id=HYP_ID,
+                    via=via,
+                    of=of,
+                    target=of,
+                    where="paper" if via == "stage" else "node",
+                    session=of,
+                    forward_start=date(2024, 6, 3),
+                    first=date(2024, 6, 3),
+                    last=last,
+                ),
+            )
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    assert (before["forward_looks"], entry["forward_looks"]) == (0, 2)
+    assert "card(s) · 2 forward look(s)" in at(runner, mocked_ws, "status").stdout
+    with StateStore(mocked_ws / "state.db") as store:
+        store.connection.execute(
+            "UPDATE hypotheses SET hypothesis_sha = NULL WHERE hyp_id = ?", (HYP_ID,)
+        )
+    (unpinned,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert unpinned["forward_looks"] is None
+
+
 def test_a_hypothesis_whose_window_is_written_as_midnight_timestamps_is_listed(
     runner: CliRunner, loaded: Path
 ) -> None:
     """The schema admits a day written as a timestamp at midnight, and `hyp add` pins the file
-    as written; the screen reads its window as the schema did rather than refuse to draw."""
+    as written; the screen reads its windows as the schema did rather than refuse to draw."""
     from datetime import datetime
 
     from .conftest import CERTIFICATION, HYPOTHESIS, write_hypothesis
@@ -160,7 +207,9 @@ def test_a_hypothesis_whose_window_is_written_as_midnight_timestamps_is_listed(
         "start": f"{CERTIFICATION[0].isoformat()}T00:00:00Z",
         "end": datetime(CERTIFICATION[1].year, CERTIFICATION[1].month, CERTIFICATION[1].day),
     }
-    path = write_hypothesis(loaded, windows={**HYPOTHESIS["windows"], "certification": stamped})
+    forward = {"start": "2024-06-03T00:00:00Z"}
+    windows = {**HYPOTHESIS["windows"], "certification": stamped, "forward": forward}
+    path = write_hypothesis(loaded, windows=windows)
     assert at(runner, loaded, "hyp", "add", path).exit_code == Exit.OK
     assert "00:00:00" in path.read_text(encoding="utf-8")
 
@@ -168,7 +217,7 @@ def test_a_hypothesis_whose_window_is_written_as_midnight_timestamps_is_listed(
 
     assert result.exit_code == Exit.OK, result.stdout
     (entry,) = payload(result)["hypotheses"]
-    assert entry["holdout_looks"] == 0
+    assert entry["holdout_looks"] == entry["forward_looks"] == 0
     assert at(runner, loaded, "status").exit_code == Exit.OK
 
 

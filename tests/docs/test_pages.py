@@ -2337,3 +2337,149 @@ def test_the_pages_say_a_second_exit_past_the_rate_leaves_an_exit_rule_s_owed_ex
         said = prose(page(name))
         assert "replaces it rather than adding to it" in said, name
         assert "unless the first was an exit rule's, which its host's ask neither" in said, name
+
+
+def backlog_row(number: int) -> str:
+    """One row of `docs/backlog.md`, by its number."""
+    return next(
+        line for line in page("backlog.md").splitlines() if line.startswith(f"| {number} |")
+    )
+
+
+def test_the_pages_say_how_forward_looks_are_counted_and_that_they_move_no_bar() -> None:
+    """Every read of a forward window is in `state.db`, which the forward looks are counted
+    from, so deleting it forgets every look it counted; the concepts page says what a look at
+    the forward window is, what its one exemption is, how looks are counted and what is not
+    counted; the replay rows name what each command prints; and row 331 is closed for the
+    target's lineage and open across lineages."""
+    concepts = prose(page("concepts.md"))
+    cli = prose(page("cli.md"))
+    changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    assert "**Looks at the forward window are counted and shown too, and they move no bar.**" in (
+        concepts
+    )
+    assert "Looks at the forward window (`docs/backlog.md` row 330)" not in concepts
+    assert "Looks across lineages are not counted." in concepts
+    for anchor in (
+        "a replay that reads any day on or after its target's `windows.forward.start` is a look",
+        "`kanso replay parity` of a version inside the days a stage already ran it over is no look",
+        "A version is one look however many windows its stages close and however many passes "
+        "judge it",
+        "Stage windows realised and replays made before this release recorded no read and are "
+        "not counted",
+        "but one that joined a stage already running was never shown that day's earlier part, "
+        "and a parity of it over that day is a look",
+        "it exempts none of its days until a later window that did not halt covers them",
+        "Nor are screens, reads across windows",
+        "replays of a certification window, and the passes within one version",
+        "forward look 1 of 1 at demo_mr's forward window from 2025-06-02 · by demo_mr",
+    ):
+        assert anchor in concepts, anchor
+    forward = concepts[
+        concepts.index("**Looks at the forward window are counted") : concepts.index(
+            "**A failing verdict is not an error"
+        )
+    ]
+    assert "demo_child" not in forward and "2024-03-01" not in forward, "the demo has neither"
+    for name in ("`forward_look`", '`exempt: "stage"`', "`where: parity`"):
+        assert name in cli, name
+    assert "a replay that reads any day of it is counted as a look at it" in cli
+    assert "The judgements at the forward window are counted nowhere" not in concepts
+    assert "`forward_holdout`'s evidence says which look the version is" in concepts
+    assert "whatever look it is" in concepts
+    assert "`forward_holdout`'s evidence records `look`, which look this version is" in cli
+    assert "`looks`, how many the lineage has taken" in cli
+    assert "`inputs.forward_looks`" in cli
+    assert "a pinned plan is not asked again as looks accrue" in concepts
+    assert "replanned with `kanso cert plan ID --replan`" in concepts
+    assert "the planner is shown `forward_looks` beside `n_trials` and `looks`" in changelog
+    assert "`kanso status` prints `N forward look(s)`" in changelog
+    assert "demo_mr researching 9.986730 4 card(s) · 1 forward look(s)" in concepts
+    assert "`forward_looks`, how many looks its lineage has taken at its own forward window" in cli
+    assert "`· N forward look(s)`" in cli
+    assert "the passes within one version — each an open row in `docs/backlog.md`" in concepts
+    backlog = page("backlog.md")
+    for words in (
+        "A screen reads a forward window and nothing counts it.",
+        "Reads across windows are counted by neither counter.",
+        "A replay of a certification window reads the hold-out, and only certificates are "
+        "counted there.",
+        "`forward_holdout`'s judgement is sequential within one look.",
+    ):
+        (row,) = [line for line in backlog.splitlines() if words in line]
+        assert not row.split("|")[3].strip().startswith("~~"), words
+    closed = backlog_row(330)
+    assert closed.split("|")[3].strip().startswith("~~Looks at the forward window are counted")
+    assert "**closed**: `kanso.certify.looks` counts them per lineage" in closed
+    assert "on `kanso status`; they move no bar" in closed
+    assert (
+        "**Looks at the forward window are counted per lineage and shown; they move no bar.**"
+        in changelog
+    )
+    assert "Skills `kanso-replay`" in changelog
+    row = backlog_row(331)
+    assert row.split("|")[3].strip().startswith("~~")
+    assert "**closed for the target's lineage**" in row
+    assert (
+        "Still open: a replay over days inside the forward window of a registered hypothesis"
+        in (row)
+    )
+    state = prose(section(page("workspace.md"), "`state.db`"))
+    assert (
+        "every read of a hypothesis's forward window, a paper or live stage's and a replay's"
+        in (state)
+    )
+    assert "which the forward looks are counted from" in state
+    assert (
+        "nor any record of the forward window's reads, so every look it counted is forgotten"
+        in (state)
+    )
+
+
+def test_the_pages_say_a_stage_showed_a_version_only_as_far_as_its_series_were_served() -> None:
+    """A version whose series lagged its stage-mates' was shown its decisions only as far as the
+    catalog served them, and no later window shows it the rest, so a parity past that day is a
+    look."""
+    concepts = prose(page("concepts.md"))
+    for anchor in (
+        "The days a stage showed a version are its windows' days, less three kinds.",
+        "a universe whose sync lagged its stage-mates', a pair's leg or a quote series behind its "
+        "bars",
+        "its days end on the last day the catalog served every series it reads when the window "
+        "ran, and a parity past it, once a sync has filled those days, is a look",
+    ):
+        assert anchor in concepts, anchor
+    assert "less two kinds" not in concepts
+    assert (
+        "less the days past the last on which the catalog served every series the version reads "
+        "when the window ran" in prose(page("cli.md"))
+    )
+
+
+def test_the_pages_say_a_replay_s_read_is_written_before_its_session_s_files() -> None:
+    """A store that refuses the read leaves no session, and one that fails after it counts a look
+    rather than missing one."""
+    concepts = prose(page("concepts.md"))
+    cli = prose(page("cli.md"))
+    assert "A replay's read is recorded just before its session's files are written" in concepts
+    assert (
+        "a write that fails after the read leaves a look nobody took, counted rather than missed"
+        in concepts
+    )
+    assert "recorded as soon as its session's files are on disk" not in concepts
+    for anchor in (
+        "a store that refuses the read leaves nothing in `sessions/`, and no session on disk is "
+        "uncounted",
+        "a write that fails after it leaves a read with no session, which counts a look rather "
+        "than missing one",
+    ):
+        assert anchor in cli, anchor
+    assert "recorded as soon as the session's files are written" not in cli
+
+
+def test_the_pages_say_forward_holdout_carries_its_look_on_a_skip() -> None:
+    """A skip passes, so the version it passes is promotable at a look the evidence must name."""
+    assert (
+        "whether the gate judged or skipped, since a skip passes and its version is promotable "
+        "at its look" in prose(page("cli.md"))
+    )
