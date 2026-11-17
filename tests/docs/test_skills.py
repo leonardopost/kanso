@@ -78,13 +78,21 @@ def test_the_hypothesis_skill_reads_a_draft_s_seed_beside_the_parent_s_best_and_
 ):
     """The agent recommending `hyp add` is told the score is the seed's as the parent's card,
     and to read it beside the two numbers that make it mean something — named as the summary
-    `kanso inbox` shows spells them, since no command shows the event they are also on."""
+    `kanso inbox` shows spells them, since no command shows the rest of the event they are also
+    on. `T` is what the draft is priced from, traded cards and declared grids, which the skill
+    once said of every card of the family; and the rationale the summary cuts is in the inbox."""
     from tests.docs.test_pages import SUMMARY
 
     text = skill(PACKAGED, "kanso-hypothesis")
     assert f"`{SUMMARY}`" in text
     assert "Its seed was measured once as one more card of the parent" in text
     assert "`B` is `parent_best`" in text and "`T` is `inherited_trials`" in text
+    assert "which every result it reaches is priced against" not in text
+    assert (
+        "the cards of the families its `derived_from` names that ran and traded, plus the "
+        "settings their `prior_trials` grids declared"
+    ) in text
+    assert "`kanso inbox` prints the whole rationale beneath the entry" in text
     assert "is the operator's to write with `kanso hyp new`" in text
 
 

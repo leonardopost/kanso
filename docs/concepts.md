@@ -1250,12 +1250,17 @@ host-alone or hold run computes it once for all of them.
 
 It is written as a draft to `hypotheses/<id>/`, a directory that did not exist, with what its
 seed scored, and registered by nothing: an `explored` escalation, whose summary leads with that
-score, offers `hyp validate` and `hyp add`, and whether it gets a lane is yours. The `explored`
+score, offers `hyp validate` and `hyp add`, and whether it gets a lane is yours. A summary is
+capped at a line, so the rationale after the score is cut there, and `kanso inbox` prints the
+whole rationale beneath the entry, off the `explored` event that names it. The `explored`
 event and `kanso hyp explore --json` carry the score whole as `seed` — the metric, its error,
 the trades, the objective, the window, the snapshot and run, the measurement's sha, how many
 books it was compared with, a book it matched without repeating, `parent_best`, the parent's
 best measured under the same pins and reading or `null` where it was not, and
-`inherited_trials`, the count the draft's search starts from through `derived_from`. Every
+`inherited_trials`, the draws every number the draft's search is priced by starts from: the
+cards of the families its `derived_from` names that ran and traded, plus the settings their
+`prior_trials` grids declared — not `n_trials`, which counts crashes and cards that placed no
+order and no grid — so a draft's first card that trades is priced at one more. Every
 attempt, by hand or by a lane, leaves an event under the parent — `explored`
 when it wrote a candidate, `explored_failed` with the error and its remedy when it did not —
 and the stalls a lane counts are the ones since the newest of them, so a provider that is

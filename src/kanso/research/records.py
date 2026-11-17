@@ -154,6 +154,7 @@ __all__ = [
     "close",
     "declared_prior",
     "encode_measurement",
+    "inherited",
     "insert",
     "lineage",
     "links",
@@ -515,8 +516,14 @@ def prior_trials(store: StateStore, hyp_id: str) -> int:
     the workspace has not registered states nothing, as it counts no card. A card's and a
     certificate's `n_trials` stay kanso's own cards, so this is never part of a filename.
     """
+    return _grids(store, family(store, hyp_id))
+
+
+def _grids(store: StateStore, members: Sequence[str]) -> int:
+    """The settings `members` declared tried outside kanso, each grid once at the larger count
+    any member states for it."""
     grids: dict[str, int] = {}
-    for member in family(store, hyp_id):
+    for member in members:
         block = declared_prior(store, member)
         if block is not None:
             grids[block.grid] = max(grids.get(block.grid, 0), block.count)
@@ -598,13 +605,35 @@ def candidates(store: StateStore, hyp_id: str) -> int:
     card to, and of the candidates a deflation's expected maximum is taken over. A re-pin to
     another objective continues the search, so the cards before it still count.
     """
-    ids = family(store, hyp_id)
+    return _traded(store, family(store, hyp_id))
+
+
+def _traded(store: StateStore, members: Sequence[str]) -> int:
+    """How many cards of `members` ran to a result and traded."""
     row = store.connection.execute(
-        f"SELECT COUNT(*) FROM cards WHERE hyp_id IN ({_placeholders(ids)})"
+        f"SELECT COUNT(*) FROM cards WHERE hyp_id IN ({_placeholders(members)})"
         " AND status != 'crash' AND n_trades > 0",
-        ids,
+        tuple(members),
     ).fetchone()
     return int(row[0])
+
+
+def inherited(store: StateStore, parents: Sequence[str]) -> int:
+    """The draws a hypothesis whose `derived_from` names `parents` is priced from before it has
+    a card of its own: `candidates` plus `prior_trials` over the families those parents head.
+
+    Every count by which a search is priced — `edge_per_trade`'s margin, the deflation gates'
+    draws, the rule from which a plan carries its correction — is `candidates` plus
+    `prior_trials` over the hypothesis's family, and that family is the hypothesis and the
+    families its parents head. One with no card and no grid of its own — an explored draft,
+    which may state no `prior_trials` — adds nothing to either, so this is the count it starts
+    from, and every card of its own that runs and trades adds one: a crash or a card that
+    placed no order is no draw, and a declared grid is, as each is for `candidates` and
+    `prior_trials`. A parent the workspace has not registered counts nothing, as in `family`,
+    and a grid two families state is counted once.
+    """
+    members = tuple(dict.fromkeys(member for name in parents for member in family(store, name)))
+    return _traded(store, members) + _grids(store, members)
 
 
 def objective_of(store: StateStore, pin: str) -> str | None:

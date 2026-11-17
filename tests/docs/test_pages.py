@@ -157,6 +157,25 @@ def test_the_pages_say_a_draft_is_measured_once_as_its_parent_s_card() -> None:
     assert "an `explored` entry's summary leads with what the draft's seed scored" in inbox
 
 
+def test_the_pages_say_what_a_draft_s_trials_and_rationale_are() -> None:
+    """`T` was every card of the parent's family, crashes and flat cards in, and no grid, while
+    the draft is priced on the traded cards and the grids, so the pages named a count off by a
+    grid; and the summary's cap cut a rationale after the score, which no command then showed."""
+    row = explore_row()
+    assert (
+        "the cards of the families its `derived_from` names that ran and traded, plus the "
+        "settings their `prior_trials` grids declared"
+    ) in row
+    assert "with the whole rationale, which `kanso inbox` shows" in row
+    inbox = next(
+        line for line in page("cli.md").splitlines() if line.startswith("| `kanso inbox` |")
+    )
+    assert "carries the draft's whole rationale beneath it (`rationale` under `--json`" in inbox
+    concepts = prose(page("concepts.md"))
+    assert "`kanso inbox` prints the whole rationale beneath the entry" in concepts
+    assert "not `n_trials`, which counts crashes and cards that placed no order" in concepts
+
+
 def test_the_cli_page_says_explore_mechanisms_is_no_search_rule() -> None:
     """The paragraph naming the `[research]` keys said all of them were search rules; the
     mechanisms a draft may move to are the operator's scope, which no agent sets."""

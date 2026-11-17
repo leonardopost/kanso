@@ -12,6 +12,12 @@ promotion to `promote --live --as NAME`. Acknowledging twice is the same as once
 The file `escalations/inbox.md` is append-only and is never rewritten, so a line
 acknowledged an hour ago still reads as unchecked there; the rows are what this command
 answers from, and the file is the operator's own permanent log.
+
+An `explored` entry also carries the whole rationale of the draft it names, read off the
+`explored` event that names the entry (`kanso.research.explore.rationale`): its summary leads
+with the seed's score and is capped at a line, so the rationale after the score is cut there,
+and no other command shows a lane's draft's. It is `null` for an entry written before the
+event named it.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import typer
 from kanso import inbox
 from kanso.cli.context import global_json, open_workspace, store
 from kanso.cli.render import Report, emit, field, indent
+from kanso.research import explore
 from kanso.workspace import Workspace
 
 app = typer.Typer(help="Unread escalations, and acknowledging one.", invoke_without_command=True)
@@ -61,9 +68,19 @@ def ack_command(
 def _unread(ws: Workspace) -> Report:
     with store(ws) as opened:
         entries = inbox.unread(opened)
+        said = {
+            entry.escalation_id: explore.rationale(opened, entry.escalation_id)
+            for entry in entries
+            if entry.kind == explore.EXPLORED
+        }
     data: dict[str, Any] = {
         "unread": len(entries),
-        "entries": [entry.payload() for entry in entries],
+        "entries": [
+            {**entry.payload(), "rationale": said[entry.escalation_id]}
+            if entry.escalation_id in said
+            else entry.payload()
+            for entry in entries
+        ],
         "path": str(inbox.inbox_file(ws)),
     }
     lines = [field("unread", f"{len(entries)} escalation(s)")]
@@ -71,6 +88,9 @@ def _unread(ws: Workspace) -> Report:
         lines.append(
             f"{entry.escalation_id} {entry.kind:<{KIND}}{entry.subject:<{SUBJECT}}{entry.summary}"
         )
+        whole = said.get(entry.escalation_id)
+        if whole is not None:
+            lines.append(indent(f"rationale: {whole}", len(entry.escalation_id) + 1))
         lines.append(indent(entry.actions, len(entry.escalation_id) + 1))
     lines.append(field("file", inbox.inbox_file(ws)))
     return Report(data=data, lines=tuple(lines))

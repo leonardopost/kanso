@@ -239,6 +239,7 @@ def test_a_candidate_is_written_as_a_draft_nothing_registers(
         show(ws, store, CANDIDATE_ID)
     assert scheduler.queued(store) == []
 
+    [entry] = unread(store)
     events = [event for event in store.events(subject=researched) if event.kind == "explored"]
     assert [event.detail for event in events] == [
         {
@@ -249,9 +250,11 @@ def test_a_candidate_is_written_as_a_draft_nothing_registers(
             "lane": "op",
             "seed": written.seed.payload(),
             "rationale": answer()["rationale"],
+            "escalation": entry.escalation_id,
         }
     ]
-    [entry] = unread(store)
+    assert explore.rationale(store, entry.escalation_id) == answer()["rationale"]
+    assert explore.rationale(store, "00000000") is None, "an entry no event names"
     assert (entry.kind, entry.subject) == ("explored", CANDIDATE_ID)
     assert entry.summary.startswith(f"from {researched}: as its card the seed scored ")
     assert entry.summary.endswith(
@@ -971,8 +974,50 @@ def test_the_parent_s_best_beside_the_seed_is_the_one_measured_under_the_seed_s_
     assert written.seed.parent_best == records.stored_metric(store, newest, best, reading)
     assert written.seed.parent_best == metric, "one reading, so the best's own number"
     assert written.seed.books == 2, "the flat baseline's book and the keep's"
-    assert written.seed.inherited_trials == records.n_trials(store, researched) == 2
-    assert f"(best {metric:.4g}), 2 trials inherited: " in unread(store)[0].summary
+    assert f"(best {metric:.4g}), 1 trials inherited: " in unread(store)[0].summary
+
+
+GRID: Final = {"count": 400, "source": "evidence/grid.md", "sha256": "3f" * 32}
+"""A grid of settings tried outside kanso, as a registered hypothesis's `prior_trials` states it."""
+
+
+def test_a_draft_inherits_the_draws_its_results_are_priced_from(
+    ws: Workspace, store: StateStore, researched: str
+) -> None:
+    """`T` is what every number the draft's search is priced by starts from — `candidates`
+    plus `prior_trials` over the family its `derived_from` names — and not `n_trials`, which
+    counts the parent's flat baseline, no draw, and no grid: a draft of a parent behind a
+    400-setting grid was told it inherited 2."""
+    sha = store.put_blob(yaml.safe_dump({"id": "demo_grid", "prior_trials": GRID}).encode())
+    store.connection.execute(
+        "INSERT INTO hypotheses (hyp_id, status, hypothesis_sha, created_at, updated_at)"
+        " VALUES ('demo_grid', 'researching', ?, '2026-11-17', '2026-11-17')",
+        (sha,),
+    )
+    explorer(ws, [answer(hypothesis_yaml=candidate_yaml(derived_from=[HYP_ID, "demo_grid"]))])
+
+    written = explore.explore(ws, store, researched)
+
+    assert records.n_trials(store, researched) == 2, "the flat baseline and the keep"
+    assert records.candidates(store, researched) == 1, "the keep alone traded"
+    assert written.seed.inherited_trials == 1 + 400
+    assert written.seed.inherited_trials == records.inherited(store, [researched, "demo_grid"])
+    assert ", 401 trials inherited: " in unread(store)[0].summary
+
+
+def test_a_rationale_the_summary_cuts_is_read_whole_off_its_event(
+    ws: Workspace, store: StateStore, researched: str
+) -> None:
+    """The summary leads with the score and is capped at a line, so a rationale of the 240
+    characters the schema allows is cut there; the escalation's own event keeps it whole."""
+    whole = ("the parent only faded falls and never bought strength; " * 5)[:240].rstrip()
+    explorer(ws, [answer(rationale=whole)])
+
+    explore.explore(ws, store, researched)
+
+    [entry] = unread(store)
+    assert entry.summary.endswith("…") and whole not in entry.summary
+    assert explore.rationale(store, entry.escalation_id) == whole
 
 
 def test_a_seed_that_places_no_order_is_refused_as_the_parent_s_empty_book(

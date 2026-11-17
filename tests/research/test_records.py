@@ -389,6 +389,39 @@ def test_one_evidence_file_named_two_ways_is_counted_once(store: StateStore) -> 
     assert records.prior_trials(store, "demo_aliased") == 27
 
 
+def test_a_hypothesis_not_yet_registered_inherits_the_draws_its_parents_are_priced_by(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """What a draft naming `parents` will be priced from once registered, before a card of its
+    own: each parent's family's cards that ran and traded, plus their grids, each member and
+    each grid once — so the count is the one `candidates` plus `prior_trials` strike for the
+    draft once it is registered and has carded nothing. A crash, a card that placed no order
+    and a parent nothing registered count nothing."""
+    a_hypothesis(store, "demo_grid", a_grid(400, "evidence/grid.md", "3f" * 32, registered))
+    a_hypothesis(store, "demo_twin", a_grid(400, "evidence/grid.md", "3f" * 32, registered))
+    parent_run = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    grid_run = pinned_run(store, "demo_grid", 2, b"objective: {id: net_edge_bps}\n")
+    for metric in (40.0, 55.0):
+        scored(store, parent_run, metric)
+    scored(store, parent_run, 0.0, n_trades=0)
+    scored(store, grid_run, 30.0)
+    store.connection.execute(
+        "UPDATE cards SET status = 'crash' WHERE run_id = ? AND metric = 30.0", (grid_run.run_id,)
+    )
+    scored(store, grid_run, 20.0)
+
+    parents = ["demo_grid", "demo_twin", registered, "demo_unregistered"]
+    assert records.n_trials(store, registered) == 3
+    assert records.inherited(store, [registered]) == 2, "the card that placed no order is none"
+    assert records.inherited(store, parents) == 2 + 1 + 400, "one grid, each member once"
+    assert records.inherited(store, ["demo_unregistered"]) == 0
+    assert records.inherited(store, []) == 0
+    a_hypothesis(store, "demo_draft", yaml.safe_dump({"derived_from": parents}).encode())
+    assert records.inherited(store, parents) == (
+        records.candidates(store, "demo_draft") + records.prior_trials(store, "demo_draft")
+    )
+
+
 def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     store: StateStore, registered: str
 ) -> None:

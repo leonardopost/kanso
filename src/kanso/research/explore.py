@@ -90,10 +90,12 @@ Nothing registers a directory by its presence: `kanso hyp add` is still the only
 hypothesis enters the registry, and the construct, the objective and the constraints are
 still `kanso classify`'s to decide. The candidate's strategy is stored as a blob, so a
 second exploration that writes the same bytes is refused as already stored, and so is what
-its seed was measured from. What is left is an `explored` event under the parent, carrying
-the seed's score (`Seed`), the parent's best measured under the same pins and reading, the
-trials the draft inherits and the whole rationale, and an `explored` escalation under the new
-id whose summary leads with that score, offering `hyp validate` and `hyp add`.
+its seed was measured from. What is left is an `explored` escalation under the new id whose
+summary leads with the seed's score, offering `hyp validate` and `hyp add`, and an `explored`
+event under the parent naming that escalation, carrying the seed's score (`Seed`), the parent's
+best measured under the same pins and reading, the draws the draft's search is priced from and
+the whole rationale. The inbox caps a summary at a glance's length and the score comes first,
+so the rationale is cut there; `kanso inbox` reads it whole off the event (`rationale`).
 
 **The trigger is the operator's, or a count in `kanso.toml`.** `kanso hyp explore ID`
 runs it by hand. `[research] explore_after_stalls` — five in the template, zero never — runs
@@ -160,6 +162,7 @@ __all__ = [
     "after_stall",
     "due",
     "explore",
+    "rationale",
 ]
 
 TASK: Final = "explore"
@@ -204,8 +207,10 @@ class Seed:
     when none was stored there, and `same_book` a book it matched without repeating — its
     number moved past the floor. `parent_best` is the parent's best measured under the same
     pins and reading, from its own stored book, or `None` where it was not, so two numbers
-    struck two ways are never set side by side. `inherited_trials` is the count the draft's
-    search starts from through `derived_from`: every card of the parent's family.
+    struck two ways are never set side by side. `inherited_trials` is the count every number
+    the draft's search is priced by starts from (`records.inherited`): the cards of the
+    families its `derived_from` names that ran and traded, and the settings their grids
+    declared — to which each card of its own that trades adds one.
     """
 
     metric: float
@@ -244,8 +249,8 @@ class Seed:
     def said(self) -> str:
         """The head of the `explored` escalation's summary, which is what `kanso inbox` shows:
         the score as the parent's card, the parent's best beside it where it was measured the
-        same way, the trials the draft inherits, and that nothing was compared where nothing
-        was stored."""
+        same way, the draws the draft's search is priced from, and that nothing was compared
+        where nothing was stored."""
         best = "" if self.parent_best is None else f" (best {self.parent_best:.4g})"
         none = "; no book of it stored to compare" if self.books == 0 else ""
         return (
@@ -866,9 +871,11 @@ def _write(
     for field, name in zip(_FILES, _NAMES, strict=True):
         lanes.write_atomic(directory / name, str(answer[field]).encode("utf-8"))
     sha = store.put_blob(str(answer["strategy_py"]).encode("utf-8"))
-    seed = _seed(store, newest, setup, found)
+    hyp = parse_yaml(Hypothesis, str(answer["hypothesis_yaml"]), HYPOTHESIS_FILE)
+    seed = _seed(store, newest, setup, found, hyp.derived_from)
     tags = tuple(str(tag) for tag in answer["tags"])
-    rationale = str(answer["rationale"])
+    said = str(answer["rationale"])
+    entry = escalate(ws, store, EXPLORED, candidate_id, f"from {parent}: {seed.said()}: {said}")
     store.event(
         EXPLORED,
         parent,
@@ -879,11 +886,9 @@ def _write(
             "tags": list(tags),
             "lane": lane,
             "seed": seed.payload(),
-            "rationale": rationale,
+            "rationale": said,
+            "escalation": entry.escalation_id,
         },
-    )
-    entry = escalate(
-        ws, store, EXPLORED, candidate_id, f"from {parent}: {seed.said()}: {rationale}"
     )
     return Explored(
         parent=parent,
@@ -891,15 +896,22 @@ def _write(
         directory=directory,
         strategy_sha=sha,
         tags=tags,
-        rationale=rationale,
+        rationale=said,
         escalation_id=entry.escalation_id,
         seed=seed,
     )
 
 
-def _seed(store: StateStore, newest: RunRecord, setup: loop.Setup, found: loop.Probe) -> Seed:
+def _seed(
+    store: StateStore,
+    newest: RunRecord,
+    setup: loop.Setup,
+    found: loop.Probe,
+    derived_from: Sequence[str],
+) -> Seed:
     """The accepted seed's score, its measurement stored, beside the parent's best under the
-    same pins and reading and the trials the draft inherits."""
+    same pins and reading and the draws the search of a draft deriving from `derived_from` is
+    priced from."""
     measured = found.measured
     assert measured is not None  # only a seed that was measured is accepted
     best, _ = records.best_of(store, newest.hyp_id)
@@ -917,8 +929,24 @@ def _seed(store: StateStore, newest: RunRecord, setup: loop.Setup, found: loop.P
         parent_best=None
         if best is None
         else records.stored_metric(store, newest, best, setup.measured_under),
-        inherited_trials=records.n_trials(store, newest.hyp_id),
+        inherited_trials=records.inherited(store, derived_from),
     )
+
+
+def rationale(store: StateStore, escalation_id: str) -> str | None:
+    """The whole rationale of the draft an `explored` escalation names, off the `explored`
+    event that names it, or `None` for an escalation no event names — one written before the
+    event named its escalation.
+
+    The inbox caps a summary at one line, and an `explored` summary leads with the seed's
+    score, so a rationale after it is cut there; this is where `kanso inbox` reads it whole.
+    """
+    row = store.connection.execute(
+        "SELECT detail FROM events WHERE kind = ? AND json_extract(detail, '$.escalation') = ?"
+        " ORDER BY event_id DESC LIMIT 1",
+        (EXPLORED, escalation_id),
+    ).fetchone()
+    return None if row is None else str(json.loads(str(row["detail"]))["rationale"])
 
 
 def _pinned(store: StateStore, sha: str) -> Hypothesis:

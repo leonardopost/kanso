@@ -135,6 +135,32 @@ def test_explore_reads_as_what_was_written_and_the_next_command(
     assert f"kanso hyp validate {mocked_ws / 'hypotheses' / CANDIDATE_ID}" in result.stdout
 
 
+def test_the_inbox_shows_a_draft_s_whole_rationale_beneath_its_entry(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """The summary leads with the seed's score and is capped at a line, so a rationale of the
+    240 characters the schema allows is cut there — and a lane's draft has no `hyp explore`
+    output to read it in. The inbox prints it whole, off the event that names the entry."""
+    whole = ("the parent only faded deviations from a mean and never bought a fresh low; " * 4)[
+        :240
+    ].rstrip()
+    assert at(runner, mocked_ws, "research", "run", HYP_ID, "--cards", 1).exit_code == Exit.OK
+    long = {**answer(), "rationale": whole}
+    mocked.write_script(mocked_ws, "frontier", {"certify_plan": [mocked.PLAN], "explore": [long]})
+    assert at(runner, mocked_ws, "hyp", "explore", HYP_ID).exit_code == Exit.OK
+
+    [entry] = payload(at(runner, mocked_ws, "inbox", "--json"))["entries"]
+    listed = at(runner, mocked_ws, "inbox")
+
+    assert entry["kind"] == "explored" and whole not in entry["summary"]
+    assert entry["rationale"] == whole
+    assert listed.exit_code == Exit.OK
+    lines = listed.stdout.splitlines()
+    head = next(i for i, line in enumerate(lines) if line.startswith(entry["id"]))
+    assert lines[head + 1].strip() == f"rationale: {whole}"
+    assert lines[head + 2].strip() == entry["actions"]
+
+
 def test_explore_with_no_model_exits_2_and_writes_nothing(
     runner: CliRunner, mocked_ws: Path
 ) -> None:
