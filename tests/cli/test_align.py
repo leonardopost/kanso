@@ -61,8 +61,10 @@ def test_a_drift_is_reported_with_exit_zero_and_the_lane_rewound(
 def test_the_deterministic_checks_come_first_and_cost_no_call(
     runner: CliRunner, mocked_ws: Path
 ) -> None:
-    # No `align_check` script at all: a model asked here would answer `{}` and refuse.
-    mocked.scripted(mocked_ws)
+    # The judge scripted with nothing: a model asked here would answer `{}` and refuse, so
+    # the command would exit 2. Left to the helper's default it would answer aligned, and a
+    # call the static check made unnecessary would pass unseen.
+    mocked.scripted(mocked_ws, align_check=[])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
     edit(mocked_ws, mocked.SEED + '\nOTHER = "NOPE.XX"\n')
 
@@ -88,7 +90,8 @@ def test_the_run_s_base_is_never_judged(runner: CliRunner, mocked_ws: Path) -> N
 
 
 def test_a_check_that_judged_nothing_says_so(runner: CliRunner, mocked_ws: Path) -> None:
-    mocked.scripted(mocked_ws)
+    # Scripted with nothing, so a model asked about the base would fail the command.
+    mocked.scripted(mocked_ws, align_check=[])
     assert at(runner, mocked_ws, "research", "begin", HYP_ID).exit_code == Exit.OK
 
     result = at(runner, mocked_ws, "align", "check", HYP_ID)
