@@ -59,10 +59,15 @@ moves a fill (`kanso.nautilus.tape`); a sleeve's cancel can still part them, and
 measured part them otherwise, not traced (`docs/backlog.md`).
 
 Every venue account is funded with the whole run capital, because the engine keeps one
-account per venue and has no cross-venue book. What bounds exposure across venues is the
-sleeve, which sizes against `max_position_pct` of what its book can fund per instrument and
-`max_leverage` x capital gross over every position it holds; the venue balance only has
-to be large enough not to reject an order the sleeve already allowed.
+account per venue and has no cross-venue book. What bounds exposure across venues is what
+the sleeve sizes to. An unsized sleeve sizes against `max_position_pct` per instrument and
+`max_leverage` gross over every position it holds, both of the smaller of the capital and
+its balance. A sized one does not: under `sizing: full_book` every entry is the whole
+budget whatever the balance, and nothing at run time holds it to either ceiling —
+`kanso hyp validate` holds the budget to both on the capital, once, and in a shared book the
+book's room can cut it. The venue balance only has to be large enough not to reject an
+order the sleeve already allowed; on a margin account the venue rejects none for want of
+it (`kanso.nautilus.facts`).
 
 Engine facts this module relies on (nautilus_trader 1.231.0): `BacktestVenueConfig` is
 the declarative form of `BacktestEngine.add_venue`, and `BacktestNode` translates one

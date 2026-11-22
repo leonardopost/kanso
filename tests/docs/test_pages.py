@@ -27,9 +27,10 @@ from kanso.env.envelope import MIN_DECLARED_MEM_PER_LANE_GB
 from kanso.errors import ValidationError
 from kanso.hyp.registry import SCOPE
 from kanso.models.wire import REQUEST_TIMEOUT_S
-from kanso.nautilus import clock
+from kanso.nautilus import clock, facts, venue
 from kanso.nautilus.adapters.okx.reference import PAUSE_S, RETRIES
 from kanso.nautilus.clock import NEW_YORK, segment_of, session_of
+from kanso.nautilus.costs import maintenance_ratio
 from kanso.nautilus.strategy import KansoConfig, refuse_own_bar_resolution
 from kanso.research import driver
 from kanso.research.explore import Seed
@@ -1710,6 +1711,53 @@ def test_the_catalog_section_names_the_words_pyyaml_reads_as_booleans() -> None:
     assert named == read_as_boolean
     assert "`Y` and `N` are read as strings and need no quotes." in catalog
     assert [yaml.safe_load(word) for word in ("Y", "N")] == ["Y", "N"]
+
+
+def test_the_pages_say_a_full_book_entry_reads_no_ceiling_and_no_balance_at_run_time() -> None:
+    """`venue` and `facts` said the sleeve's room bounded every sleeve, and `concepts.md` that
+    a strategy that had lost money could not keep its size; a `full_book` sleeve has no room,
+    and its ceilings are read once, on the capital, at `hyp validate`."""
+    workspace = prose(page("workspace.md"))
+    assert (
+        "**Under the key the budget is the same at every entry, however much the account has "
+        "lost.** `kanso hyp validate` refuses (exit 3) a budget above `max_position_pct` of the "
+        "capital or above `max_leverage` x the capital, and that is the only place either "
+        "ceiling is read"
+    ) in workspace
+    assert "at a balance of zero or below it still buys the whole budget" in workspace
+    assert "Only in a shared book is a sized entry cut" in workspace
+    concepts = prose(page("concepts.md"))
+    assert "An unsized strategy that has lost money therefore cannot keep entering" in concepts
+    assert "the budget is funded by definition" not in concepts
+    assert "The budget is the same at every entry, however much the account has lost." in concepts
+    for module in (venue, facts):
+        doc = prose(module.__doc__ or "")
+        assert "A `sizing: full_book` sleeve has none" in doc or (
+            "nothing at run time holds it to either ceiling" in doc
+        ), module.__name__
+    assert "the sleeve's own room" not in prose(facts.__doc__ or "")
+
+
+def test_the_book_section_s_full_book_floor_is_the_ratio_the_gate_reads() -> None:
+    """The fall a full-book long may take before the floor, as the section states it, is what
+    `maintenance_ratio` reads on that book: equity over gross at the period's low."""
+    text = prose(page("workspace.md"))
+    start = text.index("**Under `sizing: full_book` the floor moves with the balance.**")
+    stated = text[start : text.index("a size that follows the book is an unsized one", start)]
+    budget, floor = 34_500.0, 0.75
+
+    def worst(balance: float) -> float:
+        """The low, as a fraction of the entry price, at which the ratio reaches the floor."""
+        return (1.0 - balance / budget) / (1.0 - floor)
+
+    for balance in (30_000.0, 29_000.0, 25_875.0):
+        cash = balance - budget
+        assert maintenance_ratio(cash, [budget * worst(balance)]) == pytest.approx(floor)
+    assert "budget of 34,500 on 30,000 of capital and a floor of 75" in stated
+    assert f"{(1.0 - worst(30_000.0)) * 100:.1f}% below its entry" in stated
+    assert f"about {(worst(29_000.0) - worst(30_000.0)) * 100:.1f} points" in stated
+    assert worst(25_875.0) == pytest.approx(1.0)
+    assert "at a balance of 25,875 it breaches at entry" in stated
 
 
 # -- docs/constructs.md ---------------------------------------------------------------

@@ -79,7 +79,10 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #   mode: full_book                # every entry is the whole budget in one instrument, floor(budget / (price x multiplier)) whole lots with the
 #   budget: 100000                 # round trip reserved; one instrument held at a time; every exit the whole position; submit_entry
 #                                  # and submit_exit take no size. `kanso hyp validate` refuses (exit 3) unless
-#                                  # capital x max_position_pct / 100 >= budget and capital x max_leverage >= budget
+#                                  # capital x max_position_pct / 100 >= budget and capital x max_leverage >= budget,
+#                                  # on the capital, once: at run time every entry is the whole budget whatever the
+#                                  # account has lost, at a leverage of budget / balance, past max_leverage once the
+#                                  # balance is below budget / max_leverage, and still bought below a balance of zero
 risk_limits:                       # *_pct are percentages of capital; an unsized entry's room is read on
                                    # the smaller of capital and what the account is worth, times max_leverage:
                                    # margin up to that multiple, never sized off money the account has lost

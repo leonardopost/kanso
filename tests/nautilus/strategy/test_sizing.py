@@ -24,7 +24,7 @@ from kanso.nautilus.strategy import (
     KansoStrategy,
 )
 
-from .conftest import DEMO, HEDGE, flat
+from .conftest import DEEP, DEMO, HEDGE, bar, flat
 from .test_sleeve import config
 
 BUDGET = 30_000.0
@@ -296,6 +296,53 @@ def test_without_a_rule_held_is_the_sleeve_s_own_position(backtest) -> None:
 
     assert run.strategy.seen == [100.0]
     assert not run.strategy.sized
+
+
+def moved(to: float) -> list[object]:
+    """DEMO at 10.00 for five bars and at `to` after them, so the sixth bar's exit books a move."""
+    return [bar(DEMO, index, 10.0 if index < 5 else to, DEEP) for index in range(20)]
+
+
+class Again(Enters):
+    """Enters on the third bar, exits on the sixth and enters again on the eighth."""
+
+    def after(self, bars: int) -> None:
+        if bars == 6:
+            self.submit_exit(DEMO)
+        if bars == 8:
+            self.seen.append(self.balance)
+            self.seen.append(self.submit_entry(DEMO, "BUY"))
+
+
+@pytest.mark.parametrize(
+    ("budget", "leverage", "to", "first", "left", "again"),
+    [
+        # 9,990 bought at 10.00 and sold at 5.00 leave 50,050; 19,960 at 5.00 is 99,800,
+        # twice what the balance funds at a ceiling of one
+        (100_000.0, 1.0, 5.0, 9_990.0, 50_050.0, 19_960.0),
+        # 19,980 bought at 10.00 and sold at 4.00 leave -19,880; 49,875 at 4.00 is bought
+        # on a balance below zero
+        (200_000.0, 2.0, 4.0, 19_980.0, -19_880.0, 49_875.0),
+    ],
+    ids=["past_max_leverage", "below_zero"],
+)
+def test_a_full_book_entry_after_a_loss_is_the_whole_budget_however_little_is_left(
+    backtest, budget, leverage, to, first, left, again
+) -> None:
+    """`hyp validate` holds the budget to the ceilings on the capital, once; at run time no
+    sized entry reads them, nor the balance, so the second entry is the whole budget again."""
+    limits = {"max_leverage": leverage, "max_position_pct": leverage * 100.0}
+    run = backtest(
+        Again(sized(universe=("DEMO.XNAS",), sizing_budget=budget, **limits)), data=moved(to)
+    )
+
+    assert intents(run) == [
+        ("DEMO.XNAS", "BUY", first),
+        ("DEMO.XNAS", "SELL", first),
+        ("DEMO.XNAS", "BUY", again),
+    ]
+    assert run.strategy.seen[1] == pytest.approx(left)
+    assert again * to > leverage * max(left, 0.0), "more than the room an unsized entry takes"
 
 
 def test_an_exit_while_the_entry_is_still_in_flight_places_nothing(backtest) -> None:

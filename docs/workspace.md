@@ -520,7 +520,21 @@ is divided by are one contract's, `price x multiplier`, as is every notional the
 sizes, reserves or reads back on either path. `submit_entry` also takes `edge_bp`, the move
 the entry predicts less its round trip's cost in basis points, which only a book reads — it
 orders an instant's entries by it (`docs/concepts.md`, *Stages*) — and a sleeve run alone
-ignores. Without the key, `submit_entry(id, side,
+ignores.
+**Under the key the budget is the same at every entry, however much the account has lost.**
+`kanso hyp validate` refuses (exit 3) a budget above `max_position_pct` of the capital or
+above `max_leverage` x the capital, and that is the only place either ceiling is read: at run
+time an entry reads neither, nor the balance, and nothing asks whether the book can fund it.
+So once a sized sleeve has lost money its gross at entry is still the budget, its leverage the
+budget over its balance — above `max_leverage` once the balance is below `budget /
+max_leverage` — and at a balance of zero or below it still buys the whole budget. On a margin
+venue nothing stops it, since kanso's instruments carry no margin rates and the venue locks
+none and liquidates nothing; under a `book` it pays the `carry` on what it borrows, and
+`maintenance_margin` reads the floor it breaches (`book`, below). Only in a shared book is a
+sized entry cut, to what the book has left (`docs/concepts.md`, *Stages*). A size that should
+follow the book is an unsized one: leave the key out, and `submit_entry(id, side)` takes the
+whole room described next.
+Without the key, `submit_entry(id, side,
 notional=…)` or `qty=…` sizes to the smaller of what was asked and what the risk limits leave,
 floored onto the instrument's lot — a `qty` the limits leave whole is submitted whole, never
 its notional divided back by the price — read on the smaller
@@ -933,11 +947,22 @@ period is divided by the split's ratio — over their gross. A card is refused b
 window when the sleeve's do, and a composed version whenever the floor is declared: `strat
 compose` refuses (exit 2) a version whose own run over the certification window falls
 through it. `kanso hyp validate` refuses (exit 3) a floor above
-`100 / max_leverage`, which a book levered to the ceiling breaches at entry; a reset or a
+`100 / max_leverage`, which a book levered to the ceiling breaches at entry — under
+`sizing: full_book` a check of the first entry alone (below); a reset or a
 carry on a venue whose account is `cash`, which can neither fund a restore nor hold a
 borrowed notional; and an attached construct whose `book` is not its host's, because its
 cards run the host under its own file's policy and its version is deployed under the
 host's. Classification never touches the key.
+
+**Under `sizing: full_book` the floor moves with the balance.** Every entry is the whole
+budget whatever the account has lost (`sizing`, above), so the ratio at the instant of entry
+is about the balance over the budget, not `100 / max_leverage`, and a book breaches the floor
+at entry, before any price moves, once its balance is below `maintenance_pct` of the budget.
+Above that the fall it allows shrinks with each dollar lost. With a budget of 34,500 on 30,000
+of capital and a floor of 75, a long bought on the capital breaches once the period's lowest
+low is 47.8% below its entry; each 1,000 lost before an entry takes about 11.6 points off
+that, and at a balance of 25,875 it breaches at entry. `kanso hyp validate` sees the first
+entry alone, so it refuses none of this; a size that follows the book is an unsized one.
 
 On a paper or live stage the node restarts flat at the version's capital every window, as
 it always has. What carries across a restart is the policy's own state, read from the

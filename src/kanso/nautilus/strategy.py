@@ -1170,12 +1170,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
 
     @property
     def sized(self) -> bool:
-        """Whether the hypothesis declared a sizing rule, so the harness sizes every order."""
+        """Whether the hypothesis declared a sizing rule, so the harness sizes every order.
+
+        A sized entry is the whole budget (`_sized_entry`): it reads neither the balance nor
+        the ceilings, which `max_notional` and `gross_limit` state for an unsized one."""
         return self._cfg.sizing_budget > 0
 
     @property
     def budget(self) -> float:
-        """The budget every entry is sized to under the sizing rule; zero when free."""
+        """The budget every entry is sized to under the sizing rule; zero when free. It is the
+        hypothesis's and constant over the run, whatever the balance."""
         return self._cfg.sizing_budget
 
     @property
@@ -1250,13 +1254,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     @property
     def max_notional(self) -> float:
         """The most one instrument may hold: `max_position_pct` of the smaller of the capital
-        and `balance`, so a sleeve that has lost money cannot borrow to keep its size."""
+        and `balance`, so an unsized sleeve that has lost money cannot borrow to keep its size.
+        A sized entry never reads it (`_sized_entry`)."""
         return min(self.capital, self.balance) * self._cfg.max_position_pct / PERCENT
 
     @property
     def gross_limit(self) -> float:
         """The most the sleeve may hold across every instrument: `max_leverage` x the smaller
-        of the capital and `balance`."""
+        of the capital and `balance`. A sized entry never reads it (`_sized_entry`), and
+        neither does the funding question, which a sized sleeve is not asked."""
         return min(self.capital, self.balance) * self._cfg.max_leverage
 
     # --- the only clock ------------------------------------------------------
@@ -3798,6 +3804,11 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         bucket is asked first, so an entry it would not send is dropped and counted as refused
         before it is sized (`_drop_rate`), and the room is read only for one it lets through.
 
+        **Under a sizing rule none of this is read.** The entry is `_sized_entry`'s, returned
+        before the room: the whole budget, whatever the balance, so `max_position_pct` and
+        `max_leverage` bind it only where `kanso hyp validate` held the budget to them on the
+        capital, once.
+
         **In a book the entry is the book's to place** (`kanso.nautilus.book`). It is
         collected, returning `None`, and placed when the instant ends, after every member's
         entries of that instant are in: in the book's order — `edge_bp` first, the predicted
@@ -3973,6 +3984,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         price: float | None,
     ) -> object | None:
         """The whole budget in one instrument, at market, or a named refusal.
+
+        The budget is the hypothesis's, the same at every entry: the quantity reads neither
+        `balance` nor `max_notional` nor `gross_limit`, and the funding question is not asked
+        of the order (`submit_order`). So an entry's leverage is the budget over the balance:
+        once the balance is below `budget / max_leverage` it holds more than `max_leverage` x
+        what is left, and at a balance of zero or below it is still placed whole. In a book
+        the book's cut can make it smaller; nothing else does.
 
         Already holding the budget on this side is the ordinary bar and answers `None`;
         the other side of a held instrument, or any other instrument held with no exit

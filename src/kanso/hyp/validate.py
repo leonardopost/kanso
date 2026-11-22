@@ -743,9 +743,14 @@ def _check_sizing(ws: Workspace, hyp: Hypothesis) -> None:
     """A budget the ceilings can fund, on a construct that places orders.
 
     `full_book` sizes every entry to the whole budget in one instrument, so the position
-    ceiling and the leverage ceiling must each reach it — a budget above either would size
-    an order the limits then cut, and the rule would be a hope again. A filter places no
-    order and an exit rule places only the host's, so neither has anything to size.
+    ceiling and the leverage ceiling must each reach it on the capital — a budget above
+    either would be an entry the limits never admitted. This is the only place either
+    ceiling is read under the rule: at run time an entry is the whole budget whatever the
+    balance (`KansoStrategy._sized_entry`), so once the balance is below `budget /
+    max_leverage` an entry holds more than `max_leverage` x what is left, and below a balance
+    of zero it still enters the budget.
+    A filter places no order and an exit rule places only the host's, so neither has
+    anything to size.
     """
     sizing = hyp.sizing
     if sizing is None:
