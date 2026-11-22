@@ -312,7 +312,7 @@ class Setup:
     the catalog as it stands when the card is built, so the child — which has no catalog —
     is handed a span rather than computing one; `None` for a hypothesis that declares no
     warmup. The run pins its snapshot, not this span: a `kanso data load` that adds a
-    printed day inside the lookback between two cards moves the prefix by that day, and
+    session inside the lookback between two cards moves the prefix by that day, and
     the certificate records the count it was warmed on, not the days."""
     extensions: tuple[tuple[str, str], ...] = ()
     """The workspace extensions imported while the setup was built, each by its directory
@@ -372,11 +372,12 @@ class Setup:
 
         `prefix` is the warmup sessions a card is fed before the window, and `Setup` is
         rebuilt for every card, so it is resolved from the catalog again for every card:
-        `backtest.warmup_prefix` takes the last N distinct days it finds, and a
-        `kanso data load` that adds a printed day inside the lookback moves the prefix by
-        that day between two cards of one run. `_benchmark_run` keys its cache on the
-        snapshot and the prefix together, which is this package's own statement that the
-        prefix is part of what a card's data is.
+        `backtest.warmup_prefix` takes the last N distinct sessions it finds — days of a
+        name's market it printed on while the market was open, dated below a bar of a day on
+        the market's own clock — and a `kanso data load` that adds one inside the lookback
+        moves the prefix by that day between two cards of one run. `_benchmark_run` keys its
+        cache on the snapshot and the prefix together, which is this package's own statement
+        that the prefix is part of what a card's data is.
 
         The claim is completeness against this dataclass, not against the world. Every
         field of `Setup` is either digested here or moves no number, and

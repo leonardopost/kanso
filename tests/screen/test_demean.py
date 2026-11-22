@@ -80,6 +80,7 @@ def test_the_third_friday_s_week_is_monday_to_sunday_on_a_market_open_on_sundays
     # from Monday the 11th to Sunday the 17th, and neither Sunday the 10th nor Monday the 18th.
     sundays = Calendar(
         authority="a market closed on Saturdays",
+        zone="UTC",
         first=date(2024, 1, 1),
         last=date(2024, 12, 31),
         weekend=frozenset({5}),

@@ -254,7 +254,7 @@ def test_a_calendar_control_no_calendar_on_file_covers_is_refused_before_anythin
     calendar: Any,
     held: str,
 ) -> None:
-    monkeypatch.setattr("kanso.screen.condition._calendar", lambda definition: calendar)
+    monkeypatch.setattr("kanso.data.closures.calendar_of", lambda definition: calendar)
 
     result = at(runner, taped, "screen", "run", write_screen(taped, STATE), "--json")
 

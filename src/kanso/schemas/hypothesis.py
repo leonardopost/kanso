@@ -178,14 +178,20 @@ class Sizing(KansoModel):
 class Warmup(KansoModel):
     """The sessions a strategy is fed before its window, so it trades from the open.
 
-    A session is a calendar day on which any instrument of the universe printed at the
-    sleeve's grain — the host's, for an attached construct consulted on another one. The
-    runner resolves the last `sessions` of them before the window,
-    delivers them to the strategy exactly as the window's own points are delivered, and
-    drops every order until the first point of the window arrives: the indicators warm,
-    nothing fills, and the measured run begins at the open with no cold start. Every path —
-    a card, a certificate, a replay, a stage node — warms on the same rule. Scope, like
-    `sizing`: a run warmed on one prefix is not compared with a card run cold.
+    A session is a day of an instrument's market on which it printed at the sleeve's grain —
+    the host's, for an attached construct consulted on another one — while that market was
+    open by `kanso.data.closures`, the instruments of the universe taken together. Below a
+    bar of a day each point is dated on its market's own clock, so a US equity's evening
+    stamped past 00:00 UTC is its own day's and makes no weekend, holiday or next weekday a
+    session; a bar of a day or longer counts on the UTC day it is stamped, and a market with
+    no calendar on file on every UTC day it printed on
+    (`kanso.nautilus.backtest.warmup_prefix`). The runner resolves the last `sessions` of
+    them before the window, delivers them to the strategy exactly as the window's own points
+    are delivered, and drops every order until the first point of the window arrives: the
+    indicators warm, nothing fills, and the measured run begins at the open with no cold
+    start. Every path — a card, a certificate, a replay, a stage node — warms on the same
+    rule. Scope, like `sizing`: a run warmed on one prefix is not compared with a card run
+    cold.
     """
 
     sessions: int = Field(gt=0)
@@ -824,10 +830,11 @@ class Hypothesis(Versioned):
         row in force within research that was measured past it is not refused here. The first
         date read is the New York evening before
         the first UTC day delivered (`first_new_york_day`), and with a warmup of N sessions
-        the first day delivered is at least N days before the window, a session being a day
-        that printed: that is as far as the file can say, and the sessions the catalog
-        resolves are held to the table where they are known — by `hyp validate` when the
-        catalog holds them, and where a run is built (`kanso.nautilus.backtest.RunRequest`)."""
+        the first day delivered is at least N days before the window, the sessions being
+        counted on N distinct UTC days: that is as far as the file can say, and the
+        sessions the catalog resolves are held to the table where they are known — by
+        `hyp validate` when the catalog holds them, and where a run is built
+        (`kanso.nautilus.backtest.RunRequest`)."""
         outside = sorted({row.instrument for row in rows} - set(self.universe))
         if outside:
             raise RemedyError(

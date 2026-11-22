@@ -7,8 +7,10 @@ before the open and what the extraction did with it.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from hypothesis import given, settings
@@ -16,6 +18,7 @@ from hypothesis import strategies as st
 
 from kanso.criteria import Fill
 from kanso.criteria.run import NS_PER_DAY, day_of, midnight_ns
+from kanso.data.closures import US_EQUITY
 from kanso.data.types import CorporateAction
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus.backtest import (
@@ -33,7 +36,10 @@ from .conftest import (
     CERTIFICATION,
     INSTRUMENT,
     RESEARCH,
+    SECOND_NS,
     SLEEVE,
+    SYMBOL,
+    VENUE,
     bars,
     catalog,
     hypothesis,
@@ -43,8 +49,9 @@ from .conftest import (
 SESSIONS = 5
 DECEMBER = (date(2023, 12, 1), date(2023, 12, 31))
 PREFIX = (date(2023, 12, 27), date(2023, 12, 31))
-"""The last five calendar days of December: what five sessions resolve to over a series
-that prints every day."""
+"""The last five calendar days of December: what five sessions resolve to over a series of
+daily bars that prints every day, each bar counted on the UTC day it is stamped, whatever the
+market's calendar says of it."""
 
 OTHER = "OTHR.XNAS"
 
@@ -116,7 +123,7 @@ def test_too_few_sessions_inside_the_bound_is_a_refusal_naming_what_was_found(
 def test_a_clock_resolves_the_sessions_at_or_before_it(deep: Path) -> None:
     """A stage restart warms on what it replayed: the day its clock stands in counts once
     that day has printed, and not before."""
-    from .conftest import CLOSE_NS, SECOND_NS
+    from .conftest import CLOSE_NS
 
     tenth = midnight_ns(date(2024, 1, 10))
     published = tenth + CLOSE_NS + SECOND_NS
@@ -159,7 +166,441 @@ def test_sessions_are_counted_on_quotes_when_the_hypothesis_requires_no_bars(
         }
     )
 
-    assert warmup_prefix(quoted, RESEARCH, store) == (date(2023, 12, 29), date(2023, 12, 31))
+    assert warmup_prefix(quoted, RESEARCH, store) == (date(2023, 12, 27), date(2023, 12, 29))
+
+
+# --- a session is a day the market was open -------------------------------------
+
+NEW_YORK = ZoneInfo("America/New_York")
+
+
+def extended(first: date, last: date, kind: str = "bar", symbol: str = SYMBOL) -> list[object]:
+    """One US equity's 1m bars, or its quotes or prints a minute apart, over 04:00 to 20:00 New
+    York on each weekday from `first` to `last`, every point stamped at its minute's close with
+    `ts_init == ts_event`: so the evening's end is stamped on the next UTC date — the bar
+    closing at 20:00 alone in summer, those closing at 19:00 to 20:00 in winter.
+
+    That is the vendor's stamping of bars, measured at kanso 0.20.0 in an operator's workspace
+    over SOXL.ARCX's and SOXS.ARCX's 1m bars, loaded for 2022-09-01 to 2023-12-29 (the
+    measurement was handed to this change without the date it was made on): the UTC day
+    2022-09-03 held only the bar stamped 20:00 EDT on Friday 2022-09-02, and 2023-01-07 only
+    the bars stamped 19:00 to 20:00 EST on Friday 2023-01-06. The synthetic loader stamps a
+    bar at its close as the vendor's bar loader does, and a quote or a print at its own instant
+    (`kanso.data.loaders.synthetic`); the post-market runs to 20:00 New York
+    (`kanso.data.closures`), so a winter evening's last hour of quotes and prints is on the
+    next UTC date as its bars are. It knows no holiday, serving every weekday as a session, so
+    each range here is chosen to hold none, but for the tests that say they hold one."""
+    from kanso.data.loaders.synthetic import SyntheticLoader
+
+    loader = SyntheticLoader()
+    (ref,) = loader.discover(
+        {
+            "loader": "synthetic",
+            "seed": 3,
+            "instruments": [symbol],
+            "venue": VENUE,
+            "resolution": "1m",
+            "types": [kind],
+            "start": first,
+            "end": last,
+            "session_start": "04:00",
+            "session_end": "20:00",
+        }
+    )
+    return list(loader.load(ref, ref.span))
+
+
+def evening(day: date, hour: int, minute: int) -> int:
+    """The instant of `hour:minute` in New York on `day`, in nanoseconds."""
+    at = datetime(day.year, day.month, day.day, hour, minute, tzinfo=NEW_YORK)
+    return int(at.timestamp()) * SECOND_NS
+
+
+def tail(points: Sequence[object], day: date) -> list[int]:
+    """The instants of the points stamped on the UTC date `day`."""
+    return [int(point.ts_init) for point in points if day_of(int(point.ts_init)) == day]  # type: ignore[attr-defined]
+
+
+def ticked(kind: str, sessions: int) -> Hypothesis:
+    """The demo hypothesis clocked on quotes or prints, warming on this many sessions."""
+    return Hypothesis.model_validate(
+        {
+            **hypothesis().model_dump(by_alias=True, mode="json"),
+            "resolution": kind,
+            "data_requirements": [kind],
+            "warmup": {"sessions": sessions},
+        }
+    )
+
+
+SUMMER = (date(2022, 8, 29), date(2022, 9, 2), date(2022, 9, 6))
+"""Monday to Friday before Labor Day 2022, and the Tuesday the window opens on after it."""
+WINTER = (date(2023, 1, 3), date(2023, 1, 6), date(2023, 1, 9))
+"""Tuesday to Friday after New Year's Day observed, 2023, and the Monday after."""
+
+
+@pytest.mark.parametrize(
+    ("days", "stamped"),
+    [
+        pytest.param(SUMMER, [(20, 0)], id="EDT: the bar closing at 20:00"),
+        pytest.param(
+            WINTER,
+            [(19 + minute // 60, minute % 60) for minute in range(61)],
+            id="EST: the bars closing at 19:00 to 20:00",
+        ),
+    ],
+)
+def test_a_friday_s_post_market_stamped_on_saturday_is_no_session(
+    tmp_path: Path, days: tuple[date, date, date], stamped: list[tuple[int, int]]
+) -> None:
+    """The evening's end of a Friday is stamped on Saturday's UTC date, which the market did
+    not open on: N sessions reach N weekdays back, and asked one more, the catalog holds N."""
+    first, last, opens = days
+    points = extended(first, last)
+    saturday = last + timedelta(days=1)
+    store = catalog(tmp_path / "extended", points, [instrument()])
+    weekdays = (last - first).days + 1
+
+    assert tail(points, saturday) == [evening(last, *at) for at in stamped]
+    assert saturday.weekday() == 5
+    assert warmup_prefix(warmed(weekdays, resolution="1m"), (opens, opens), store) == (first, last)
+    with pytest.raises(PreconditionError, match=f"the catalog holds {weekdays} in"):
+        warmup_prefix(warmed(weekdays + 1, resolution="1m"), (opens, opens), store)
+
+
+@pytest.mark.parametrize(
+    ("first", "last", "minutes"),
+    [
+        pytest.param(date(2023, 11, 20), date(2023, 11, 22), 61, id="Thanksgiving, EST"),
+        pytest.param(date(2024, 3, 25), date(2024, 3, 28), 1, id="Good Friday, EDT"),
+    ],
+)
+def test_the_evening_before_a_holiday_stamped_on_the_holiday_is_no_session(
+    tmp_path: Path, first: date, last: date, minutes: int
+) -> None:
+    """The evening's end of the day before a weekday holiday is stamped on the holiday's UTC
+    date, and a day the market did not open adds nothing, whatever it holds."""
+    points = extended(first, last)
+    holiday = last + timedelta(days=1)
+    store = catalog(tmp_path / "holiday", points, [instrument()])
+    opens = holiday + timedelta(days=1)
+    weekdays = (last - first).days + 1
+
+    assert US_EQUITY.closed(holiday) and holiday.weekday() < 5
+    assert len(tail(points, holiday)) == minutes
+    assert warmup_prefix(warmed(weekdays, resolution="1m"), (opens, opens), store) == (first, last)
+    with pytest.raises(PreconditionError, match=f"the catalog holds {weekdays} in"):
+        warmup_prefix(warmed(weekdays + 1, resolution="1m"), (opens, opens), store)
+
+
+@pytest.mark.parametrize("kind", ["quote", "trade"])
+def test_quotes_and_prints_stamped_on_saturday_are_no_session_either(
+    tmp_path: Path, kind: str
+) -> None:
+    """A sleeve clocked on quotes or prints counts its sessions off the files' `ts_init`
+    column (`_days_filed`), and the market's closed days are taken out of those the same way."""
+    first, last, opens = WINTER
+    points = extended(first, last, kind)
+    store = catalog(tmp_path / kind, points, [instrument()])
+
+    assert len(tail(points, last + timedelta(days=1))) == 61
+    assert warmup_prefix(ticked(kind, 4), (opens, opens), store) == (first, last)
+    with pytest.raises(PreconditionError, match="the catalog holds 4 in"):
+        warmup_prefix(ticked(kind, 5), (opens, opens), store)
+
+
+def weekdays(first: date, last: date) -> list[date]:
+    """Every weekday from `first` to `last`."""
+    every = (first + timedelta(days=offset) for offset in range((last - first).days + 1))
+    return [day for day in every if day.weekday() < 5]
+
+
+def new_york_day(stamp: int) -> date:
+    """The New York date of the minute a point stamped at its close covers."""
+    return datetime.fromtimestamp((stamp - 1) // SECOND_NS, tz=NEW_YORK).date()
+
+
+@pytest.mark.parametrize(
+    ("first", "last"),
+    [
+        pytest.param(date(2022, 8, 22), date(2022, 9, 2), id="EDT"),
+        pytest.param(date(2023, 1, 23), date(2023, 2, 3), id="EST"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("hour", "minute", "back", "begun"),
+    [
+        pytest.param(20, 0, 0, False, id="the evening's last bar"),
+        pytest.param(12, 0, 0, True, id="a bar at noon"),
+        pytest.param(4, 0, 1, False, id="before the day's first bar"),
+    ],
+)
+def test_a_stage_restart_re_feeds_n_whole_sessions_on_every_night_of_the_week(
+    tmp_path: Path,
+    request_for,
+    first: date,
+    last: date,
+    hour: int,
+    minute: int,
+    back: int,
+    begun: bool,
+) -> None:
+    """A stage restart warms on the sessions at or before its clock, the instant its node last
+    reached. On the bar a US equity's evening ends on, stamped past 00:00 UTC on the next
+    date, that evening's day is the last of them on every night of the week, Friday's
+    included: the next date holds nothing of its own session at the clock, so it is no
+    session, and N sessions re-feed N whole ones. A clock inside a day counts the day, whose
+    morning is re-fed beside N - 1 whole sessions, and one before the day's first bar the
+    day before. The window opens on the clock's day and the request takes the prefix as it
+    is."""
+    points = extended(first, last)
+    store = catalog(tmp_path / "extended", points, [instrument()])
+    hyp = warmed(3, resolution="1m")
+    sessions = weekdays(first, last)
+    for at, day in enumerate(sessions[-5:], start=len(sessions) - 5):
+        clock = evening(day, hour, minute)
+        window = (day_of(clock), day_of(clock) + timedelta(days=6))
+        warmed_on = sessions[at - back - 2 : at - back + 1]
+
+        prefix = warmup_prefix(hyp, window, store, until_ns=clock)
+
+        assert prefix == (warmed_on[0], warmed_on[-1]), day
+        opens, _ = request_for(window, prefix=prefix, hypothesis_=hyp).delivered
+        stamps = [int(point.ts_init) for point in points]  # type: ignore[attr-defined]
+        fed = {new_york_day(stamp) for stamp in stamps if opens <= stamp <= clock}
+        whole = {
+            session
+            for session in fed
+            if all(opens <= stamp <= clock for stamp in stamps if new_york_day(stamp) == session)
+        }
+        assert whole == set(warmed_on[:-1] if begun else warmed_on), day
+        assert warmed_on[-1] in fed, day
+    assert len(tail(points, last + timedelta(days=1))) == (1 if first.month == 8 else 61)
+
+
+def test_a_name_with_nothing_before_the_window_adds_no_session(tmp_path: Path) -> None:
+    """A name the catalog holds only from the window's open — listed, or loaded, after the
+    sessions it would warm on — adds none of them, and the prefix is the other name's."""
+    first, last, opens = WINTER
+    points = [*extended(first, last), *extended(opens, opens, symbol="OTHR")]
+    store = catalog(tmp_path / "late", points, [instrument(), instrument("OTHR")])
+    both = [INSTRUMENT, OTHER]
+
+    assert warmup_prefix(warmed(4, universe=both, resolution="1m"), (opens, opens), store) == (
+        first,
+        last,
+    )
+
+
+def test_a_day_the_market_was_closed_adds_nothing_whatever_is_dated_to_it(
+    tmp_path: Path,
+) -> None:
+    """The synthetic loader knows no holiday and serves Martin Luther King Jr. Day, 2023-01-16,
+    as any weekday (`kanso.data.loaders.synthetic`): its bars there stand for whatever a source
+    holds on a day the calendar marks closed, which no vendor measured for this change served.
+    Dated to that day in New York, they add no session, so four reach back over it to the
+    Thursday before, and a fifth is not there."""
+    first, last = date(2023, 1, 12), date(2023, 1, 18)
+    points = extended(first, last)
+    store = catalog(tmp_path / "holiday", points, [instrument()])
+    opens = last + timedelta(days=1)
+    holiday = date(2023, 1, 16)
+
+    assert US_EQUITY.closed(holiday)
+    assert sum(new_york_day(int(point.ts_init)) == holiday for point in points) == 960  # type: ignore[attr-defined]
+    assert warmup_prefix(warmed(4, resolution="1m"), (opens, opens), store) == (first, last)
+    with pytest.raises(PreconditionError, match="the catalog holds 4 in"):
+        warmup_prefix(warmed(5, resolution="1m"), (opens, opens), store)
+
+
+def test_outside_the_span_on_file_every_day_reads_open_and_the_zone_still_dates_each_point(
+    tmp_path: Path,
+) -> None:
+    """Past the last day the calendar is on file for, 2027-09-06, no day is closed, as for
+    coverage, so Thanksgiving 2027 is a session of a series that holds bars on it; but the zone
+    is no dated fact, and the Friday's last hour, stamped on Saturday's UTC date, is still the
+    Friday's, so three days are three sessions and a fourth is not there."""
+    first, last = date(2027, 11, 24), date(2027, 11, 26)
+    points = extended(first, last)
+    store = catalog(tmp_path / "beyond", points, [instrument()])
+    opens = date(2027, 11, 29)
+
+    assert first > US_EQUITY.last and not US_EQUITY.closed(date(2027, 11, 25))
+    assert len(tail(points, last + timedelta(days=1))) == 61
+    assert warmup_prefix(warmed(3, resolution="1m"), (opens, opens), store) == (first, last)
+    with pytest.raises(PreconditionError, match="the catalog holds 3 in"):
+        warmup_prefix(warmed(4, resolution="1m"), (opens, opens), store)
+
+
+def perpetual_bars(first: date, last: date, resolution: str) -> list[object]:
+    """A perpetual's bars round the clock, every day from `first` to `last`, as the synthetic
+    loader makes them under its `continuous` calendar: each stamped at its close."""
+    from kanso.data.loaders.synthetic import SyntheticLoader
+
+    loader = SyntheticLoader()
+    (ref,) = loader.discover(
+        {
+            "loader": "synthetic",
+            "seed": 11,
+            "instruments": ["BTCUSDT-PERP"],
+            "venue": "SIM",
+            "resolution": resolution,
+            "start": first,
+            "end": last,
+            "start_price": 10_000.0,
+            "price_precision": 1,
+            "calendar": "continuous",
+        }
+    )
+    return list(loader.load(ref, ref.span))
+
+
+def test_a_market_with_no_calendar_counts_every_day_it_printed_weekends_included(
+    tmp_path: Path,
+) -> None:
+    """A perpetual's venue keeps no calendar on file (`closures.never`), so its days are UTC's:
+    its hourly bars over New Year's week, Sunday the 31st to Saturday the 6th, are seven
+    sessions, both weekends' days among them. The last bar is stamped at 00:00 UTC on Sunday
+    the 7th and covers Saturday's last hour, so it is Saturday's, as the bar a stage restart's
+    clock stands on at a midnight is the day's it closed."""
+    from .conftest import PERP, perpetual
+
+    points = perpetual_bars(date(2023, 12, 31), date(2024, 1, 6), "1h")
+    store = catalog(tmp_path / "perp", points, [perpetual()])
+    opens = date(2024, 1, 8)
+    week = [date(2023, 12, 31) + timedelta(days=offset) for offset in range(7)]
+    midnight = midnight_ns(date(2024, 1, 3))
+
+    assert {day_of(int(point.ts_init)) for point in points} == {*week, date(2024, 1, 7)}  # type: ignore[attr-defined]
+    assert tail(points, date(2024, 1, 7)) == [midnight_ns(date(2024, 1, 7))]
+    assert warmup_prefix(warmed(7, universe=[PERP], resolution="1h"), (opens, opens), store) == (
+        week[0],
+        week[-1],
+    )
+    with pytest.raises(PreconditionError, match="the catalog holds 7 in"):
+        warmup_prefix(warmed(8, universe=[PERP], resolution="1h"), (opens, opens), store)
+    assert midnight in [int(point.ts_init) for point in points]  # type: ignore[attr-defined]
+    restarted = warmed(2, universe=[PERP], resolution="1h")
+    window = (date(2024, 1, 3), date(2024, 1, 9))
+    assert warmup_prefix(restarted, window, store, until_ns=midnight) == (
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+    )
+
+
+def test_a_day_counts_when_any_name_printed_on_it_while_its_own_market_was_open(
+    tmp_path: Path,
+) -> None:
+    """An equity's 1m bars from Tuesday to Friday beside a perpetual's on the Sunday alone:
+    the perpetual's Sunday counts, and the Saturday that holds the equity's Friday evening, on
+    which nothing else printed, does not, so five sessions reach back to the Tuesday and a
+    sixth is not there."""
+    from .conftest import PERP, perpetual
+
+    first, last, opens = WINTER
+    sunday = last + timedelta(days=2)
+    points = [*extended(first, last), *perpetual_bars(sunday, sunday, "1m")]
+    store = catalog(tmp_path / "mixed", points, [instrument(), perpetual()])
+    both = [INSTRUMENT, PERP]
+
+    assert sunday.weekday() == 6 and len(tail(points, last + timedelta(days=1))) == 61
+    assert warmup_prefix(warmed(5, universe=both, resolution="1m"), (opens, opens), store) == (
+        first,
+        sunday,
+    )
+    with pytest.raises(PreconditionError, match="the catalog holds 5 in"):
+        warmup_prefix(warmed(6, universe=both, resolution="1m"), (opens, opens), store)
+
+
+# --- a bar of a day is its session's, wherever it is stamped ----------------------
+
+
+def daily(first: date, last: date) -> tuple[list[date], list[object]]:
+    """One US equity's sessions from `first` to `last` and their daily bars, each stamped as
+    kanso's vendor loaders stamp one: at the close of the vendor's window, which opens at
+    midnight New York, so at the next New York midnight — 05:00 UTC in winter, 04:00 in
+    summer — and on the UTC date after the session's own.
+
+    The window's opening is measured: for the consolidated US tape it is midnight New York,
+    05:00Z in winter and 04:00Z in summer (`docs/backlog.md` row 20), and the vendor's bulk
+    loader records one session's measured at 2026-08-03 04:00Z, in nanoseconds in its store
+    and in milliseconds in its REST answer (`kanso.data.adapters.massive.loaders.bulk`). A
+    bar is stamped at its window's start plus its size, with `ts_init == ts_event`
+    (`build_bar` in the vendor's bar loader). The sessions are the days `kanso.data.closures`
+    holds open, which were measured as the weekdays SPY printed a daily bar on."""
+    from nautilus_trader.model.data import Bar
+    from nautilus_trader.model.objects import Price, Quantity
+
+    from .conftest import bar_type
+
+    sessions = [
+        first + timedelta(days=offset)
+        for offset in range((last - first).days + 1)
+        if not US_EQUITY.closed(first + timedelta(days=offset))
+    ]
+    made: list[object] = []
+    for index, day in enumerate(sessions):
+        opened = datetime(day.year, day.month, day.day, tzinfo=NEW_YORK)
+        stamp = (int(opened.timestamp()) + 86_400) * SECOND_NS
+        close = Price(10.0 + 0.25 * (index % 4), 2)
+        made.append(
+            Bar(bar_type(), close, close, close, close, Quantity.from_int(10_000), stamp, stamp)
+        )
+    return sessions, made
+
+
+DAILY = [
+    pytest.param(date(2023, 1, 3), date(2023, 1, 20), date(2023, 1, 13), id="MLK Day, EST"),
+    pytest.param(date(2023, 3, 27), date(2023, 4, 14), date(2023, 4, 6), id="Good Friday, EDT"),
+    pytest.param(date(2023, 11, 13), date(2023, 12, 1), date(2023, 11, 22), id="Thanksgiving"),
+]
+"""Three weeks of sessions ending on a Friday, and the session before a holiday inside them."""
+
+
+@pytest.mark.parametrize(("first", "last", "eve"), DAILY)
+def test_n_daily_bars_are_n_sessions_though_a_friday_s_is_stamped_on_saturday(
+    tmp_path: Path, request_for, first: date, last: date, eve: date
+) -> None:
+    """A Friday's daily bar is stamped on Saturday's UTC date and the bar of the session
+    before a holiday on the holiday's, both days the market was closed; each is its session's
+    only point and counts there, so N sessions before the Monday after deliver exactly the
+    last N daily bars, for every N the catalog holds, and one more is refused."""
+    sessions, points = daily(first, last)
+    store = catalog(tmp_path / "daily", points, [instrument()])
+    window = (last + timedelta(days=3), last + timedelta(days=9))
+    stamped = {day: day_of(int(bar.ts_init)) for day, bar in zip(sessions, points, strict=True)}  # type: ignore[attr-defined]
+
+    assert stamped[last] == last + timedelta(days=1) and US_EQUITY.closed(stamped[last])
+    assert stamped[eve] == eve + timedelta(days=1) and US_EQUITY.closed(stamped[eve])
+    for wanted in range(1, len(sessions) + 1):
+        hyp = warmed(wanted)
+        prefix = warmup_prefix(hyp, window, store)
+        assert prefix is not None
+        opens, _ = request_for(window, prefix=prefix, hypothesis_=hyp).delivered
+        fed = [day for day, bar in zip(sessions, points, strict=True) if int(bar.ts_init) >= opens]  # type: ignore[attr-defined]
+        assert fed == sessions[-wanted:], wanted
+    with pytest.raises(PreconditionError, match=f"the catalog holds {len(sessions)} in"):
+        warmup_prefix(warmed(len(sessions) + 1), window, store)
+
+
+def test_a_clock_on_a_friday_s_daily_bar_replays_n_daily_bars(tmp_path: Path, request_for) -> None:
+    """A stage restart whose clock stands on Friday's daily bar, stamped at 05:00 UTC on
+    Saturday, warms on the sessions at or before it: that Saturday is the Friday's, and five
+    reach back over Martin Luther King Jr. Day to the Friday before, five bars."""
+    sessions, points = daily(date(2023, 1, 3), date(2023, 1, 20))
+    store = catalog(tmp_path / "daily", points, [instrument()])
+    clock = int(points[-1].ts_init)  # type: ignore[attr-defined]
+    window = (day_of(clock), day_of(clock) + timedelta(days=6))
+    hyp = warmed(5)
+
+    prefix = warmup_prefix(hyp, window, store, until_ns=clock)
+
+    assert prefix == (date(2023, 1, 14), date(2023, 1, 21))
+    opens, _ = request_for(window, prefix=prefix, hypothesis_=hyp).delivered
+    replayed = [
+        day for day, bar in zip(sessions, points, strict=True) if opens <= int(bar.ts_init) <= clock
+    ]  # type: ignore[attr-defined]
+    assert replayed == [date(2023, 1, 13), *(date(2023, 1, day) for day in (17, 18, 19, 20))]
 
 
 SPAN_DAYS = 6
@@ -232,13 +673,17 @@ def test_the_days_counted_are_the_days_of_the_points_a_query_returns(
     drawn: tuple[str, dict[str, list[list[object]]], int, int],
 ) -> None:
     """Over quotes or prints in several files a name, the days a warmup counts, read off the
-    files' `ts_init` alone, are the days of the points the window's own read returns over
-    the same span."""
+    files' `ts_init` alone, are the New York days of the points the window's own read returns
+    over the same span, each the date of the instant before its stamp as the harness's clock
+    reads it (`kanso.nautilus.clock.session_of`), less the weekend of 30 and 31 December,
+    which the US equity market did not open on: a point at a UTC midnight, or a nanosecond
+    before one, is the New York evening's before."""
     import tempfile
 
     from nautilus_trader.persistence.catalog.parquet import ParquetDataCatalog
 
     from kanso.nautilus.backtest import _catalog, _held, _primary_days, market_points
+    from kanso.nautilus.clock import session_of
 
     kind, filed, start, end = drawn
     with tempfile.TemporaryDirectory() as directory:
@@ -262,12 +707,12 @@ def test_the_days_counted_are_the_days_of_the_points_a_query_returns(
 
         counted = _primary_days(catalog_, quoted, held, kind, start, end)
         returned = {
-            day_of(int(point.ts_init))  # type: ignore[attr-defined]
+            session_of(int(point.ts_init)).day  # type: ignore[attr-defined]
             for name in names
             for point in market_points(catalog_, kind, held[name], kind, start, end)
         }
 
-    assert counted == returned
+    assert counted == {day for day in returned if not US_EQUITY.closed(day)}
 
 
 def test_a_quote_file_gone_after_the_lookback_listed_it_is_counted_as_the_catalog_holds_it_now(
@@ -312,9 +757,16 @@ def test_a_quote_file_gone_after_the_lookback_listed_it_is_counted_as_the_catalo
         for point in market_points(_catalog(root), "quote", held[INSTRUMENT], "quote", *span)
     }
 
+    def opened(days: range) -> set[date]:
+        return {
+            day
+            for day in (DECEMBER[0] + timedelta(days=offset) for offset in days)
+            if not US_EQUITY.closed(day)
+        }
+
     assert len(listed) == 2
-    assert before == {DECEMBER[0] + timedelta(days=offset) for offset in range(31)}
-    assert after == returned == {DECEMBER[0] + timedelta(days=offset) for offset in range(15)}
+    assert before == opened(range(31))
+    assert after == {day for day in returned if not US_EQUITY.closed(day)} == opened(range(15))
 
 
 # --- the request ---------------------------------------------------------------
