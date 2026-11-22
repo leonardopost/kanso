@@ -215,7 +215,7 @@ def refuse_uncalendared(
         if not needs:
             continue
         for follower in screen.members(measure.followers):
-            calendar = _calendar(definitions[screen.legs[follower].instrument])
+            calendar = closures.calendar_of(definitions[screen.legs[follower].instrument])
             if calendar is not None and calendar.first <= first and last <= calendar.last:
                 continue
             held = (
@@ -404,7 +404,7 @@ def _follower(
             days.append(day)
             found.append(held)
     instrument = context.screen.legs[name].instrument
-    calendar = _calendar(context.definitions[instrument])
+    calendar = closures.calendar_of(context.definitions[instrument])
     return _Follower(days, [dates[day] for day in days], found, calendar)
 
 
@@ -962,10 +962,6 @@ def _mark(leg: Series, at: int) -> Mark:
     if leg.bid is None or leg.ask is None:
         return Mark(int(leg.ts[at]), float(leg.price[at]))
     return Mark(int(leg.ts[at]), float(leg.price[at]), float(leg.bid[at]), float(leg.ask[at]))
-
-
-def _calendar(definition: Any) -> closures.Calendar | None:
-    return closures.calendar(definition.asset_class.name, definition.id.venue.value)
 
 
 def _month_end(day: date) -> date:

@@ -131,7 +131,7 @@ from array import array
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from functools import cache
 from itertools import accumulate, chain
@@ -140,6 +140,7 @@ from operator import attrgetter
 from pathlib import Path
 from types import ModuleType
 from typing import IO, Any, Final
+from zoneinfo import ZoneInfo
 
 import numpy as np
 from nautilus_trader.model.data import (
@@ -473,7 +474,7 @@ class RunRequest:
     computes. `bounds` stays the measured window; `delivered` is what the engine is fed.
     The upper bound is the same in both. A prefix ends before the window opens, or on the
     day it opens: a stage restart's window opens on the day its clock stands in, and the
-    sessions at or before the clock end on that day.
+    sessions at or before the clock end on that day once it is one (`warmup_prefix`).
 
     `cushion` and `settled_ns` are where a book policy stood before this window opened:
     what a monthly reset had moved out of the book, and the last period end it settled.
@@ -787,19 +788,32 @@ def warmup_prefix(
 ) -> tuple[date, date] | None:
     """The sessions this hypothesis warms on before `window`, resolved from the catalog.
 
-    `None` when the hypothesis declares no warmup. A session is a calendar day on which any
-    name of the universe printed at the sleeve's own grain — the union, which is how the
-    venue sees the market. The catalog is read over a bounded lookback before the window,
-    doubling from twice the sessions asked for in calendar days, and the last N distinct
-    days found are the prefix; fewer than N inside the bound is a refusal naming what was
-    found. Resolved in the parent by every builder and put on the request explicitly: a
-    card child has no catalog, and re-checks the span it was handed rather than one it
-    computes. The window's own bounds are not touched.
+    `None` when the hypothesis declares no warmup. A session is a day of a name's market on
+    which it printed at the sleeve's own grain, the names taken together, which is how the
+    venue sees the market (`_primary_days`): below a bar of a day a point is dated by the
+    market's own clock — New York's for a US equity, UTC's for a market with no calendar on
+    file — at the instant before its stamp, so the evening's end of a trading day, stamped
+    past 00:00 UTC, is that day's, and a day the market's calendar marks closed is none; a
+    bar of a day or longer counts on the UTC day it is stamped. Below a bar of a day, each
+    session is counted on the UTC day its market's day opens on, its own date in New York and
+    in UTC. The catalog
+    is read over a bounded lookback before the window, doubling from twice the sessions
+    asked for in calendar days, and the last N distinct sessions found are the prefix, a
+    pair of UTC days; fewer than N inside the bound is a refusal naming what was found.
+    Resolved in the parent by every builder and put on the request explicitly: a card child
+    has no catalog, and re-checks the span it was handed — that every point it is fed lies
+    from the prefix's first midnight to the window's close — rather than one it computes, so
+    nothing it checks counts a session. The window's own bounds are not touched.
 
     `until_ns` is a stage restart's clock: the sessions are then the last N at or before
     that instant rather than before the window's open, because a restarted node resumes
     at the instant after its clock, inside a window that opens on the clock's day, and
-    what it warms on is what it replayed before.
+    what it warms on is what it replayed before. They are counted the same way, so the
+    clock's own session is one of them once a point of it is at or before the clock: a
+    clock on the bar a US equity's evening ends on, stamped past 00:00 UTC on the next
+    date, ends the prefix on that evening's day on every night of the week — the next date's
+    own session has not begun — and one on a Friday's daily bar, stamped on Saturday, ends
+    it on that Saturday.
     """
     if hyp.warmup is None:
         return None
@@ -945,46 +959,120 @@ def _held(catalog: Any, hyp: Hypothesis) -> dict[str, Any]:
 def _primary_days(
     catalog: Any, hyp: Hypothesis, held: Mapping[str, Any], grain: str, start: int, end: int
 ) -> set[date]:
-    """The UTC days the series a session is counted on holds a point in, `start <= ts_init
-    <= end`: the sleeve's own grain of its first market type.
+    """The sessions over `start <= ts_init <= end`, each as the UTC day it opens on: the days
+    of each name's market that the series a session is counted on holds a point of in. The
+    series is the sleeve's own grain of its first market type.
 
     Bars at the sleeve's grain when it is a bar size and the hypothesis requires bars, else
     its quotes, else its trades — one of the three is always required, because a resolution
     is a bar size or one of the unaggregated grains and the schema requires the type it
     names; a sleeve clocked on quotes or prints counts its sessions on them, whatever bars
     its signals carry beside them, and reads bars, at its `bar_resolution`, only where it
-    holds neither. The names are taken together, so a day any of them printed is a session.
+    holds neither. The names are taken together, so a day any of them is counted on is a
+    session: a coin's weekend counts in a universe that holds an equity beside it.
+
+    Below a day — quotes, prints and bars shorter than one — a point is the market's day's
+    that the instant a nanosecond before its stamp falls in, the last instant its bar
+    covers, as `kanso.nautilus.clock.session_of` reads it, on the clock of the zone the
+    calendar `kanso.data.closures` holds for the name's definition is kept in; a day that
+    calendar marks closed holds no session, whatever is dated to it (`_sessions_of`). A US
+    equity's session runs 04:00 to 20:00 New York, inside its own UTC date but for that end,
+    and a bar is stamped at its close, so the bar of 20:00 EDT and the bars of 19:00 to
+    20:00 EST are stamped on the next UTC date. They are their own evening's, and add no
+    session to the date they are stamped in: not to a Saturday or a holiday, and not to a
+    weekday whose own session holds nothing at or before `end`, as when a stage restart's
+    clock stands on such a bar. A market with no calendar on file is dated on the UTC clock
+    the same way, so every UTC day it printed on is a session, weekends included, and a bar
+    stamped at 00:00 UTC is the day's before. Outside the span a calendar is on file for (US
+    equities: 2003-09-10 to 2027-09-06) its closures answer open, as they do for coverage,
+    and its zone still dates every point.
+
+    A bar of a day or longer is the only point of what it covers and is stamped at its
+    window's close — a US equity's daily bar at the next New York midnight, 04:00 or 05:00
+    UTC — so a Friday's daily bar lands on Saturday and the day before a weekday holiday's on
+    the holiday. Every UTC day that holds one is a session, each bar on a date of its own,
+    and neither zone nor calendar is read: the UTC day it is stamped on is the one the
+    prefix opens on to deliver that bar and not the one before it.
 
     Bars are read as the window reads them (`market_points`), a bar an instant. Quotes and
-    prints are not: only their days are wanted, and a name's quotes over twice the sessions
-    asked for are tens of millions of objects — measured on 2026-10-22, the 20 names of a
-    tick hypothesis held 67.8 million quotes over ten days before the window, 736 bytes
-    each once read, and a parent asking five sessions of them passed 9 GB in 103 s. Their
-    days are read off the `ts_init` column of the very files `_in_file_order` would hand the
-    query (`_days_filed`), which the query filters on `ts_init`, inclusively at both ends,
-    and turns into one point a row, so the days are the days of the points it would return.
+    prints are not: only their sessions are wanted, and a name's quotes over twice the
+    sessions asked for are tens of millions of objects — measured on 2026-10-22, the 20
+    names of a tick hypothesis held 67.8 million quotes over ten days before the window,
+    736 bytes each once read, and a parent asking five sessions of them passed 9 GB in
+    103 s. Their sessions are read off the `ts_init` column of the very files
+    `_in_file_order` would hand the query (`_days_filed`), which the query filters on
+    `ts_init`, inclusively at both ends, and turns into one point a row, so they are the
+    sessions of the points it would return, dated and taken out alike.
     """
+    from kanso.data.closures import calendar_of, never
     from kanso.nautilus.strategy import BAR, QUOTE, TRADE
 
     order = (BAR, QUOTE, TRADE) if is_duration(grain) else (QUOTE, TRADE, BAR)
     requirement = next(kind for kind in order if kind in hyp.data_requirements)
     size = grain if is_duration(grain) else hyp.bar_size
+    whole = requirement == BAR and parse_duration(size, "resolution") >= timedelta(days=1)
     days: set[date] = set()
     for name in sorted(hyp.universe):
-        if requirement == BAR:
-            points = market_points(catalog, requirement, held[name], size, start, end)
-            days.update(day_of(int(point.ts_init)) for point in points)  # type: ignore[attr-defined]
+        found = calendar_of(held[name])
+        clock = ("UTC", never) if found is None else (found.zone, found.closed)
+        if requirement != BAR:
+            days |= _days_filed(catalog, requirement, held[name], hyp.resolution, start, end, clock)
+            continue
+        points = market_points(catalog, requirement, held[name], size, start, end)
+        stamps = np.fromiter(
+            (point.ts_init for point in points),  # type: ignore[attr-defined]
+            dtype=np.int64,
+            count=len(points),
+        )
+        del points
+        if whole:
+            days.update(day_of(int(day) * NS_PER_DAY) for day in np.unique(stamps // NS_PER_DAY))
         else:
-            days.update(_days_filed(catalog, requirement, held[name], hyp.resolution, start, end))
+            days |= _sessions_of(stamps, *clock)
     return days
 
 
+def _sessions_of(stamps: Any, zone: str, shut: Callable[[date], bool]) -> set[date]:
+    """The sessions the points stamped at `stamps`, an array of `int64`, lie in, each as the
+    UTC day it opens on.
+
+    A point lies in the day of `zone` that the instant a nanosecond before its stamp falls
+    in, and a day `shut` answers true for holds no session. A day runs from its midnight
+    to the next, each found by `kanso.criteria.gates.first_reading`, which places a midnight
+    a change of clocks skips at the change, so every point is placed by its instant
+    whatever the zone's offset is that day; and a session opens on the UTC day its midnight
+    falls on, which is its own date in New York and in UTC, and whose 00:00 UTC comes before
+    every point the session holds, whatever the zone. A point's day in any zone is within a
+    day of the UTC date of the instant before its stamp, which is at most a day before its
+    own, so the midnights read run from two days before the first stamp's UTC date to the
+    day after the last's.
+    """
+    from kanso.criteria.gates import first_reading
+
+    if not len(stamps):
+        return set()
+    first = day_of(int(stamps.min())) - timedelta(days=2)
+    local = [first + timedelta(days=n) for n in range((day_of(int(stamps.max())) - first).days + 2)]
+    clock = ZoneInfo(zone)
+    opens = np.array([first_reading(day, 0, clock) for day in local], dtype=np.int64)
+    found = np.unique(np.searchsorted(opens + 1, stamps, side="right") - 1)
+    return {day_of(int(opens[at])) for at in found.tolist() if not shut(local[at])}
+
+
 def _days_filed(
-    catalog: Any, requirement: str, instrument: Any, resolution: str, start: int, end: int
-) -> tuple[date, ...]:
-    """The UTC days of one instrument's quotes or prints with `start <= ts_init <= end`, read
-    off the `ts_init` column of the files `_in_file_order` reads, one file at a time, through
-    the same `wanted` check and the same miss handling (`_read_listed`) as `market_points`.
+    catalog: Any,
+    requirement: str,
+    instrument: Any,
+    resolution: str,
+    start: int,
+    end: int,
+    clock: tuple[str, Callable[[date], bool]],
+) -> set[date]:
+    """The sessions of one instrument's quotes or prints with `start <= ts_init <= end`, each
+    as the UTC day it opens on on `clock`, the zone its days are kept in and the days it is
+    closed on (`_sessions_of`), read off the `ts_init` column of the files `_in_file_order`
+    reads, one file at a time, through the same `wanted` check and the same miss handling
+    (`_read_listed`) as `market_points`.
 
     The engine names no reader of one column, so this reads the files with `pyarrow`, as
     `_row_groups` does. On nautilus_trader 1.231.0 a query handed files reads them as one
@@ -993,7 +1081,6 @@ def _days_filed(
     (`ParquetDataCatalog._query_pyarrow` and `_handle_table_nautilus`); a file that is gone
     raises `FileNotFoundError` naming it, from `pyarrow` as from the query.
     """
-    import numpy
     import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
     _refuse_if_unwanted()
@@ -1003,16 +1090,15 @@ def _days_filed(
         files = catalog.filter_files(
             data_cls, catalog.get_file_list_from_data_cls(data_cls), [identifier], start, end
         )
-        held: set[int] = set()
+        held: set[date] = set()
         for path in sorted(files):
             with pq.ParquetFile(path) as handle:
                 column = handle.read(columns=["ts_init"], use_threads=False).column(0)
-            instants = column.to_numpy().astype(numpy.int64)
-            inside = instants[(instants >= start) & (instants <= end)]
-            held.update(numpy.unique(inside // NS_PER_DAY).tolist())
-        return tuple(day_of(number * NS_PER_DAY) for number in sorted(held))
+            instants = column.to_numpy().astype(np.int64)
+            held |= _sessions_of(instants[(instants >= start) & (instants <= end)], *clock)
+        return tuple(held)
 
-    return _read_listed(catalog, data_cls, [identifier], (start, end), read)  # type: ignore[return-value]
+    return set(_read_listed(catalog, data_cls, [identifier], (start, end), read))  # type: ignore[arg-type]
 
 
 def window_data(

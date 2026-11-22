@@ -149,9 +149,12 @@ class _MaxHold:
     A thesis that says "switches are less than a month apart" is a sentence a model reads;
     this is the same sentence as a refusal, in whichever unit the operator states it:
     `days` counts calendar days, `trading_days` counts the sessions a position is held
-    across — the run's period ends it spans, which at a daily return period are one per
-    day that traded, so a weekend or a holiday inside a hold adds nothing. Either limit or
-    both may be set, and a position over either is refused.
+    across — the run's period ends it spans, which at a daily return period are one per UTC
+    day that holds a point, so a weekend or a holiday inside a hold adds nothing where
+    nothing is stamped on it. No calendar is read, so below a bar of a day a US equity's
+    Friday post-market, stamped past 00:00 UTC, makes Saturday one, and the evening before a
+    weekday holiday the holiday (`docs/backlog.md` row 241). Either limit or both may be
+    set, and a position over either is refused.
 
     A closed position is timed from its entry fill to its exit fill — exact instants, so a
     clock change counts for what it is and a reversal in one instrument is two positions,
