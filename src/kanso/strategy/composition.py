@@ -73,6 +73,7 @@ from kanso.errors import PreconditionError
 from kanso.hyp import HYPOTHESIS_FILE, Registration, moved, scope_of
 from kanso.hyp import show as registration_of
 from kanso.nautilus import backtest
+from kanso.nautilus.sizing import SIZING_BUDGET, SIZING_ROOM, config_fields
 from kanso.research import records
 from kanso.schemas import (
     Certificate,
@@ -513,10 +514,10 @@ def _hypothesis(ws: Workspace, store: StateStore, hyp_id: str) -> Hypothesis:
 
 
 def _with_budget(params: Mapping[str, Any] | None, hyp: Hypothesis) -> dict[str, Any] | None:
-    """An attached construct's parameters, its own budget among them when it sizes."""
+    """An attached construct's parameters, its own budget and cap among them when it sizes."""
     if hyp.sizing is None:
         return None if params is None else dict(params)
-    return {**dict(params or {}), "sizing_budget": hyp.sizing.budget}
+    return {**dict(params or {}), **config_fields(hyp.sizing)}
 
 
 def _book(
@@ -592,7 +593,8 @@ def _measure(
         modifiers=attached,
         period=ws.config.research.return_period,
         grains=grains,
-        sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
+        sleeve_budget=float(manifest.sleeve.config.get(SIZING_BUDGET, 0.0) or 0.0),
+        sleeve_room=bool(manifest.sleeve.config.get(SIZING_ROOM, False)),
         prefix=backtest.warmup_prefix(hyp, _window(hyp), catalog, grains),
         version_source=manifest.sleeve.source,
     )

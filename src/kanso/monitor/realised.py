@@ -174,6 +174,12 @@ def joined(runs: Sequence[CardRun]) -> CardRun | None:
                 key=lambda item: (item.ts_ns, item.instrument_id),
             )
         ),
+        sized=tuple(
+            sorted(
+                (item for run in runs for item in run.sized),
+                key=lambda item: (item.ts_ns, item.instrument_id),
+            )
+        ),
     )
 
 

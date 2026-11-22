@@ -88,6 +88,7 @@ from kanso.inbox import escalate
 from kanso.nautilus import node
 from kanso.nautilus.cross_section import without_markers
 from kanso.nautilus.node import Placement, StageNode, StageRun
+from kanso.nautilus.sizing import SIZING_BUDGET, SIZING_ROOM
 from kanso.portfolio import files, records
 from kanso.portfolio.capital import assign
 from kanso.portfolio.clients import check_runnable
@@ -750,7 +751,8 @@ def _placement(ws: Workspace, target: Target, admitted: Admitted) -> Placement:
         source=target.strategy_source,
         loaded=loaded,
         grains=(str(config["resolution"]), *(str(g) for g in config.get("extra_resolutions", ()))),
-        sleeve_budget=float(config.get("sizing_budget", 0.0) or 0.0),
+        sleeve_budget=float(config.get(SIZING_BUDGET, 0.0) or 0.0),
+        sleeve_room=bool(config.get(SIZING_ROOM, False)),
     )
 
 

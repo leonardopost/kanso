@@ -56,7 +56,7 @@ from kanso.criteria.quantities import (
     sharpe,
     standard_error,
 )
-from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Trade
+from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Sized, Trade
 
 __all__ = [
     "plan_complaints",
@@ -75,6 +75,7 @@ __all__ = [
     "Fill",
     "FundingPayment",
     "Held",
+    "Sized",
     "Gate",
     "GateContext",
     "Objective",

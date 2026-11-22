@@ -83,6 +83,8 @@ data_requirements: [bar]           # bar|quote|trade|book|<any registered custom
 #                                  # on the capital, once: at run time every entry is the whole budget whatever the
 #                                  # account has lost, at a leverage of budget / balance, past max_leverage once the
 #                                  # balance is below budget / max_leverage, and still bought below a balance of zero
+#   cap: room                      # opt-in: each entry the smaller of the budget and the room the risk limits leave on
+#                                  # min(capital, balance) less what is held: nothing at a balance of zero or below
 risk_limits:                       # *_pct are percentages of capital; an unsized entry's room is read on
                                    # the smaller of capital and what the account is worth, times max_leverage:
                                    # margin up to that multiple, never sized off money the account has lost

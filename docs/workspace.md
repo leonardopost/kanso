@@ -510,6 +510,7 @@ capital: 30000
 sizing:                            # scope: adding or changing it clears `best`
   mode: full_book                  # every entry is the whole budget in one instrument, whole lots, at market;
   budget: 30000                    # one instrument held at a time; every exit the whole position; no size argument
+  # cap: room                      # opt-in: each entry the smaller of the budget and the room the risk limits leave
 ```
 
 Under it `submit_entry(id, side)` and `submit_exit(id)` take no `notional`, `qty` or
@@ -521,7 +522,7 @@ sizes, reserves or reads back on either path. `submit_entry` also takes `edge_bp
 the entry predicts less its round trip's cost in basis points, which only a book reads — it
 orders an instant's entries by it (`docs/concepts.md`, *Stages*) — and a sleeve run alone
 ignores.
-**Under the key the budget is the same at every entry, however much the account has lost.**
+**Without `cap` the budget is the same at every entry, however much the account has lost.**
 `kanso hyp validate` refuses (exit 3) a budget above `max_position_pct` of the capital or
 above `max_leverage` x the capital, and that is the only place either ceiling is read: at run
 time an entry reads neither, nor the balance, and nothing asks whether the book can fund it.
@@ -531,9 +532,23 @@ max_leverage` — and at a balance of zero or below it still buys the whole budg
 venue nothing stops it, since kanso's instruments carry no margin rates and the venue locks
 none and liquidates nothing; under a `book` it pays the `carry` on what it borrows, and
 `maintenance_margin` reads the floor it breaches (`book`, below). Only in a shared book is a
-sized entry cut, to what the book has left (`docs/concepts.md`, *Stages*). A size that should
-follow the book is an unsized one: leave the key out, and `submit_entry(id, side)` takes the
-whole room described next.
+sized entry cut, to what the book has left (`docs/concepts.md`, *Stages*).
+**`cap: room` makes the full book the whole of what is left.** Each entry is then the smaller of
+the budget and the room the risk limits leave at that instant — `max_position_pct` of the
+smaller of the capital and the balance in the name, and `max_leverage` x the same less the
+gross already held, an overlay's clips and the host's own share counted together — and is sized
+from it by the same arithmetic, in whole lots, at market. Above the capital, with nothing else
+held, it is the budget, as without the key; after a loss it shrinks with the balance, so no entry is levered past
+`max_leverage`; at a balance of zero or below nothing is placed, and `submit_entry` answers
+`None`, as it does where an unsized entry finds no room — a room below one lot answers `None`
+too, where the budget itself below one lot is refused (`budget_below_lot`). A sized overlay's
+clip is cut the same way when its own file states the key. Every other rule of `full_book`
+holds: one instrument at a time, every exit the whole position, no size argument. Each base an
+entry was sized to is recorded with the run (`sized`), and `position_size` judges the entry's
+fills against it rather than against the budget. The key is opt-in and scope: a file that does
+not state it is pinned, digested and run exactly as before it existed, and adding it clears
+`best`. A size the strategy should choose for itself is an unsized one: leave `sizing` out,
+and `submit_entry(id, side)` takes the whole room described next.
 Without the key, `submit_entry(id, side,
 notional=…)` or `qty=…` sizes to the smaller of what was asked and what the risk limits leave,
 floored onto the instrument's lot — a `qty` the limits leave whole is submitted whole, never
@@ -657,7 +672,8 @@ write instead; what the scan cannot see — a second
 instrument while one is held, the other side of a held name — is refused inside the handler,
 the run stops, and the card is a `discard` whose `sizing` gate carries the rule, the
 instrument, the instant and the book held. `position_size` under the rule judges entry fills
-over the budget, gathered per order, and is the backstop that should never fire. Classification
+over the base each was sized to — the budget, or under `cap: room` the base the run recorded —
+gathered per order, and is the backstop that should never fire. Classification
 never touches the key. `kanso hyp validate` refuses (exit 3) a budget above what
 `max_position_pct` or `max_leverage` admits, a rule on a `filter` or an `exit`, a budgeted
 overlay on an unbudgeted host or the reverse, an overlay whose host budget and own budget
@@ -954,15 +970,19 @@ borrowed notional; and an attached construct whose `book` is not its host's, bec
 cards run the host under its own file's policy and its version is deployed under the
 host's. Classification never touches the key.
 
-**Under `sizing: full_book` the floor moves with the balance.** Every entry is the whole
-budget whatever the account has lost (`sizing`, above), so the ratio at the instant of entry
+**Under `sizing: full_book` without `cap` the floor moves with the balance.** Every entry is
+the whole budget whatever the account has lost (`sizing`, above), so the ratio at the instant
+of entry
 is about the balance over the budget, not `100 / max_leverage`, and a book breaches the floor
 at entry, before any price moves, once its balance is below `maintenance_pct` of the budget.
 Above that the fall it allows shrinks with each dollar lost. With a budget of 34,500 on 30,000
 of capital and a floor of 75, a long bought on the capital breaches once the period's lowest
 low is 47.8% below its entry; each 1,000 lost before an entry takes about 11.6 points off
 that, and at a balance of 25,875 it breaches at entry. `kanso hyp validate` sees the first
-entry alone, so it refuses none of this; a size that follows the book is an unsized one.
+entry alone, so it refuses none of this. Under `cap: room` it holds at every entry: an entry is
+at most `max_leverage` x the smaller of the capital and the balance, so a long holds at least
+`100 / max_leverage` of its gross the instant it is bought, as an unsized book does, and the
+47.8% of the example is the fall it allows at every entry.
 
 On a paper or live stage the node restarts flat at the version's capital every window, as
 it always has. What carries across a restart is the policy's own state, read from the

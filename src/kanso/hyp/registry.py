@@ -337,6 +337,12 @@ def host_sizing(ws: Workspace, store: StateStore, host: HostRef) -> float:
     return 0.0 if sizing is None else sizing.budget
 
 
+def host_room(ws: Workspace, store: StateStore, host: HostRef) -> bool:
+    """Whether the host sleeve's rule states `cap: room`, so its entries are cut to the room."""
+    sizing = hypothesis_of(ws, store, host.sleeve.hyp_id).sizing
+    return sizing is not None and sizing.cap == "room"
+
+
 def retire(ws: Workspace, store: StateStore, hyp_id: str) -> None:
     """Retire a hypothesis. `ws` names the workspace whose registry this is."""
     if _row(store, hyp_id) is None:
@@ -515,7 +521,7 @@ def _scope_fields(hyp: Hypothesis) -> dict[str, Any]:
             else None
         ),
         CONSTRUCT: hyp.construct.id if hyp.construct else None,
-        SIZING: hyp.sizing.model_dump() if hyp.sizing else None,
+        SIZING: hyp.sizing.model_dump(exclude_none=True) if hyp.sizing else None,
         OBJECTIVE: hyp.objective.id if hyp.objective else None,
         WARMUP: hyp.warmup.model_dump() if hyp.warmup else None,
         BENCHMARK: (

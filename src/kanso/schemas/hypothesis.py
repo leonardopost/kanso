@@ -149,11 +149,22 @@ class Sizing(KansoModel):
     the price, floored to whole lots, with the round-trip cost reserved inside it — at most
     one instrument held at a time, and every exit the whole position. The harness computes
     each quantity: `submit_entry` and `submit_exit` take no size, and an attached overlay
-    names a `Clip` and never a `Hedge`. The budget is the same at every entry, whatever the
-    account has lost: `kanso hyp validate` holds it to `max_position_pct` and `max_leverage`
-    on the capital, and nothing reads either ceiling at run time, so an entry's leverage is
-    the budget over the balance — past `max_leverage` once the balance is below `budget /
-    max_leverage` — and the sleeve keeps entering below a balance of zero.
+    names a `Clip` and never a `Hedge`. Without `cap` the budget is the same at every entry,
+    whatever the account has lost: `kanso hyp validate` holds it to `max_position_pct` and
+    `max_leverage` on the capital, and nothing reads either ceiling at run time, so an entry's
+    leverage is the budget over the balance — past `max_leverage` once the balance is below
+    `budget / max_leverage` — and the sleeve keeps entering below a balance of zero.
+
+    `cap: room` is the opt-in other answer: each entry, and each clip, is the smaller of the
+    budget and the room the risk limits leave at that instant — `max_position_pct` of the
+    smaller of the capital and the balance in the name, and `max_leverage` x the same less
+    the gross already held, the overlay's clips and the host's own share counted together —
+    so the full book is the whole of what is left once the book has shrunk, and nothing is
+    entered where nothing is left. Above the capital, with nothing else held, it is the
+    budget, as without the key.
+    `position_size` then judges each entry against the base it was sized to. Left out, the
+    key dumps as nothing, so a file that does not state it keeps the scope it was pinned
+    under.
     Operator-owned like `required_constraints`, so classification neither reads nor writes
     it; and scope, so a `best` earned under one rule is not compared with a card run under
     another.
@@ -161,6 +172,7 @@ class Sizing(KansoModel):
 
     mode: Literal["full_book"]
     budget: float = Field(gt=0)
+    cap: Literal["room"] | None = None
 
 
 class Warmup(KansoModel):

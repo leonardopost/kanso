@@ -36,7 +36,7 @@ from kanso.criteria.gates import (
 )
 from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.quantities import fill_path_drawdown_pct, periods_per_year, variance
-from kanso.criteria.run import NS_PER_SECOND, Fill, midnight_ns
+from kanso.criteria.run import NS_PER_SECOND, Fill, Sized, midnight_ns
 from kanso.errors import PreconditionError
 from tests.criteria.builders import (
     START,
@@ -1909,6 +1909,33 @@ def test_position_size_subtracts_the_host_s_fills_for_an_attached_construct() ->
 
     assert result.passed, result.evidence
     assert result.evidence["n_entries"] == 1
+
+
+def test_position_size_under_cap_room_judges_each_entry_against_the_base_it_was_sized_to() -> None:
+    """The second entry was sized to the 5,000 the room left, not the 10,000 budget: judged
+    against the budget it reads as a half-sized entry, against its base as a whole one."""
+    later = START + timedelta(days=2)
+    fills = (
+        _fill(START, "BUY", 99.0, 100.5),
+        _fill(START + timedelta(days=1), "SELL", 99.0, 50.0),
+        _fill(later, "BUY", 99.0, 50.25),
+    )
+    bases = (
+        Sized(ts_ns=at(START), instrument_id="DEMO", side="BUY", base=10_000.0),
+        Sized(ts_ns=at(later), instrument_id="DEMO", side="BUY", base=5_000.0),
+    )
+    hyp = make_hyp(sizing={"mode": "full_book", "budget": 10_000.0, "cap": "room"})
+    run = replace(build_run((0.0,) * 3, fills=fills), sized=bases)
+    band = {"min_pct": 98.0, "max_pct": 100.0}
+
+    result = position_size.evaluate(context(run, hyp=hyp, params=band))
+
+    assert result.passed, result.evidence
+    assert result.evidence["cap"] == "room"
+    assert result.evidence["smallest_base"] == 5_000.0
+    without = position_size.evaluate(context(replace(run, sized=()), hyp=hyp, params=band))
+    assert not without.passed
+    assert without.evidence["smallest_pct"] == pytest.approx(49.7475)
 
 
 def test_position_size_with_no_entry_filled_judges_nothing_under_sizing() -> None:

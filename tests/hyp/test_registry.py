@@ -438,6 +438,30 @@ def test_a_row_pinned_before_sizing_joined_the_scope_keeps_the_best(
     assert record(ws, store).best_sha == "c" * 64
 
 
+SIZED: dict[str, Any] = {"mode": "full_book", "budget": 100.0}
+
+
+def test_a_full_book_file_that_states_no_cap_keeps_the_pins_it_had_before_the_key() -> None:
+    """A pin written before `cap` existed held the mode and the budget alone, so a file that
+    does not state it dumps the same two and a re-pin after the upgrade keeps its best."""
+    assert (
+        hyp.registry.scope_of(Hypothesis.model_validate(document(sizing=SIZED)))["sizing"] == SIZED
+    )
+
+
+def test_a_row_pinned_with_full_book_keeps_the_best_and_adding_the_cap_clears_it(
+    ws: Workspace, store: StateStore
+) -> None:
+    register(ws, store, document(sizing=SIZED))
+    set_best(store)
+
+    register(ws, store, document(title="A better title", sizing=SIZED))
+    assert record(ws, store).best_sha == "c" * 64
+
+    register(ws, store, document(sizing={**SIZED, "cap": "room"}))
+    assert record(ws, store).best_sha is None
+
+
 def pin_before_costs(store: StateStore) -> None:
     """Rewrite the row's pins in the shape a release before 0.13 wrote: no `costs` key."""
     held = store.connection.execute(

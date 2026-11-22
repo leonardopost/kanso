@@ -586,6 +586,45 @@ def test_a_sizing_refusal_crosses_the_process_boundary_as_a_refusal_not_a_crash(
     assert result.run.capital == request.capital
 
 
+ENTERING_SLEEVE = b"""
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    pass
+
+
+class Strategy(KansoStrategy):
+    config_cls = Config
+
+    def on_start(self):
+        self.seen = 0
+
+    def on_bar(self, bar):
+        self.seen += 1
+        if self.seen == 3:
+            self.submit_entry(bar.bar_type.instrument_id, "BUY")
+"""
+
+
+def test_the_bases_a_capped_rule_sized_to_cross_the_process_boundary_with_the_run(
+    store: Path, lane: Path, request_for
+) -> None:
+    """The runner configures the sleeve with the cap and the child hands back the base it
+    sized the entry to, which `position_size` judges the fill against."""
+    capped = request_for(source=ENTERING_SLEEVE, sleeve_budget=10_000.0, sleeve_room=True)
+    plain = request_for(source=ENTERING_SLEEVE, sleeve_budget=10_000.0)
+
+    result = run_subprocess(capped, store, lane)
+
+    assert result.crashed is False and result.refused is None
+    assert [(item.instrument_id, item.side, item.clip) for item in result.run.sized] == [
+        ("DEMO.XNAS", "BUY", False)
+    ]
+    assert 0.0 < result.run.sized[0].base <= 10_000.0
+    assert run_subprocess(plain, store, lane).run.sized == ()
+
+
 def test_a_refusal_stops_the_run_at_the_first_refused_order(
     store: Path, lane: Path, request_for
 ) -> None:

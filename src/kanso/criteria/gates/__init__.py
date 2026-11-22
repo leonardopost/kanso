@@ -66,7 +66,7 @@ from kanso.criteria.quantities import (
     variance,
     years,
 )
-from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, Trade, day_of
+from kanso.criteria.run import BPS, NS_PER_SECOND, CardRun, Fill, Held, Sized, Trade, day_of
 from kanso.errors import PreconditionError, ValidationError
 from kanso.schemas import GateResult, parse_duration
 from kanso.schemas.screen import hours_minutes
@@ -342,15 +342,23 @@ class _PositionSize:
     def _on_entry_fills(
         self, ctx: GateContext, floor: float, ceiling: float, high: float | None
     ) -> GateResult:
-        """Under a sizing rule: every entry, as a share of the budget it was sized to.
+        """Under a sizing rule: every entry, as a share of the base it was sized to.
 
         A period-end mark is the wrong basis here — a leveraged leg drifts through any
         band between two closes — so the judgement is on what the harness actually
         placed. Fills are gathered per order first, because the venue fills a market
         order past a quarter of the bar's volume as two events; for an attached construct
         the host's orders are subtracted by identity and the remainder are the candidate's.
+
+        The base is the budget, unless the rule states `cap: room`: each entry was then
+        sized to the smaller of the budget and the room the limits left, which the run
+        records (`CardRun.sized`), and an entry is judged against the latest base recorded in
+        its name and side at or before its fill — a clip's, for an attached construct, whose
+        entries are its clips — so a book that shrank is not read as one sizing too small.
         """
-        budget = ctx.hyp.sizing.budget  # type: ignore[union-attr]
+        sizing = ctx.hyp.sizing
+        assert sizing is not None  # the caller checks this first
+        budget = sizing.budget
         orders = _orders(ctx.run.fills)
         if ctx.host_run is not None:
             hosts = _orders(ctx.host_run.fills)
@@ -358,14 +366,22 @@ class _PositionSize:
         entries = _entries(orders)
         if not entries:
             return skipped(self.id, "no entry was filled, so nothing was sized")
-        shares = [notional / budget * PERCENT for notional in entries]
+        clip = ctx.host_run is not None
+        sized = [item for item in ctx.run.sized if item.clip == clip]
+        bases = [_base(sized, entry, budget) for entry in entries]
+        shares = [
+            notional / base * PERCENT
+            for (_, _, _, notional), base in zip(entries, bases, strict=True)
+        ]
         outside = [share for share in shares if not floor <= share <= ceiling]
+        capped = {"cap": sizing.cap, "smallest_base": min(bases)} if sizing.cap else {}
         return verdict(
             self.id,
             not outside,
             {
                 "basis": "entry_fills",
                 "budget": budget,
+                **capped,
                 "min_pct": floor,
                 "max_pct": high,
                 "n_entries": len(shares),
@@ -392,17 +408,32 @@ def _orders(fills: Sequence[Fill]) -> list[tuple[int, str, str, float, float]]:
     ]
 
 
-def _entries(orders: Sequence[tuple[int, str, str, float, float]]) -> list[float]:
-    """The notional of every order that opened or grew a position, by a running count."""
+def _entries(
+    orders: Sequence[tuple[int, str, str, float, float]],
+) -> list[tuple[int, str, str, float]]:
+    """Every order that opened or grew a position, by a running count, as
+    `(ts_ns, instrument_id, side, notional)`."""
     position: dict[str, float] = {}
-    entries: list[float] = []
-    for _, instrument_id, _, qty, notional in orders:
+    entries: list[tuple[int, str, str, float]] = []
+    for ts, instrument_id, side, qty, notional in orders:
         before = position.get(instrument_id, 0.0)
         after = before + qty
         position[instrument_id] = after
         if abs(after) > abs(before):
-            entries.append(notional)
+            entries.append((ts, instrument_id, side, notional))
     return entries
+
+
+def _base(sized: Sequence[Sized], entry: tuple[int, str, str, float], budget: float) -> float:
+    """The base an entry was sized to: the latest base a `cap: room` rule recorded in its name
+    and side at or before its fill, and the budget where none was."""
+    ts, instrument_id, side, _ = entry
+    found = [
+        item.base
+        for item in sized
+        if item.instrument_id == instrument_id and item.side == side and item.ts_ns <= ts
+    ]
+    return found[-1] if found else budget
 
 
 def _own(ctx: GateContext) -> tuple[Held, ...]:

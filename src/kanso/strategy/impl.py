@@ -384,7 +384,9 @@ def _sleeve_config(
     `session_scope`, which are not written here, so a stage sleeve subscribes every required
     type of every name (`docs/backlog.md` row 239) — with the version's own `config`
     layered on top for the fields an operator or a later construct set. `sizing_budget` is
-    the sleeve hypothesis's rule, and `extra_resolutions` the grains its attached overlays
+    the sleeve hypothesis's rule, with `sizing_room` written only where the rule states
+    `cap: room`, so a version sized without the cap is configured as it was before the key
+    existed; `extra_resolutions` the grains its attached overlays
     keep their own clock on, so a stage node runs both as a card did; `bar_resolution` is
     written only where the hypothesis states one, so a version on bars alone, or on ticks
     alone, is configured with exactly the fields it was before the key existed. The venue model
@@ -392,6 +394,7 @@ def _sleeve_config(
     stage hands the harness apart, as a card's runner does.
     """
     from kanso.nautilus.costs import undated
+    from kanso.nautilus.sizing import config_fields
 
     return {
         "hyp_id": hyp.id,
@@ -404,6 +407,7 @@ def _sleeve_config(
         "max_drawdown_pct": hyp.risk_limits.max_drawdown_pct,
         "max_leverage": hyp.risk_limits.max_leverage,
         "sizing_budget": 0.0 if hyp.sizing is None else hyp.sizing.budget,
+        **config_fields(hyp.sizing),
         "venue_model": undated(version.pins.venue_model.model_dump(mode="json")),
         **({} if hyp.depth is None else {"depth": [hyp.depth.every_ns, hyp.depth.levels]}),
         **({} if hyp.bar_resolution is None else {"bar_resolution": hyp.bar_resolution}),

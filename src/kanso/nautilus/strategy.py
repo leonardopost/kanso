@@ -299,7 +299,7 @@ from nautilus_trader.model.objects import Price, Quantity
 from nautilus_trader.model.orders import Order
 from nautilus_trader.trading.strategy import Strategy
 
-from kanso.criteria.run import NS_PER_DAY, day_of
+from kanso.criteria.run import NS_PER_DAY, Sized, day_of
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import actions, splits
 from kanso.nautilus.clock import Session, session_of
@@ -444,6 +444,10 @@ class KansoConfig(StrategyConfig, frozen=True):
     sizing_budget: float = 0.0
     """The budget every order is sized to when the hypothesis declares `sizing`; zero
     is free sizing, where the author chooses a size within the risk limits."""
+    sizing_room: bool = False
+    """Whether the sizing rule states `cap: room`: each entry is then the smaller of the budget
+    and the room the risk limits leave at that instant (`KansoStrategy._sized_base`), not the
+    budget whatever the balance."""
     books_funding: bool = False
     """Whether the balance books each funding settlement it is handed, as the runner's
     extraction does. The runner and a stage node on a simulated venue set it, because the
@@ -574,6 +578,10 @@ class KansoModifierConfig(ActorConfig, frozen=True):
     """The budget a sized overlay's clips are sized to; zero means it hedges with
     quantities of its own and places no clip."""
 
+    sizing_room: bool = False
+    """Whether the overlay's sizing rule states `cap: room`: each clip is then the smaller of
+    its budget and the room the host's risk limits leave, the host's own share counted."""
+
 
 def tunable_fields(config: StrategyConfig) -> tuple[str, ...]:
     """The numeric parameters of a strategy config: its own fields, not the injected ones.
@@ -689,6 +697,12 @@ def _budget_of(modifier: object) -> float:
     """The budget a modifier's clips are sized to; zero for one without a config or a rule."""
     config = getattr(modifier, "modifier_config", None)
     return float(getattr(config, "sizing_budget", 0.0) or 0.0)
+
+
+def _room_of(modifier: object) -> bool:
+    """Whether a modifier's clips are capped to the room (`cap: room`)."""
+    config = getattr(modifier, "modifier_config", None)
+    return bool(getattr(config, "sizing_room", False))
 
 
 def _charges(config: KansoConfig) -> Mapping[str, Any]:
@@ -1000,6 +1014,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         self._overlay_due: tuple[InstrumentId, Bar | None, float | None] | None = None
         self._entry_answers: tuple[tuple[object, Decision], ...] | None = None
         self._clip_orders: dict[str, list[object]] = {}
+        self._sized_to: list[Sized] = []
         self._kept_filled: dict[str, float] = {}
         self._kept_intended: dict[str, float] = {}
         self._sizing_call = False
@@ -1173,13 +1188,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         """Whether the hypothesis declared a sizing rule, so the harness sizes every order.
 
         A sized entry is the whole budget (`_sized_entry`): it reads neither the balance nor
-        the ceilings, which `max_notional` and `gross_limit` state for an unsized one."""
+        the ceilings, which `max_notional` and `gross_limit` state for an unsized one — unless
+        the rule states `cap: room`, under which it is the smaller of the budget and the room
+        they leave (`_sized_base`)."""
         return self._cfg.sizing_budget > 0
 
     @property
     def budget(self) -> float:
         """The budget every entry is sized to under the sizing rule; zero when free. It is the
-        hypothesis's and constant over the run, whatever the balance."""
+        hypothesis's and constant over the run, whatever the balance; under `cap: room` an entry
+        is sized to the smaller of it and the room (`_sized_base`)."""
         return self._cfg.sizing_budget
 
     @property
@@ -1255,14 +1273,15 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     def max_notional(self) -> float:
         """The most one instrument may hold: `max_position_pct` of the smaller of the capital
         and `balance`, so an unsized sleeve that has lost money cannot borrow to keep its size.
-        A sized entry never reads it (`_sized_entry`)."""
+        A sized entry reads it only under `cap: room` (`_sized_base`)."""
         return min(self.capital, self.balance) * self._cfg.max_position_pct / PERCENT
 
     @property
     def gross_limit(self) -> float:
         """The most the sleeve may hold across every instrument: `max_leverage` x the smaller
-        of the capital and `balance`. A sized entry never reads it (`_sized_entry`), and
-        neither does the funding question, which a sized sleeve is not asked."""
+        of the capital and `balance`. A sized entry reads it only under `cap: room`
+        (`_sized_base`), and the funding question, which reads it too, is not asked of a sized
+        sleeve."""
         return min(self.capital, self.balance) * self._cfg.max_leverage
 
     # --- the only clock ------------------------------------------------------
@@ -2592,7 +2611,7 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     "declare `sizing` on its hypothesis, or return hedges with a quantity",
                 )
             for clip in decision.clips:
-                order = self._clip_order(clip, budget)
+                order = self._clip_order(clip, budget, room=_room_of(modifier))
                 if order is not None:
                     orders.append(order)
         return orders
@@ -2995,14 +3014,16 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         order: object = self.order_factory.market(instrument_id, side, quantity)
         return order
 
-    def _clip_order(self, clip: Clip, budget: float) -> object | None:
+    def _clip_order(self, clip: Clip, budget: float, *, room: bool = False) -> object | None:
         """One clip as an order: `FLAT` takes the held clip off, a side opens the budget.
 
         One clip at a time, in one instrument, on one side: a second instrument while a
         clip is held or in flight is refused, and so is the other side of a held clip —
         `FLAT` first, in the same answer, is how a clip switches. The order is recorded
         as a clip before it is submitted, so the ledger attributes its fills to the
-        overlay and never to the host.
+        overlay and never to the host. Under `cap: room` (`room`) a side opens the smaller of
+        the budget and the room the host's limits leave (`_sized_base`), and nothing where
+        nothing is left.
         """
         instrument_id = InstrumentId.from_str(clip.instrument)
         instrument = self.cache.instrument(instrument_id)
@@ -3047,13 +3068,18 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             if price is None or price <= 0:
                 return None
             multiplier = float(instrument.multiplier)
+            base = self._sized_base(key, price * multiplier, budget) if room else budget
+            if base <= 0:
+                return None
             raw = full_book_quantity(
-                budget,
+                base,
                 price * multiplier,
                 float(instrument.price_increment) * multiplier,
                 self.cost_rate_at(price, multiplier, float(instrument.price_increment), key),
             )
             quantity = self._quantise(instrument, raw)
+            if quantity is None and base < budget:
+                return None
             if quantity is None:
                 self._refuse(
                     BUDGET_BELOW_LOT,
@@ -3062,6 +3088,10 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                     why=f"a budget of {budget:g} at {price:g} floors to no whole lot",
                 )
             side = OrderSide.BUY if signed > 0 else OrderSide.SELL
+            if room and not self._warming():
+                self._sized_to.append(
+                    Sized(self._data_time, key, order_side_to_str(side), base, clip=True)
+                )
         order: object = self.order_factory.market(instrument_id, side, quantity)
         self._forget_kept()
         self._clip_orders.setdefault(key, []).append(order)
@@ -3807,7 +3837,8 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
         **Under a sizing rule none of this is read.** The entry is `_sized_entry`'s, returned
         before the room: the whole budget, whatever the balance, so `max_position_pct` and
         `max_leverage` bind it only where `kanso hyp validate` held the budget to them on the
-        capital, once.
+        capital, once — unless the rule states `cap: room`, under which it is the smaller of
+        the budget and the same room (`_sized_base`).
 
         **In a book the entry is the book's to place** (`kanso.nautilus.book`). It is
         collected, returning `None`, and placed when the instant ends, after every member's
@@ -3985,12 +4016,19 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
     ) -> object | None:
         """The whole budget in one instrument, at market, or a named refusal.
 
-        The budget is the hypothesis's, the same at every entry: the quantity reads neither
-        `balance` nor `max_notional` nor `gross_limit`, and the funding question is not asked
-        of the order (`submit_order`). So an entry's leverage is the budget over the balance:
-        once the balance is below `budget / max_leverage` it holds more than `max_leverage` x
-        what is left, and at a balance of zero or below it is still placed whole. In a book
-        the book's cut can make it smaller; nothing else does.
+        Without `cap: room` the budget is the hypothesis's, the same at every entry: the
+        quantity reads neither `balance` nor `max_notional` nor `gross_limit`, and the funding
+        question is not asked of the order (`submit_order`). So an entry's leverage is the
+        budget over the balance: once the balance is below `budget / max_leverage` it holds
+        more than `max_leverage` x what is left, and at a balance of zero or below it is still
+        placed whole. In a book the book's cut can make it smaller; nothing else does.
+
+        Under `cap: room` (`sizing_room`) the entry is sized to `_sized_base` instead: the
+        smaller of the budget and the room the limits leave at this instant, so it holds no
+        more than `max_leverage` x the smaller of the capital and the balance, and where the
+        room leaves nothing — a balance of zero or below — nothing is placed and `None` is
+        answered, as an unsized entry with no room is. The base is recorded with the instant
+        (`_sized_record`), for `position_size` to judge the entry's fills against.
 
         Already holding the budget on this side is the ordinary bar and answers `None`;
         the other side of a held instrument, or any other instrument held with no exit
@@ -4047,8 +4085,13 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             return None
         multiplier = float(instrument.multiplier)  # type: ignore[attr-defined]
         increment = float(instrument.price_increment)  # type: ignore[attr-defined]
+        room = self._cfg.sizing_room
+        base = self._sized_base(key, reference * multiplier, self.budget) if room else self.budget
+        if base <= 0:
+            self._sized_nothing(instrument, side)
+            return None
         raw = full_book_quantity(
-            self.budget,
+            base,
             reference * multiplier,
             increment * multiplier,
             self.cost_rate_at(reference, multiplier, increment, key),
@@ -4066,6 +4109,9 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
                         "sizing rule an entry is the whole budget or nothing",
                     )
             quantity = self._quantise(instrument, raw)
+            if quantity is None and base < self.budget:
+                self._sized_nothing(instrument, side)
+                return None
             if quantity is None:
                 self._refuse(
                     BUDGET_BELOW_LOT,
@@ -4083,11 +4129,35 @@ class KansoStrategy(Strategy):  # type: ignore[misc]
             order = self._order(instrument, side, quantity, None)
             self._sizing_call = True
             try:
-                return self._booked(order)
+                placed = self._booked(order)
             finally:
                 self._sizing_call = False
+            if placed is not None and room:
+                self._sized_to.append(Sized(self._data_time, key, asked, base))
+            return placed
         finally:
             self._entry_answers = None
+
+    def _sized_base(self, key: str, unit: float, budget: float) -> float:
+        """What a sized entry or clip in `key` is sized to under `cap: room`: the smaller of
+        the budget and the room the risk limits leave at this instant — `max_notional` less
+        what is held in the name, and `gross_limit` less the gross held across every name,
+        the host's own share (`_holdings`) and the overlay's clips (`_clips`) counted
+        together and marked as the unsized room marks them (`_gross_intended`). `unit` is one
+        contract's notional at the price the entry is sized at. Both limits are shares of the
+        smaller of the capital and `balance`, so above the capital, with nothing else held, it
+        is the budget, which `kanso hyp validate` holds to them, and at a balance of zero or
+        below it is nothing.
+        """
+        host, clips = self._holdings(), self._clips()
+        held = (abs(host.get(key, 0.0)) + abs(clips.get(key, 0.0))) * unit
+        gross = self._gross_intended(host) + self._gross_intended(clips)
+        return min(budget, self.max_notional - held, self.gross_limit - gross)
+
+    def _sized_record(self) -> tuple[Sized, ...]:
+        """Every entry and clip `cap: room` sized, with the base it was sized to, as the run
+        records it (`kanso.criteria.run.CardRun.sized`); empty without the cap."""
+        return tuple(self._sized_to)
 
     def _sized_exit(
         self,

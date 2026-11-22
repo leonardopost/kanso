@@ -418,6 +418,14 @@ def test_a_sizing_mode_outside_full_book_is_refused() -> None:
         build(sizing={"mode": "fixed", "budget": 1000})
 
 
+def test_a_sizing_cap_is_room_or_nothing() -> None:
+    assert build(sizing={"mode": "full_book", "budget": 1000}).sizing.cap is None  # type: ignore[union-attr]
+    capped = build(sizing={"mode": "full_book", "budget": 1000, "cap": "room"})
+    assert capped.sizing is not None and capped.sizing.cap == "room"
+    with pytest.raises(ValidationError, match="sizing.cap"):
+        build(sizing={"mode": "full_book", "budget": 1000, "cap": "balance"})
+
+
 def test_sizing_is_optional_and_carries_its_budget() -> None:
     assert build().sizing is None
     sized = build(sizing={"mode": "full_book", "budget": 30_000})

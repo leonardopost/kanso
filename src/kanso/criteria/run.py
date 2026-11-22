@@ -194,6 +194,24 @@ class Adjustment:
 
 
 @dataclass(frozen=True)
+class Sized:
+    """One entry or clip a `sizing` rule with `cap: room` sized: the instant the harness sized
+    it, its instrument and side, and the base it was sized to — the smaller of the budget and
+    the room the risk limits left then (`kanso.nautilus.strategy.KansoStrategy._sized_base`).
+
+    `clip` says it was an overlay's clip rather than the host's own entry, so a gate judging
+    the overlay's entries reads the bases of its clips. What `position_size` judges each entry
+    fill against: the base of the latest of these in its name and side at or before the fill.
+    """
+
+    ts_ns: int
+    instrument_id: str
+    side: str
+    base: float
+    clip: bool = False
+
+
+@dataclass(frozen=True)
 class Trade:
     """A closed position: what was opened, what closed it, and what it netted after costs.
 
@@ -260,6 +278,11 @@ class CardRun:
     replay them too. Empty for a run that held nothing through a split, and for a run
     recorded before runs kept them.
 
+    `sized` is every entry and clip a `sizing` rule with `cap: room` sized, in time order (each
+    a `Sized`): the base it was sized to, which `position_size` judges the entry fills against.
+    Empty without the cap, where every base is the budget, and for a run recorded before runs
+    kept them.
+
     `period_stops` is what the hypothesis's `period_target` did over the run, as the harness
     that applied it recorded it (`PeriodStops`): every New York week it traded in, each week
     it stopped — the hit, what the stopped week dropped unsent, the flatten's fills — and the
@@ -291,6 +314,7 @@ class CardRun:
     funding: tuple[FundingPayment, ...] = ()
     period_stops: PeriodStops | None = None
     adjustments: tuple[Adjustment, ...] = ()
+    sized: tuple[Sized, ...] = ()
 
     def __post_init__(self) -> None:
         start, end = self.window
@@ -353,7 +377,7 @@ class CardRun:
     def between(self, opens: int, closes: int) -> CardRun:
         """This run restricted to the half-open instant span `[opens, closes)`.
 
-        Every series is filtered, `held`, `funding` and `adjustments` included: `replace`
+        Every series is filtered, `held`, `funding`, `adjustments` and `sized` included: `replace`
         would carry the whole run's holdings into each fold, so a gate reading them fold-wise
         would judge periods the fold does not contain. A funding payment belongs to the span
         holding its settlement instant, and a split's adjustment to the span holding the
@@ -375,6 +399,7 @@ class CardRun:
             held=tuple(h for h in self.held if opens <= h.ts_ns < closes),
             funding=tuple(p for p in self.funding if opens <= p.ts_ns < closes),
             adjustments=tuple(a for a in self.adjustments if opens <= a.ts_ns < closes),
+            sized=tuple(s for s in self.sized if opens <= s.ts_ns < closes),
             cushion=tuple(self.cushion[i] for i in kept) if self.cushion else (),
             carry=tuple(self.carry[i] for i in kept) if self.carry else (),
             worst_ratio=tuple(self.worst_ratio[i] for i in kept) if self.worst_ratio else (),

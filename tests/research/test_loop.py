@@ -1899,7 +1899,7 @@ def test_every_field_of_a_setup_is_a_reading_or_is_not(ws: Workspace, store: Sta
     neither, which is the only way a claim of completeness can be kept.
     """
     read = {"capital", "folds", "period", "venue_model", "harness", "sleeve_budget", "grains"}
-    read |= {"prefix"}
+    read |= {"prefix", "sleeve_room"}
     pinned = {"hyp", "impl", "host_source", "host_modifiers"}
     no_number = {"max_lines", "catalog", "extensions"}
 
@@ -1912,6 +1912,7 @@ def test_every_field_of_a_setup_is_a_reading_or_is_not(ws: Workspace, store: Sta
         ("folds", 9),
         ("period", "1h"),
         ("sleeve_budget", 1234.0),
+        ("sleeve_room", True),
         ("grains", ("1m",)),
         ("prefix", (date(2023, 12, 29), date(2023, 12, 31))),
     ):

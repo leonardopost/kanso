@@ -63,6 +63,8 @@ SIZING_BUDGET: Final = "sizing_budget"
 """The one parameter composition sets on an attached construct and no construct declares:
 its own budget under a `sizing` rule, which its config takes (`KansoModifierConfig`) and
 which research and certification already hand it the same way."""
+SIZING_ROOM: Final = "sizing_room"
+"""Set beside `SIZING_BUDGET` the same way, where the construct's rule states `cap: room`."""
 
 SLEEVE_ENTRY: Final = "Strategy"
 MODIFIER_ENTRY: Final = "Modifier"
@@ -401,7 +403,9 @@ class Attached(Base):
         expectation: Expectation,
         created_at: datetime | None = None,
     ) -> StrategyVersion:
-        self.check_params({k: v for k, v in (params or {}).items() if k != SIZING_BUDGET})
+        self.check_params(
+            {k: v for k, v in (params or {}).items() if k not in (SIZING_BUDGET, SIZING_ROOM)}
+        )
         if strategy is None:
             raise PreconditionError(
                 f"strategy: a {self.id} composes onto its host's latest version, and no host "

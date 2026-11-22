@@ -1719,7 +1719,7 @@ def test_the_pages_say_a_full_book_entry_reads_no_ceiling_and_no_balance_at_run_
     and its ceilings are read once, on the capital, at `hyp validate`."""
     workspace = prose(page("workspace.md"))
     assert (
-        "**Under the key the budget is the same at every entry, however much the account has "
+        "**Without `cap` the budget is the same at every entry, however much the account has "
         "lost.** `kanso hyp validate` refuses (exit 3) a budget above `max_position_pct` of the "
         "capital or above `max_leverage` x the capital, and that is the only place either "
         "ceiling is read"
@@ -1729,7 +1729,7 @@ def test_the_pages_say_a_full_book_entry_reads_no_ceiling_and_no_balance_at_run_
     concepts = prose(page("concepts.md"))
     assert "An unsized strategy that has lost money therefore cannot keep entering" in concepts
     assert "the budget is funded by definition" not in concepts
-    assert "The budget is the same at every entry, however much the account has lost." in concepts
+    assert "Without `cap` the budget is the same at every entry, however much the" in concepts
     for module in (venue, facts):
         doc = prose(module.__doc__ or "")
         assert "A `sizing: full_book` sleeve has none" in doc or (
@@ -1742,8 +1742,10 @@ def test_the_book_section_s_full_book_floor_is_the_ratio_the_gate_reads() -> Non
     """The fall a full-book long may take before the floor, as the section states it, is what
     `maintenance_ratio` reads on that book: equity over gross at the period's low."""
     text = prose(page("workspace.md"))
-    start = text.index("**Under `sizing: full_book` the floor moves with the balance.**")
-    stated = text[start : text.index("a size that follows the book is an unsized one", start)]
+    start = text.index(
+        "**Under `sizing: full_book` without `cap` the floor moves with the balance.**"
+    )
+    stated = text[start : text.index("Under `cap: room` it holds at every entry", start)]
     budget, floor = 34_500.0, 0.75
 
     def worst(balance: float) -> float:
@@ -1758,6 +1760,28 @@ def test_the_book_section_s_full_book_floor_is_the_ratio_the_gate_reads() -> Non
     assert f"about {(worst(29_000.0) - worst(30_000.0)) * 100:.1f} points" in stated
     assert worst(25_875.0) == pytest.approx(1.0)
     assert "at a balance of 25,875 it breaches at entry" in stated
+
+
+def test_the_pages_say_what_cap_room_sizes_and_what_a_file_without_it_keeps() -> None:
+    """`cap: room` answers backlog row 76's open question; the pages say what it sizes, what
+    it places at no room, what `position_size` judges, and that it is opt-in."""
+    workspace = prose(page("workspace.md"))
+    start = workspace.index("**`cap: room` makes the full book the whole of what is left.**")
+    stated = workspace[start : workspace.index("takes the whole room described next", start)]
+    for claim in (
+        "the smaller of the budget and the room the risk limits leave at that instant",
+        "an overlay's clips and the host's own share counted together",
+        "Above the capital, with nothing else held, it is the budget",
+        "at a balance of zero or below nothing is placed, and `submit_entry` answers `None`",
+        "the budget itself below one lot is refused (`budget_below_lot`)",
+        "`position_size` judges the entry's fills against it rather than against the budget",
+        "a file that does not state it is pinned, digested and run exactly as before",
+    ):
+        assert claim in stated, claim
+    assert "Under `cap: room` it holds at every entry" in workspace
+    backlog = next(line for line in page("backlog.md").splitlines() if line.startswith("| 76 "))
+    assert "**closed**: both answers are built, and the file chooses." in backlog
+    assert "`cap: room` the base the run recorded for it" in prose(page("concepts.md"))
 
 
 # -- docs/constructs.md ---------------------------------------------------------------

@@ -27,9 +27,10 @@ from kanso.classify.construct import HostRef
 from kanso.classify.construct import get as construct_for
 from kanso.data.manifest import catalog_path
 from kanso.errors import PreconditionError, ValidationError
-from kanso.hyp import HYPOTHESIS_FILE, host_resolution, host_sizing, hypothesis_of
+from kanso.hyp import HYPOTHESIS_FILE, host_resolution, host_room, host_sizing, hypothesis_of
 from kanso.hyp import show as registration_of
 from kanso.nautilus.backtest import RunRequest, grains_of, warmup_prefix
+from kanso.nautilus.sizing import SIZING_BUDGET, SIZING_ROOM, config_fields
 from kanso.research import records
 from kanso.schemas import Hypothesis, StrategyFile, VenueModel, parse_yaml
 
@@ -70,6 +71,7 @@ class Target:
     version: int | None = None
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    sleeve_room: bool = False
     version_source: str | None = None
     version_hyp: str | None = None
 
@@ -96,6 +98,7 @@ class Target:
             period=self.period,
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
+            sleeve_room=self.sleeve_room,
             prefix=warmup_prefix(self.hyp, window, self.catalog, self.grains),
             version_source=self.version_source,
             version_hyp=self.version_hyp,
@@ -178,14 +181,15 @@ def _of_strategy(ws: Workspace, store: StateStore, strategy_id: str, version: in
         strategy_id=strategy_id,
         version=chosen,
         grains=_manifest_grains(manifest.sleeve.config),
-        sleeve_budget=float(manifest.sleeve.config.get("sizing_budget", 0.0) or 0.0),
+        sleeve_budget=float(manifest.sleeve.config.get(SIZING_BUDGET, 0.0) or 0.0),
+        sleeve_room=bool(manifest.sleeve.config.get(SIZING_ROOM, False)),
         version_source=manifest.sleeve.source,
     )
 
 
-def _own_budget(hyp: Hypothesis) -> dict[str, float]:
-    """An attached construct's own budget, as the parameter its config takes."""
-    return {} if hyp.sizing is None else {"sizing_budget": hyp.sizing.budget}
+def _own_budget(hyp: Hypothesis) -> dict[str, float | bool]:
+    """An attached construct's own budget, and its cap, as the parameters its config takes."""
+    return config_fields(hyp.sizing)
 
 
 def _manifest_grains(config: Mapping[str, Any]) -> tuple[str, ...]:
@@ -250,6 +254,9 @@ def _of_hypothesis(ws: Workspace, store: StateStore, hyp_id: str, sha: str | Non
         sleeve_budget=host_sizing(ws, store, harness.host)
         if harness.host is not None
         else (0.0 if hypothesis.sizing is None else hypothesis.sizing.budget),
+        sleeve_room=host_room(ws, store, harness.host)
+        if harness.host is not None
+        else (hypothesis.sizing is not None and hypothesis.sizing.cap == "room"),
         version_source=version_source,
         version_hyp=version_hyp,
     )

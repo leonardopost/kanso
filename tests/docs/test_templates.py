@@ -99,6 +99,7 @@ def test_the_scaffold_says_a_full_book_budget_is_held_to_the_ceilings_once() -> 
     assert "every entry is the whole budget whatever the account has lost" in sizing
     assert "at a leverage of budget / balance, past max_leverage once the balance" in sizing
     assert "still bought below a balance of zero" in sizing
+    assert "cap: room" in sizing and "opt-in: each entry the smaller of the budget" in sizing
 
 
 def test_the_program_states_the_repair_budget_the_driver_enforces() -> None:

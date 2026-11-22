@@ -124,7 +124,9 @@ submitted before it counted; what it closes is never cut.
 
 **A sized overlay names clips.** When its hypothesis declares `sizing`, the overlay answers
 `Decision(clips=(Clip(instrument, side),))` and the harness sizes the clip to the overlay's
-own budget — the whole of it, in whole lots, at the last print — holds one clip at a time,
+own budget — the whole of it, in whole lots, at the last print, or under `cap: room` in the
+overlay's own file the smaller of it and the room the host's risk limits leave, the host's own
+share counted (`docs/workspace.md`, `sizing`) — holds one clip at a time,
 and takes it off whole on `Clip(instrument, "FLAT")`. `Hedge`, `hedges=` and `scale=` are
 refused on a sized overlay and `Clip` on one without a budget, statically by
 `strategy_integrity` and again at the boundary; the neutral answer is the identity on both.

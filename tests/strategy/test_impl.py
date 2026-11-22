@@ -456,6 +456,11 @@ def test_the_manifest_config_carries_the_overlays_extra_grain_and_the_sleeves_bu
     assert impl._extra_grains(ws, store, sleeve, draft) == ("1s",)
     config = impl._sleeve_config(sleeve, 30_000.0, draft, extra_resolutions=("1s",))
     assert (config["sizing_budget"], config["extra_resolutions"]) == (30_000.0, ["1s"])
+    assert "sizing_room" not in config, "a rule without the cap configures what it always did"
+    capped = sleeve.model_copy(
+        update={"sizing": sleeve.sizing.model_copy(update={"cap": "room"})}  # type: ignore[union-attr]
+    )
+    assert impl._sleeve_config(capped, 30_000.0, draft)["sizing_room"] is True
     assert (
         impl._sleeve_config(draft_hypothesis(ws, store, "demo_free"), 1.0, draft)["sizing_budget"]
         == 0.0

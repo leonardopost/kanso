@@ -7,7 +7,7 @@ from math import floor, sqrt
 
 from hypothesis import strategies as st
 
-from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Trade
+from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Sized, Trade
 from kanso.replay.record import Session
 from kanso.research.records import Measurement
 from kanso.schemas import (
@@ -626,6 +626,21 @@ def card_runs(draw: st.DrawFn) -> CardRun:
                         paid=FINITE,
                         ratio=st.none() | POSITIVE,
                         fills_before=st.integers(min_value=0, max_value=3),
+                    ),
+                    max_size=3,
+                )
+            )
+        ),
+        sized=tuple(
+            draw(
+                st.lists(
+                    st.builds(
+                        Sized,
+                        ts_ns=INSTANTS,
+                        instrument_id=st.just("DEMO.XNAS"),
+                        side=st.sampled_from(("BUY", "SELL")),
+                        base=POSITIVE,
+                        clip=st.booleans(),
                     ),
                     max_size=3,
                 )

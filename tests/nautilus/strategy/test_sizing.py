@@ -345,6 +345,64 @@ def test_a_full_book_entry_after_a_loss_is_the_whole_budget_however_little_is_le
     assert again * to > leverage * max(left, 0.0), "more than the room an unsized entry takes"
 
 
+@pytest.mark.parametrize(
+    ("budget", "leverage", "to", "first", "left", "again", "base"),
+    [
+        # the 50,050 the loss left funds 9,990 at 5.00, where the budget alone bought 19,960
+        (100_000.0, 1.0, 5.0, 9_990.0, 50_050.0, 9_990.0, 50_050.0),
+        # a balance below zero leaves no room, so nothing is bought
+        (200_000.0, 2.0, 4.0, 19_980.0, -19_880.0, None, None),
+        # a balance above the capital reads the capital, so the budget is bought whole
+        (100_000.0, 1.0, 20.0, 9_990.0, 199_900.0, 4_997.0, 100_000.0),
+    ],
+    ids=["cut_to_the_balance", "nothing_below_zero", "the_budget_above_the_capital"],
+)
+def test_under_cap_room_an_entry_is_the_smaller_of_the_budget_and_the_room(
+    backtest, budget, leverage, to, first, left, again, base
+) -> None:
+    """`cap: room` answers what a full book is once the book has shrunk: the whole of what
+    the limits leave on the smaller of the capital and the balance, and the base each entry
+    was sized to is recorded for `position_size`."""
+    limits = {"max_leverage": leverage, "max_position_pct": leverage * 100.0}
+    rule = sized(universe=("DEMO.XNAS",), sizing_budget=budget, sizing_room=True, **limits)
+    run = backtest(Again(rule), data=moved(to))
+
+    expected = [("DEMO.XNAS", "BUY", first), ("DEMO.XNAS", "SELL", first)]
+    assert intents(run) == expected + ([] if again is None else [("DEMO.XNAS", "BUY", again)])
+    assert run.strategy.seen[1] == pytest.approx(left)
+    if again is None:
+        assert run.strategy.seen[2] is None
+    recorded = [(item.side, item.base, item.clip) for item in run.strategy._sized_record()]
+    assert recorded == [("BUY", budget, False)] + ([] if base is None else [("BUY", base, False)])
+
+
+def test_without_the_cap_no_base_is_recorded(backtest) -> None:
+    run = backtest(Enters(sized()), data=two_names(), instruments=(DEMO, HEDGE))
+
+    assert run.strategy._sized_record() == ()
+
+
+def test_under_cap_room_a_room_below_one_lot_places_nothing_and_refuses_nothing(
+    backtest,
+) -> None:
+    """The budget buys one share of a 60,000 name; the 50,050 a loss left buys none, which is
+    no room rather than a budget below one lot."""
+
+    class Elsewhere(Again):
+        def after(self, bars: int) -> None:
+            if bars == 6:
+                self.submit_exit(DEMO)
+            if bars == 8:
+                self.seen.append(self.submit_entry(HEDGE, "BUY"))
+
+    data = [*moved(5.0), *flat(HEDGE, close=60_000.0, volume=DEEP)]
+    rule = sized(sizing_budget=100_000.0, sizing_room=True)
+    run = backtest(Elsewhere(rule), data=data, instruments=(DEMO, HEDGE))
+
+    assert intents(run) == [("DEMO.XNAS", "BUY", 9_990.0), ("DEMO.XNAS", "SELL", 9_990.0)]
+    assert run.strategy.seen[1] is None
+
+
 def test_an_exit_while_the_entry_is_still_in_flight_places_nothing(backtest) -> None:
     class Hasty(Enters):
         def after(self, bars: int) -> None:

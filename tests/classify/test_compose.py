@@ -53,6 +53,9 @@ def test_an_attached_construct_records_the_budget_it_is_composed_with_without_de
         strategy(), "vol_target", SHA, {"sizing_budget": 5_000.0}, **COMPOSED
     )
     assert version.attached[-1].params == {"sizing_budget": 5_000.0}
+    capped = {"sizing_budget": 5_000.0, "sizing_room": True}
+    version = get("overlay").compose(strategy(), "vol_target", SHA, capped, **COMPOSED)
+    assert version.attached[-1].params == capped
     with pytest.raises(ValidationError, match="'sector' is not one of"):
         get("filter").compose(
             strategy(), "vol_gate", SHA, {"scope": "sector", "sizing_budget": 1.0}, **COMPOSED

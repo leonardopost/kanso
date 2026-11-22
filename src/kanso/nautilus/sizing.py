@@ -33,6 +33,12 @@ the budget is what a floor on entry fills would otherwise refuse. The price and 
 increment are one contract's, so on a multiplied instrument the harness hands in `price x
 multiplier` and `increment x multiplier` — the notional one contract costs and the notional
 one tick moves it by — and a per-share commission is per contract in the `cost_rate`.
+
+Under `cap: room` the budget handed in is the smaller of the budget and the room the risk
+limits leave at the instant (`KansoStrategy._sized_base`), so the same arithmetic sizes the
+whole of what is left. `config_fields` is how a rule reaches a sleeve's or an overlay's
+configuration: the budget, and `sizing_room` only where the rule states the cap, so a
+configuration built from a rule without it carries the keys it always did.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Final
 
 from kanso.errors import ValidationError
+from kanso.schemas.hypothesis import Sizing
 
 SIZE_ARGUMENT: Final = "size_argument"
 """A `notional`, `qty` or `price` was passed where the harness sizes and places at market."""
@@ -135,6 +142,20 @@ class SizingError(ValidationError):
             "discarded with this refusal as its `sizing` gate",
         )
         self.refusal = refusal
+
+
+SIZING_BUDGET: Final = "sizing_budget"
+SIZING_ROOM: Final = "sizing_room"
+"""The configuration fields a sizing rule sets, on a sleeve and on an attached construct."""
+
+
+def config_fields(sizing: Sizing | None) -> dict[str, float | bool]:
+    """What a sizing rule sets in a configuration: its budget, and under `cap: room` the flag
+    that caps each entry to the room; nothing without a rule."""
+    if sizing is None:
+        return {}
+    room: dict[str, float | bool] = {SIZING_ROOM: True} if sizing.cap == "room" else {}
+    return {SIZING_BUDGET: sizing.budget, **room}
 
 
 def full_book_quantity(budget: float, price: float, increment: float, cost_rate: float) -> float:

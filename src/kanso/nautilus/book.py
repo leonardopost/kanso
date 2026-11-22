@@ -946,6 +946,7 @@ def execute_book(
                 member.request,
                 _Engine(_StrategyView(engine.cache, strategy.id.value)),
                 marks[member.id],
+                sized=strategy._sized_record(),
             )
             for member, strategy in zip(order, strategies, strict=True)
         )
