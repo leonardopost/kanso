@@ -695,7 +695,7 @@ def precheck(
     return is carded by both builds under one criteria version, which names no engine either,
     so an engine patch moves a return under it too; certification resolves inputs afresh
     rather than reading them off the card — the warmup prefix, from the catalog as it stands,
-    which a `kanso data load` adding a printed day inside the lookback moves, and an attached
+    which a `kanso data load` adding a session inside the lookback moves, and an attached
     construct's budget and grains, from its host's registration as it stands; and the trials
     are counted when each reading is made. In those cases the certification child's own
     precheck, on the run it makes, is the one the certificate agrees with

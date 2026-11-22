@@ -374,6 +374,51 @@ def test_the_research_skill_states_the_exploration_default_the_package_ships() -
     ) in text
 
 
+def test_every_page_that_says_what_a_warmup_counts_dates_a_point_by_its_market() -> None:
+    """Below a bar of a day a warmup dates each point on its market's own clock and counts the
+    days a name printed on while its market was open, and at a bar of a day or longer every
+    UTC day one is stamped on (`kanso.nautilus.backtest.warmup_prefix`). A page that said any
+    UTC day that printed would tell an agent a Friday's post-market, stamped on Saturday,
+    warms a strategy a session, and a stage restart on a weeknight's evening one more; one
+    that said only open days would tell it a Friday's daily bar, stamped on Saturday, does
+    not."""
+    workspace = prose(page("workspace.md"))
+    template = prose((ROOT / "src" / "kanso" / "templates" / "hypothesis.yaml").read_text())
+    assert (
+        "Below a day — quotes, prints and bars shorter than one — a point belongs to the day of "
+        "its market that the instant before its stamp falls in"
+    ) in workspace
+    assert (
+        "a session is a day of the instrument's market on which it printed while that calendar "
+        "holds it open"
+    ) in workspace
+    assert (
+        "is stamped on the next UTC date — a Saturday after a Friday, the holiday after the day "
+        "before one — and adds no session to it, nor to a weekday whose own session has not "
+        "begun"
+    ) in workspace
+    assert (
+        "A bar of a day or longer is the only point of what it covers, so every UTC day that "
+        "holds one is a session and neither zone nor calendar is read"
+    ) in workspace
+    dated = "while that market was open, each point dated on the market's own clock"
+    daily = "a bar of 1d or longer counts on the day it is stamped"
+    hypothesis_skill = skill(PACKAGED, "kanso-hypothesis")
+    assert dated in hypothesis_skill
+    assert daily in hypothesis_skill
+    assert dated in template.replace("# ", "")
+    assert daily in template.replace("# ", "")
+    cli = prose(page("cli.md"))
+    assert ("a session being a day of a universe name's market on which it printed " + dated) in cli
+    assert "makes no weekend, holiday or next weekday a session" in cli
+    assert "or at a bar of 1d or longer every UTC day one is stamped on" in cli
+    assert (
+        "there a point is dated by its market's own clock, New York's for a US equity, so an "
+        "evening stamped past 00:00Z is its own day's, and a day a name's market was closed on "
+        "is no warmup session for it"
+    ) in prose(page("concepts.md"))
+
+
 def test_the_data_skill_says_what_a_gap_and_an_answer_mean() -> None:
     """An agent reading `data show` for an operator meets `empty` inside `gaps`, and told
     nothing would either ask for those days again or call a lost trading day a holiday."""
