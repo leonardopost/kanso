@@ -129,6 +129,7 @@ from kanso.hyp import (
     Registration,
     check_tick_costs,
     host_resolution,
+    host_room,
     host_sizing,
     hypothesis_dir,
     hypothesis_file,
@@ -305,6 +306,7 @@ class Setup:
     host_modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = field(default=())
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    sleeve_room: bool = False
     prefix: tuple[date, date] | None = None
     """The sessions a card is fed before the research window, resolved in the parent from
     the catalog as it stands when the card is built, so the child — which has no catalog —
@@ -361,7 +363,10 @@ class Setup:
         `RunRequest.sleeve_budget`. For an attached construct it is the host's budget read
         from the host's *currently registered* hypothesis (`_sleeve_budget` →
         `hyp.registry.host_sizing`), and re-registering that file with another budget
-        composes no host version, so the host version above does not cover it. `grains`,
+        composes no host version, so the host version above does not cover it. `sleeve_room`,
+        whether that rule states `cap: room`, is read the same way and digested beside the
+        budget only where it is set, so a setup without the cap digests as it always did.
+        `grains`,
         the bar sizes the run loads, is the host's registered resolution beside the
         sleeve's own and moves by the same edit.
 
@@ -403,7 +408,7 @@ class Setup:
             self.period,
             self.venue_model.model_dump(mode="json"),
             None if self.harness.host is None else self.harness.host.version,
-            self.sleeve_budget,
+            [self.sleeve_budget, "room"] if self.sleeve_room else self.sleeve_budget,
             self.grains,
             None if self.prefix is None else [day.isoformat() for day in self.prefix],
         )
@@ -534,6 +539,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         host_modifiers=modifiers,
         grains=grains,
         sleeve_budget=_sleeve_budget(ws, store, hyp, harness.host),
+        sleeve_room=_sleeve_room(ws, store, hyp, harness.host),
         prefix=backtest.warmup_prefix(hyp, window, catalog, grains),
         extensions=extensions,
     )
@@ -559,6 +565,14 @@ def _sleeve_budget(
     return 0.0 if hyp.sizing is None else hyp.sizing.budget
 
 
+def _sleeve_room(ws: Workspace, store: StateStore, hyp: Hypothesis, host: HostRef | None) -> bool:
+    """Whether the sleeve of this run caps its entries to the room: its own rule's `cap`, or
+    its host's when attached."""
+    if host is not None:
+        return host_room(ws, store, host)
+    return hyp.sizing is not None and hyp.sizing.cap == "room"
+
+
 # --- running one backtest ----------------------------------------------------
 
 
@@ -582,8 +596,7 @@ def _request(
         assert host is not None
         version_source, version_hyp = host.sleeve_file(strategy), host.sleeve.hyp_id
         params = dict((setup.hyp.construct.params if setup.hyp.construct else None) or {})
-        if setup.hyp.sizing is not None:
-            params["sizing_budget"] = setup.hyp.sizing.budget
+        params.update(sizing.config_fields(setup.hyp.sizing))
         attached = (
             setup.host_modifiers
             if host_only
@@ -602,6 +615,7 @@ def _request(
         period=setup.period,
         grains=setup.grains,
         sleeve_budget=setup.sleeve_budget,
+        sleeve_room=setup.sleeve_room,
         prefix=setup.prefix,
         version_source=version_source,
         version_hyp=version_hyp,

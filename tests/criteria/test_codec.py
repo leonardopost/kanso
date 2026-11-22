@@ -88,6 +88,30 @@ def test_a_run_that_held_nothing_through_a_split_is_stored_as_it_was() -> None:
     assert decode_run(ordered).adjustments == (after,)
 
 
+def test_a_run_sized_without_the_cap_is_stored_as_it_was_and_its_bases_are_kept() -> None:
+    """A run no `cap: room` sized writes no `sized` key, so it is stored as runs were before
+    they kept the bases; one that has them reads them back whole, a clip's said where it is."""
+    from dataclasses import replace
+
+    from kanso.criteria.run import Sized
+    from tests.criteria.builders import build_run
+
+    run = build_run((1.0, -1.0))
+    entry = Sized(ts_ns=7, instrument_id="SOXL.ARCX", side="BUY", base=27_449.5)
+    clip = Sized(ts_ns=9, instrument_id="SOXS.ARCX", side="SELL", base=1_000.0, clip=True)
+
+    assert "sized" not in encode_run(run)
+    assert decode_run(encode_run(run)).sized == ()
+    kept = encode_run(replace(run, sized=(entry, clip)))
+    assert kept["sized"] == [
+        {"ts_ns": 7, "instrument_id": "SOXL.ARCX", "side": "BUY", "base": 27_449.5},
+        {"ts_ns": 9, "instrument_id": "SOXS.ARCX", "side": "SELL", "base": 1_000.0, "clip": True},
+    ]
+    assert decode_run(kept).sized == (entry, clip)
+    assert run.between(0, 8).sized == ()
+    assert replace(run, sized=(entry, clip)).between(0, 8).sized == (entry,)
+
+
 def test_a_holding_says_its_mark_was_under_zero_only_where_it_was() -> None:
     """A holding marked at or above zero writes no `below_zero` key, so it is stored as
     holdings were before they said so, and one stored that way decodes as at or above zero;

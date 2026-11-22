@@ -26,7 +26,9 @@ adjustment writes where it fell among the fills of its instant (`fills_before`) 
 some came before it, and one written without it reads as before them all. A holding
 says its mark was under zero (`Held.below_zero`) only where it was, so every other holding is
 stored as it was, and one stored before holdings said so reads as at or above zero, which
-the same fill path reads it as.
+the same fill path reads it as. The bases a `cap: room` rule sized each entry to (`sized`) are
+written only where there are some, so a run sized without the cap, or unsized, is stored as it
+was, and a run stored before runs kept them decodes with none.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Trade
+from kanso.criteria.run import Adjustment, CardRun, Fill, FundingPayment, Held, Sized, Trade
 from kanso.schemas import PeriodStops
 
 __all__ = ["decode_run", "encode_run"]
@@ -54,6 +56,7 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         if run.adjustments
         else {}
     )
+    based = {"sized": [_encode_sized(item) for item in run.sized]} if run.sized else {}
     return {
         "window": [run.window[0].isoformat(), run.window[1].isoformat()],
         "period": run.period,
@@ -72,6 +75,7 @@ def encode_run(run: CardRun) -> dict[str, Any]:
         "venue_model": dict(run.venue_model),
         **stopped,
         **adjusted,
+        **based,
     }
 
 
@@ -102,6 +106,28 @@ def decode_run(payload: Mapping[str, Any]) -> CardRun:
         venue_model=dict(payload["venue_model"]),
         period_stops=None if stopped is None else PeriodStops.model_validate(stopped),
         adjustments=tuple(_decode_adjustment(item) for item in payload.get("adjustments", ())),
+        sized=tuple(_decode_sized(item) for item in payload.get("sized", ())),
+    )
+
+
+def _encode_sized(item: Sized) -> dict[str, Any]:
+    clip = {"clip": True} if item.clip else {}
+    return {
+        "ts_ns": item.ts_ns,
+        "instrument_id": item.instrument_id,
+        "side": item.side,
+        "base": item.base,
+        **clip,
+    }
+
+
+def _decode_sized(payload: Mapping[str, Any]) -> Sized:
+    return Sized(
+        ts_ns=int(payload["ts_ns"]),
+        instrument_id=str(payload["instrument_id"]),
+        side=str(payload["side"]),
+        base=float(payload["base"]),
+        clip=bool(payload.get("clip", False)),
     )
 
 

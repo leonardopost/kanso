@@ -539,6 +539,10 @@ def test_an_attached_budget_travels_in_its_params_and_the_book_is_the_largest_si
 
     assert _with_budget({"a": 1}, sized) == {"a": 1, "sizing_budget": 20_000.0}
     assert _with_budget(None, sized) == {"sizing_budget": 20_000.0}
+    capped = sized.model_copy(
+        update={"sizing": sized.sizing.model_copy(update={"cap": "room"})}  # type: ignore[union-attr]
+    )
+    assert _with_budget(None, capped) == {"sizing_budget": 20_000.0, "sizing_room": True}
     assert _with_budget(None, plain) is None
     assert _with_budget({"a": 1}, plain) == {"a": 1}
 

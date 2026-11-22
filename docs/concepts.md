@@ -1481,7 +1481,7 @@ the capital, less what its fills paid and were charged, plus its positions marke
 print — the equity curve's own number, computed as the run goes. An unsized strategy that has
 lost money therefore cannot keep entering at its original size on borrowed money, and one that
 has made money does not grow past its capital; a strategy under a `sizing` rule reads none of
-this (below). The room counts orders in flight as filled and holds back
+this unless the rule states `cap: room` (below). The room counts orders in flight as filled and holds back
 what a resting limit or stop entry would add. `submit_entry` is cut to it, and so is each hedge
 leg an overlay asks for, with the legs before it counted. An entry a strategy builds by hand is
 not rebuilt at another size, and only the funding question is asked of it: one that would take
@@ -1497,7 +1497,8 @@ ex-date the venue restates the held leg at the day's first point, which may be t
 until the held leg prints again its last price is restated by the split's ratio, for the balance
 and for the room, and the runner marks it the same way at a period end. `position_size` still judges a position against the capital
 (`docs/backlog.md`), and under a `sizing` rule no entry reads the room: the budget is entered
-whole at every entry, whatever the balance (row 76).
+whole at every entry, whatever the balance (row 76) — unless the rule states `cap: room`, under
+which each entry is the smaller of the budget and this room.
 `self.balance` reads the number, and a read costs what the sleeve's orders gained since the
 last one rather than what they hold: each event of each order — a fill, and the two a modify
 adds — is folded in once, as the engine hands it to the sleeve, so a sleeve may read it on
@@ -1554,7 +1555,8 @@ and charges no financing here — kanso's instruments carry no margin rates — 
 is delegated to the venue. A sized sleeve gets no special case: a full-book entry that
 borrows pays the carry and can breach the floor (row 76) — at entry, once its balance is below
 `maintenance_pct` of the budget, since the ratio a long holds the instant it is bought is about
-its balance over the budget (`docs/workspace.md`, `book`).
+its balance over the budget (`docs/workspace.md`, `book`). Under `cap: room` no entry borrows
+past `max_leverage` x what the book can fund, and the floor holds at entry as it does unsized.
 
 The policy has edges, each recorded in `docs/backlog.md` row 86. `maintenance_margin` reads
 end-of-period holdings, so a position opened and closed inside one period is never judged,
@@ -1573,8 +1575,8 @@ method of the same name binds a name the base owns, which the same gate refuses,
 in `hypothesis.yaml` moves the size of every order from the strategy to the harness: an entry
 is the whole budget in one instrument at market — `budget / ((1 + 2 × cost) × (price + one
 increment))`, floored to whole lots — at most one instrument is held at a time, every exit is
-the whole position, and `submit_entry(id, side)` and `submit_exit(id)` take no size. The
-budget is the same at every entry, however much the account has lost. `kanso hyp validate`
+the whole position, and `submit_entry(id, side)` and `submit_exit(id)` take no size. Without
+`cap` the budget is the same at every entry, however much the account has lost. `kanso hyp validate`
 holds it to `max_position_pct` of the capital and to `max_leverage` × the capital, and nothing
 reads either ceiling, or the balance, at run time: a sized entry's leverage is the budget over
 the balance, past `max_leverage` once the balance is below `budget / max_leverage`, and at a
@@ -1583,7 +1585,13 @@ and only a shared book's room cuts it. Measured on 2026-11-22
 over six SOXL and SOXS regime-holding hypotheses on 0.20.0, each with a budget of 34,500 on
 30,000 of capital at `max_leverage: 1.15`: entries at up to 39 times the equity they were
 bought on, and in one hypothesis 1,606 of its 1,967 entries bought at an equity of zero or
-below. A
+below. `sizing: {mode: full_book, budget: N, cap: room}` is the opt-in other answer to what a
+full book is once the book has shrunk: each entry, and each clip of a sized overlay whose file
+states the key, is the smaller of the budget and the room the risk limits leave at that
+instant — the budget above the capital with nothing else held, a share of the balance after a
+loss, nothing at a
+balance of zero or below — with every other rule of the mode unchanged; the run records the
+base each entry was sized to (`sized`). A
 proposal that names one is discarded by `strategy_integrity` before any backtest, with the
 line and the reason; a shape the scan cannot see — an entry into a second instrument while
 one is held with no exit in flight, the other side of a held name, a hand-built order — is
@@ -1591,7 +1599,8 @@ refused inside the handler that asked for it, the run stops there, and the card 
 `discard` carrying a `sizing` gate with the rule, the instrument, the instant and what was
 held, which the proposer sees with its next cards. Nothing is spent grinding on a size that
 could never validate. `position_size` stays as the backstop, and under the rule it judges
-**entry fills** as a share of the budget — gathered per order, because the venue fills a
+**entry fills** as a share of the base each was sized to — the budget, or under `cap: room`
+the base the run recorded for it — gathered per order, because the venue fills a
 market order past a quarter of the bar's volume as two events — rather than period-end
 marks, which a leveraged leg drifts through between two closes. A flip is `submit_exit(old)`
 then `submit_entry(new, side)` in the same handler: the exit in flight nets the old leg to

@@ -112,7 +112,7 @@ from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import TraderId
 
 from kanso.criteria.objectives import measures_benchmark
-from kanso.criteria.run import CardRun, midnight_ns
+from kanso.criteria.run import CardRun, Sized, midnight_ns
 from kanso.errors import PreconditionError, ValidationError
 from kanso.nautilus import backtest, sandbox, splits, tape
 from kanso.nautilus.backtest import SUBMIT_RATE, RunRequest
@@ -176,6 +176,7 @@ class Placement:
     loaded: Loaded
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    sleeve_room: bool = False
     cushion: float = 0.0
     settled_ns: int | None = None
     """Where this version's book policy stood when its last window on the stage closed: the
@@ -225,6 +226,7 @@ class Placement:
             period=self.period,
             grains=self.grains,
             sleeve_budget=self.sleeve_budget,
+            sleeve_room=self.sleeve_room,
             prefix=prefix,
             cushion=self.cushion,
             settled_ns=self.settled_ns,
@@ -599,6 +601,7 @@ def run(
                 struck,
                 strategy._target_record(),
                 feed=points[: client.released],
+                sized=strategy._sized_record(),
             )
             for placed, request, groups, strategy in zip(
                 node.placements, requests, window.per_version, strategies, strict=True
@@ -960,6 +963,7 @@ def _realised(
     period_stops: PeriodStops | None = None,
     *,
     feed: Sequence[Any],
+    sized: tuple[Sized, ...] = (),
 ) -> Realised:
     """One version's window, extracted from the shared cache as if it had run alone.
 
@@ -991,7 +995,8 @@ def _realised(
     What the version's period target did over the window is its harness's record, read once
     the node has stopped — after its own flatten, or where a halt, which flattens nothing,
     left the sleeve (`period_stops`, `KansoStrategy._target_record`) — and is carried on the
-    window's run, an empty one included.
+    window's run, an empty one included. So are the bases a `cap: room` rule sized its entries
+    to (`sized`, `KansoStrategy._sized_record`), on a window that held anything.
     """
     if not any(groups):
         return Realised(
@@ -1012,7 +1017,7 @@ def _realised(
         strategy_id=placed.strategy_id,
         version=placed.version,
         capital=placed.capital,
-        run=backtest._extract(request, _Engine(view), marks, period_stops),
+        run=backtest._extract(request, _Engine(view), marks, period_stops, sized),
         positions=tuple(
             book for (holder, _), book in sorted(books.items()) if holder == placed.identity
         ),

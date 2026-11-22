@@ -156,7 +156,7 @@ from nautilus_trader.model.data import (
 )
 
 from kanso.criteria import Adjustment, CardRun, Fill, FundingPayment, Trade
-from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, day_of, midnight_ns
+from kanso.criteria.run import NS_PER_DAY, NS_PER_SECOND, Held, Sized, day_of, midnight_ns
 from kanso.errors import KansoError, PreconditionError, ValidationError
 from kanso.nautilus import splits
 from kanso.nautilus.costs import (
@@ -457,9 +457,11 @@ class RunRequest:
 
     `sleeve_budget` is what the sleeve sizes every order to under a `sizing` rule — its
     own hypothesis's for a sleeve card, its host's for an attached construct's — and zero
-    is free sizing. An attached construct's own budget travels in its `params` as
-    `sizing_budget`. `grains` are the bar grains to load, the sleeve's first; empty means
-    the hypothesis's own. An overlay researched at a finer grain than its host names both
+    is free sizing; `sleeve_room` is whether that rule states `cap: room`, so each entry is
+    the smaller of the budget and the room the limits leave. An attached construct's own
+    budget travels in its `params` as `sizing_budget`, and its cap as `sizing_room`.
+    `grains` are the bar grains to load, the sleeve's first; empty means the hypothesis's
+    own. An overlay researched at a finer grain than its host names both
     (`grains_of`),
     for the combined run and the host-alone run alike. Every grain loaded reaches the
     venue whether or not the sleeve subscribes it, and the exchange matches against the
@@ -521,6 +523,7 @@ class RunRequest:
     overrides: Mapping[str, float] = field(default_factory=dict)
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    sleeve_room: bool = False
     prefix: tuple[date, date] | None = None
     cushion: float = 0.0
     settled_ns: int | None = None
@@ -1413,6 +1416,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             else (scope.series, scope.flag, tuple(scope.always)),
             capital=request.capital,
             sizing_budget=request.sleeve_budget,
+            sizing_room=request.sleeve_room,
             max_position_pct=hyp.risk_limits.max_position_pct,
             max_drawdown_pct=hyp.risk_limits.max_drawdown_pct,
             max_leverage=hyp.risk_limits.max_leverage,
@@ -1657,7 +1661,7 @@ def execute_chunked(
             engine.clear_data()
         if ran:
             engine.end()
-        card = _extract(request, engine, marks, strategy._target_record())
+        card = _extract(request, engine, marks, strategy._target_record(), strategy._sized_record())
         intents = tuple(
             (i.ts_event, i.instrument_id, i.side, i.qty, i.order_type, i.price)
             for i in strategy.intents
@@ -2687,11 +2691,16 @@ def increments_of(instruments: Iterable[Any]) -> dict[str, float]:
 
 
 def _extract(
-    request: RunRequest, engine: Any, marks: Marks, period_stops: PeriodStops | None = None
+    request: RunRequest,
+    engine: Any,
+    marks: Marks,
+    period_stops: PeriodStops | None = None,
+    sized: tuple[Sized, ...] = (),
 ) -> CardRun:
     """The one measured object: returns, equity, trades and fills with costs applied, and
     the book policy applied once at each period end; with what the sleeve's period target did
-    over the run, as its harness recorded it (`period_stops`), carried as it was handed."""
+    over the run and the bases a `cap: room` rule sized its entries to, as its harness
+    recorded them (`period_stops`, `sized`), carried as they were handed."""
     model = VenueModel.model_validate(dict(request.venue_model))
     cache = engine.cache
     multipliers = multipliers_of(cache.instruments())
@@ -2737,6 +2746,7 @@ def _extract(
         funding=curve.funding,
         period_stops=period_stops,
         adjustments=adjustments,
+        sized=sized,
     )
 
 

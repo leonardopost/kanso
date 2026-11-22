@@ -1662,6 +1662,11 @@ def test_an_attached_subject_carries_its_own_budget_as_a_parameter() -> None:
     assert _own_budget(SimpleNamespace(hyp=make_hyp())) == {}
     sized = make_hyp(sizing={"mode": "full_book", "budget": 2_500.0})
     assert _own_budget(SimpleNamespace(hyp=sized)) == {"sizing_budget": 2_500.0}
+    capped = make_hyp(sizing={"mode": "full_book", "budget": 2_500.0, "cap": "room"})
+    assert _own_budget(SimpleNamespace(hyp=capped)) == {
+        "sizing_budget": 2_500.0,
+        "sizing_room": True,
+    }
 
 
 # --- warming ------------------------------------------------------------------

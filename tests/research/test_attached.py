@@ -123,6 +123,23 @@ def attached(ws: Workspace, store: StateStore, **changes: Any) -> str:
     return classify(ws, store, {**FILTER, **changes}, ALLOWING)
 
 
+def test_a_host_that_states_cap_room_caps_the_sleeve_an_attached_card_runs(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The cap is read from the host's registered file as its budget is, and reaches the run
+    beside it, so a filter's or an overlay's card runs the host as its own cards did."""
+    compose_host(ws, store, SIZED_HOST, sized=True)
+    hyp = hypothesis_of(ws, store, attached(ws, store))
+    before = loop._setup(ws, store, hyp, version=1)
+    rule = {"mode": "full_book", "budget": 10_000, "cap": "room"}
+    register(ws, store, write_hypothesis(ws, document(id=HOST, sizing=rule, **BOOK), SIZED_HOST))
+    after = loop._setup(ws, store, hyp, version=1)
+
+    assert (before.sleeve_room, after.sleeve_room) == (False, True)
+    assert before.measured_under != after.measured_under
+    assert loop._request(after, b"", "s", budget_s=None, mem_cap_gb=None).sleeve_room is True
+
+
 def test_a_host_budget_re_registered_moves_the_reading_and_no_version(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -151,6 +168,7 @@ def test_a_host_budget_re_registered_moves_the_reading_and_no_version(
     after = loop._setup(ws, store, hyp, version=1)
 
     assert (before.sleeve_budget, after.sleeve_budget) == (10_000, 20_000)
+    assert (before.sleeve_room, after.sleeve_room) == (False, False)
     assert before.harness.host is not None and after.harness.host is not None
     assert before.harness.host.version == after.harness.host.version == 1, (
         "the host was not composed again, so the version the card differences against stands"

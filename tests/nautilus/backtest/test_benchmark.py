@@ -44,6 +44,7 @@ def test_the_benchmark_keeps_everything_the_subject_pins_but_the_strategy(reques
         period="1d",
         grains=("1d",),
         sleeve_budget=5_000.0,
+        sleeve_room=True,
         prefix=(date(2023, 12, 27), date(2023, 12, 31)),
         version_source="kanso_impl_sleeve_demo_mr_0123456789ab.py",
     )
@@ -71,6 +72,7 @@ def test_the_benchmark_keeps_everything_the_subject_pins_but_the_strategy(reques
         subject.grains,
         subject.sleeve_budget,
     )
+    assert held.sleeve_room is subject.sleeve_room is True
 
 
 def test_the_hold_buys_the_first_leg_once_and_never_sells(tmp_path: Path, request_for) -> None:

@@ -181,10 +181,17 @@ from kanso.data.snapshot import read as read_snapshot
 from kanso.data.types import type_id_of
 from kanso.env.envelope import engine_version
 from kanso.errors import Exit, KansoError, PreconditionError, ValidationError
-from kanso.hyp import HYPOTHESIS_FILE, Registration, host_resolution, host_sizing, set_status
+from kanso.hyp import (
+    HYPOTHESIS_FILE,
+    Registration,
+    host_resolution,
+    host_room,
+    host_sizing,
+    set_status,
+)
 from kanso.hyp import show as registration_of
 from kanso.inbox import escalate
-from kanso.nautilus import backtest
+from kanso.nautilus import backtest, sizing
 from kanso.replay.parity import Parity
 from kanso.replay.parity import parity as replay_parity
 from kanso.research import records
@@ -329,6 +336,7 @@ class Subject:
     host_modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = ()
     grains: tuple[str, ...] = ()
     sleeve_budget: float = 0.0
+    sleeve_room: bool = False
     research_prefix: tuple[date, date] | None = None
     certification_prefix: tuple[date, date] | None = None
     """The sessions each window warms on, resolved once when the subject is built so every
@@ -989,6 +997,9 @@ def _subject(ws: Workspace, store: StateStore, hyp_id: str, sha: str | None) -> 
         sleeve_budget=host_sizing(ws, store, harness.host)
         if harness.host is not None
         else (0.0 if hyp.sizing is None else hyp.sizing.budget),
+        sleeve_room=host_room(ws, store, harness.host)
+        if harness.host is not None
+        else (hyp.sizing is not None and hyp.sizing.cap == "room"),
         research_prefix=backtest.warmup_prefix(
             hyp, (windows.research.start, windows.research.end), catalog, grains
         ),
@@ -1149,17 +1160,16 @@ def _request(
         overrides=own,
         grains=subject.grains,
         sleeve_budget=subject.sleeve_budget,
+        sleeve_room=subject.sleeve_room,
         prefix=subject.prefix_of(window),
         version_source=version_source,
         version_hyp=version_hyp,
     )
 
 
-def _own_budget(subject: Subject) -> dict[str, float]:
-    """An attached construct's own budget, as the parameter its config takes."""
-    if subject.hyp.sizing is None:
-        return {}
-    return {"sizing_budget": subject.hyp.sizing.budget}
+def _own_budget(subject: Subject) -> dict[str, float | bool]:
+    """An attached construct's own budget, and its cap, as the parameters its config takes."""
+    return sizing.config_fields(subject.hyp.sizing)
 
 
 def _tunable(subject: Subject) -> dict[str, float]:

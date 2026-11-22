@@ -73,6 +73,47 @@ def test_a_clip_is_sized_to_the_overlay_s_budget_not_the_host_s(backtest) -> Non
     assert positions(run) == {"DEMO.XNAS": DEMO_SHARES, "HEDGE.XNAS": HEDGE_CLIP}
 
 
+@pytest.mark.parametrize(
+    ("leverage", "clipped"),
+    [
+        # the host's 2,997 filled partly a tick worse, leaving 99,972.53: 40% of it is
+        # 39,989.01, less the host's 29,970 at 10.00 leaves 10,019.01, 500 shares at 20.01
+        (0.4, 500.0),
+        # 29,981.76 less 29,970 leaves 11.76, below one share: nothing, and no refusal
+        (0.2999, None),
+        # 28,992.03 is less than the host already holds: nothing
+        (0.29, None),
+    ],
+    ids=["cut_to_the_room_left", "below_one_lot", "no_room"],
+)
+def test_under_cap_room_a_clip_is_cut_to_the_room_the_host_leaves(
+    backtest, leverage, clipped
+) -> None:
+    """The host's own share counts against the clip's room, so the two together hold no more
+    than `max_leverage` x the book."""
+
+    class Once(Clipper):
+        script = {8: (Clip("HEDGE.XNAS", "BUY"),)}
+
+    overlay = Once(
+        KansoModifierConfig(
+            host_strategy_id="Enters",
+            hyp_id="attached",
+            sizing_budget=CLIP_BUDGET,
+            sizing_room=True,
+        )
+    )
+    run = backtest(
+        Enters(sized(max_leverage=leverage)), [overlay], data=two_names(), instruments=(DEMO, HEDGE)
+    )
+
+    host = [("DEMO.XNAS", "BUY", DEMO_SHARES)]
+    assert intents(run) == host + ([] if clipped is None else [("HEDGE.XNAS", "BUY", clipped)])
+    recorded = [(i.instrument_id, i.base, i.clip) for i in run.strategy._sized_record()]
+    if leverage == 0.4:
+        assert recorded == [("HEDGE.XNAS", pytest.approx(10_019.012), True)]
+
+
 def test_a_clip_reserves_the_tick_its_venue_model_states(backtest) -> None:
     """One tick of a cent on a 20-dollar name is 5 bp a side: 20,000 over (1 + 2 x 5 bp) x
     20.01 is 998 shares of the hedge, one fewer than with no tick reserved; the host's entry in
