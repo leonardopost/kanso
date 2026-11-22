@@ -485,9 +485,11 @@ def test_a_stage_window_s_marks_hold_the_record_its_venue_was_loaded_with(
     extracted: list[tuple[Struck | None, Struck | None]] = []
     extract = backtest._extract
 
-    def extracting(request: Any, engine: Any, marks: Any, period_stops: Any = None) -> Any:
+    def extracting(
+        request: Any, engine: Any, marks: Any, period_stops: Any = None, sized: Any = ()
+    ) -> Any:
         extracted.append((marks.record, marks.pricing))
-        return extract(request, engine, marks, period_stops)
+        return extract(request, engine, marks, period_stops, sized)
 
     monkeypatch.setattr(node, "Struck", loading)
     monkeypatch.setattr(backtest, "_extract", extracting)
