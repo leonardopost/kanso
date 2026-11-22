@@ -118,6 +118,7 @@ def test_an_equity_reads_the_us_calendar_whatever_its_venue_is_spelled() -> None
     assert set(found) == {"SOXL.ARCA", "SOXL.ARCX"}
     assert all(closed(sunday) for closed in found.values())
     assert closures.calendar("EQUITY", "ARCA") is closures.US_EQUITY
+    assert closures.calendar_of(equity("SOXL.ARCX")) is closures.US_EQUITY
 
 
 def test_a_market_with_no_calendar_on_file_is_never_closed() -> None:
@@ -125,6 +126,7 @@ def test_a_market_with_no_calendar_on_file_is_never_closed() -> None:
     [closed] = closures.by_instrument([pair]).values()
 
     assert closures.calendar("FX", "SIM") is None
+    assert closures.calendar_of(pair) is None
     assert closures.closed_days("FX", "SIM") is closures.never
     assert not closed(date(2021, 4, 18))
     assert not closures.never(date(2021, 4, 18))

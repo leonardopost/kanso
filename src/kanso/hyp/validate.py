@@ -251,10 +251,11 @@ def _check_dated_warmup(ws: Workspace, hyp: Hypothesis) -> None:
     sessions (`kanso.nautilus.backtest.warmup_prefix`, at the hypothesis's own grain).
 
     The file alone holds the rows as far back as a warmup of N sessions reaches at the latest,
-    N days before the window (`kanso.schemas.Hypothesis`); the sessions themselves are the
-    days the catalog holds a print on, so they are read here when it holds them. A catalog
-    that does not hold them yet resolves nothing to refuse, and the run is held to them where
-    it is built (`kanso.nautilus.backtest.RunRequest`)."""
+    N days before the window (`kanso.schemas.Hypothesis`); the sessions themselves are
+    resolved from the days the catalog holds prints on (`kanso.nautilus.backtest.warmup_prefix`),
+    so they are read here when it holds them. A catalog that does not hold them yet resolves
+    nothing to refuse, and the run is held to them where it is built
+    (`kanso.nautilus.backtest.RunRequest`)."""
     rows = None if hyp.costs is None else hyp.costs.dated
     if not rows or hyp.warmup is None:
         return

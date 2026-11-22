@@ -724,25 +724,52 @@ warmup:                            # scope: adding or changing it clears `best`
   sessions: 20                     # sessions before the window fed to the strategy before it may trade
 ```
 
-A session is a calendar day on which any instrument of the universe printed at the
-sleeve's grain — the host's, for an attached construct consulted on a coarser or finer
-one; the runner takes the last `sessions` of them before the
-window from the catalog, so the prefix is trading days rather than calendar days and a
-weekend or a holiday adds nothing. Over the prefix every handler runs and every attached
-overlay's `on_data` is asked, so their state warms too, but `submit_entry` and
+A session is a trading day of an instrument of the universe at the sleeve's grain — the
+host's, for an attached construct consulted on a coarser or finer one — and the runner
+takes the last `sessions` of them before the window from the catalog, so for a market
+whose calendar kanso holds the prefix is its trading days rather than calendar days, and a
+weekend or a holiday it was closed on adds nothing. Below a day — quotes, prints and bars
+shorter than one — a point belongs to the day of its market that the instant before its
+stamp falls in, read on the clock of the zone the market's calendar is kept in (the
+calendar coverage reads, `kanso.data.closures`: New York for US equities), and a session
+is a day of the instrument's market on which it printed while that calendar holds it open.
+So the evening's end of a trading day is that day's, wherever UTC stamps it: a US equity's
+post-market runs to 20:00 New York and a bar is stamped at its close, so the bar of 20:00
+EDT, or the last hour of bars in winter, is stamped on the next UTC date — a Saturday
+after a Friday, the holiday after the day before one — and adds no session to it, nor to a
+weekday whose own session has not begun, as when a stage restart's clock stands on that
+bar. A point dated to a day the calendar marks closed adds nothing, whatever a source
+holds there. A bar of a day or longer is the only point of what it covers, so every UTC
+day that holds one is a session and neither zone nor calendar is read: a US equity's daily
+bar is stamped at the next New York midnight, 04:00 or 05:00 UTC, so a Friday's lands on
+Saturday and the day before a holiday's on the holiday, and each counts there, one bar a
+session. The instruments are taken together, so a day counts when any of them is counted
+on it: a coin's weekend is a session of a universe that holds an equity beside it. A
+market with no calendar on file — a coin's, a perpetual's — keeps UTC's days, so every UTC
+day it printed on is a session, weekends included, and below a bar of a day a point stamped
+at 00:00 UTC is the day's before. Outside the span a calendar is on file for (US equities: 2003-09-10 to
+2027-09-06) every day reads as open, as it does for coverage, and the zone still dates
+each point. Below a bar of a day, each session is counted on the UTC day its market's day
+opens on, its own date in New York as in UTC, and the prefix is the UTC days from the first of those sessions to
+the last: the strategy is fed everything the catalog holds from the first's 00:00 UTC to
+the window — what a closed day holds, and whatever of the session before the first is
+stamped past that midnight, included. Over the prefix every handler runs and every
+attached overlay's `on_data` is asked, so their state warms too, but `submit_entry` and
 `submit_exit` return `None` — the same answer a refused filter gives — and nothing fills:
 the measured run begins at the window's first point with no position and no cold start. A
 card, a certificate, a replay and a stage node all warm on the same rule; a stage restart
-warms on the sessions at or before its clock, and a stage-mate's prefix warms nobody else:
-a version on a stage is handed only the sessions its own file asks for, whatever the
-versions beside it declare. `research begin` refuses (exit 2) when the
-catalog holds fewer sessions before the window than the file asks for, naming what it
-found, and the snapshot it pins must cover the prefix as well as the two windows. Adding
-the key re-pins the hypothesis under a new sha and clears `best`, exactly as `sizing`
-does, and a certificate earned cold refuses to compose under it. The window's own bounds
-are unchanged: the upper bound of every window is what it was, and only the data fed
-before it widens. An attached construct declares the same `warmup` as its host, or
-`kanso hyp validate` refuses it (exit 3), because its cards run the host underneath it.
+warms on the sessions at or before its clock — its own session among them once a point of
+it is, so a clock on an evening's last bar re-feeds `sessions` whole ones on every night
+of the week — and a stage-mate's prefix warms nobody else: a version on a stage is handed
+only the sessions its own file asks for, whatever the versions beside it declare.
+`research begin` refuses (exit 2) when the catalog holds fewer sessions before the window
+than the file asks for, naming what it found, and the snapshot it pins must cover the
+prefix as well as the two windows. Adding the key re-pins the hypothesis under a new sha
+and clears `best`, exactly as `sizing` does, and a certificate earned cold refuses to
+compose under it. The window's own bounds are unchanged: the upper bound of every window
+is what it was, and only the data fed before it widens. An attached construct declares the
+same `warmup` as its host, or `kanso hyp validate` refuses it (exit 3), because its cards
+run the host underneath it.
 
 **`data_by_instrument` narrows what one instrument must carry, and it is scope.** A
 universe that mixes sources can hold a type for some instruments and not others: a crypto
@@ -801,11 +828,12 @@ that narrows what an instrument is asked for (`docs/backlog.md` row 239). A bar 
 its close and the window is merged by `ts_init` with a stable sort, so a minute's bar reaches
 the sleeve among the ticks at the instant the minute ended, ahead of a quote or a print of that
 same instant. The sleeve's sessions — what `warmup` counts — are still the days its quotes or
-prints were printed, not the days a signal's bars were. A signal that trades round the clock —
-a future's twenty-three hours, a coin's twenty-four — moves the sleeve outside the traded
-name's session too: an order sent then is filled at that name's last quote or print, since the
-simulated venue keeps no market hours, and every UTC day that holds a point, a weekend's
-included, is a session of the run's digest and its period ends (`docs/backlog.md` row 241).
+prints were printed on while their market was open, not the days a signal's bars were. A
+signal that trades round the clock — a future's twenty-three hours, a coin's twenty-four —
+moves the sleeve outside the traded name's session too: an order sent then is filled at that
+name's last quote or print, since the simulated venue keeps no market hours, and every UTC day
+that holds a point, a weekend's included, is a session of the run's digest and its period ends
+(`docs/backlog.md` row 241).
 `kanso hyp validate` refuses (exit 3) a tick file that requires `bar` and states no
 `bar_resolution` — before the key existed such a file passed `hyp validate` and `hyp add`, and
 `research begin` refused it for want of a snapshot at `tick` (exit 2), so no card ran — a

@@ -911,10 +911,14 @@ session, because the session opens at midnight there — where the first market 
 the bar that closes at exactly 00:00Z, which summarises the previous day's last period,
 that bar is ordered ahead of a scope point stamped at the same instant and is judged
 under the previous session's scope while its return folds into the new period
-(`docs/backlog.md` row 100). No calendar decides a session: the sessions are the days the
-catalog holds prints on, whichever venue printed them, and the closures
-`kanso.data.closures` holds decide only which missing days coverage excuses (Snapshot,
-above).
+(`docs/backlog.md` row 100). No calendar decides a return period or a scope's session: each
+is cut on the UTC days of the points the catalog holds, whichever venue printed them
+(`docs/backlog.md` row 241). The closures `kanso.data.closures` holds decide which missing
+days coverage excuses (Snapshot, above), and the days a warmup counts below a bar of a day:
+there a point is dated by its market's own clock, New York's for a US equity, so an evening
+stamped past 00:00Z is its own day's, and a day a name's market was closed on is no warmup
+session for it; on a venue with no calendar on file every day it printed on is one
+(`docs/workspace.md`, *`warmup`*).
 
 **A period target stops a card's week, and the card is read as it ran.** A hypothesis that
 declares `period_target` (`docs/workspace.md`) is held to it by the harness, on the card as on
@@ -1099,8 +1103,8 @@ So do three the workspace declares nowhere: what the sleeve sizes to, which for 
 construct is its host's budget as the host's `hypothesis.yaml` is registered *now*; the bar
 grains the run loads, which is that same file's resolution beside the sleeve's own; and the
 warmup sessions a card is fed, which are resolved from the catalog for every card, so a
-`kanso data load` that adds a printed day inside the lookback moves them between two cards
-of one run.
+`kanso data load` that adds a session inside the lookback (`docs/workspace.md`, *`warmup`*)
+moves them between two cards of one run.
 So a stored number carries a digest of what it was measured under, and an anchor is a row
 measured the way the asking card was. Edit one of those keys and the stored numbers stop
 being anchors until the books are measured again — which is the same statement as the one
@@ -1328,7 +1332,7 @@ already over. There are eleven.
 | `intraday_drawdown` | a run that fell further than the hypothesis permits between the period ends: the same limit read on the path through every fill — cash after each fill, every open position at the price it last traded at, or at the runner's mark at the last period end when it has not traded since — re-anchored at each period end to the equity the runner struck there, so a book flat at its ends is judged on the fall it took inside them. The path holds what the runner holds: each split the venue applied to a held position is replayed where the runner booked it, the instant the venue applied it, after the fills of its name the venue matched before it there — an order landing behind the instant's first point, or a resting order an earlier point of it filled, is struck in the old shares — the quantity it changed, the last price divided by the ratio of the split it names, the cash it paid in lieu — and at each end every position is replaced by what the runner held there, at the runner's mark, under zero where that was, so a split's lost shares are never marked and a move to an end's mark is not counted again at the next fill. A run stored before runs kept their splits (`adjustments`) has none to replay, and its path holds a split's lost shares until the next end; one stored before holdings said their mark was under zero reads a position held there at the same price above zero, and the next fill of its name moves the path by twice that price on every unit held. Carries no parameter; its evidence carries the period-end reading beside it and the instant of the trough |
 | `maintenance_margin` | a book whose equity over its gross, with each period-end holding valued at that period's adverse extreme — a long at its lowest low, a short at its highest high, read in the shares held at the end, so a low printed before a split inside the period is divided by its ratio — fell below the `book.maintenance_pct` the hypothesis declares. Carries no parameter; skipped without a floor, and on a run that held nothing at any period end |
 | `position_size` | a position worth more, **or less**, than the hypothesis says it should be |
-| `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, so a weekend or a holiday inside a hold adds nothing. A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
+| `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, one per UTC day that holds a point, so a weekend or a holiday inside a hold adds nothing where nothing is stamped on it; no calendar is read, so a US equity's Friday post-market below a bar of a day, stamped past 00:00 UTC, makes Saturday one, and the evening before a weekday holiday the holiday (`docs/backlog.md` row 241). A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
 | `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 at 1 trial, 0.52 at 2, 2.28 at 50, 3.05 at 500 — where `trials` is the card, every card of the hypothesis before it that ran to a result and traded, under any objective, and the `prior_trials` its family declares tried outside kanso (*Card* above), so a hypothesis's first card is held to 0 only where no grid is declared. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `prior_trials` — the declared part of it — `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
@@ -2739,7 +2743,7 @@ under one criteria version, since an edit between two builds of one version move
 criteria digest; and a criteria version names no engine, so a patch of the engine within
 the supported range moves a return under the same one. Certification resolves inputs afresh
 instead of reading them off the card — the warmup prefix, from the catalog as it stands,
-which a `kanso data load` adding a printed day inside the lookback moves, and an attached
+which a `kanso data load` adding a session inside the lookback moves, and an attached
 construct's budget and grains, from its host's registration as it stands. And the trials
 are counted when each reading is made, so a card another lane records, of a hypothesis this
 one derives from, between the lane's reading and the child's moves the search they price. In
