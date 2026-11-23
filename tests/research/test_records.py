@@ -627,16 +627,24 @@ def test_a_family_s_trials_on_the_grid_are_rows_and_a_window_a_re_pin_moved_is_o
 ) -> None:
     """A parent's cards are trials of the child's search, so those on the child's grid are
     rows; a card measured over the window before a re-pin moved it struck its returns at other
-    instants, and is counted off the grid rather than set beside the subject."""
+    instants, and is counted off the grid rather than set beside the subject — and so is one
+    whose window a re-pin moved only across days that held no period, which struck every
+    return at the grid's instants but is cut into blocks over other spans."""
     child = classify(ws, store, {**DOCUMENT, "id": "demo_child", "derived_from": [registered]})
     parent = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
     moved = pinned_run(store, child, 2, b"id: x\nobjective: {id: wf_contribution_bps}\n")
     january = replace(
         GRID, period_ends_ns=tuple(t - 31 * 86_400 * 10**9 for t in GRID.period_ends_ns)
     )
-    shas = [store.put_blob(f"# {n}\n".encode()) for n in range(3)]
+    wider = replace(GRID, window=(GRID.window[0], GRID.window[1] + timedelta(days=2)))
+    assert on_grid(run=wider).pairs(on_grid()), "the same instants, host and benchmark"
+    assert on_grid(run=wider).fold_values(4) != on_grid().fold_values(4), "other blocks"
+    shas = [store.put_blob(f"# {n}\n".encode()) for n in range(4)]
     records.record_card(
         store, parent, a_card(parent, shas[0], 1.0, grid_measurement(store, run=january))
+    )
+    records.record_card(
+        store, parent, a_card(parent, shas[3], 1.0, grid_measurement(store, run=wider))
     )
     records.record_card(
         store,
@@ -654,9 +662,12 @@ def test_a_family_s_trials_on_the_grid_are_rows_and_a_window_a_re_pin_moved_is_o
     assert len(found.values) == 2 and found.subject == 1, (
         "the parent's card on the grid, then the subject"
     )
-    assert found.excluded["off_grid"] == 1, "the parent's card measured before the window moved"
-    assert alone.excluded["off_grid"] == 1 and len(alone.values) == 1, (
-        "the parent's January card is off its grid too, and its child's card is no trial of it"
+    assert found.excluded["off_grid"] == 2, (
+        "the parent's cards measured before the window moved, and over the wider window"
+    )
+    assert alone.excluded["off_grid"] == 2 and len(alone.values) == 1, (
+        "the parent's January and wider cards are off its grid too, and its child's card is no"
+        " trial of it"
     )
 
 

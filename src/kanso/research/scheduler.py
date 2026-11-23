@@ -408,14 +408,16 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
 
     Nor, for the zero rule's reason, is a best a research gate refuses on research data. The
     plan's research gates — the search correction, the gate whose library file `deflates` the
-    best's objective; `walk_forward_consistency`; and `research_plateau`, each at the values
-    the planner chose — read the research window and the trials alone, and a certificate
-    fails when any gate that judged fails, so one that refuses the best on research data has
-    decided the certificate before the certification window is read. The plan is therefore
-    made here, in the lane — the planner's call when none is pinned, the refusal of a pinned
-    plan this version cannot run — and the correction and the folds judged on the measurement
-    the best's newest card kept, running nothing, so the plateau, which re-runs the research
-    window once per move, is left to the child; both on the workspace as the child would open
+    best's objective; `walk_forward_consistency`; `overfit_probability`, where the plan carries
+    it; and `research_plateau`, each at the values the planner chose — read the research
+    window, the trials and the measurements their cards kept alone, and a certificate fails
+    when any gate that judged fails, so one that refuses the best on research data has decided
+    the certificate before the certification window is read. The plan is therefore made here,
+    in the lane — the planner's call when none is pinned, the refusal of a pinned plan this
+    version cannot run — and the correction and the folds judged on the measurement the best's
+    newest card kept, and `overfit_probability` on the trials' stored measurements on that
+    card's grid, running nothing, so the plateau, which re-runs the research window once per
+    move, is left to the child; both on the workspace as the child would open
     it, `kanso.toml` read again rather than as the lane read it when it started
     (`kanso.certify.run.precheck_at_stall`). A refusal spares the stall: no child is started,
     no certification window is read, the hypothesis stays where it was and goes back to the

@@ -873,16 +873,18 @@ def trial_folds(store: StateStore, hyp_id: str, subject_sha: str, blocks: int) -
     cards — the card certification takes as its subject — and `None` comes back where that
     card kept none, or kept one this build cannot read or score. Its row is the subject's.
     Every other row is a strategy of the trials `trial_metrics` reads (`_trial_rows`): the
-    newest card of its bytes whose measurement pairs with the grid (`Measurement.pairs`), so two
-    byte strings are two rows however alike their results, and a strategy carded again under
-    new pins is read where it shares the grid. Rows are in the order those cards were recorded.
+    newest card of its bytes whose measurement pairs with the grid (`Measurement.pairs`) over
+    the grid's own window, so two byte strings are two rows however alike their results, and a
+    strategy carded again under new pins is read where it shares the grid. Rows are in the
+    order those cards were recorded.
 
     A strategy none of whose cards pairs makes no row, and is counted in `excluded` by why its
     newest card did not: `unmeasured`, it kept no measurement; `other_objective`, its run pinned
     a file naming another objective, a number in other units; `off_grid`, it struck its returns
-    at other instants or against another host or benchmark — a window a re-pin moved, a family
-    member's own; `unreadable`, its measurement could not be decoded or scored. The settings a
-    family declares tried outside kanso were never measured here and are never rows.
+    at other instants, over another window or against another host or benchmark — a window a
+    re-pin moved, even only across days that held no period, a family member's own;
+    `unreadable`, its measurement could not be decoded or scored. The settings a family
+    declares tried outside kanso were never measured here and are never rows.
 
     Each measurement is decoded only once it is wanted and reduced to its block values at once,
     so no more than one run is held at a time, however many cards the search has.
@@ -943,13 +945,19 @@ def trial_folds(store: StateStore, hyp_id: str, subject_sha: str, blocks: int) -
 def _on_grid(
     store: StateStore, sha: str, grid: Measurement, blocks: int
 ) -> tuple[float, ...] | str:
-    """A stored measurement's block values where it pairs with `grid`, or why it has none:
-    decoded and scored here, and nothing of it kept but the values."""
+    """A stored measurement's block values where it pairs with `grid` over the grid's own
+    window, or why it has none: decoded and scored here, and nothing of it kept but the values.
+
+    The window is asked beside `pairs` because the blocks are cut from each run's own window
+    (`CardRun.folds`) while its period ends hold only the periods that held a point: a window
+    moved across days that held none — an end moved from a Friday to the Sunday after it, a
+    start on a holiday — keeps every period end and cuts every block over another span.
+    """
     try:
         measured = _measurement(store, sha)
         if measured.objective.id != grid.objective.id:
             return OTHER_OBJECTIVE
-        if not measured.pairs(grid):
+        if not measured.pairs(grid) or measured.run.window != grid.run.window:
             return OFF_GRID
         return measured.fold_values(blocks)
     except Exception:

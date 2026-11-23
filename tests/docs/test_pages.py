@@ -392,7 +392,12 @@ def test_the_pages_say_a_stall_certifies_only_a_best_whose_research_gates_pass()
             assert gate in text, gate
     # The selection's refusal is printed in the terms of its own evidence, and every key of
     # that evidence is named where the `stalled` event's keys are.
-    assert "`overfit_probability 0.625 > 0.250`" in cli
+    assert "`overfit_probability 0.667 > 0.250`" in cli
+    assert (
+        "The plan's research gates — its correction, `walk_forward_consistency`, "
+        "`overfit_probability` where the plan carries it, and `research_plateau` — are judged on "
+        "the research window before the certification window is read"
+    ) in cli, "`cert run` by hand judges the selection before the window too"
     for key in ("pbo", "max_pbo", "rows", "subject_row", "searched", "excluded", "oos_loss"):
         assert f"`{key}`" in cli, key
     assert "`gates`, every reading in the order it was taken" in cli

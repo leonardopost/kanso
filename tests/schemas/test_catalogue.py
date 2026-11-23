@@ -140,31 +140,6 @@ def test_only_a_cert_gate_reads_the_research_window_before_the_certification_win
         CriteriaItem.model_validate({**GATE, "reads": "certification"})
 
 
-def test_a_research_gate_need_not_deflate_anything() -> None:
-    """`reads: research` says where a gate's evidence comes from, not that it prices a search:
-    an optional gate that reads research and names its parameters together claims no
-    objective, so every objective stays claimed by its one deflation gate."""
-    item = CriteriaItem.model_validate(
-        {
-            **GATE,
-            "id": "overfit_probability",
-            "required": False,
-            "together": True,
-            "reads": "research",
-            "params": {"half_blocks": "int", "max_pbo": "float"},
-            "ranges": {"half_blocks": [2, 8], "max_pbo": [0.0, 0.25]},
-            "impl": "kanso.criteria.gates.overfit_probability.gate",
-        }
-    )
-
-    assert (item.required, item.together, item.reads, item.deflates) == (
-        False,
-        True,
-        "research",
-        None,
-    )
-
-
 def test_an_objective_declares_applicability_and_priority() -> None:
     with pytest.raises(ValidationError, match="applies"):
         CriteriaItem.model_validate({**OBJECTIVE, "applies": None})

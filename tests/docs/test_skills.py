@@ -304,8 +304,9 @@ def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None
     zero is certified, it would report a spared stall's missing certificate as a fault."""
     text = skill(PACKAGED, "kanso-research")
     assert (
-        "unless a research gate of the plan — its search correction, `walk_forward_consistency` "
-        "or `research_plateau` — refuses it on research data, which **spares**"
+        "unless a research gate of the plan — its search correction, `walk_forward_consistency`, "
+        "`overfit_probability` where the plan carries it, or `research_plateau` — refuses it on "
+        "research data, which **spares**"
     ) in text
 
 

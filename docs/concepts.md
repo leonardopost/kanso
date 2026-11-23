@@ -2989,8 +2989,8 @@ offer a planner those refusals. Whether the certification window holds the edge 
 of backtest overfitting, estimated by combinatorially symmetric cross-validation after Bailey,
 Borwein, López de Prado and Zhu (2014). The trials are the cards of the hypothesis's family that
 ran and traded — the set the corrections read — one row per strategy: the newest card of its
-bytes whose stored measurement shares the grid of the subject's newest card, the same periods,
-host and benchmark, so two byte strings are two rows however alike their results, and identical
+bytes whose stored measurement shares the grid of the subject's newest card, the same window,
+periods, host and benchmark, so two byte strings are two rows however alike their results, and identical
 results only tie. The research window is cut into `S = 2 × half_blocks` equal calendar blocks
 and every row, `N` of them, is scored on each by the objective's own fold arithmetic — a block that holds no
 period scores zero, as a fold does. For each of the `C(S, S/2)` ways of choosing half the
@@ -3010,15 +3010,13 @@ the strategies that made no row, by why their newest card did not — `unmeasure
 draw. It reads stored measurements and runs nothing, so a stall judges it in the lane and the
 certification child reads the same matrix; it judges nothing without two rows, or with a grid
 holding fewer period ends than blocks. Reading them decodes each trial's measurement, one at a
-time, and keeps nothing of it but its block values: measured on a synthetic store of 1,000
-cards, each a scalper's 44 sessions of 8,800 trades and 17,600 fills, 505 KB stored, a read took
-217 and 312 seconds on two calls in one process — 0.2 to 0.3 seconds a card — and raised the
-process's peak resident memory by 108 MB on the first and by nothing on the second. The cost
-grows with the cards and with what each holds, not with the number held at once. A stall whose
-plan carries the gate pays it in the lane and again in the child when it passes; one it refuses
-in the lane starts no child, so the child's run of the research window is spared — which is
-why the lane judges it rather than leaving it to the child as it leaves the plateau. `half_blocks` sets its own block count: `[research]
-folds` is unchanged by it. It is the planner's to include, from 2 to 8 `half_blocks` and
+time, and keeps nothing of it but its block values, so the memory it takes is one measurement's
+however many cards the search has, and the time grows with the cards and with what each holds —
+a scalper's thousands of trades a card cost more to read than a daily strategy's dozens. A stall
+whose plan carries the gate pays it in the lane and again in the child when it passes; one it
+refuses in the lane starts no child, so the child's run of the research window is spared —
+which is why the lane judges it rather than leaving it to the child as it leaves the plateau.
+`half_blocks` sets its own block count: `[research] folds` is unchanged by it. It is the planner's to include, from 2 to 8 `half_blocks` and
 `max_pbo` from 0 to 0.25, and it carries no `deflates`: it complements the correction and
 never replaces it.
 
