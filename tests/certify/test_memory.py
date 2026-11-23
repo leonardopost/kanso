@@ -1,7 +1,9 @@
 """What a certification holds: one read and one chunk of a window, whatever its plan runs.
 
 A certification makes many engine runs in the process certifying — both windows, a host or a
-hold beside each, one per parameter `param_plateau` moves, and the composition a pass implies.
+hold beside each, one per parameter `research_plateau` moves over the research window and one
+per parameter `param_plateau` moves over the certification window, and the composition a pass
+implies.
 Measured on 2026-10-14 on a synthetic month of one name's quotes (kanso 0.15.1.dev5,
 nautilus_trader 1.231.0), before the windows streamed: the traced Python heap held 216 bytes
 for every point of the certification window from the first run to the last, and peaked at
@@ -274,9 +276,12 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
 ) -> None:
     """The research window's run, half as many points again, peaks within a fifth of the
     certification window's points of the plateau's runs; and each of those peaks within a
-    tenth of them of the others, however many came before it. A certification holds one read
-    and one chunk of whichever window it is running, and nothing of a run once it has ended:
-    not its window, and not what its engine left to the cyclic collector."""
+    tenth of them of the others, however many came before it, as each of the research
+    plateau's runs does of the others, all within a fifth of the research window's first run —
+    a window read again whole would be half as much again as the certification window. A
+    certification holds one read and one chunk of whichever window it is running, and nothing
+    of a run once it has ended: not its window, and not what its engine left to the cyclic
+    collector."""
     held = window_held(ws)
     classify(ws, store, DOC, SOURCE)
     a_card(ws, store, SOURCE, hyp_id=HYP_ID, document=DOC)
@@ -294,12 +299,18 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
     finally:
         tracemalloc.stop()
 
-    (plateau,) = [gate for gate in made.gates if gate.id == "param_plateau"]
-    assert plateau.skipped is None and plateau.evidence["n_backtests"] == 2 * FIELDS
+    for name in ("research_plateau", "param_plateau"):
+        (plateau,) = [gate for gate in made.gates if gate.id == name]
+        assert plateau.skipped is None and plateau.evidence["n_backtests"] == 2 * FIELDS, name
     assert made.verdict == "pass", "a pass composes, which is one more run of the window"
-    research, subject, *moved, composed = ran  # the research window is run first
+    assert len(ran) == 3 + 4 * FIELDS
+    # The research window is run first, and moved for the research plateau before the
+    # certification window is read; the certification window is then run, and moved.
+    research, reran = ran[0], ran[1 : 1 + 2 * FIELDS]
+    subject, moved, composed = ran[1 + 2 * FIELDS], ran[2 + 2 * FIELDS : -1], ran[-1]
+    assert research.window == RESEARCH and not research.overrides
+    assert all(each.window == RESEARCH and each.overrides for each in reran)
     assert subject.window == composed.window == CERTIFICATION and not subject.overrides
-    assert research.window == RESEARCH
     assert len(moved) == 2 * FIELDS and all(each.overrides for each in moved)
     peaks = [each.peak for each in moved]
     assert research.peak - max(peaks) < held / 5, (
@@ -308,6 +319,16 @@ def test_a_certification_s_peak_grows_with_neither_its_runs_nor_its_window(
     )
     assert max(peaks) - min(peaks) < held / 10, (
         f"the plateau's runs peaked {peaks}, apart by {max(peaks) - min(peaks):,} bytes; the "
+        f"certification window held whole is {held:,}"
+    )
+    again = [each.peak for each in reran]
+    assert max(again) - min(again) < held / 10, (
+        f"the research plateau's runs peaked {again}, apart by {max(again) - min(again):,} "
+        f"bytes; the certification window held whole is {held:,}"
+    )
+    assert max(again) - research.peak < held / 5, (
+        f"the research plateau's runs peaked {max(again) - research.peak:,} bytes over the "
+        f"research window's first run, which they read again a chunk at a time; the "
         f"certification window held whole is {held:,}"
     )
 

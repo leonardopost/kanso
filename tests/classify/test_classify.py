@@ -910,6 +910,24 @@ def test_a_frontier_class_makes_two_attempts_and_then_refuses(
             "outside the range [1, 10000]",
         ),
         (
+            {
+                "constraints": [
+                    {"id": "strategy_integrity"},
+                    {"id": "positive_folds", "params": pairs({"min_positive_folds": 5})},
+                ]
+            },
+            "positive_folds.min_positive_folds: 5 is outside the range [1, 4]",
+        ),
+        (
+            {
+                "constraints": [
+                    {"id": "strategy_integrity"},
+                    {"id": "positive_folds", "params": pairs({})},
+                ]
+            },
+            "positive_folds.min_positive_folds: is not set",
+        ),
+        (
             {"constraints": [{"id": "min_trades", "params": pairs({"min": 30})}]},
             "strategy_integrity",
         ),

@@ -146,7 +146,7 @@ def _cards_per_hour(opened: StateStore) -> float:
 
 def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
     """Every registered hypothesis with its status, its best metric, its card count, its
-    newest stall — whether it certified, and the search correction that decided it — and how
+    newest stall — whether it certified, and the research gates that decided it — and how
     many looks its lineage has taken at the certification window its best is read on and at
     its own forward window, counted over a lineage graph and pinned windows read once for
     every row, and once for each lineage and window rather than once for each member that

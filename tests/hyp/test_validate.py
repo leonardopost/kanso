@@ -2276,6 +2276,41 @@ def test_a_required_constraint_parameter_outside_its_range_is_refused(ws: Worksp
     assert "required_constraints.min_trades.min" in failure.message
 
 
+@pytest.mark.parametrize("where", ["required_constraints", "constraints"])
+@pytest.mark.parametrize(
+    ("params", "problem"),
+    [
+        ({"min_positive_folds": 5}, "min_positive_folds: 5 is outside the range [1, 4]"),
+        ({"min_positive_folds": 0}, "min_positive_folds: 0 is outside the range [1, 4]"),
+        ({}, "min_positive_folds: is not set, and positive_folds judges nothing"),
+    ],
+)
+def test_positive_folds_is_held_to_the_fold_count_and_named_with_its_count(
+    ws: Workspace, where: str, params: dict[str, int], problem: str
+) -> None:
+    """Every fold positive is `min_positive_folds` equal to the workspace's `[research] folds`,
+    four here; a count past it can never be met, and a gate named bare judges nothing."""
+    folds = {"id": "positive_folds", "params": params}
+    if where == "constraints":
+        doc = document(
+            **{**SLEEVE_CLASSIFICATION, "constraints": [{"id": "strategy_integrity"}, folds]}
+        )
+    else:
+        doc = document(**SLEEVE_CLASSIFICATION, required_constraints=[folds])
+
+    failure = refused(ws, doc)
+
+    assert f"{where}.positive_folds.{problem}" in failure.message
+
+
+def test_every_fold_positive_is_admitted_as_the_operator_s_own_value(ws: Workspace) -> None:
+    folds = {"id": "positive_folds", "params": {"min_positive_folds": 4}}
+
+    held = accepted(ws, document(**SLEEVE_CLASSIFICATION, required_constraints=[folds]))
+
+    assert {ref.id: ref.params for ref in held.card_gates}["positive_folds"] == folds["params"]
+
+
 CONTRIBUTION = {
     **SLEEVE_CLASSIFICATION,
     "objective": {"id": "wf_contribution_bps", "params": {"min_delta": 0.5, "k_se": 1.0}},

@@ -1,0 +1,9 @@
+id: positive_folds
+kind: gate
+stage: card
+required: false
+together: true
+meaningful_when: "The card's research folds positive in at least this many, the arithmetic of walk_forward_consistency on the card itself: an edge one fold earned and the others did not is a fit to that fold."
+params: {min_positive_folds: int}
+ranges: {min_positive_folds: [1, "1 * folds"]}
+impl: kanso.criteria.gates.positive_folds

@@ -192,15 +192,18 @@ from kanso.schemas.venue import first_new_york_day
 
 __all__ = [
     "ALLOWED_ENV",
+    "AUTHOR_FILES",
     "BUDGET",
     "DEFAULT_PERIOD",
     "DIED",
+    "ConfigError",
     "DrainedError",
     "EXCEPTION",
     "INTERRUPTED",
     "MEMORY",
     "RunRequest",
     "RunResult",
+    "authored",
     "booked",
     "checked",
     "checked_chunks",
@@ -1343,8 +1346,45 @@ def _instrument_of(point: object) -> str | None:
 # --- loading the code --------------------------------------------------------
 
 
+AUTHOR_FILES: Final = frozenset({"<sleeve>", "<modifier>"})
+"""The file names `_module` compiles what an author wrote under — a sleeve, an attached
+construct — and so the `co_filename` of every frame of that code a traceback holds."""
+
+
+class ConfigError(ValidationError):
+    """A sleeve's or an attached construct's configuration class refused the values it was
+    built with: its own check of a field, or a parameter it does not take."""
+
+
+def authored(fault: BaseException) -> bool:
+    """Whether `fault` is the author's code refusing the setting it was run at, rather than a
+    fault of the process it ran in.
+
+    It is when the configuration class refused its values (`ConfigError`), when the harness
+    refused an order the strategy placed (`SizingError`, raised inside the handler that placed
+    it), or when an exception kanso did not raise unwound through a frame of the author's own
+    file (`AUTHOR_FILES`) — the engine's frames between that and the run are of no account.
+    Any other refusal kanso raised is not, and neither is an `OSError` or a `MemoryError`
+    wherever it surfaced: reading the catalog and holding the run are the process's.
+
+    Engine fact (nautilus_trader 1.231.0): a handler's exception is logged and re-raised as it
+    was raised, so its traceback still holds the frame of the handler that raised it.
+    """
+    if isinstance(fault, ConfigError | SizingError):
+        return True
+    if isinstance(fault, KansoError | OSError | MemoryError):
+        return False
+    frame = fault.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename in AUTHOR_FILES:
+            return True
+        frame = frame.tb_next
+    return False
+
+
 def _module(source: bytes, kind: str) -> ModuleType:
-    """The bytes of a strategy file as a module, named after the digest of those bytes.
+    """The bytes of a strategy file as a module, named after the digest of those bytes, and
+    compiled under `<kind>` (`AUTHOR_FILES`).
 
     Naming by digest means the same file loaded twice is one entry rather than one per
     run, and two different files never collide however they are spelled.
@@ -1424,7 +1464,7 @@ def _sleeve(request: RunRequest) -> tuple[Any, Any]:
             **dict(request.overrides),
         )
     except ValueError as exc:
-        raise ValidationError(f"strategy.py: {cls.config_cls.__name__}: {exc}") from None
+        raise ConfigError(f"strategy.py: {cls.config_cls.__name__}: {exc}") from None
     return cls, config
 
 
@@ -1466,7 +1506,7 @@ def _modifier(
     try:
         config = cls.config_cls(host_strategy_id=host, hyp_id=hyp.id, **dict(params))
     except TypeError as exc:
-        raise ValidationError(
+        raise ConfigError(
             f"construct.params: {cls.config_cls.__name__} does not take these parameters: {exc}"
         ) from None
     modifier = cls(config=config)

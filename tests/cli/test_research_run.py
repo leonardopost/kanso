@@ -10,13 +10,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
 from kanso.certify import certificate
 from kanso.certify.plan import read_plan
-from kanso.certify.run import precheck
+from kanso.certify.run import Precheck, precheck
+from kanso.cli.research import spared_by
+from kanso.criteria import gates
+from kanso.criteria.context import MovedRunError, skipped, verdict
 from kanso.errors import Exit
 from kanso.hyp import set_status, show
 from kanso.models import spend
@@ -24,6 +28,8 @@ from kanso.research import records, scheduler
 from kanso.schemas import Card, RunRecord, resolve_venue_model
 from kanso.state import StateStore
 from kanso.workspace import find
+from tests.criteria.builders import build_run, context, make_hyp
+from tests.criteria.test_param_plateau import Rerun, a_run
 
 from . import mocked
 from .conftest import DRAFT, HYP_ID, HYPOTHESIS, at, lane, payload, write_hypothesis
@@ -174,6 +180,140 @@ def test_a_stall_says_what_its_search_correction_judged(runner: CliRunner, mocke
     assert (precheck["gate"], precheck["judged"], precheck["pass"]) == ("deflated_edge", True, True)
     assert precheck["evidence"]["min_probability"] == 0.9, "the threshold the plan pinned"
     assert outcome["certificate"]["sha7"] == outcome["best_sha"][:7]
+    readings = {reading["gate"]: reading for reading in precheck["gates"]}
+    assert list(readings) == ["deflated_edge", "walk_forward_consistency", "research_plateau"]
+    assert all(reading["judged"] and reading["pass"] for reading in readings.values())
+    assert readings["deflated_edge"]["evidence"] == precheck["evidence"], "the deciding one"
+    assert readings["walk_forward_consistency"]["evidence"]["min_positive_folds"] == 1
+    assert readings["research_plateau"]["evidence"]["n_backtests"] > 0, "run by the child"
+
+
+SHARPE = make_hyp(objective={"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 0.5}})
+"""The demo with a Sharpe objective, scored off its period returns."""
+
+
+def refusal(gate_id: str, params: dict[str, float], **slots: Any) -> dict[str, object]:
+    """A stall's precheck as its `stalled` event records it, spared by this gate judging these
+    slots — the gate's own evidence, not a hand-written copy of its keys."""
+    reading = gates()[gate_id].evaluate(context(a_run(1.0), stage="cert", params=params, **slots))
+    assert reading.skipped is None and not reading.passed, reading
+    return Precheck(
+        [skipped("deflated_edge", "plan carries none"), reading], measured=True
+    ).payload()
+
+
+def raising_at(moved: dict[str, float], otherwise: Rerun) -> Any:
+    """A re-run whose strategy raises at one moved setting and scores as `otherwise` at the
+    rest."""
+
+    def rerun(overrides: dict[str, float]) -> Any:
+        if dict(overrides) == moved:
+            raise MovedRunError("moved", raised="ValueError: only one setting runs")
+        return otherwise(overrides)
+
+    return rerun
+
+
+@pytest.mark.parametrize(
+    ("precheck", "said"),
+    [
+        (
+            Precheck(
+                [
+                    verdict(
+                        "deflated_contribution",
+                        False,
+                        {"probability": 0.7921, "min_probability": 0.95},
+                    )
+                ],
+                measured=False,
+            ).payload(),
+            "deflated_contribution 0.792 < 0.950",
+        ),
+        (
+            {
+                "gate": "deflated_sharpe",
+                "judged": True,
+                "pass": False,
+                "measured": True,
+                "evidence": {"dsr": 0.5, "min_dsr": 0.9},
+            },
+            "deflated_sharpe 0.500 < 0.900",
+        ),
+        (
+            refusal(
+                "walk_forward_consistency",
+                params={"min_positive_folds": 4},
+                hyp=SHARPE,
+                research_run=build_run((3.0, -1.0, -4.0, -1.0, 5.0, -2.0, -6.0, -2.0)),
+            ),
+            "walk_forward_consistency 2 < 4 positive folds",
+        ),
+        (
+            refusal(
+                "research_plateau",
+                params={"perturb_pct": 10.0, "keep_fraction": 0.9},
+                tunable={"fast": 10.0, "slow": 40.0},
+                rerun=Rerun(0.5, **{"fast=11": 2.0}),
+                research_run=a_run(1.0),
+            ),
+            "research_plateau 3 of 4 moves under 0.900",
+        ),
+        (
+            refusal(
+                "research_plateau",
+                params={"perturb_pct": 10.0, "keep_fraction": 0.9},
+                tunable={"fast": 10.0, "slow": 40.0},
+                rerun=raising_at({"fast": 11.0}, Rerun(0.5)),
+                research_run=a_run(1.0),
+            ),
+            "research_plateau 3 of 4 moves under 0.900, 1 raised",
+        ),
+        (
+            refusal(
+                "research_plateau",
+                params={"perturb_pct": 10.0, "keep_fraction": 0.9},
+                tunable={"fast": 10.0},
+                rerun=Rerun(),
+                research_run=a_run(-0.412),
+            ),
+            "research_plateau unperturbed -0.412 not positive",
+        ),
+        (
+            Precheck([verdict("min_trades", False, {"total": 0})], measured=True).payload(),
+            "min_trades refused",
+        ),
+        (
+            Precheck(
+                [verdict("deflated_edge", True, {"probability": 0.99})], measured=True
+            ).payload(),
+            None,
+        ),
+        (Precheck([skipped("deflated_edge", "too few trials")], measured=False).payload(), None),
+        (Precheck(measured=False, reason="no card").payload(), None),
+        (None, None),
+    ],
+    ids=[
+        "contribution",
+        "sharpe-recorded-before-gates",
+        "folds",
+        "plateau-moves",
+        "plateau-raised",
+        "plateau-loss",
+        "another-gate",
+        "passed",
+        "judged-nothing",
+        "read-nothing",
+        "no-stall",
+    ],
+)
+def test_a_spared_stall_is_said_in_the_terms_of_the_gate_that_spared_it(
+    precheck: object, said: str | None
+) -> None:
+    """The `certification` line of `research run` and the `stall spared:` suffix of `status`
+    name the research gate that spared a stall and the numbers it decided on; a stall recorded
+    before a stall judged more than its correction reads as it always did."""
+    assert spared_by(precheck) == said
 
 
 def test_a_stall_its_search_correction_refuses_is_spared_and_says_so(

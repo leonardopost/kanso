@@ -21,13 +21,16 @@ from hypothesis import strategies as st
 from kanso.certify import run
 from kanso.certify.run import certify
 from kanso.criteria import CardRun, gates
+from kanso.criteria.context import MovedRunError
 from kanso.criteria.gates.param_plateau import (
     ALL_DROPPED,
     NO_PARAMETERS,
     NO_RERUN,
+    NO_RESEARCH_RUN,
     NOT_POSITIVE,
     _moved,
     gate,
+    research,
 )
 from kanso.criteria.objectives import wf_sharpe_vs_hold
 from kanso.nautilus import backtest
@@ -155,6 +158,45 @@ def test_it_fails_when_one_move_falls_below_the_floor() -> None:
     ]
 
 
+def test_a_move_at_which_the_strategy_raises_kept_nothing_and_fails_the_gate() -> None:
+    """A strategy that raises at a moved setting never ran there: the move is counted, scored
+    as nothing with what raised, and every other move is still run and scored."""
+    asked: list[dict[str, float]] = []
+
+    def rerun(overrides: Mapping[str, float]) -> CardRun:
+        asked.append(dict(overrides))
+        if overrides == {"fast": 11.0}:
+            raise MovedRunError("moved", raised="ValueError: only one setting runs")
+        return a_run(0.95)
+
+    result = judged(rerun, {"fast": 10.0, "slow": 40.0})  # type: ignore[arg-type]
+
+    assert not result.passed and result.skipped is None
+    assert result.evidence["n_backtests"] == 4 == len(asked), "every move was still run"
+    raised, *scored = result.evidence["perturbations"]
+    assert raised == {
+        "field": "fast",
+        "direction": "up",
+        "value": 11.0,
+        "metric": None,
+        "raised": "ValueError: only one setting runs",
+    }
+    assert [move["metric"] for move in scored] == pytest.approx([0.95] * 3)
+    assert all("raised" not in move for move in scored)
+    assert (
+        research.evaluate(
+            context(
+                a_run(5.0),
+                params=MOVES,
+                tunable={"fast": 10.0, "slow": 40.0},
+                rerun=rerun,
+                research_run=a_run(1.0),
+            )
+        ).evidence["perturbations"]
+        == result.evidence["perturbations"]
+    ), "both forms read it so"
+
+
 def test_the_floor_is_the_chosen_fraction_of_the_unperturbed_metric() -> None:
     result = judged(
         Rerun(metric=0.6),
@@ -194,6 +236,72 @@ def test_a_benchmark_stays_fixed_while_the_subject_is_moved() -> None:
     assert [p["metric"] for p in measured.evidence["perturbations"]] == pytest.approx(
         [wf_sharpe_vs_hold.compute(moved, 4, benchmark=hold)[0]] * 2
     )
+
+
+# --- on the research window ---------------------------------------------------
+
+
+def test_the_research_form_scores_the_research_window_and_holds_its_hold_fixed() -> None:
+    """`research_plateau` is the same arithmetic on the research slots alone: the research run
+    is the unperturbed score, every move is measured against the research hold, and nothing in
+    the run, host or benchmark slots — where a certification run would sit — is read."""
+    hold = build_run((1.0, 2.0, 1.0, 3.0, 2.0, 1.0, 2.0, 2.0))
+    researched = build_run((3.0, 2.0, 4.0, 3.0, 5.0, 2.0, 6.0, 3.0))
+    moved = build_run((2.0, 2.0, 4.0, 4.0, 5.0, 2.0, 6.0, 2.0))
+    elsewhere = build_run((-9.0, -9.0, -9.0, -9.0))
+    hyp = make_hyp(
+        benchmark={"hold": "first_leg"},
+        objective={"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}},
+    )
+    slots: dict[str, Any] = {
+        "params": MOVES,
+        "tunable": {"fast": 10.0},
+        "rerun": lambda overrides: moved,
+        "hyp": hyp,
+        "research_run": researched,
+        "benchmark_research_run": hold,
+    }
+
+    measured = research.evaluate(
+        context(elsewhere, host_run=elsewhere, benchmark_run=elsewhere, **slots)
+    )
+    certified = gate.evaluate(context(researched, benchmark_run=hold, **slots))
+
+    assert measured.id == "research_plateau" and measured.skipped is None
+    assert measured.evidence["unperturbed"] == pytest.approx(
+        wf_sharpe_vs_hold.compute(researched, 4, benchmark=hold)[0]
+    )
+    assert [p["metric"] for p in measured.evidence["perturbations"]] == pytest.approx(
+        [wf_sharpe_vs_hold.compute(moved, 4, benchmark=hold)[0]] * 2
+    )
+    assert measured.evidence == certified.evidence, "one arithmetic, one set of evidence keys"
+    assert measured.passed == certified.passed
+
+
+def test_the_research_form_without_a_research_run_judges_nothing() -> None:
+    result = research.evaluate(
+        context(a_run(1.0), params=MOVES, tunable={"fast": 10.0}, rerun=Rerun())
+    )
+
+    assert (result.id, result.passed, result.skipped) == ("research_plateau", True, NO_RESEARCH_RUN)
+
+
+def test_the_research_form_refuses_a_research_loss_before_moving_anything() -> None:
+    rerun = Rerun()
+
+    result = research.evaluate(
+        context(
+            a_run(5.0),
+            params=MOVES,
+            tunable={"fast": 10.0},
+            rerun=rerun,
+            research_run=a_run(-1.0),
+        )
+    )
+
+    assert not result.passed and result.evidence["reason"] == NOT_POSITIVE
+    assert result.evidence["unperturbed"] == pytest.approx(-1.0)
+    assert rerun.calls == []
 
 
 # --- what it refuses to judge -------------------------------------------------
@@ -362,6 +470,35 @@ def test_the_moved_parameters_are_the_authors_own_and_not_the_injected_ones(
     }
 
 
+def test_a_sizing_parameter_moves_a_contribution_in_proportion_and_an_edge_not_at_all(
+    ws: Workspace, store: StateStore
+) -> None:
+    """What the planner is told of `keep_fraction` (`kanso.certify.plan.RESEARCH_GATES`): the
+    notional moved down a tenth takes a contribution down a tenth, so a plateau keeping more
+    than nine tenths of one refuses the strategy whatever its edge, and leaves the edge per
+    trade and the Sharpe where they were."""
+    from kanso.criteria.objectives import REGISTRY
+
+    hyp_id = classify(ws, store, DOCUMENT, source(0.5))
+    sha = a_card(ws, store, source(0.5))
+    subject = run._subject(ws, store, hyp_id, sha)
+    assert run._tunable(subject)["notional"] == 5_000.0
+    base = backtest.run(run._request(subject, subject.research), subject.catalog).run
+    smaller = backtest.run(
+        run._request(subject, subject.research, overrides={"notional": 4_500.0}),
+        subject.catalog,
+    ).run
+
+    def ratio(objective: str) -> float:
+        scored = [REGISTRY[objective].compute(each, subject.folds)[0] for each in (base, smaller)]
+        assert scored[0] > 0, objective
+        return scored[1] / scored[0]
+
+    assert ratio("wf_contribution_bps") == pytest.approx(0.9, abs=1e-9)
+    assert ratio("net_edge_bps") == pytest.approx(1.0, abs=1e-9)
+    assert ratio("wf_sharpe_net") == pytest.approx(1.0, abs=1e-9)
+
+
 CHASING = b'''
 from kanso.nautilus.strategy import KansoConfig, KansoStrategy
 
@@ -405,17 +542,18 @@ UNFLOORED: dict[str, Any] = {**CERT_GATES[0], "params": {}}
 def perturbed_runs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, float]]:
     """The overrides of every engine run a certification makes from here on, as they happen.
 
-    The subject's own runs, a hold's and a replay's carry none; only a perturbation does.
+    The subject's own runs, a hold's and a replay's carry none; only a perturbation does,
+    over either window. Every run a certification makes goes through `execute_chunked`.
     """
     moved: list[dict[str, float]] = []
-    original = backtest.execute
+    original = backtest.execute_chunked
 
-    def counted(request: backtest.RunRequest, instruments: Any, groups: Any) -> Any:
+    def counted(request: backtest.RunRequest, *args: Any, **kwargs: Any) -> Any:
         if request.overrides:
             moved.append(dict(request.overrides))
-        return original(request, instruments, groups)
+        return original(request, *args, **kwargs)
 
-    monkeypatch.setattr(run.backtest, "execute", counted)
+    monkeypatch.setattr(run.backtest, "execute_chunked", counted)
     return moved
 
 
@@ -468,3 +606,4 @@ def test_a_window_that_judged_nothing_spares_nothing_and_the_gate_refuses_the_lo
 
 def test_the_toolbox_no_longer_declares_the_gate_without_an_implementation() -> None:
     assert "param_plateau" in gates()
+    assert gates()["research_plateau"] is research

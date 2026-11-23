@@ -68,8 +68,10 @@ app = typer.Typer(help="What would count as proof, and whether it holds.", no_ar
 JsonOption = Annotated[bool, typer.Option("--json", help="Print one JSON object.")]
 IdArgument = Annotated[str, typer.Argument(metavar="ID", help="The hypothesis id.")]
 
-MARK, GATE = 6, 22
-"""Widths of the stage-or-verdict column and the gate-id column of the gate lists."""
+MARK, GATE = 6, 26
+"""Widths of the stage-or-verdict column and the gate-id column of the gate lists: the longest
+gate id the toolbox ships, `walk_forward_consistency`, which every plan carries, and two
+spaces."""
 
 NO_BEST = (
     "nothing to state what the windows resolve from: no best card yet, or the best card's "

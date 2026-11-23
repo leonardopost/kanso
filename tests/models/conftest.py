@@ -105,6 +105,13 @@ PROPOSED: dict[str, Any] = {
 PLANNED: dict[str, Any] = {
     "gates": [
         {"id": "embargoed_window", "stage": "cert", "params": pairs(), "rationale": "required"},
+        {
+            "id": "walk_forward_consistency",
+            "stage": "cert",
+            "params": pairs(),
+            "rationale": "required",
+        },
+        {"id": "research_plateau", "stage": "cert", "params": pairs(), "rationale": "required"},
         {"id": "paper_forward", "stage": "paper", "params": pairs(), "rationale": "required"},
         {"id": "live_drift", "stage": "live", "params": pairs(), "rationale": "required"},
     ],

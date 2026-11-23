@@ -289,6 +289,104 @@ def test_the_baseline_discards_when_a_card_gate_fails(ws: Workspace, store: Stat
     assert run.best_sha is None
 
 
+THREE_FOLDS = REVERTING.replace(
+    b"    def on_bar(self, bar) -> None:\n        self.closes.append",
+    b"    def on_bar(self, bar) -> None:\n"
+    b"        if bar.ts_event >= 1_705_968_000_000_000_000:  # 2024-01-23, UTC\n"
+    b"            if self.long:\n"
+    b"                self.submit_exit(bar.bar_type.instrument_id)\n"
+    b"                self.long = False\n"
+    b"            return\n"
+    b"        self.closes.append",
+)
+"""The reverter, flat from 2024-01-23 on: it earns in the first three of the research window's
+four folds and holds nothing through the last, which therefore scores zero."""
+
+
+@pytest.mark.parametrize(("required", "status"), [(4, "discard"), (3, "keep")])
+def test_a_card_whose_edge_does_not_recur_in_every_fold_it_is_held_to_is_a_discard(
+    ws: Workspace, store: StateStore, required: int, status: str
+) -> None:
+    """`positive_folds` at the workspace's four folds is every fold positive, stated as the
+    hypothesis's own value: a card positive in three of four is refused it and never kept,
+    and at three it keeps. No engine run is made for it beyond the card's own."""
+    assert ws.config.research.folds == 4
+    folds = {"id": "positive_folds", "params": {"min_positive_folds": required}}
+    hyp_id = classify(
+        ws,
+        store,
+        document(constraints=[{"id": "strategy_integrity"}], required_constraints=[folds]),
+        THREE_FOLDS,
+    )
+    run = loop.begin(ws, store, hyp_id)
+
+    (baseline,) = records.cards_of(store, hyp_id)
+    assert baseline.status == status
+    (gate,) = [found for found in baseline.gate_results if found.id == "positive_folds"]
+    assert gate.evidence["positive_folds"] == 3
+    assert gate.evidence["folds"][-1] == 0.0, "flat through the last fold"
+    assert gate.passed is (status == "keep")
+    assert (run.best_sha is None) is (status == "discard")
+
+
+def test_a_fold_count_the_folds_were_lowered_beneath_is_refused_where_a_run_is_set_up(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`min_positive_folds` 4 was every fold positive when it was registered; under three folds
+    no card could meet it, and each would be a discard saying nothing of why. So neither a card
+    of an open run nor a run begun is set up under folds the card gates' ranges exclude, and
+    the refusal names both ways out."""
+    folds = {"id": "positive_folds", "params": {"min_positive_folds": 4}}
+    hyp_id = classify(
+        ws,
+        store,
+        document(constraints=[{"id": "strategy_integrity"}], required_constraints=[folds]),
+        REVERTING,
+    )
+    loop.begin(ws, store, hyp_id)
+    fewer = tuned(ws, folds=3)
+
+    with pytest.raises(ValidationError) as refused:
+        loop.card(fewer, store, hyp_id, "under three folds")
+
+    assert refused.value.code == Exit.VALIDATION
+    assert (
+        "positive_folds.min_positive_folds: 4 is outside the range [1, 3]" in refused.value.message
+    )
+    assert refused.value.remedy is not None
+    assert "`[research] folds`" in refused.value.remedy
+    assert f"`kanso hyp validate hypotheses/{hyp_id}/hypothesis.yaml`" in refused.value.remedy
+    assert len(records.cards_of(store, hyp_id)) == 1, "no card was made under three folds"
+    loop.end(fewer, store, hyp_id)
+    with pytest.raises(ValidationError, match="does not admit"):
+        loop.begin(fewer, store, hyp_id)
+    assert len(records.runs_of(store, hyp_id)) == 1, "and no run was begun under them"
+
+
+def test_only_a_range_the_folds_scale_holds_a_pinned_card_gate_where_a_run_is_set_up(
+    ws: Workspace,
+) -> None:
+    """`[research] folds` is the one thing a pin was validated against that the workspace can
+    move under it. A file pinned before `edge_per_trade` became `together`, naming `min_bps`
+    alone, is held to that rule where it is next registered, not refused here as if the folds
+    had moved; beside a `positive_folds` count the folds no longer reach, the refusal names
+    that count and nothing else."""
+    from tests.criteria.builders import make_hyp
+
+    half = {"id": "edge_per_trade", "params": {"min_bps": 1.0}}
+    loop._refuse_unadmitted(ws, make_hyp(required_constraints=[half]), 4)
+
+    counted = {"id": "positive_folds", "params": {"min_positive_folds": 6}}
+    with pytest.raises(ValidationError) as refused:
+        loop._refuse_unadmitted(ws, make_hyp(required_constraints=[half, counted]), 4)
+
+    assert refused.value.message.endswith(
+        "card gates `[research] folds` 4 does not admit: "
+        "positive_folds.min_positive_folds: 6 is outside the range [1, 4]"
+    )
+    assert "edge_per_trade" not in refused.value.message
+
+
 def test_begin_refuses_a_tick_hypothesis_whose_venue_now_states_no_latency(
     ws: Workspace, store: StateStore
 ) -> None:

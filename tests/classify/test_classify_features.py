@@ -343,8 +343,13 @@ def test_the_card_gates_are_the_card_stage_ones_with_their_ranges(ws: Workspace)
         "position_size",
         "leg_edge",
         "trading_hours",
+        "positive_folds",
     }
     assert gates["strategy_integrity"]["required"] is True
+    assert gates["positive_folds"]["required"] is False, "named by the classifier or the operator"
+    assert gates["positive_folds"]["ranges"] == {
+        "min_positive_folds": {"min": 1.0, "max": float(ws.config.research.folds)}
+    }
     assert gates["min_trades"]["required"] is False
     assert gates["min_trades"]["params"] == {"min": "int"}
     assert gates["min_trades"]["ranges"] == {"min": {"min": 1.0, "max": 10000.0}}

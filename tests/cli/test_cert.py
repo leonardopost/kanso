@@ -327,6 +327,18 @@ def test_the_certificate_reads_as_the_verdict_then_the_gates(
     assert "2 skipped" in result.stdout and "nothing is deployed" in result.stdout
     assert "fewer than two trials" in result.stdout, "one card that traded is no search yet"
     assert "engine" in result.stdout and "snapshot" in result.stdout
+    (folds,) = [line for line in result.stdout.splitlines() if "walk_forward_consistency" in line]
+    assert "walk_forward_consistency  " in folds, "the gate column holds the longest id"
+
+
+def test_the_gate_column_holds_every_gate_id_the_toolbox_ships() -> None:
+    """`walk_forward_consistency` is in every plan, so a column narrower than it ran its id into
+    its evidence on every certificate."""
+    from kanso.cli import cert
+    from kanso.criteria import catalogue
+
+    gates = [name for name, item in catalogue().items() if item.kind == "gate"]
+    assert max(len(name) for name in gates) + 2 == cert.GATE
 
 
 def test_a_failing_verdict_is_a_result_and_not_an_error(
@@ -341,7 +353,9 @@ def test_a_failing_verdict_is_a_result_and_not_an_error(
     assert document["verdict"] == "fail"
     assert document["status"] == "researching", "a fail short of the allowance returns to research"
     failed = [gate["id"] for gate in document["gates"] if not gate["pass"]]
-    assert failed == ["embargoed_window"], "bytes that never trade earn nothing out of sample"
+    assert failed == ["embargoed_window", "walk_forward_consistency"], (
+        "bytes that never trade earn nothing out of sample, nor in any research fold"
+    )
 
 
 def test_a_fail_points_at_more_research_rather_than_at_a_replan(

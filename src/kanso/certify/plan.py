@@ -365,13 +365,16 @@ def _document(hyp: Hypothesis) -> dict[str, Any]:
 
 def _toolbox(hyp: Hypothesis, folds: int) -> list[dict[str, Any]]:
     """Every plannable gate: what it means, what it takes, whether it takes all of it or
-    nothing (`together`, which `check_params` holds a plan to), and what it may be given."""
+    nothing (`together`, which `check_params` holds a plan to), what it reads before the
+    certification window is read (`reads`, `null` for a gate that reads no research window
+    first), and what it may be given."""
     return [
         {
             "id": item.id,
             "stage": item.stage,
             "required": bool(item.required),
             "together": bool(item.together),
+            "reads": item.reads,
             "meaningful_when": item.meaningful_when,
             "params": dict(item.params),
             "ranges": _ranges(item, hyp, folds),
@@ -415,7 +418,9 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
     rule moves the threshold with the count. How many looks the lineage has taken at the
     forward window is stated beside it, unconditionally since `forward_holdout` is in every
     plan, as a fact that states no bound: what it does to `resolve` and `min_fraction` is the
-    planner's answer.
+    planner's answer. So is which gates are judged on research data before the certification
+    window is read, and what each plateau's `keep_fraction` is a fraction of: the research
+    score the search selected, or the certification score.
     """
     offered = plannable()
     gate = None if hyp.objective is None else deflation_gate(hyp.objective.id)
@@ -481,12 +486,33 @@ def _invariants(hyp: Hypothesis) -> dict[str, Any]:
             "every required gate is included, and none of them is excluded",
             *guarded,
             *correction,
+            RESEARCH_GATES,
             FORWARD_LOOKS,
             "the plan includes at least one gate at each of the cert, paper and live stages",
             "no gate is named twice, and no gate is both included and excluded",
         ],
     }
 
+
+RESEARCH_GATES: Final = (
+    "a gate whose reads is research judges the research window's runs, the trials and nothing "
+    "of the certification window, so it is judged at a stall before the certification window "
+    "is read, and one that refuses the best there spares the stall: no certificate is written "
+    "and no look is taken. research_plateau holds each move of a parameter to keep_fraction of "
+    "the research score the search selected, which selection inflated; param_plateau, when the "
+    "plan includes it, holds each move to keep_fraction of the certification score, and is "
+    "judged after the certification window is read. Under a contribution objective a "
+    "parameter that sizes the position, a notional say, moves the score in proportion to its "
+    "move under either plateau, so a keep_fraction above 1 - perturb_pct / 100 refuses every "
+    "strategy that declares one among its own parameters, whatever its edge; under an edge "
+    "or a Sharpe it moves the score little or not at all"
+)
+"""The invariant stating which gates are judged before the certification window, stated in
+every plan since `research_plateau` and `walk_forward_consistency` are in every plan, with
+the one fact of the plateaus' arithmetic that sets a bound on what `keep_fraction` can mean:
+measured on the research suite's saw-tooth on 2026-11-23, a notional moved from 5,000 to
+4,500 took `wf_contribution_bps` from 11.3242 to 10.1917, a ratio of 0.9000, and left
+`net_edge_bps` and `wf_sharpe_net` where they were."""
 
 FORWARD_LOOKS: Final = (
     "forward_looks is how many looks this hypothesis's lineage — every registered hypothesis "

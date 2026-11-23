@@ -368,24 +368,31 @@ def test_the_cli_page_says_a_stage_speed_paces_nothing_in_this_version() -> None
     assert "the catch-up itself runs unpaced" in text
 
 
-def test_the_pages_say_a_stall_certifies_only_a_best_whose_correction_passes() -> None:
-    """A stall the search correction refuses on research data reads no certification window
+def test_the_pages_say_a_stall_certifies_only_a_best_whose_research_gates_pass() -> None:
+    """A stall a research gate refuses on research data reads no certification window
     (`kanso.certify.run.precheck`, `certify_at_stall`). The pages say so where the stall's
     rule and its two commands are described, and name every key the `stalled` event records
-    for it, so an operator reading one can tell a spared stall from one that judged
-    nothing."""
+    for it — every reading under `gates` among them — so an operator reading one can tell a
+    spared stall from one that judged nothing, and which gate spared it."""
     from kanso.certify.run import Precheck
+    from kanso.criteria.context import skipped
 
     cli = prose(page("cli.md"))
     concepts = prose(page("concepts.md"))
     changelog = prose((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
-    rule = "A stall certifies only a best whose search correction passes on research data."
-    assert f"**{rule}**" in cli and f"**{rule}**" in changelog
-    assert "**A stall certifies only a best whose correction passes on research data.**" in (
-        concepts
-    )
-    for key in Precheck("deflated_edge", False, None, {}, "why", measured=False).payload():
+    rule = "A stall certifies only a best whose research gates pass on research data."
+    for text in (cli, concepts, changelog):
+        assert f"**{rule}**" in text
+    recorded = Precheck([skipped("deflated_edge", "why")], measured=False).payload()
+    assert "gates" in recorded
+    for key in [*recorded, *recorded["gates"][0]]:  # type: ignore[misc]
         assert f"`{key}`" in cli, key
+    for gate in ("walk_forward_consistency", "research_plateau"):
+        for text in (cli, concepts, changelog):
+            assert gate in text, gate
+    assert "`gates`, every reading in the order it was taken" in cli
+    assert "every reading under `gates`" in concepts
+    assert "never judged again" in cli and "never judged again" in concepts
     research_run = next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso research run")
     )

@@ -102,8 +102,21 @@ REQUIRED_GATES: list[dict[str, Any]] = [
         "params": {"ts_ns": 0},
         "rationale": "required; the deployed code path must be the researched one",
     },
+    {
+        "id": "walk_forward_consistency",
+        "stage": "cert",
+        "params": {"min_positive_folds": 1},
+        "rationale": "required; the edge recurs across the research folds",
+    },
+    {
+        "id": "research_plateau",
+        "stage": "cert",
+        "params": {"perturb_pct": 10.0, "keep_fraction": 0.0},
+        "rationale": "required; the research score survives a move of every parameter",
+    },
 ]
-"""The three cert gates every plan must carry, since all three are structural invariants."""
+"""The five cert gates every plan must carry, since all five are structural invariants: the
+research plateau at values every subject here clears that clears the research window at all."""
 
 TIMING_GATE: dict[str, Any] = {
     "id": "entry_timing",
@@ -543,7 +556,10 @@ def test_a_failing_gate_returns_the_hypothesis_to_research(
 
     assert made.verdict == "fail"
     failed = [gate.id for gate in made.gates if not gate.passed]
-    assert failed == ["embargoed_window"], "a strategy that never trades earns nothing"
+    assert failed == ["embargoed_window", "walk_forward_consistency"], (
+        "a strategy that never trades earns nothing, in the certification window or in any "
+        "research fold"
+    )
     assert _status(store, HYP_ID) == "researching"
     assert _failures(store, HYP_ID) == 1
     assert not unread(store), "one failure is not an escalation"
@@ -605,11 +621,11 @@ def test_a_failing_certificate_hands_the_proposer_gate_ids_and_no_measurement(
 
     made = certify(ws, store, HYP_ID)
 
-    (line,) = driver._failing_gates(store, HYP_ID)
-    assert line == "embargoed_window"
+    lines = driver._failing_gates(store, HYP_ID)
+    assert lines == ["embargoed_window", "walk_forward_consistency"]
     (gate,) = [found for found in made.gates if found.id == "embargoed_window"]
     assert "certification" in gate.evidence, "the gate does record it, on the certificate"
-    assert str(gate.evidence["certification"]) not in line
+    assert all(str(gate.evidence["certification"]) not in line for line in lines)
 
 
 def test_a_pass_clears_the_failures_a_hypothesis_had_run_up(
@@ -1122,14 +1138,16 @@ def test_a_gate_with_no_implementation_is_skipped_rather_than_failed(
     classify(ws, store, DOCUMENT, REVERTING)
     a_card(ws, store, REVERTING)
     write_plan(ws)
-    without_lag = {name: gate for name, gate in run.gates().items() if name != "publication_lag"}
-    monkeypatch.setattr(run, "gates", lambda: without_lag)
+    unbuilt = ("publication_lag", "walk_forward_consistency")
+    without = {name: gate for name, gate in run.gates().items() if name not in unbuilt}
+    monkeypatch.setattr(run, "gates", lambda: without)
 
     made = certify(ws, store, HYP_ID)
 
-    (lag,) = [gate for gate in made.gates if gate.id == "publication_lag"]
-    assert lag.skipped == run.UNIMPLEMENTED
-    assert lag.passed, "a gate that judged nothing does not fail a certificate"
+    for name in unbuilt:  # one judged on the certification window, one on research data
+        (missing,) = [gate for gate in made.gates if gate.id == name]
+        assert missing.skipped == run.UNIMPLEMENTED, name
+        assert missing.passed, "a gate that judged nothing does not fail a certificate"
     assert made.verdict == "pass"
 
 
@@ -1152,6 +1170,8 @@ def test_a_plan_that_does_not_name_the_parity_gate_replays_nothing(
     assert [gate.id for gate in made.gates] == [
         "embargoed_window",
         "publication_lag",
+        "walk_forward_consistency",
+        "research_plateau",
         "entry_timing",
     ]
     assert sessions(ws) == [], "nothing replayed, so no session was written"
@@ -1888,6 +1908,58 @@ def test_a_failed_window_spares_the_read_and_says_what_it_spared(
     assert (timing.skipped, timing.passed, timing.evidence) == (run.TIMING_SPARED, True, {})
     assert read == [], "the window was not read again"
     assert len(run.TIMING_SPARED) <= 200
+
+
+def test_a_failed_window_still_spares_the_gates_that_run_or_read_it_again(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The research gates are judged before the certification window is read and record what
+    they judged; the gates that re-run the subject over that window, or read it again, are
+    spared by the window gate's refusal exactly as before."""
+    from kanso.criteria import gates as implemented
+    from kanso.criteria.context import verdict
+
+    class Refusing:
+        id = "embargoed_window"
+
+        def evaluate(self, _: Any) -> Any:
+            return verdict(self.id, False, {"refused": "by the test"})
+
+    registry = {**implemented(), "embargoed_window": Refusing()}
+    monkeypatch.setattr(run, "gates", lambda: registry)
+    latency = {
+        "id": "latency_stress",
+        "stage": "cert",
+        "params": {"mult_a": 2.0, "mult_b": 5.0, "keep_fraction": 0.5},
+        "rationale": "a slower route",
+    }
+    classify(ws, store, DOCUMENT, REVERTING)
+    a_card(ws, store, REVERTING)
+    write_plan(ws, gates=[*CERT_GATES, PLATEAU, latency])
+    read = timing_reads(monkeypatch)
+    moved: list[tuple[tuple[date, date], dict[str, float], bool]] = []
+    original = backtest.execute_chunked
+
+    def counted(request: backtest.RunRequest, *args: Any, **kwargs: Any) -> Any:
+        stressed = request.venue_model != venue_model().model_dump()
+        if request.overrides or stressed:
+            moved.append((request.window, dict(request.overrides), stressed))
+        return original(request, *args, **kwargs)
+
+    monkeypatch.setattr(backtest, "execute_chunked", counted)
+
+    made = certify(ws, store, HYP_ID)
+
+    found = {gate.id: gate for gate in made.gates}
+    assert made.verdict == "fail" and not found["embargoed_window"].passed
+    for spared in ("param_plateau", "latency_stress"):
+        assert (found[spared].skipped, found[spared].passed) == (run.WINDOW_FAILED, True)
+    assert found["entry_timing"].skipped == run.TIMING_SPARED
+    assert read == [], "the window was not read again"
+    plateau = found["research_plateau"]
+    assert plateau.skipped is None and plateau.passed, "judged before the window, and kept"
+    assert [window for window, _, _ in moved] == [RESEARCH] * plateau.evidence["n_backtests"]
+    assert not any(stressed for _, _, stressed in moved)
 
 
 def test_a_card_scored_on_a_sharpe_before_a_re_pin_is_not_certified_without_entry_timing(

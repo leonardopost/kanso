@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -13,7 +14,7 @@ from kanso.criteria.gates import PENDING
 from kanso.criteria.library import resolve_bound
 from kanso.errors import ValidationError
 from kanso.schemas import CertificationPlan, CriteriaItem
-from tests.criteria.builders import make_hyp
+from tests.criteria.builders import build_run, context, make_hyp, trade
 
 CACHED = (lib._catalogue, lib.criteria_version, lib._objectives, lib._gates)
 
@@ -35,8 +36,16 @@ def write_item(directory: Any, name: str, body: str) -> None:
 
 FOLDS = 4
 
-REQUIRED_CERT_GATES = ("embargoed_window", "parity_replay", "publication_lag")
-"""The cert gates every plan is held to, all of which this version can run.
+REQUIRED_CERT_GATES = (
+    "embargoed_window",
+    "parity_replay",
+    "publication_lag",
+    "research_plateau",
+    "walk_forward_consistency",
+)
+"""The cert gates every plan is held to, all of which this version can run: among them the two
+research gates beside the search correction, judged at a stall before the certification window
+is read.
 
 A gate the toolbox declares but this version cannot run is exempt from that, and is
 neither offered to a planner nor required of a plan. No required gate is in that state
@@ -78,6 +87,12 @@ PLAN: dict[str, Any] = {
             "stage": "cert",
             "params": {"ts_ns": 0},
             "rationale": "the deployed path is the researched one",
+        },
+        {
+            "id": "research_plateau",
+            "stage": "cert",
+            "params": {"perturb_pct": 10.0, "keep_fraction": 0.0},
+            "rationale": "required; the research score survives a move of every parameter",
         },
         {"id": "bootstrap", "stage": "cert", "params": {"n": 1000}, "rationale": "path risk"},
         {
@@ -130,7 +145,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 38
+    assert len(items) == 40
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -161,6 +176,168 @@ def test_the_structural_invariants_are_the_only_required_gates() -> None:
         *REQUIRED_PAPER_GATES,
         *criteria.pending_required(),
     }
+
+
+@pytest.mark.parametrize(
+    ("gate_id", "params"),
+    [
+        ("walk_forward_consistency", {}),
+        ("research_plateau", {"perturb_pct": 10.0}),
+        ("research_plateau", {"keep_fraction": 0.5}),
+        ("research_plateau", {}),
+    ],
+)
+def test_a_research_gate_every_plan_carries_is_carried_with_every_parameter_set(
+    gate_id: str, params: dict[str, float]
+) -> None:
+    """Required and `together`: named bare or with half its rule it would skip, and a skip
+    passes. How high its bar sits is still the planner's."""
+    item = catalogue()[gate_id]
+
+    assert (item.stage, item.required, item.together, item.reads) == (
+        "cert",
+        True,
+        True,
+        "research",
+    )
+    with pytest.raises(ValidationError, match=rf"gates\.{gate_id}\.\w+: is not set"):
+        validate_plan(replacing(gate_id, params=params), make_hyp(), FOLDS)
+
+
+def test_every_fold_positive_on_a_card_is_a_value_and_never_a_default() -> None:
+    """`positive_folds` is the classifier's to name among the constraints, or the operator's in
+    `required_constraints`, with its count set; no hypothesis carries it unasked."""
+    item = catalogue()["positive_folds"]
+
+    assert (item.stage, item.required, item.together, item.reads) == ("card", False, True, None)
+    assert item.required_for is None
+    assert lib.check_params(item, {"min_positive_folds": FOLDS}, make_hyp(), FOLDS) == []
+    (wide,) = lib.check_params(item, {"min_positive_folds": FOLDS + 1}, make_hyp(), FOLDS)
+    assert wide == f"min_positive_folds: {FOLDS + 1} is outside the range [1, {FOLDS}]"
+    (bare,) = lib.check_params(item, {}, make_hyp(), FOLDS)
+    assert bare.startswith("min_positive_folds: is not set, and positive_folds judges nothing")
+
+
+def test_a_pinned_card_gate_is_held_to_the_ranges_the_folds_scale_and_nothing_else() -> None:
+    """`check_folds` is `check_params` narrowed to what `[research] folds` moves: a value outside
+    a range one of whose bounds scales with the folds, and never a type, an undeclared name, a
+    range that does not scale or a `together` set left half-stated."""
+    counted = catalogue()["positive_folds"]
+    edge = catalogue()["edge_per_trade"]
+    hyp = make_hyp()
+
+    assert lib.check_folds(counted, {"min_positive_folds": FOLDS}, hyp, FOLDS) == []
+    assert lib.check_folds(counted, {"min_positive_folds": FOLDS + 1}, hyp, FOLDS) == [
+        f"min_positive_folds: {FOLDS + 1} is outside the range [1, {FOLDS}]"
+    ]
+    assert lib.check_folds(counted, {"min_positive_folds": "all"}, hyp, FOLDS) == []
+    assert lib.check_folds(counted, {"nonesuch": 1}, hyp, FOLDS) == []
+    assert lib.check_folds(edge, {"min_bps": 99.0}, hyp, FOLDS) == []
+    assert lib.check_params(edge, {"min_bps": 99.0}, hyp, FOLDS)
+
+
+def test_the_research_gates_are_the_ones_whose_files_say_they_read_research() -> None:
+    """Read from the YAML, so no gate id is listed in code: a gate added with `reads: research`
+    is judged before the certification window without anyone remembering to add it."""
+    declared = {
+        path.stem
+        for path in lib.LIBRARY.glob("*.yaml")
+        if "\nreads: research\n" in path.read_text(encoding="utf-8")
+    }
+
+    assert lib.research_gates() == declared
+    assert declared == {
+        "deflated_contribution",
+        "deflated_edge",
+        "deflated_sharpe",
+        "research_plateau",
+        "walk_forward_consistency",
+    }
+
+
+def test_every_search_correction_is_judged_on_research_data() -> None:
+    """A deflation reads the research window and the trials alone, which is what lets a stall
+    spare a best it refuses without reading the certification window."""
+    corrections = [item for item in catalogue().values() if item.deflates]
+
+    assert corrections
+    assert all(item.reads == "research" for item in corrections)
+
+
+RESEARCHED = build_run(
+    (3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0),
+    trades=tuple(trade(date(2024, 1, 1 + day), pnl=pnl) for day, pnl in enumerate((9, -2, 7, 4))),
+)
+"""A research run that earned, by period and by trade."""
+
+ELSEWHERE = build_run(
+    (-7.0, 2.0, -9.0, -1.0, -3.0),
+    start=date(2025, 1, 6),
+    trades=(trade(date(2025, 1, 6), pnl=-30.0), trade(date(2025, 1, 7), pnl=11.0)),
+)
+"""An unrelated run on another window: what a certification run would be, if one leaked in."""
+
+RESEARCH_PARAMS: dict[str, dict[str, Any]] = {
+    "deflated_sharpe": {"min_dsr": 0.95},
+    "deflated_contribution": {"min_probability": 0.95},
+    "deflated_edge": {"min_probability": 0.95},
+    "walk_forward_consistency": {"min_positive_folds": 3},
+    "research_plateau": {"perturb_pct": 10.0, "keep_fraction": 0.5},
+}
+
+
+@pytest.mark.parametrize(
+    "objective",
+    [
+        {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 0.5}},
+        {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}},
+        {"id": "net_edge_bps", "params": {"min_delta": 0.0, "k_se": 1.0}},
+    ],
+)
+def test_a_research_gate_reads_nothing_of_the_certification_window(
+    objective: dict[str, Any],
+) -> None:
+    """The YAML's claim, as a test: every gate that says `reads: research` gives the same
+    verdict on the same evidence whatever the window, the run, the host and the benchmark it
+    is handed are, since what it judges is the research slots and the trials alone."""
+    from kanso.criteria import CardRun
+
+    hyp = make_hyp(objective=objective)
+    reran: list[dict[str, float]] = []
+
+    def rerun(overrides: dict[str, float]) -> CardRun:
+        reran.append(dict(overrides))
+        return RESEARCHED
+
+    research = {
+        "hyp": hyp,
+        "stage": "cert",
+        "research_run": RESEARCHED,
+        "trial_metrics": (1.0, 2.0, 0.5, 1.5),
+        "trials": 4,
+        "tunable": {"fast": 10.0},
+        "rerun": rerun,
+    }
+    judged = []
+    for gate_id in sorted(lib.research_gates()):
+        params = RESEARCH_PARAMS[gate_id]
+        own = gates()[gate_id].evaluate(context(RESEARCHED, params=params, **research))
+        leaked = gates()[gate_id].evaluate(
+            context(
+                ELSEWHERE,
+                params=params,
+                host_run=ELSEWHERE,
+                benchmark_run=ELSEWHERE,
+                window=ELSEWHERE.window,
+                **research,
+            )
+        )
+        assert own == leaked, gate_id
+        if own.skipped is None:
+            judged.append(gate_id)
+    assert {"walk_forward_consistency", "research_plateau"} <= set(judged)
+    assert len(judged) == 3, "the objective's own correction judged too, and no other"
+    assert reran, "the plateau moved the subject"
 
 
 def test_the_toolbox_reaches_every_stage() -> None:

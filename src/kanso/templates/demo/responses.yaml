@@ -20,6 +20,8 @@ certify_plan:
       - {id: embargoed_window, stage: cert, params: [{name: min_fraction, value: 0.5}], rationale: "required; the only out-of-sample evidence"}
       - {id: publication_lag, stage: cert, params: [{name: tolerance_s, value: 0}], rationale: "required; the synthetic series is realtime, so any lag at all is a surprise"}
       - {id: parity_replay, stage: cert, params: [{name: ts_ns, value: 0}], rationale: "required; the live code path and the research one must submit the same orders"}
+      - {id: walk_forward_consistency, stage: cert, params: [{name: min_positive_folds, value: 3}], rationale: "required; the edge recurs in three of the four research folds rather than arriving once"}
+      - {id: research_plateau, stage: cert, params: [{name: perturb_pct, value: 10}, {name: keep_fraction, value: 0.25}], rationale: "required; a tenth's move of any parameter keeps a quarter of a research edge selection inflated"}
       - {id: cost_stress, stage: cert, params: [{name: mult_a, value: 2}, {name: mult_b, value: 3}], rationale: "30m horizon: edge is cost-sensitive"}
       - {id: bootstrap, stage: cert, params: [{name: n, value: 1000}], rationale: "drawdown band, and a band of the objective that must reach above zero"}
       - {id: deflated_edge, stage: cert, params: [{name: min_probability, value: 0.95}], rationale: "the search correction for a per-trade edge; required behind two or more trials"}

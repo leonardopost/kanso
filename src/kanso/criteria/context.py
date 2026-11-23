@@ -26,6 +26,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from kanso.criteria.run import CardRun
+from kanso.errors import PreconditionError
 from kanso.schemas import GateResult, Hypothesis, ParamValue
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
@@ -110,7 +111,9 @@ class GateContext:
       of number — oldest first, so a participation limit has something to be a share of;
     * `tunable` are the subject's own numeric parameters at the values it ran with, and
       `rerun` runs it again over `window` with some of them replaced — the pair a
-      perturbation gate needs, and the one thing here that costs a backtest to use;
+      perturbation gate needs, and the one thing here that costs a backtest to use. A
+      `rerun` may raise `MovedRunError` where the strategy refused the moved setting, which
+      the gate reads as a move that kept nothing;
     * `rerun_costs` runs it again over `window` under a venue model whose cost keys are
       replaced — `latency_ms`, the one a latency stress moves — with the strategy as it
       was: what a gate that asks how the result survives a slower route needs, since a
@@ -160,6 +163,24 @@ class GateContext:
     rerun_costs: Callable[[Mapping[str, float]], CardRun] | None = None
     session_prices: Callable[[Sequence[PriceKey]], SessionPrices] | None = None
     looks: LookCount | None = None
+
+
+class MovedRunError(PreconditionError):
+    """A re-run of the subject with its parameters moved, whose setting its strategy refused:
+    its configuration class rejected a moved value, the harness refused an order it placed,
+    or its own code raised.
+
+    The subject's own run did not, so what refused is the setting a perturbation gate moved
+    it to: the result does not survive that move, it never ran there. A `rerun` raises this,
+    `raised` naming the exception, and the gate that asked records the move as keeping
+    nothing (`kanso.criteria.gates.param_plateau`). A fault that is not the strategy's — a
+    catalog that could not be read, say — is never one of these. Anything else that meets it
+    reads the refusal it is.
+    """
+
+    def __init__(self, message: str, *, raised: str, remedy: str | None = None) -> None:
+        super().__init__(message, remedy)
+        self.raised = raised
 
 
 class Gate(Protocol):

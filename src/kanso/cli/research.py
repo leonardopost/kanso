@@ -19,8 +19,9 @@ picks them up before it takes anything new — so stopping is a cheap act rather
 decision.
 
 A run that stalls with a keep nothing has certified certifies it before it returns, unless
-its search correction refuses it on research data, so `run` reports what that stall decided:
-the certificate the best stands under, pointing at it, or the correction that spared it.
+a research gate — its search correction, `walk_forward_consistency` or `research_plateau` —
+refuses it on research data, so `run` reports what that stall decided: the certificate the
+best stands under, pointing at it, or the research gate that spared it.
 
 `show` prints what is in state: a card's stored `strategy.py`, the unified diff between
 two of them, or — under `--measured` — what the newest card of those bytes that kept a
@@ -411,7 +412,7 @@ def _standing(ws: Workspace, opened: StateStore, hyp_id: str, sha: str) -> Certi
     make again, by the predicate it found it with (`kanso.certify.certificate.judged`).
 
     Any other is not this run's outcome. A rewound `best` leaves another subject's
-    certificate newest, and a stall its search correction spared leaves one under a
+    certificate newest, and a stall a research gate spared leaves one under a
     `hypothesis.yaml`, a plan or an engine since replaced, which certified the bytes under a
     question or a bar the stall no longer judges by; reporting either as what this run came
     to would be a lie."""
@@ -468,15 +469,39 @@ def _stop(ws: Workspace, drain: bool = False) -> Report:
 
 
 def spared_by(precheck: object) -> str | None:
-    """`deflated_contribution 0.792 < 0.950`: the search correction that spared a stall, with
-    its probability and the planner's threshold, or `None` when the precheck spared nothing —
-    it passed, it judged nothing, or the stall recorded none."""
+    """The research gate that spared a stall, in the terms of its own evidence, or `None` when
+    the precheck spared nothing — it passed, it judged nothing, or the stall recorded none.
+
+    A search correction gives its probability and the planner's threshold
+    (`deflated_contribution 0.792 < 0.950`); `walk_forward_consistency` its count of positive
+    folds and the planner's (`walk_forward_consistency 2 < 4 positive folds`); `research_plateau`
+    how many of its moves fell under the floor (`research_plateau 3 of 8 moves under 1.234`),
+    and how many raised where any did (`research_plateau 0 of 8 moves under 1.234, 2 raised`),
+    or that its unperturbed score was a loss (`research_plateau unperturbed -0.412 not
+    positive`); any other gate that it refused. A stall recorded before stalls judged more than
+    the correction reads as it always did.
+    """
     if not isinstance(precheck, dict) or not precheck.get("judged") or precheck.get("pass"):
         return None
-    evidence = precheck["evidence"]
-    value = evidence.get("probability", evidence.get("dsr"))
-    floor = evidence.get("min_probability", evidence.get("min_dsr"))
-    return f"{precheck['gate']} {value:.3f} < {floor:.3f}"
+    gate, evidence = precheck["gate"], precheck["evidence"]
+    if "probability" in evidence or "dsr" in evidence:
+        value = evidence.get("probability", evidence.get("dsr"))
+        floor = evidence.get("min_probability", evidence.get("min_dsr"))
+        return f"{gate} {value:.3f} < {floor:.3f}"
+    if "positive_folds" in evidence:
+        return (
+            f"{gate} {evidence['positive_folds']} < {evidence['min_positive_folds']} positive folds"
+        )
+    if "perturbations" in evidence:
+        if "floor" not in evidence:
+            return f"{gate} unperturbed {evidence['unperturbed']:.3f} not positive"
+        floor = evidence["floor"]
+        metrics = [move["metric"] for move in evidence["perturbations"]]
+        under = sum(1 for metric in metrics if metric is not None and metric < floor)
+        raised = metrics.count(None)
+        also = f", {raised} raised" if raised else ""
+        return f"{gate} {under} of {evidence['n_backtests']} moves under {floor:.3f}{also}"
+    return f"{gate} refused"
 
 
 def stopped_line(children: Sequence[daemon.ChildPid], ending: Sequence[daemon.ChildPid]) -> str:

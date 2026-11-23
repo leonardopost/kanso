@@ -29,12 +29,13 @@ from kanso.criteria.gates import (
     max_hold,
     min_trades,
     position_size,
+    positive_folds,
     publication_lag,
     strategy_integrity,
     stressed,
     walk_forward_consistency,
 )
-from kanso.criteria.objectives import wf_sharpe_net, wf_sharpe_vs_hold
+from kanso.criteria.objectives import marginal_net_edge_bps, wf_sharpe_net, wf_sharpe_vs_hold
 from kanso.criteria.quantities import fill_path_drawdown_pct, periods_per_year, variance
 from kanso.criteria.run import NS_PER_SECOND, Fill, midnight_ns
 from kanso.errors import PreconditionError
@@ -1117,6 +1118,87 @@ def test_walk_forward_consistency_without_its_context_judges_nothing(overrides: 
     result = walk_forward_consistency.evaluate(
         context(trading_run(1.0, 1.0, 1.0, 1.0), **overrides)
     )
+    assert result.passed and result.skipped is not None
+
+
+# --- positive_folds -----------------------------------------------------------------
+
+MARGINAL = {"objective": {"id": "marginal_net_edge_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}}
+"""An attached construct scored on what its trades add to its host's, fold by fold."""
+
+
+@pytest.mark.parametrize(("required", "passed"), [(2, True), (3, False)])
+def test_positive_folds_counts_the_card_s_folds_against_its_host(
+    required: int, passed: bool
+) -> None:
+    """The candidate earns 100 to 400 bp a fold and its host 50 to 500, so what it adds is
+    positive in two folds of four: two passes, three fails."""
+    candidate, host = (
+        trading_run(100.0, 200.0, 300.0, 400.0),
+        trading_run(50.0, 250.0, 100.0, 500.0),
+    )
+
+    result = positive_folds.evaluate(
+        context(
+            candidate,
+            hyp=make_hyp(**MARGINAL),
+            params={"min_positive_folds": required},
+            host_run=host,
+        )
+    )
+
+    assert (result.skipped, result.passed) == (None, passed)
+    assert result.evidence["folds"] == pytest.approx(
+        list(marginal_net_edge_bps.fold_values(candidate, 4, host))
+    )
+    assert result.evidence["positive_folds"] == 2
+    assert result.evidence["min_positive_folds"] == required
+
+
+@pytest.mark.parametrize("required", [1, 2, 3, 4])
+def test_positive_folds_counts_the_card_s_folds_against_its_benchmark(required: int) -> None:
+    """The card's folds are read against the hold the card was measured against, at the
+    count at which it passes and the one past it."""
+    folds = wf_sharpe_vs_hold.fold_values(RISING, 4, benchmark=HOLDING)
+    positive = sum(1 for value in folds if value > 0)
+
+    result = positive_folds.evaluate(
+        context(
+            RISING,
+            hyp=make_hyp(**HOLD_HYP),
+            params={"min_positive_folds": required},
+            benchmark_run=HOLDING,
+        )
+    )
+
+    assert result.evidence["positive_folds"] == positive
+    assert result.passed is (positive >= required)
+
+
+def test_positive_folds_is_walk_forward_consistency_on_the_card_itself() -> None:
+    """One count, two places: the card gate reads the run a card is judged on, the cert gate
+    the research slots of a certification, and on the same run they say the same thing."""
+    run = trading_run(100.0, -50.0, 200.0, 300.0)
+    params = {"min_positive_folds": 4}
+
+    card = positive_folds.evaluate(
+        context(run, params=params, research_run=trading_run(1.0, 1.0, 1.0, 1.0))
+    )
+    certified = walk_forward_consistency.evaluate(
+        context(trading_run(-1.0, -1.0, -1.0, -1.0), params=params, research_run=run)
+    )
+
+    assert card.id == "positive_folds" and not card.passed
+    assert card.evidence == certified.evidence
+    assert card.evidence["positive_folds"] == 3, "the research slot is not read on a card"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{}, {"params": {"min_positive_folds": 1}, "hyp": make_hyp(objective=None, constraints=None)}],
+)
+def test_positive_folds_without_its_context_judges_nothing(overrides: Any) -> None:
+    result = positive_folds.evaluate(context(trading_run(1.0, 1.0, 1.0, 1.0), **overrides))
     assert result.passed and result.skipped is not None
 
 

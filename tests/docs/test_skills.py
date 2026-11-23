@@ -229,7 +229,10 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     precheck, it would report a missing certificate as a fault, or certify by hand a best the
     search correction had already refused on research data."""
     text = skill(PACKAGED, "kanso-certify")
-    assert "passes on research data. One it refuses is **spared**" in text
+    assert "pass on research data. One they refuse is **spared**" in text
+    for gate in ("walk_forward_consistency", "research_plateau", "`gates`"):
+        assert gate in text, gate
+    assert "never judged again" in text
     assert "`hypotheses[].last_stall.precheck`" in text
     assert "`kanso cert run` by hand is never spared" in text
     # `measured` is whether the research window was run for the precheck; the child runs it
@@ -299,9 +302,22 @@ def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None
     """An agent driving the loop reads what a stall leads to here; told only that a keep above
     zero is certified, it would report a spared stall's missing certificate as a fault."""
     text = skill(PACKAGED, "kanso-research")
-    assert "unless the plan's search correction refuses it on research data, which **spares**" in (
-        text
-    )
+    assert (
+        "unless a research gate of the plan — its search correction, `walk_forward_consistency` "
+        "or `research_plateau` — refuses it on research data, which **spares**"
+    ) in text
+
+
+def test_the_hypothesis_skill_states_every_fold_positive_as_the_operator_s_value() -> None:
+    """An agent asked for an edge that recurs writes the card gate from here; told nothing of
+    the count, it would leave the gate bare, which `hyp validate` refuses, or pick a count the
+    operator never stated."""
+    text = skill(PACKAGED, "kanso-hypothesis")
+    assert "`required_constraints: [{id: positive_folds, params: {min_positive_folds: N}}]`" in text
+    assert "N is the operator's, never yours" in text
+    classify = skill(PACKAGED, "kanso-classify")
+    assert "`positive_folds` holds a card to a positive objective" in classify
+    assert "never carried by default" in classify
 
 
 def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:

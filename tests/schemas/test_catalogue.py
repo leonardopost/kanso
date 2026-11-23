@@ -125,6 +125,21 @@ def test_only_a_card_or_cert_gate_guards_an_objective_and_only_a_gate_names_para
         CriteriaItem.model_validate({**OBJECTIVE, "together": True})
 
 
+def test_only_a_cert_gate_reads_the_research_window_before_the_certification_window() -> None:
+    """`reads: research` is a claim about what certification may judge before it reads the
+    certification window, so only a cert gate makes it; a card gate reads the research window
+    already, a paper or live gate a stage, and an objective is measured on any window."""
+    assert CriteriaItem.model_validate({**GATE, "reads": "research"}).reads == "research"
+    assert CriteriaItem.model_validate(GATE).reads is None
+    for stage in ("card", "paper", "live"):
+        with pytest.raises(ValidationError, match="only a cert gate is judged before"):
+            CriteriaItem.model_validate({**GATE, "stage": stage, "reads": "research"})
+    with pytest.raises(ValidationError, match="only a gate judges a window"):
+        CriteriaItem.model_validate({**OBJECTIVE, "reads": "research"})
+    with pytest.raises(ValidationError, match="reads"):
+        CriteriaItem.model_validate({**GATE, "reads": "certification"})
+
+
 def test_an_objective_declares_applicability_and_priority() -> None:
     with pytest.raises(ValidationError, match="applies"):
         CriteriaItem.model_validate({**OBJECTIVE, "applies": None})

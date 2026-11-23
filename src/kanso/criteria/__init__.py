@@ -37,6 +37,7 @@ from kanso.criteria.integrity import (
 from kanso.criteria.library import (
     applicable_objectives,
     catalogue,
+    check_folds,
     check_params,
     criteria_version,
     gates,
@@ -81,6 +82,7 @@ __all__ = [
     "Trade",
     "applicable_objectives",
     "catalogue",
+    "check_folds",
     "check_params",
     "criteria_version",
     "drawdown_pct",
