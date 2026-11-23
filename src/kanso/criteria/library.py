@@ -18,6 +18,14 @@ it is carried by every certification plan for such a hypothesis, in the same way
 (`required_cert_gates`): an absolute objective credits a drift held as if it were timed, and
 `entry_timing` is what tells the two apart.
 
+A cert gate whose file says `reads: research` claims that what it judges is the research
+window's runs, the card measurements the store keeps and the trial counts, never the
+certification window (`research_gates`): the three deflation gates, `walk_forward_consistency`
+and `research_plateau`. Certification judges those first, on research data, and a stall whose
+best one of them refuses reads no certification window (`kanso.certify.run`). The claim is the
+file's, and `tests/criteria/test_library.py` holds every such gate to it by judging each on a
+context whose certification slots hold an unrelated run.
+
 A range bound may be written against the run's own scale rather than in absolute units —
 `1 * folds`, `100 * horizon` — so an item is written once and sized to each hypothesis.
 Resolving those expressions is what makes a plan checkable: `min_positive_folds` is
@@ -188,6 +196,14 @@ def deflation_gate(objective_id: str) -> str | None:
             if item.kind == "gate" and objective_id in (item.deflates or ())
         ),
         None,
+    )
+
+
+def research_gates() -> frozenset[str]:
+    """The cert gates judged on research data before the certification window is read, as the
+    toolbox declares them with `reads: research`; no id is listed here."""
+    return frozenset(
+        item.id for item in _catalogue().values() if item.kind == "gate" and item.reads
     )
 
 

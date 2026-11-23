@@ -18,12 +18,19 @@ the simulated venue.
 
 A gate whose test is more than arithmetic on the run in hand lives in a module of its own
 beside this one, because it needs machinery the rest do not: `param_plateau` re-runs the
-subject once per perturbation and so reads the re-run the certification runner hands it,
+subject once per perturbation and so reads the re-run the certification runner hands it — and
+`research_plateau`, the same test on the research window, reads the research runs instead —
 `entry_timing` prices the run's trades at other sessions and so reads the window's prices the
 runner hands it, `parity_replay` compares two code paths' order intents, which is a replay's
 record rather than a run's, and the five paper and live gates — `paper_forward`,
 `forward_holdout`, `live_drift`, `daily_loss_kill` and `fill_quality_drift` — read the stage
 record the monitor assembles, because a run says nothing about the deployment that produced it.
+
+The gates whose library file says `reads: research` — the three deflation gates,
+`walk_forward_consistency` and `research_plateau` — read only the research slots of their
+context, the trials and the card measurements, so certification judges them before it reads
+the certification window and a stall whose best one of them refuses is spared
+(`kanso.certify.run`).
 
 Nothing is declared here and left unimplemented: every gate in the library resolves.
 """
@@ -740,7 +747,9 @@ class _WalkForwardConsistency:
     planner offered it could only choose to add those refusals. Whether the certification
     window holds the edge is `embargoed_window`'s question, asked against the research
     estimate rather than its worst fold. What is left reads the research window alone: how
-    many of its folds the objective was positive in.
+    many of its folds the objective was positive in. It is required of every plan, with its
+    count set, and judged at a stall before the certification window is read; the count is
+    the planner's.
     """
 
     id: ClassVar[str] = "walk_forward_consistency"

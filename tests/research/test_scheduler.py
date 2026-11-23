@@ -12,7 +12,7 @@ import json
 import os
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -54,6 +54,18 @@ from .conftest import (
 )
 from .mocked import Recorder, fresh_cursors, scripted, tuned  # noqa: F401
 from .test_attached import compose_host
+
+JANUARY = REVERTING.replace(
+    b"    def on_bar(self, bar) -> None:\n        self.closes.append",
+    b"    def on_bar(self, bar) -> None:\n"
+    b"        if bar.ts_event >= 1_706_745_600_000_000_000:  # 2024-02-01, UTC\n"
+    b"            return\n"
+    b"        self.closes.append",
+)
+"""The reverter, trading January alone: it earns in every research fold and stands still over
+the certification window, so its research gates pass, a stall certifies it, and its
+certificate fails. Bytes that never trade fail their folds on research data, and a stall
+spares them before any certification window is read."""
 
 
 def register(ws: Workspace, store: StateStore, hyp_id: str) -> str:
@@ -305,13 +317,13 @@ def test_a_stall_with_an_uncertified_best_certifies_it_and_requeues_it(
 def test_a_stall_whose_certificate_fails_returns_the_hypothesis_to_research(
     ws: Workspace, store: StateStore
 ) -> None:
-    hyp_id = classify(ws, store, DOCUMENT, FLAT)
-    a_card(ws, store, FLAT)
+    hyp_id = classify(ws, store, DOCUMENT, JANUARY)
+    a_card(ws, store, JANUARY)
     write_plan(ws)
 
     stall = scheduler.on_stall(ws, store, hyp_id)
 
-    assert stall.verdict == "fail", "bytes that never trade earn nothing out of sample"
+    assert stall.verdict == "fail", "bytes that stop trading earn nothing out of sample"
     assert stall.priority == scheduler.STALL_PRIORITY
     assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
     assert ids(store) == [hyp_id]
@@ -322,8 +334,8 @@ def test_a_stall_whose_certificate_fails_comes_back_to_the_queue(
     ws: Workspace, store: StateStore
 ) -> None:
     """A failing verdict is a result, not a sentence. Only an operator ends a hypothesis."""
-    hyp_id = classify(ws, store, DOCUMENT, FLAT)
-    a_card(ws, store, FLAT)
+    hyp_id = classify(ws, store, DOCUMENT, JANUARY)
+    a_card(ws, store, JANUARY)
     write_plan(ws)
     scheduler.enqueue(store, hyp_id)
 
@@ -344,8 +356,8 @@ def test_a_retire_that_lands_during_the_certification_is_still_honoured(
     Requeueing one anyway would raise out of `_alive` and take the lane down with it, so
     the retire is checked on the far side of the certification as well as the near side.
     """
-    hyp_id = classify(ws, store, DOCUMENT, FLAT)
-    a_card(ws, store, FLAT)
+    hyp_id = classify(ws, store, DOCUMENT, JANUARY)
+    a_card(ws, store, JANUARY)
     write_plan(ws)
     scheduler.enqueue(store, hyp_id)
     real = child.certify_in_child
@@ -374,7 +386,7 @@ def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
     hypothesis and the queue dropped it; a lane that came free afterwards had nothing of
     it to take, and no command anywhere could give it back.
     """
-    hyp_id = classify(ws, store, DOCUMENT, FLAT)
+    hyp_id = classify(ws, store, DOCUMENT, JANUARY)
     write_plan(ws, gates=[*CERT_GATES, SEARCHED])  # five trials behind it by the last
     policy = tuned(ws, n_fail=3)  # read by the child that certifies, so it is on disk
 
@@ -382,7 +394,11 @@ def test_a_hypothesis_that_keeps_failing_keeps_getting_lanes(
         # Each attempt's keep beats the last, as a keep beats its run's base: an equal
         # metric would leave the hypothesis's best — and the certificate — where it was.
         a_card(
-            ws, store, FLAT + f"# attempt {attempt}\n".encode(), seq=attempt, metric=float(attempt)
+            ws,
+            store,
+            JANUARY + f"# attempt {attempt}\n".encode(),
+            seq=attempt,
+            metric=float(attempt),
         )
         scheduler.enqueue(store, hyp_id)
         stall = scheduler.on_stall(policy, store, hyp_id)
@@ -482,6 +498,35 @@ def test_a_stall_whose_best_fails_its_search_correction_on_research_data_is_spar
     spared(ws, store, hyp_id, stall)
     assert stall.precheck is not None
     assert stall.precheck["gate"] == "deflated_sharpe" and stall.precheck["measured"] is False
+
+
+def test_a_stall_whose_best_s_folds_do_not_recur_is_spared_in_the_lane(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`walk_forward_consistency` reads the research folds alone, so a best positive in two of
+    four folds under a plan asking for four is refused from the measurement the card kept: no
+    child, no window, back in the queue at −1, and every reading on the `stalled` event."""
+    from tests.certify.test_precheck import EVERY_FOLD, FICKLE
+
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, run=FICKLE))
+    write_plan(ws, gates=EVERY_FOLD)
+    monkeypatch.setattr(child, "certify_in_child", refused)
+    monkeypatch.setattr(backtest, "window_chunks", refused)
+
+    stall = scheduler.on_stall(ws, store, hyp_id)
+
+    spared(ws, store, hyp_id, stall)
+    assert stall.precheck is not None
+    assert stall.precheck["gate"] == "walk_forward_consistency"
+    assert stall.precheck["measured"] is False
+    readings = cast("list[dict[str, Any]]", stall.precheck["gates"])
+    assert [(reading["gate"], reading["judged"], reading["pass"]) for reading in readings] == [
+        ("deflated_sharpe", False, None),
+        ("walk_forward_consistency", True, False),
+    ], "the plan's word that it carries no correction, then the refusal"
+    assert readings[1]["evidence"]["positive_folds"] == 2
 
 
 def test_a_stall_whose_best_passes_its_search_correction_is_certified_as_before(
@@ -1258,8 +1303,8 @@ def test_remove_from_a_lane_names_the_lane_that_may_not_begin(
 def test_a_removal_that_lands_during_the_certification_is_honoured(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    hyp_id = classify(ws, store, DOCUMENT, FLAT)
-    a_card(ws, store, FLAT)
+    hyp_id = classify(ws, store, DOCUMENT, JANUARY)
+    a_card(ws, store, JANUARY)
     write_plan(ws)
     scheduler.hold(store, hyp_id, "l1")
     real = child.certify_in_child

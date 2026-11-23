@@ -3,9 +3,20 @@
 A strategy's numbers are read off one point in its parameter space. If moving a parameter
 a little destroys the result, the search found that point rather than the effect, and the
 number is a property of the fitting rather than of the market. This gate moves each of the
-strategy's own numeric parameters, one at a time and in both directions, scores the
-certification window again at each setting, and asks that every one of them keep at least
-a stated fraction of the unperturbed score.
+strategy's own numeric parameters, one at a time and in both directions, scores the window
+again at each setting, and asks that every one of them keep at least a stated fraction of
+the unperturbed score.
+
+**It comes in two forms, one arithmetic, each on one window.** `param_plateau` scores the
+context's own window — the certification window, where certification judges it — so it is
+judged after that window is read, and its unperturbed score is the certification one.
+`research_plateau` scores the research window alone, its run and the host and benchmark run
+beside it, and its re-run moves the subject over that window: it reads nothing of the
+certification window, so certification judges it before reading that window, and a stall
+whose best it refuses is spared (`kanso.certify.run`). Its unperturbed score is the one the
+search selected, which selection inflated, so a sound strategy loses more of it to a move
+than of a certification score, and the planner sets `keep_fraction` knowing so. Both forms
+share every rule below and the same evidence keys.
 
 **Only the strategy's own parameters move.** The configuration base the engine and the
 hypothesis contribute — the capital, the risk limits, the venue model, the universe — is
@@ -30,6 +41,8 @@ what robustness certifies, and a skip is a pass.
 **Every perturbation costs a backtest.** The runs go through the re-run the certification
 runner supplies, one after another in a fixed order, so two runs of the same certification
 produce the same numbers and the price of the gate is visible in its evidence as a count.
+The host and the benchmark stay the runs the unperturbed score was measured against: a
+perturbation moves the subject, never what it is differenced against.
 """
 
 from __future__ import annotations
@@ -54,16 +67,26 @@ NO_PARAMETERS: Final = (
     "the strategy configuration declares no numeric parameter of its own, so nothing moved"
 )
 ALL_DROPPED: Final = "every perturbation rounded back to the value it started from"
+NO_RESEARCH_RUN: Final = "no research-window run was supplied to score"
 NOT_POSITIVE: Final = (
     "the unperturbed objective is not positive, and a plateau around a loss is not evidence "
     "of robustness, so no parameter was moved"
 )
 
 
+_Runs = tuple[CardRun, CardRun | None, CardRun | None]
+"""The run a plateau scores, and the host's and the benchmark's run held fixed beside it."""
+
+
 class _ParamPlateau:
-    """The objective survives a small move in every parameter the author declared."""
+    """The objective survives a small move in every parameter the author declared, over the
+    window the context is judged on."""
 
     id: ClassVar[str] = "param_plateau"
+
+    def runs(self, ctx: GateContext) -> _Runs | None:
+        """The context's own window: its run, and its host and benchmark beside it."""
+        return ctx.run, ctx.host_run, ctx.benchmark_run
 
     def evaluate(self, ctx: GateContext) -> GateResult:
         percent, fraction = number(ctx, "perturb_pct"), number(ctx, "keep_fraction")
@@ -72,6 +95,9 @@ class _ParamPlateau:
         objective = _objective(ctx)
         if objective is None:
             return skipped(self.id, NO_OBJECTIVE)
+        runs = self.runs(ctx)
+        if runs is None:
+            return skipped(self.id, NO_RESEARCH_RUN)
         if ctx.rerun is None:
             return skipped(self.id, NO_RERUN)
         if not ctx.tunable:
@@ -79,9 +105,8 @@ class _ParamPlateau:
         moves, dropped = _plan(ctx.tunable, percent)
         if not moves:
             return skipped(self.id, ALL_DROPPED)
-        unperturbed = objective.compute(
-            ctx.run, ctx.research_folds, ctx.host_run, ctx.benchmark_run
-        )[0]
+        run, host, benchmark = runs
+        unperturbed = objective.compute(run, ctx.research_folds, host, benchmark)[0]
         reading: dict[str, object] = {
             "objective": objective.id,
             "unperturbed": unperturbed,
@@ -97,7 +122,7 @@ class _ParamPlateau:
                 {**reading, "n_backtests": 0, "perturbations": [], "reason": NOT_POSITIVE},
             )
         floor = fraction * unperturbed
-        scored = _score(ctx, objective, ctx.rerun, moves)
+        scored = _score(ctx.research_folds, objective, ctx.rerun, moves, host, benchmark)
         return verdict(
             self.id,
             all(metric >= floor for _, _, _, metric in scored),
@@ -143,10 +168,12 @@ def _plan(
 
 
 def _score(
-    ctx: GateContext,
+    folds: int,
     objective: Objective,
     rerun: Callable[[Mapping[str, float]], CardRun],
     moves: tuple[tuple[str, str, float], ...],
+    host: CardRun | None,
+    benchmark: CardRun | None,
 ) -> tuple[tuple[str, str, float, float], ...]:
     """Each move run and measured in turn, in the order `_plan` fixed, one at a time."""
     return tuple(
@@ -154,10 +181,8 @@ def _score(
             name,
             way,
             value,
-            # The benchmark stays fixed: a perturbation moves the subject, never the hold.
-            objective.compute(
-                rerun({name: value}), ctx.research_folds, ctx.host_run, ctx.benchmark_run
-            )[0],
+            # The host and the benchmark stay fixed: a perturbation moves the subject alone.
+            objective.compute(rerun({name: value}), folds, host, benchmark)[0],
         )
         for name, way, value in moves
     )
@@ -168,5 +193,23 @@ def _objective(ctx: GateContext) -> Objective | None:
     return None if ref is None else REGISTRY.get(ref.id)
 
 
+class _ResearchPlateau(_ParamPlateau):
+    """`param_plateau` over the research window: the research run scored, the host's and the
+    benchmark's research runs held fixed beside it, and the re-run moving the subject over
+    that window — nothing of the certification window is read."""
+
+    id: ClassVar[str] = "research_plateau"
+
+    def runs(self, ctx: GateContext) -> _Runs | None:
+        """The research window: its run, and its host and benchmark beside it, or `None`
+        where no research run was supplied."""
+        if ctx.research_run is None:
+            return None
+        return ctx.research_run, ctx.host_research_run, ctx.benchmark_research_run
+
+
 gate: Final[Gate] = _ParamPlateau()
 """What the toolbox entry `param_plateau` resolves to."""
+
+research: Final[Gate] = _ResearchPlateau()
+"""What the toolbox entry `research_plateau` resolves to."""

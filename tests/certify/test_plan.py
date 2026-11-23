@@ -130,6 +130,18 @@ def answer(**changes: Any) -> dict[str, Any]:
                 "rationale": "the deployed code path must be the researched one",
             },
             {
+                "id": "walk_forward_consistency",
+                "stage": "cert",
+                "params": pairs({"min_positive_folds": 1}),
+                "rationale": "required; the edge recurs across the research folds",
+            },
+            {
+                "id": "research_plateau",
+                "stage": "cert",
+                "params": pairs({"perturb_pct": 10.0, "keep_fraction": 0.0}),
+                "rationale": "required; the research score survives a move of every parameter",
+            },
+            {
                 "id": "bootstrap",
                 "stage": "cert",
                 "params": pairs({"n": 1000}),
@@ -301,6 +313,8 @@ def test_a_plan_is_written_pinned_and_recorded(ws: Workspace, store: StateStore)
         "embargoed_window",
         "publication_lag",
         "parity_replay",
+        "walk_forward_consistency",
+        "research_plateau",
         "bootstrap",
         "paper_forward",
         "forward_holdout",
@@ -421,6 +435,40 @@ def test_the_planner_is_told_which_gates_take_every_parameter_or_none(
     assert toolbox["embargoed_window"]["together"] is False
     assert '"together": true' in seen[0].system
     assert "marks together is named with every one of its parameters set" in seen[0].system
+
+
+def test_the_planner_is_told_which_gates_read_research_data_before_the_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every gate the planner is shown says what it reads before the certification window, and
+    the invariants say what that does at a stall and what each plateau's `keep_fraction` is a
+    fraction of — a fact, beside the values that stay the planner's."""
+    script(ws, certify_plan=[answer()])
+    seen = prompts(monkeypatch)
+
+    plan(ws, store, HYP_ID)
+
+    toolbox = {gate["id"]: gate for gate in plan_module._toolbox(the_hypothesis(ws), 4)}
+    assert {name for name, gate in toolbox.items() if gate["reads"] == "research"} == {
+        "deflated_contribution",
+        "deflated_edge",
+        "deflated_sharpe",
+        "research_plateau",
+        "walk_forward_consistency",
+    }
+    assert toolbox["param_plateau"]["reads"] is None
+    assert toolbox["embargoed_window"]["reads"] is None
+    assert '"reads": "research"' in seen[0].system
+    stated = plan_module._invariants(the_hypothesis(ws))
+    assert plan_module.RESEARCH_GATES in stated["rules"]
+    assert {"research_plateau", "walk_forward_consistency"} <= set(stated["required_gates"])
+    for fact in (
+        "judged at a stall before the certification window is read",
+        "spares the stall: no certificate is written and no look is taken",
+        "the research score the search selected",
+        "param_plateau, when the plan includes it",
+    ):
+        assert fact in plan_module.RESEARCH_GATES and fact in seen[0].system, fact
 
 
 def test_the_prompt_carries_no_card_metric_no_certificate_and_no_strategy_source(

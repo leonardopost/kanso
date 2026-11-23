@@ -144,9 +144,10 @@ def test_the_program_says_a_stall_s_certification_can_be_spared() -> None:
     """An interactive proposer reads what a stall leads to here; told only that a keep above
     zero is certified, it would take a spared stall's missing certificate for a fault."""
     never_stop = template("program.md").split("## Never stop", 1)[1]
-    assert "unless the plan's search correction refuses it on research data, which spares the " in (
-        never_stop
-    )
+    assert (
+        "unless a research gate of the plan — its search correction, `walk_forward_consistency` "
+        "or `research_plateau` — refuses it on research data, which spares the "
+    ) in never_stop
 
 
 def test_the_program_names_every_status_a_card_can_carry_and_only_the_printed_ones() -> None:

@@ -17,21 +17,30 @@ for that window, and held fixed while a perturbation gate moves the subject. Eve
 run is made before the certification window is read, so a stall's certification can stop
 between the two.
 
-**A stall certifies only a best whose search correction passes on research data.** The
-correction the plan pins for the subject's objective — the gate whose library file
-`deflates` it — reads the research window and the trials alone, and a certificate is the
-conjunction of the gates that judged, so a correction that judged the subject and refused it
-fails the certificate whatever the certification window shows. Reading that window then buys
-a verdict already known and spends a look at the one window research never saw. So before a
-stall certifies, the correction is judged on research data (`precheck`): in the lane that
-stalled, from the measurement the subject card kept, when that measurement was struck the way
-certification would strike it now, on a snapshot that can support a claim; and in the
-certification child itself, on the research window it has just run, before the certification
-window is read (`certify_at_stall`). Either refusal spares the stall: no certification window
-is read and no certificate is written. A correction that judged nothing — a plan that carries
-none before the search has two draws, cards and declared settings together, or a gate that
-skips on the research run — spares nothing, since it would judge nothing in the certificate
-either. `kanso cert run` is the operator's own act and is never spared.
+**A stall certifies only a best whose research gates pass on research data.** A cert gate
+whose library file says `reads: research` — the search correction the plan pins for the
+subject's objective, the gate whose file `deflates` it, beside `walk_forward_consistency` and
+`research_plateau`, both of which every plan carries — judges the research window's runs, the
+trials and nothing of the certification window, and a certificate is the conjunction of the
+gates that judged, so one of them that judged the subject and refused it fails the
+certificate whatever the certification window shows. Reading that window then buys a verdict
+already known and spends a look at the one window research never saw. So the research gates
+are judged first (`_research_readings`): the correction, then the others in the plan's order,
+`research_plateau` last, since it alone costs backtests — two of the research window per
+parameter it moves, made only once every cheaper research gate has passed. Before a stall
+certifies they are judged twice. In the lane that stalled (`precheck`), from the measurement
+the subject card kept, when that measurement was struck the way certification would strike it
+now, on a snapshot that can support a claim, running nothing — so the plateau is left to the
+child. In the certification child itself, on the research window it has just run, before the
+certification window is read (`certify_at_stall`). Either refusal spares the stall: no
+certification window is read and no certificate is written. A gate that judged nothing — a
+plan that carries no correction before the search has two draws, cards and declared settings
+together, or a gate that skips on the research run — spares nothing, since it would judge
+nothing in the certificate either. The certificate records each research gate as the child
+read it, never evaluated again, so a card another lane records while the window runs does not
+move it and every backtest is paid once. `kanso cert run` is the operator's own act and is
+never spared: every research gate is judged, the plateau's backtests are not made once another
+research gate has refused, and the certification window is read regardless.
 
 **Both windows are measured the way a card is.** The objective the certificate records,
 and every gate's reading of it, is taken over the workspace's `[research] folds` equal
@@ -56,9 +65,11 @@ certificate says which gate judged nothing and why, so a plan naming a gate whos
 machinery arrives with a later milestone still produces an honest verdict over the gates
 that did run.
 
-**A gate that perturbs a parameter runs the window again through this runner.** The window
-is read from the catalog again, a chunk at a time, as the first run read it, and the
-perturbed run is extracted by exactly the arithmetic the unperturbed one was. No window is
+**A gate that perturbs a parameter runs its window again through this runner** — the
+certification window for `param_plateau` and `latency_stress`, the research window for
+`research_plateau`. The window is read from the catalog again, a chunk at a time, as the
+first run read it, and the perturbed run is extracted by exactly the arithmetic the
+unperturbed one was. No window is
 held between runs: a certification holds one read and one chunk of the window it is running,
 whichever run that is, so what it costs does not grow with the window's length or with how
 many runs its plan makes, and a perturbation costs one engine run and one read of the window.
@@ -82,7 +93,8 @@ gates are therefore judged after every other cert gate and, when the window gate
 recorded as skipped with the reason instead of running a backtest per parameter or reading the
 window again; the certificate lists its gates in the plan's order regardless. A window gate
 that judged nothing spares nothing: a skip is an absence of evidence, not a refusal, and the
-plateau then refuses a loss itself before moving anything.
+plateau then refuses a loss itself before moving anything. The research gates were judged
+before the window was read, so nothing the window shows spares or moves them.
 
 **A search is priced in full, or no certificate is written.** The deflation a plan must carry
 from the search's second draw takes its expected maximum over every card of the hypothesis's family
@@ -141,7 +153,7 @@ from __future__ import annotations
 
 import gc
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from math import inf
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -164,12 +176,14 @@ from kanso.criteria import (
     plannable,
 )
 from kanso.criteria import catalogue as toolbox
+from kanso.criteria.context import skipped
 from kanso.criteria.digest import session_edge
 from kanso.criteria.library import (
     SEARCH_TRIALS,
     deflation_gate,
     required_cert_gates,
     required_deflation,
+    research_gates,
 )
 from kanso.criteria.objectives import measures_benchmark
 from kanso.criteria.run import day_of, midnight_ns
@@ -221,6 +235,8 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 __all__ = [
     "CERTIFIABLE",
     "CERT_STAGE",
+    "LEFT_TO_CHILD",
+    "RESEARCH_FAILED",
     "TIMING_SPARED",
     "UNIMPLEMENTED",
     "WINDOW_FAILED",
@@ -270,9 +286,27 @@ PLATEAU: Final = "param_plateau"
 LATENCY: Final = "latency_stress"
 """The cert gate that costs a backtest per latency multiple, judged with the plateau."""
 
-RERUNNING: Final = frozenset({PLATEAU, LATENCY})
-"""The cert gates that re-run the subject, judged after every cheap verdict is in hand and
-spared when the window gate has already refused the subject."""
+RESEARCH_PLATEAU: Final = "research_plateau"
+"""The research gate that costs a backtest of the research window per perturbation, judged
+after every other research gate."""
+
+RERUNNING: Final = frozenset({PLATEAU, LATENCY, RESEARCH_PLATEAU})
+"""The cert gates that re-run the subject, judged after every cheap verdict is in hand: on the
+certification window, spared when the window gate has already refused the subject; on the
+research window, `research_plateau`, spared when another research gate has refused it, and
+never run in the lane, which runs nothing."""
+
+RESEARCH_FAILED: Final = (
+    "a research gate refused the subject on research data and a certificate a gate refused "
+    "cannot pass, so the plateau's research-window backtests were not made"
+)
+"""Why a re-running research gate is skipped once another has refused the subject."""
+
+LEFT_TO_CHILD: Final = (
+    "the lane runs nothing: the certification child judges this gate on the research window, "
+    "before it reads the certification window"
+)
+"""Why the lane's precheck records a re-running research gate without judging it."""
 
 WINDOW_FAILED: Final = (
     "embargoed_window failed and a certificate whose window failed cannot pass, so the "
@@ -388,59 +422,144 @@ class _Researched:
     benchmark: CardRun | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Precheck:
-    """A stall's search correction, judged on research data before any certification window
-    is read: the gate the pinned plan corrects the subject's objective with, whether it judged,
-    whether it passed, and its evidence — or why it judged nothing.
+    """A stall's research gates, judged on research data before any certification window is
+    read: what each judged, in the order it was judged (`readings`), or why none was read —
+    `reason`, given where there is no reading at all.
 
-    `passed` is `None` where nothing was judged. `measured` says whether the research window
-    was run for it, and every precheck states it: `False` in the lane, which runs nothing and
-    reads the measurement the subject card kept where it can; `True` in the certification
-    child, on the research window it has just run, exactly as the certificate's own correction
-    reads it. The child runs that window at every stall it is started for but one on a
-    snapshot that cannot support a claim, where certification runs no window at all: its
-    precheck there judges nothing, carries the snapshot's reasons as its evidence, and is
-    `False`. A stall that certifies records the child's precheck, so it records `True` unless
-    its certificate failed on such a snapshot.
+    The reading that decides is the first that judged and refused, else the first, else none;
+    `gate`, `judged`, `passed`, `evidence` and `reason` are its. The search correction is
+    judged first, so they are the correction's unless another research gate spared the stall,
+    and a stall is `spared` exactly when some reading judged the subject and refused it.
+    `passed` is `None` where the deciding reading judged nothing.
+
+    `measured` says whether the research window was run for it, and every precheck states
+    it: `False` in the lane, which runs nothing and reads the measurement the subject card
+    kept where it can; `True` in the certification child, on the research window it has just
+    run, exactly as the certificate's own research gates read it. The child runs that window
+    at every stall it is started for but one on a snapshot that cannot support a claim, where
+    certification runs no window at all: its precheck there judges nothing, carries the
+    snapshot's reasons as its evidence, and is `False`. A stall that certifies records the
+    child's precheck, so it records `True` unless its certificate failed on such a snapshot.
     """
 
-    gate: str | None
-    judged: bool
-    passed: bool | None
-    evidence: Mapping[str, object]
-    reason: str | None = None
-    measured: bool = field(kw_only=True)
+    readings: tuple[GateResult, ...]
+    measured: bool
+    cause: str | None
+
+    def __init__(
+        self,
+        readings: Sequence[GateResult] = (),
+        *,
+        measured: bool,
+        reason: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "readings", tuple(readings))
+        object.__setattr__(self, "measured", measured)
+        object.__setattr__(self, "cause", reason)
+
+    @property
+    def deciding(self) -> GateResult | None:
+        """The first reading that refused the subject, else the first, else `None`."""
+        first = self.readings[0] if self.readings else None
+        return next((found for found in self.readings if _refused(found)), first)
 
     @property
     def spared(self) -> bool:
-        """Whether the correction judged the subject and refused it, so no certificate is made."""
-        return self.judged and not self.passed
+        """Whether a research gate judged the subject and refused it, so no certificate is
+        made."""
+        return any(_refused(found) for found in self.readings)
+
+    @property
+    def gate(self) -> str | None:
+        """The deciding reading's gate, `None` where nothing was read."""
+        deciding = self.deciding
+        return None if deciding is None else deciding.id
+
+    @property
+    def judged(self) -> bool:
+        """Whether the deciding reading judged the subject."""
+        deciding = self.deciding
+        return deciding is not None and deciding.skipped is None
+
+    @property
+    def passed(self) -> bool | None:
+        """The deciding reading's verdict, `None` where it judged nothing."""
+        deciding = self.deciding
+        return deciding.passed if deciding is not None and self.judged else None
+
+    @property
+    def evidence(self) -> dict[str, object]:
+        """The deciding reading's evidence."""
+        deciding = self.deciding
+        return {} if deciding is None else dict(deciding.evidence)
+
+    @property
+    def reason(self) -> str | None:
+        """Why the deciding reading judged nothing — or, with no reading, why none was read."""
+        deciding = self.deciding
+        return self.cause if deciding is None else deciding.skipped
 
     def payload(self) -> dict[str, object]:
-        """The precheck as JSON-shaped data: what a `stalled` event records."""
+        """The precheck as JSON-shaped data: what a `stalled` event records — the deciding
+        reading's keys, and every reading under `gates`."""
         found: dict[str, object] = {
             "gate": self.gate,
             "judged": self.judged,
             "pass": self.passed,
             "measured": self.measured,
-            "evidence": dict(self.evidence),
+            "evidence": self.evidence,
         }
         if self.reason is not None:
             found["reason"] = self.reason
+        found["gates"] = [_reading_payload(reading) for reading in self.readings]
         return found
 
 
+def _refused(reading: GateResult) -> bool:
+    """Whether a reading judged the subject and refused it."""
+    return reading.skipped is None and not reading.passed
+
+
+def _reading_payload(reading: GateResult) -> dict[str, object]:
+    """One reading as a `stalled` event's `gates` lists it."""
+    judged = reading.skipped is None
+    found: dict[str, object] = {
+        "gate": reading.id,
+        "judged": judged,
+        "pass": reading.passed if judged else None,
+        "evidence": dict(reading.evidence),
+    }
+    if reading.skipped is not None:
+        found["reason"] = reading.skipped
+    return found
+
+
 def read_precheck(payload: Mapping[str, Any]) -> Precheck:
-    """A precheck back from its `payload`, as the certification child reports it."""
-    passed = payload["pass"]
+    """A precheck back from its `payload`, as the certification child reports it.
+
+    A payload without `gates` — recorded before a stall judged more than its correction —
+    reads as the one reading its own keys state, or as none where they name no gate."""
+    listed = payload.get("gates")
+    if listed is None:
+        listed = [] if payload["gate"] is None else [payload]
+    readings = tuple(
+        GateResult.model_validate(
+            {
+                "id": entry["gate"],
+                "pass": True if entry["pass"] is None else bool(entry["pass"]),
+                "evidence": dict(entry["evidence"]),
+                "skipped": entry.get("reason"),
+            }
+        )
+        for entry in listed
+    )
+    reason = payload.get("reason")
     return Precheck(
-        gate=None if payload["gate"] is None else str(payload["gate"]),
-        judged=bool(payload["judged"]),
-        passed=None if passed is None else bool(passed),
-        evidence=dict(payload["evidence"]),
-        reason=None if payload.get("reason") is None else str(payload["reason"]),
+        readings,
         measured=bool(payload["measured"]),
+        reason=None if readings or reason is None else str(reason),
     )
 
 
@@ -471,16 +590,18 @@ def certify(
 def certify_at_stall(
     ws: Workspace, store: StateStore, hyp_id: str, *, sha: str, lane: str = DEFAULT_LANE
 ) -> tuple[Certificate | None, Precheck]:
-    """Certify the bytes a stall left as the best, unless their search correction refuses
-    them on research data.
+    """Certify the bytes a stall left as the best, unless a research gate refuses them on
+    research data.
 
     `certify`, refusing what it refuses, with the research window run first and the plan's
-    correction for the subject's objective judged on that run before the certification
-    window is read (`precheck`, from the run certification has just made). A refusal returns
-    no certificate beside the precheck that refused: the certification window was not read,
-    nothing was written but the plan `certify` pins where none is pinned, and the hypothesis's
-    status is as it was. Otherwise the hypothesis becomes a candidate there, recorded by a
-    `certifiable` event, and certification goes on exactly as `certify` makes it.
+    research gates judged on that run before the certification window is read — the
+    correction for the subject's objective first, `research_plateau` last, its backtests of
+    the research window made only once every other has passed — stopping at the first that
+    refuses. A refusal returns no certificate beside the precheck that refused: the
+    certification window was not read, nothing was written but the plan `certify` pins where
+    none is pinned, and the hypothesis's status is as it was. Otherwise the hypothesis becomes
+    a candidate there, recorded by a `certifiable` event, and certification goes on exactly as
+    `certify` makes it, its certificate recording each research gate as this read it.
 
     On a snapshot that cannot support a claim certification runs no window at all, at a stall
     as by hand: its failing certificate is written with no move to candidate and no
@@ -531,9 +652,10 @@ def _certify(
         nautilus_version=engine,
     )
 
-    def spare(researched: _Researched) -> Precheck:
-        """The stall's correction on the research run just made; a candidate if it holds."""
-        checked = _corrected(store, plan, subject, researched)
+    def spare(readings: Sequence[GateResult]) -> Precheck:
+        """The stall's research gates on the research run just made; a candidate if they
+        hold."""
+        checked = Precheck(readings, measured=True)
         if not checked.spared:
             _candidate(store, registration)
             store.event(CERTIFIABLE_EVENT, hyp_id, {"strategy_sha": subject.strategy_sha})
@@ -620,8 +742,8 @@ def unpriced(store: StateStore, hyp_id: str, objective_id: str, n_trials: int) -
 def precheck_at_stall(
     root: Path, store: StateStore, hyp_id: str, sha: str, *, lane: str = DEFAULT_LANE
 ) -> Precheck:
-    """A stall's plan and its search correction on research data, made in the lane in the
-    place of the certification child it would start, on the workspace that child opens.
+    """A stall's plan and its research gates on research data, made in the lane in the place
+    of the certification child it would start, on the workspace that child opens.
 
     Takes the workspace's root and never a workspace. A lane reads `kanso.toml` when it
     starts; the child reads it again (`kanso.certify.child.main`), as `kanso cert run` does,
@@ -637,9 +759,9 @@ def precheck_at_stall(
     in the child's place end as they did in the child. One raised making the plan — a plan
     pinned on a full disk, say — is raised as the refusal the child's report made of it, exit
     1 naming what raised, with `kanso cert run ID` as the way to see it. One raised reading
-    the card — a measurement this build cannot decode — judges nothing and says what raised,
+    the card — a measurement this build cannot decode — reads no gate and says what raised,
     and the stall goes to the child, which never reads that measurement: it judges the
-    correction on the research run it makes.
+    research gates on the research run it makes.
     """
     try:
         ws = find(root)
@@ -659,36 +781,36 @@ def precheck_at_stall(
         raise
     except Exception as fault:
         return Precheck(
-            None,
-            judged=False,
-            passed=None,
-            evidence={},
+            measured=False,
             reason=f"reading the newest card of {sha[:7]} raised {type(fault).__name__}: "
             f"{fault}, so the certification child judges it on the research run it makes",
-            measured=False,
         )
 
 
 def precheck(
     ws: Workspace, store: StateStore, hyp_id: str, sha: str, plan: CertificationPlan
 ) -> Precheck:
-    """The search correction `plan` pins, judged on the research run the subject card kept.
+    """The research gates `plan` carries, judged on the research run the subject card kept.
 
     Reads, and runs nothing. The subject is the card certification would take: the newest
     card of these bytes, under the hypothesis file its run pinned. Its stored measurement is
     read only when it was struck the way certification in `ws` would strike the research
     window now — the pin's objective, `[research] folds` and `return_period`, the subject's
-    capital and the installed `criteria_version` — and otherwise the precheck judges nothing
-    and says which differed, as it does for a card that kept no measurement; a stall reads
-    `ws` as its certification child opens it (`precheck_at_stall`). Nor does it judge on a
-    snapshot that cannot support a claim: certification runs no window there and judges no
-    correction, and the failing certificate it writes is how that snapshot reaches the
-    operator, so the lane leaves the stall to it rather than spare it on a reading
-    certification would not make. Where it does judge, the gate is evaluated by its own
-    `evaluate` on the context certification would build for it (`_judge`), the measurement's
-    run in both `run` and `research_run` and the host and benchmark it was differenced
-    against beside it, with the trials certification counts: one arithmetic, so what this
-    judges is what the certificate's correction would judge from the same run.
+    capital and the installed `criteria_version` — and otherwise every research gate is
+    recorded as judging nothing, saying which differed, as it is for a card that kept no
+    measurement; a stall reads `ws` as its certification child opens it
+    (`precheck_at_stall`). Nor does it judge on a snapshot that cannot support a claim:
+    certification runs no window there and judges no research gate, and the failing
+    certificate it writes is how that snapshot reaches the operator, so the lane leaves the
+    stall to it rather than spare it on a reading certification would not make. Where it does
+    judge, each gate is evaluated by its own `evaluate` on the context certification builds
+    for it (`_research_context`), the measurement's run in every run slot and the host and
+    benchmark it was differenced against beside it, with the trials certification counts: one
+    arithmetic, so what this judges is what the certificate's research gates would judge from
+    the same run. The correction comes first — or, where the plan carries none, a reading
+    saying so — and the others follow in the plan's order, stopping at the first that refuses;
+    `research_plateau` is recorded as left to the child (`LEFT_TO_CHILD`), since it costs
+    backtests of the research window and the lane runs nothing.
 
     The same run is what certification makes only where nothing moved since the card was
     measured that the guards cannot see. A run upgraded mid-way to a build that changed a
@@ -701,8 +823,8 @@ def precheck(
     precheck, on the run it makes, is the one the certificate agrees with
     (`certify_at_stall`).
 
-    A card whose run pinned a file without a construct or an objective has no correction to
-    name, and judges nothing: certification refuses that subject itself, with its remedy.
+    A card whose run pinned a file without a construct or an objective has no gate to judge
+    it by, and reads none: certification refuses that subject itself, with its remedy.
     """
     cards = [card for card in records.cards_of(store, hyp_id) if card.strategy_sha == sha]
     card = cards[-1]
@@ -712,29 +834,17 @@ def precheck(
     )
     if hyp.construct is None or hyp.objective is None:
         # Certification refuses this subject outright (`_subject`), with its remedy; there
-        # is no objective to name a correction by, so the lane judges nothing and leaves
-        # the refusal to it.
+        # is no objective to judge it by, so the lane reads nothing and leaves the refusal
+        # to it.
         return Precheck(
-            None,
-            judged=False,
-            passed=None,
-            evidence={},
-            reason=f"the newest card of {sha[:7]} was researched without a construct or an "
-            "objective, so there is no search correction to judge it by",
             measured=False,
+            reason=f"the newest card of {sha[:7]} was researched without a construct or an "
+            "objective, so there is no research gate to judge it by",
         )
-    planned = _correction(plan, hyp, measured=False)
-    if isinstance(planned, Precheck):
-        return planned
     measured = records.measurement_of(store, card)
     if measured is None:
-        return Precheck(
-            planned.id,
-            judged=False,
-            passed=None,
-            evidence={},
-            reason=f"the newest card of {sha[:7]} kept no measurement to judge it from",
-            measured=False,
+        return _unjudged(
+            plan, hyp, f"the newest card of {sha[:7]} kept no measurement to judge it from"
         )
     research = ws.config.research
     expected = (
@@ -746,97 +856,94 @@ def precheck(
     )
     for name, was, now in expected:
         if was != now:
-            return Precheck(
-                planned.id,
-                judged=False,
-                passed=None,
-                evidence={},
-                reason=f"the newest card of {sha[:7]} was measured under {name} {was}, and "
+            return _unjudged(
+                plan,
+                hyp,
+                f"the newest card of {sha[:7]} was measured under {name} {was}, and "
                 f"certification would measure it under {now}",
-                measured=False,
             )
     snapshot = read_snapshot(ws, run.snapshot_id)
     blocked = _inadmissible(ws, snapshot)
     if blocked:
-        # Certification fails every gate on this snapshot without judging the correction,
+        # Certification fails every gate on this snapshot without judging a research gate,
         # and that failing certificate is how such a snapshot reaches the operator.
-        return _unsupported(hyp.objective.id, snapshot, blocked)
-    return _deflation(
+        return _unsupported(plan, hyp, snapshot, blocked)
+    readings = _research_readings(
         store,
-        planned,
+        plan,
         hyp,
-        sha,
         run.snapshot_id,
+        sha,
         _Researched(measured.run, measured.host, measured.benchmark),
         measured.folds,
-        measured=False,
+        stop_at_refusal=True,
     )
+    return Precheck(readings, measured=False)
 
 
-def _corrected(
-    store: StateStore, plan: CertificationPlan, subject: Subject, researched: _Researched
-) -> Precheck:
-    """The correction `plan` pins, judged on the research run certification has just made."""
-    planned = _correction(plan, subject.hyp, measured=True)
-    if isinstance(planned, Precheck):
-        return planned
-    return _deflation(
-        store,
-        planned,
-        subject.hyp,
-        subject.strategy_sha,
-        subject.snapshot_id,
-        researched,
-        subject.folds,
-        measured=True,
-    )
+def _research_order(plan: CertificationPlan, hyp: Hypothesis) -> list[PlannedGate]:
+    """The plan's research gates in the order they are judged: the search correction for the
+    objective `hyp` pins first, the rest in the plan's order, and the one that re-runs the
+    subject last, so every cheap refusal is in hand before a backtest is paid for."""
+    correction = deflation_gate(cast("ObjectiveRef", hyp.objective).id)
+    reading = research_gates()
+    planned = [gate for gate in plan.stage_gates(CERT_STAGE) if gate.id in reading]
+    return sorted(planned, key=lambda gate: (gate.id != correction, gate.id in RERUNNING))
 
 
-def _correction(
-    plan: CertificationPlan, hyp: Hypothesis, *, measured: bool
-) -> PlannedGate | Precheck:
-    """The cert gate `plan` corrects the search with for the objective `hyp` pins, or the
-    precheck that judges nothing because the plan carries none — `measured` where the child,
-    which has run the research window, finds that.
+def _uncorrected(plan: CertificationPlan, hyp: Hypothesis) -> GateResult | None:
+    """The reading that says `plan` carries no search correction for the objective `hyp`
+    pins, or `None` when it carries one.
 
     A plan carries it from the search's second draw — card, or setting of a declared grid —
-    so one without it has no search to price; one made for another objective is refused by
-    certification itself.
+    so one without it has no search to price, and the correction judges nothing; one made for
+    another objective is refused by certification itself.
     """
     objective = cast("ObjectiveRef", hyp.objective).id
     gate = deflation_gate(objective)
-    planned = next((found for found in plan.stage_gates(CERT_STAGE) if found.id == gate), None)
-    if planned is not None:
-        return planned
-    return Precheck(
+    if gate is None or any(found.id == gate for found in plan.stage_gates(CERT_STAGE)):
+        return None
+    return skipped(
         gate,
-        judged=False,
-        passed=None,
-        evidence={},
-        reason=f"plan version {plan.plan_version} carries no {gate}, the search correction for "
-        f"{objective}: a plan carries it once the search has {SEARCH_TRIALS} draws, its cards "
-        "and the prior_trials its family declares together",
-        measured=measured,
+        f"plan version {plan.plan_version} carries no {gate}, the search correction for "
+        f"{objective}: a plan carries it from {SEARCH_TRIALS} draws, its cards and declared "
+        "prior_trials together",
     )
 
 
-def _deflation(
+def _unjudged(plan: CertificationPlan, hyp: Hypothesis, reason: str) -> Precheck:
+    """A lane precheck that could read no research run: every research gate the plan carries,
+    recorded as judging nothing, with the reason."""
+    return Precheck(
+        [skipped(gate.id, reason) for gate in _research_order(plan, hyp)], measured=False
+    )
+
+
+def _research_context(
     store: StateStore,
-    planned: PlannedGate,
     hyp: Hypothesis,
-    strategy_sha: str,
+    planned: PlannedGate,
     snapshot_id: str,
+    strategy_sha: str,
     researched: _Researched,
     folds: int,
     *,
-    measured: bool,
-) -> Precheck:
-    """One correction's verdict on one research run, by the gate's own `evaluate` on the
-    context `_judge` builds for it, with the research run in the run's place."""
+    tunable: Mapping[str, float] | None = None,
+    rerun: Callable[[Mapping[str, float]], CardRun] | None = None,
+) -> GateContext:
+    """What a research gate is handed, built from the research window's runs alone.
+
+    Every run slot holds a research run — `run` and the `research_run` slots alike, the host's
+    and the benchmark's beside them — and `window` is the research window, so no certification
+    run can reach a research gate whatever it reads; the trials are counted as certification
+    counts them. Nothing the certification window yields is set: no dataset facts, no volume,
+    no cost re-run, no session prices and no replay. `rerun`, where given, runs the subject
+    over the research window again with parameters moved.
+    """
     objective = cast("ObjectiveRef", hyp.objective).id
     research = hyp.windows.research
     prior = records.prior_trials(store, hyp.id)
-    context = GateContext(
+    return GateContext(
         hyp=hyp,
         construct=cast("ConstructRef", hyp.construct).id,
         stage=CERT_STAGE,
@@ -854,17 +961,66 @@ def _deflation(
         trial_metrics=records.trial_metrics(store, hyp.id, objective),
         trials=max(records.candidates(store, hyp.id) + prior, 1),
         prior_trials=prior,
+        tunable=dict(tunable or {}),
+        rerun=rerun,
     )
-    result = gates()[planned.id].evaluate(context)
-    judged = result.skipped is None
-    return Precheck(
-        planned.id,
-        judged=judged,
-        passed=result.passed if judged else None,
-        evidence=dict(result.evidence),
-        reason=result.skipped,
-        measured=measured,
-    )
+
+
+def _research_readings(
+    store: StateStore,
+    plan: CertificationPlan,
+    hyp: Hypothesis,
+    snapshot_id: str,
+    strategy_sha: str,
+    researched: _Researched,
+    folds: int,
+    *,
+    tunable: Mapping[str, float] | None = None,
+    rerun: Callable[[Mapping[str, float]], CardRun] | None = None,
+    stop_at_refusal: bool,
+) -> tuple[GateResult, ...]:
+    """The plan's research gates judged on one research run, in the order `_research_order`
+    fixes, each by its own `evaluate` on `_research_context`.
+
+    A plan that carries no search correction is read as saying so first (`_uncorrected`). A
+    gate nothing implements is recorded as skipped (`UNIMPLEMENTED`). One that re-runs the
+    subject is recorded as left to the child where no `rerun` is given (`LEFT_TO_CHILD`), and
+    as spared once a reading before it has refused the subject (`RESEARCH_FAILED`), so no
+    backtest is made for a certificate that cannot pass. With `stop_at_refusal` — at a stall —
+    the readings end at the first that judged and refused.
+    """
+    registry = gates()
+    readings: list[GateResult] = []
+    missing = _uncorrected(plan, hyp)
+    if missing is not None:
+        readings.append(missing)
+    for gate in _research_order(plan, hyp):
+        found = registry.get(gate.id)
+        if found is None:
+            readings.append(skipped(gate.id, UNIMPLEMENTED))
+            continue
+        if gate.id in RERUNNING and rerun is None:
+            readings.append(skipped(gate.id, LEFT_TO_CHILD))
+            continue
+        if gate.id in RERUNNING and any(_refused(reading) for reading in readings):
+            readings.append(skipped(gate.id, RESEARCH_FAILED))
+            continue
+        context = _research_context(
+            store,
+            hyp,
+            gate,
+            snapshot_id,
+            strategy_sha,
+            researched,
+            folds,
+            tunable=tunable,
+            rerun=rerun,
+        )
+        reading = found.evaluate(context)
+        readings.append(reading)
+        if stop_at_refusal and _refused(reading):
+            break
+    return tuple(readings)
 
 
 def _refuse_uncorrected(
@@ -1529,7 +1685,7 @@ def _judge(
     store: StateStore,
     plan: CertificationPlan,
     subject: Subject,
-    spare: Callable[[_Researched], Precheck] | None = None,
+    spare: Callable[[Sequence[GateResult]], Precheck] | None = None,
 ) -> tuple[_Judged | None, Precheck | None]:
     """Evaluate the plan's certification gates, measure the objective they judged, state
     what the certification window could resolve from the research window's own dispersion —
@@ -1537,11 +1693,16 @@ def _judge(
     again — and strike the certification window's net per trade from the run the gates
     judged (`net_per_trade`), beside what its period target did over that run.
 
-    `spare`, at a stall, is asked about the research window's runs before the certification
-    window is read; a precheck it returns that refused the subject ends the judging there,
-    with nothing judged. The precheck it returned comes back beside what was judged — at a
-    stall on a snapshot that cannot support a claim, which runs neither window, one that
-    judged nothing and says why (`_unsupported`)."""
+    The research window is run first and the plan's research gates judged on it
+    (`_research_readings`), `research_plateau` re-running the subject over that window, before
+    the certification window is read; the certificate records those readings as they were
+    taken, in the plan's order beside the rest, and the certification window's gates are
+    judged after. `spare`, at a stall, is handed the research readings — taken to the first
+    refusal — and a precheck it returns that refused the subject ends the judging there, with
+    nothing else judged. By hand every research gate is judged, and once one refuses, the
+    plateau's backtests are not made. The precheck `spare` returned comes back beside what was
+    judged — at a stall on a snapshot that cannot support a claim, which runs neither window,
+    one that judged nothing and says why (`_unsupported`)."""
     planned = plan.stage_gates(CERT_STAGE)
     if not planned:  # pragma: no cover - the planner refuses a plan that reaches no stage
         raise PreconditionError(
@@ -1558,9 +1719,29 @@ def _judge(
             None,
             None,
             None,
-        ), None if spare is None else _unsupported(subject.objective_id, snapshot, blocked)
+        ), None if spare is None else _unsupported(plan, subject.hyp, snapshot, blocked)
     first = _research(subject)
-    checked = None if spare is None else spare(first)
+    parameters = _tunable(subject)
+
+    def rerun_research(overrides: Mapping[str, float]) -> CardRun:
+        """The subject over the research window again, with parameters moved, read from the
+        catalog a chunk at a time as its first run was."""
+        request = _request(subject, subject.research, overrides=overrides)
+        return _ran(subject, lambda: backtest.run(request, subject.catalog))
+
+    readings = _research_readings(
+        store,
+        plan,
+        subject.hyp,
+        subject.snapshot_id,
+        subject.strategy_sha,
+        first,
+        subject.folds,
+        tunable=parameters,
+        rerun=rerun_research,
+        stop_at_refusal=spare is not None,
+    )
+    checked = None if spare is None else spare(readings)
     if checked is not None and checked.spared:
         return None, checked
     measured = _measure(subject, first)
@@ -1575,12 +1756,8 @@ def _judge(
         measured.research, subject.folds, measured.host_research, measured.benchmark_research
     )
     stated = power(*researched, subject.research, subject.certification, window_params(plan))
-    metrics = records.trial_metrics(store, subject.hyp.id, objective.id)
-    prior = records.prior_trials(store, subject.hyp.id)
-    searched = records.candidates(store, subject.hyp.id) + prior
     facts = _dataset_facts(ws, snapshot, measured.evidence.lags)
     volume = measured.evidence.daily_volume
-    parameters = _tunable(subject)
 
     def rerun(overrides: Mapping[str, float]) -> CardRun:
         """The subject over the certification window again, with parameters moved, read
@@ -1599,10 +1776,15 @@ def _judge(
         return _session_prices(subject, keys)
 
     registry = gates()
-    verdicts: dict[str, EvaluatedGate] = {}
-    for gate in _perturbation_last(planned):
-        found = registry.get(gate.id)
-        if found is None:
+    research = research_gates()
+    taken = {found.id: found for found in readings}
+    # A research gate is recorded as it was read, before the window was: never judged again.
+    verdicts: dict[str, EvaluatedGate] = {
+        gate.id: _evaluated(gate, taken[gate.id]) for gate in planned if gate.id in research
+    }
+    for gate in _perturbation_last([gate for gate in planned if gate.id not in research]):
+        implemented = registry.get(gate.id)
+        if implemented is None:
             verdicts[gate.id] = _skipped(gate, UNIMPLEMENTED)
             continue
         if gate.id in LAST and _window_failed(verdicts):
@@ -1625,9 +1807,6 @@ def _judge(
             host_research_run=measured.host_research,
             benchmark_run=measured.benchmark_certification,
             benchmark_research_run=measured.benchmark_research,
-            trial_metrics=metrics,
-            trials=max(searched, 1),
-            prior_trials=prior,
             datasets=facts,
             daily_volume=volume,
             tunable=parameters,
@@ -1636,7 +1815,7 @@ def _judge(
             session_prices=session_prices,
             session=compared,
         )
-        verdicts[gate.id] = _evaluated(gate, found.evaluate(context))
+        verdicts[gate.id] = _evaluated(gate, implemented.evaluate(context))
     return (
         [verdicts[gate.id] for gate in planned],
         ObjectiveResult(id=objective.id, value=value, se=se),
@@ -1728,17 +1907,25 @@ def _blocked(planned: PlannedGate, snapshot: Snapshot, reasons: Sequence[str]) -
     )
 
 
-def _unsupported(objective_id: str, snapshot: Snapshot, reasons: Sequence[str]) -> Precheck:
+def _unsupported(
+    plan: CertificationPlan, hyp: Hypothesis, snapshot: Snapshot, reasons: Sequence[str]
+) -> Precheck:
     """A stall's precheck on a snapshot that cannot support a claim: certification runs no
-    window there and judges no correction, so neither the lane nor the child judges one, and
-    each says why, with the evidence the certificate's own gates fail on (`_blocked`)."""
+    window there and judges no research gate, so neither the lane nor the child judges one,
+    and each records every research gate the plan carries as judging nothing, with the
+    evidence the certificate's own gates fail on (`_blocked`)."""
+    evidence = {"snapshot_id": snapshot.snapshot_id, INADMISSIBLE: list(reasons)}
+    reason = (
+        f"snapshot {snapshot.snapshot_id[:12]} cannot support a claim, so certification runs "
+        "no window on it and judges no research gate: its evidence says why"
+    )
     return Precheck(
-        deflation_gate(objective_id),
-        judged=False,
-        passed=None,
-        evidence={"snapshot_id": snapshot.snapshot_id, INADMISSIBLE: list(reasons)},
-        reason=f"snapshot {snapshot.snapshot_id[:12]} cannot support a claim, so certification "
-        f"runs no window on it and judges no correction: {'; '.join(reasons)}",
+        [
+            GateResult.model_validate(
+                {"id": gate.id, "pass": True, "evidence": evidence, "skipped": reason}
+            )
+            for gate in _research_order(plan, hyp)
+        ],
         measured=False,
     )
 

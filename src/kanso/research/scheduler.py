@@ -127,8 +127,8 @@ RESEED: Final = "reseed"
 """The events a stall and a host's new version append beside the passages
 `research/passages.py` defines — `QUEUED`, `CLAIMED`, `REMOVED` and the run's `BEGUN` — under
 the hypothesis id as subject. `CERTIFIABLE` is the stall's certification child's, appended once
-the search correction has not refused the best on research data — it passed, or it judged
-nothing — and the certification window is next."""
+no research gate has refused the best on research data — each passed, or judged nothing — and
+the certification window is next."""
 
 
 @dataclass(frozen=True)
@@ -158,9 +158,10 @@ class Stall:
     reseed_from: str | None = None
     """The sha the next run was told to start from, when this stall decided one."""
     precheck: dict[str, object] | None = None
-    """The best's search correction as judged on research data before any certification
-    window was read (`kanso.certify.run.Precheck.payload`) — the certification child's
-    wherever one was started; `None` where nothing was worth certifying before it."""
+    """The best's research gates as judged on research data before any certification window
+    was read (`kanso.certify.run.Precheck.payload`): the deciding reading's keys, and every
+    reading under `gates` — the certification child's wherever one was started; `None` where
+    nothing was worth certifying before it."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -405,29 +406,31 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     which certification would refuse, and the lane with it; the run goes on drawing
     the cards that make it priceable.
 
-    Nor, for the zero rule's reason, is a best whose search correction refuses it on research
-    data. The correction the plan pins — the gate whose library file `deflates` the best's
-    objective, at the threshold the planner chose — reads the research window and the trials
-    alone, and a certificate fails when any gate that judged fails, so a correction that
-    refuses the best on research data has decided the certificate before the certification
-    window is read. The plan is therefore made here, in the lane — the planner's call when
-    none is pinned, the refusal of a pinned plan this version cannot run — and the correction
-    judged on the measurement the best's newest card kept, running nothing; both on the
-    workspace as the child would open it, `kanso.toml` read again rather than as the lane
-    read it when it started (`kanso.certify.run.precheck_at_stall`). A refusal spares the
-    stall: no child is started, no certification window is read, the hypothesis stays where
-    it was and goes back to the queue at −1. A measurement struck under another `[research]`
-    reading than the file's now or another criteria version, or none at all, judges nothing
-    here, and nor does a snapshot that cannot support a claim, whose failing certificate is
-    how it reaches the operator. Whatever the lane read, a child it starts runs the research
-    window first and judges the correction again on that run, before it reads the
-    certification window, and spares the stall itself when it refuses
-    (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its reading
-    is the one a certificate agrees with. On a snapshot that cannot support a claim the child
+    Nor, for the zero rule's reason, is a best a research gate refuses on research data. The
+    plan's research gates — the search correction, the gate whose library file `deflates` the
+    best's objective; `walk_forward_consistency`; and `research_plateau`, each at the values
+    the planner chose — read the research window and the trials alone, and a certificate
+    fails when any gate that judged fails, so one that refuses the best on research data has
+    decided the certificate before the certification window is read. The plan is therefore
+    made here, in the lane — the planner's call when none is pinned, the refusal of a pinned
+    plan this version cannot run — and the correction and the folds judged on the measurement
+    the best's newest card kept, running nothing, so the plateau, which re-runs the research
+    window once per move, is left to the child; both on the workspace as the child would open
+    it, `kanso.toml` read again rather than as the lane read it when it started
+    (`kanso.certify.run.precheck_at_stall`). A refusal spares the stall: no child is started,
+    no certification window is read, the hypothesis stays where it was and goes back to the
+    queue at −1. A measurement struck under another `[research]` reading than the file's now
+    or another criteria version, or none at all, judges nothing here, and nor does a snapshot
+    that cannot support a claim, whose failing certificate is how it reaches the operator.
+    Whatever the lane read, a child it starts runs the research window first and judges every
+    research gate again on that run, the plateau last, before it reads the certification
+    window, and spares the stall itself when one refuses
+    (`kanso.certify.run.certify_at_stall`): that run is the certificate's own, so its readings
+    are the ones a certificate records. On a snapshot that cannot support a claim the child
     runs no window at all and writes its failing certificate, and its precheck judges nothing
     and says why. The `stalled` event records the lane's precheck where no child was started
     — a spare, the only lane precheck that keeps a child from starting — and the child's
-    wherever one was. A correction that judged nothing spares nothing.
+    wherever one was. A research gate that judged nothing spares nothing.
 
     The verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
     fail returns it to research, and either way it is requeued at −1, because the queue is

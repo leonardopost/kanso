@@ -1034,11 +1034,14 @@ def criteria_items(draw: st.DrawFn) -> CriteriaItem:
             ranges[name] = (low, low + draw(NON_NEGATIVE))
     impl = draw(st.from_regex(r"\A[a-z_][a-z0-9_]{1,8}(\.[a-z_][a-z0-9_]{1,8}){1,3}\Z"))
     if kind == "gate":
+        stage = draw(st.sampled_from(["card", "cert", "paper", "live"]))
         return CriteriaItem(
             id=draw(CATALOGUE_IDS),
             kind="gate",
-            stage=draw(st.sampled_from(["card", "cert", "paper", "live"])),
+            stage=stage,
             required=draw(st.booleans()),
+            # Only a cert gate is judged before the certification window is read.
+            reads=draw(st.none() | st.just("research")) if stage == "cert" else None,
             meaningful_when=draw(SAFE_TEXT),
             params=params,
             ranges=ranges,

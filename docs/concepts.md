@@ -173,8 +173,8 @@ child is killed once its resident memory passes the lane's share, floored at thr
 what the run's baseline needed (`docs/workspace.md`, `envelope.yaml`). A stall's
 certification is a child held to the same figure for a card of the run it judges: both
 windows, every perturbation a gate runs and `parity_replay`'s node replay are made there,
-and the lane only reads back the certificate — or that the search correction spared it on
-the research window (Certification, below) — or the refusal it raised, and records what the
+and the lane only reads back the certificate — or that a research gate spared it on the
+research window (Certification, below) — or the refusal it raised, and records what the
 certification cost on the `stalled` event (`cert_peak_mem_gb`, `cert_wall_s`). Each of those
 runs reads its window a chunk at a time, as a card's child is fed it, and the child holds
 nothing of a run once it has ended, so what a certification holds — one read and one chunk
@@ -2612,7 +2612,11 @@ judge. kanso validates the plan against structural invariants — every required
 every parameter inside its range, at least one gate at each of the three stages — and sends
 the complaints back to the same model, then to the next tier up; a plan still invalid after
 that fails the step. With no model configured there is nothing to fall back on and the step
-exits 2.
+exits 2. The required cert gates are `embargoed_window`, `publication_lag`, `parity_replay`,
+`walk_forward_consistency` and `research_plateau`, the last two with every parameter set:
+they read the research window alone and are judged at a stall before the certification window
+is (below), so whether they run is not the planner's decision and how high their bars sit is.
+A plan pinned without them is refused where it is read, as one without its correction is.
 
 **A search is corrected for, from its second draw.** Every objective has exactly one
 deflation gate, the one whose library file `deflates` it — `deflated_sharpe` for the
@@ -2693,39 +2697,54 @@ The `cert run --sha` route is closed the same way. A card scored on `wf_contribu
 objective, so a plan made for the new one, which rightly leaves the gate out, is refused for it
 (exit 2), naming the gate, at any number of cards, with certifying the best as the remedy.
 
-**A stall certifies only a best whose correction passes on research data.** The correction
-reads the research window and the trials alone, and a certificate is the conjunction of the
-gates that judged, so a best the correction refuses on research data fails its certificate
-whatever the certification window shows — the reason a best at or below zero is not
-certified at a stall either. Reading the window then buys a verdict already known, and every
-read of it is one more look at the one sample research never saw. So at a stall the plan is
-made in the lane, and the correction judged at the planner's threshold on the measurement the
-best's newest card kept — by the gate's own `evaluate`, on the context certification builds
-for it, with that research run in the run's place — running nothing. A card measured under
-another `[research] folds`, `return_period` or capital, or another criteria version, or one
-that kept no measurement, is no reading of the arithmetic certification would use: the lane
-judges nothing. The settings are read from `kanso.toml` as it stands at the stall, as the
-certification child reads them, not as the lane read them when it started, so one edited
-under a running daemon is the one both judge by. A card the lane cannot read judges nothing
-either, and goes to the child, which never reads it. Nor does the lane judge on a snapshot
-that cannot support a claim, where certification judges no correction and whose failing
-certificate is how that snapshot reaches the operator, so a stall on one is never spared. Whatever the lane read, the certification child it starts
-runs the research window first and judges the correction again on it before it reads the
-certification window — on a snapshot that cannot support a claim it runs neither window, and
-the failing certificate it writes is recorded beside a precheck that judged nothing and says
-why. A refusal in either place spares the stall — no certification window read, no
-certificate, no failure counted toward `n_fail`, the hypothesis back in the queue at −1 — and
-the `stalled` event records the precheck (`docs/cli.md`). A correction that judged nothing
-spares nothing: a plan carries none before the search's second draw, card or declared
-setting, and a gate that skips on the research run would skip in the certificate too.
-`cert run` by hand is never spared.
+**A stall certifies only a best whose research gates pass on research data.** Five cert gates
+say `reads: research` in their library files: the three corrections, `walk_forward_consistency`
+and `research_plateau`. Each reads the research window's runs and the trials and nothing of the
+certification window — `tests/criteria/test_library.py` judges every one of them on a context
+whose certification slots hold an unrelated run and holds it to the same verdict — and a
+certificate is the conjunction of the gates that judged, so a best one of them refuses on
+research data fails its certificate whatever the certification window shows — the reason a best
+at or below zero is not certified at a stall either. Reading the window then buys a verdict
+already known, and every read of it is one more look at the one sample research never saw. So
+the research gates are judged first, in a fixed order: the plan's correction, then the others in
+the plan's order, then `research_plateau` last, since it alone costs backtests — two of the
+research window for every parameter it moves.
+
+At a stall the plan is made in the lane, and the correction and the folds judged at the
+planner's values on the measurement the best's newest card kept — by each gate's own
+`evaluate`, on the context certification builds for it, with that research run in every run's
+place — running nothing, so the plateau is recorded as left to the child. A plan that carries
+no correction yet says so and goes on to the folds. A card measured under another `[research]
+folds`, `return_period` or capital, or another criteria version, or one that kept no
+measurement, is no reading of the arithmetic certification would use: the lane judges nothing.
+The settings are read from `kanso.toml` as it stands at the stall, as the certification child
+reads them, not as the lane read them when it started, so one edited under a running daemon is
+the one both judge by. A card the lane cannot read judges nothing either, and goes to the child,
+which never reads it. Nor does the lane judge on a snapshot that cannot support a claim, where
+certification judges no research gate and whose failing certificate is how that snapshot
+reaches the operator, so a stall on one is never spared. Whatever the lane read, the
+certification child it starts runs the research window first and judges every research gate on
+it before it reads the certification window — the plateau's backtests made only once every
+cheaper one has passed — and stops at the first that refuses; on a snapshot that cannot support
+a claim it runs neither window, and the failing certificate it writes is recorded beside a
+precheck that judged nothing and says why. A refusal in either place spares the stall — no
+certification window read, no certificate, no look, no failure counted toward `n_fail`, the
+hypothesis back in the queue at −1 — and the `stalled` event records the precheck, every
+reading under `gates` (`docs/cli.md`). A gate that judged nothing spares nothing: a plan carries
+no correction before the search's second draw, card or declared setting, and a gate that skips
+on the research run would skip in the certificate too. A certificate the child goes on to write
+records each research gate as the child read it, never judged again: a card another lane records
+while the certification window runs moves nothing in it, and each of the plateau's backtests is
+paid once. `cert run` by hand is never spared: every research gate is judged, the plateau's
+backtests are not made once another has refused (the certificate says so), and the
+certification window is read regardless.
 
 The lane's reading is the certificate's exactly — measured on the research suite's
 synthetic workspace, a card the loop itself measured, the probability, the expected maximum
-and the trial counts agree to the last bit — wherever nothing moved between the card and the
-stall that those guards cannot see. Several things can, and these are the ones known. A run
-upgraded mid-way to a build that changed how a return is struck is carded by both builds
-under one criteria version, since an edit between two builds of one version moves no
+and the trial counts agree to the last bit, and so do the folds — wherever nothing moved between
+the card and the stall that those guards cannot see. Several things can, and these are the ones
+known. A run upgraded mid-way to a build that changed how a return is struck is carded by both
+builds under one criteria version, since an edit between two builds of one version moves no
 criteria digest; and a criteria version names no engine, so a patch of the engine within
 the supported range moves a return under the same one. Certification resolves inputs afresh
 instead of reading them off the card — the warmup prefix, from the catalog as it stands,
@@ -2783,18 +2802,21 @@ engine version — every gate with the numbers it decided on, or the reason it j
 ```
 $ kanso cert run demo_mr
 verdict    demo_mr · f729a53 · pass
-gates      6 judged · 6 pass · 0 fail · 0 skipped
-           pass  embargoed_window      certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
-           pass  publication_lag       n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
-           pass  parity_replay         compared=850, divergence=None, engine=20261015T115647Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261015T115633Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
-           pass  cost_stress           metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
-           pass  bootstrap             drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
-           pass  deflated_edge         edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, prior_trials=0, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
+gates      8 judged · 8 pass · 0 fail · 0 skipped
+           pass  embargoed_window          certification=10.14987087722001, min_fraction=0.5, objective=net_edge_bps, research=9.986729903397118
+           pass  publication_lag           n_datasets=1, published_too_early=[], tolerance_s=0.0, unknown=[]
+           pass  parity_replay             compared=850, divergence=None, engine=20261123T012403Z-engine-6ca3f78, engine_intents=850, engine_released=40950, engine_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, identical=True, max_ts_delta_ns=0, node=20261123T012358Z-node-6ca3f78, node_intents=850, node_released=40950, node_stream=81d5de5ba8556a06e9e1c0c790c94921f7d4fdb766d8b4f817cbd2bc1c6558ca, ts_ns=0
+           pass  walk_forward_consistency  folds=[9.125628298744713, 11.861214496587886, 11.581928536689706, 7.3781482815661645], min_positive_folds=3, objective=net_edge_bps, positive_folds=4
+           pass  research_plateau          dropped=[], floor=2.4966824758492794, keep_fraction=0.25, n_backtests=8, n_fields=4, objective=net_edge_bps, perturb_pct=10.0, perturbations=[{'field': 'entry_z', 'direction': 'up', 'value': 2.2, 'metric': 11.416982463589926}, {'field': 'entry_z', 'direction': 'down', 'value': 1.8, 'metric': 8.965624926453094}, {'field': 'exit_z', 'direction': 'up', 'value': 0.55, 'metric': 9.267995951345217}, {'field': 'exit_z', 'direction': 'down', 'value': 0.45, 'metric': 10.436990288278363}, {'field': 'lookback', 'direction': 'up', 'value': 66, 'metric': 11.539589326698463}, {'field': 'lookback', 'direction': 'down', 'value': 54, 'metric': 8.807022144637795}, {'field': 'notional', 'direction': 'up', 'value': 11000.0, 'metric': 9.986729903397102}, {'field': 'notional', 'direction': 'down', 'value': 9000.0, 'metric': 9.98672990339708}], unperturbed=9.986729903397118
+           pass  cost_stress               metric_a=5.146082462397, metric_b=0.14229404757398897, mult_a=2.0, mult_b=3.0, objective=net_edge_bps
+           pass  bootstrap                 drawn_from=105, limit_pct=15.0, mdd_p95=0.36279330750000277, n=1000, objective=net_edge_bps, objective_ci90=[7.7637008358315, 12.235547163365215], resampled=sessions, statistic=edge_bps
+           pass  deflated_edge             edge_bps=9.986729903397118, expected_maximum_bps=1.8114901175757312, min_probability=0.95, prior_trials=0, probability=0.9999999999999918, scored_trials=2, standard_error_bps=1.0651735278786558, trades=1003, trial_spread_bps=3.485274634516859, trials=2
 objective  net_edge_bps 10.149871 ± 1.322442
 power      resolves 4.202 at 80% · se 1.69 on the certification window from research's 9.987 ± 1.065 · embargoed_window passes 1.00 at the research estimate, 0.00 at zero
+per trade  net 10.16 bp ± 1.319 by session (t 7.7) · 425 trade(s) on 105 session(s)
 hold-out   look 1 of 2025-01-06..2025-05-30 by demo_mr
 pins       engine 1.231.0 · plan 1 · snapshot 4592f8c0dbed3f78ec2f9278f239c5ca080abf029a69553e9c2a8212c394a062 · trial 4
-written    /…/certificates/demo_mr/f729a53-heb6db7b-4-p1-e1.231.0.yaml
+written    /…/certificates/demo_mr/f729a53-h860b93a-4-p1-e1.231.0.yaml
 source     /…/certificates/demo_mr/f729a53.py
 next       kanso cert show demo_mr
 ```
@@ -2845,8 +2867,9 @@ A subject whose hypothesis declares a `benchmark` is certified against a hold of
 leg over each window — two more runs of the one runner, from the subject's own request for
 that window with the strategy replaced — and every gate that measures the objective reads the
 certification hold beside the certification run and the research hold beside the research
-run. `param_plateau` moves the subject's parameters and re-runs the subject alone: the hold
-it is differenced against stays the one it was measured against.
+run. `param_plateau` and `research_plateau` move the subject's parameters and re-run the
+subject alone: the hold it is differenced against stays the one it was measured against, the
+certification hold for the first and the research hold for the second.
 
 `latency_stress` asks whether the result survives a slower route than it was measured on.
 A venue model states one `latency_ms`, and every fill a run has was decided under it — an
@@ -2869,8 +2892,23 @@ rule states one. `cert plan` and `cert run` do not check it again: the gate read
 recorded on the card it judges, and a card recorded at zero — from a run begun before the
 rule, or one that went on past an upgrade — is skipped as any latency of zero is.
 
-`param_plateau` is defined around an edge and nowhere else. Its floor is a fraction of the
-unperturbed objective, and a fraction of a loss lies above the loss: at −10 and a
+`research_plateau` is `param_plateau` on the research window: the same arithmetic and the same
+evidence keys, each numeric parameter of the subject's own moved `perturb_pct` both ways and the
+subject run over the research window again at each setting, every move held to `keep_fraction`
+of the unperturbed research score. It is required of every plan with both its parameters set,
+because a result that survives only the setting the search landed on was fitted to it, and it
+is judged before the certification window is read, so a stall it refuses reads no certification
+window. Its unperturbed score is the one the search selected, which selection inflated, so a
+sound strategy keeps less of it under a move than it keeps of a certification score; the
+planner sets `keep_fraction` knowing so, and is told it in the invariants. A parameter that
+sizes the position moves a contribution in proportion to the move, so a `keep_fraction` above
+`1 − perturb_pct / 100` refuses every strategy that declares one. `param_plateau` stays the
+planner's to include: it holds each move to a fraction of the certification score, after the
+certification window is read.
+
+`param_plateau` is defined around an edge and nowhere else, and so is `research_plateau`. Its
+floor is a fraction of the unperturbed objective, and a fraction of a loss lies above the loss:
+at −10 and a
 `keep_fraction` of a half the floor is −5, so a perturbation that changed nothing would read
 as failing to keep half of the result, and one that merely lost less would pass. An
 unperturbed objective at or below zero therefore fails the gate before any parameter is
@@ -2883,7 +2921,9 @@ judged the subject and refused it, each is recorded as skipped with the reason a
 perturbation is run, nor the window read again — the gates are
 evidence for a pass, and a certificate whose window failed cannot pass — while the
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
-spares nothing. `bootstrap` judges both of the numbers it records: the ninety-fifth
+spares nothing. `research_plateau` is spared the same way by the research gates judged before
+it: once the correction or the folds have refused the subject, its backtests are not made and
+it is recorded as skipped, saying so. `bootstrap` judges both of the numbers it records: the ninety-fifth
 percentile of the resampled drawdown against `risk_limits.max_drawdown_pct`, and the
 ninety-percent band of the objective's statistic on the resample, which must reach above
 zero — a band that lies at or below zero says the population of trades carries no edge in
@@ -2910,11 +2950,15 @@ pass paper; a certificate written then still carries that band, and composition 
 reuse a band whose evidence does not name its statistic.
 
 `walk_forward_consistency` reads the research window alone: in how many of its folds the
-objective was positive, held to `min_positive_folds`. It once also required the certification
-estimate to beat the worst research fold, and that clause was deleted rather than made
-optional, because it measured nothing. Four research folds and a certification window a fold
-long are five draws of one quantity, so the certification draw is the lowest of the five a
-fifth of the time whatever the edge is, and selection inflates the research folds besides:
+objective was positive, held to `min_positive_folds`. It is required of every plan, with its
+count set, and judged at a stall before the certification window is read, so a best positive in
+fewer folds than the count reads no certification window. The count is the planner's, from one
+to the workspace's `[research] folds`; no rule asks every fold to be positive. It once also
+required the certification estimate to beat the worst research fold, and that clause was
+deleted rather than made optional, because it measured nothing. Four research folds and a
+certification window a fold long are five draws of one quantity, so the certification draw is
+the lowest of the five a fifth of the time whatever the edge is, and selection inflates the
+research folds besides:
 simulated in October 2026 on the layout of an operator's 153 certificates — the planner had
 chosen the gate for every one of them — the clause passed a true edge about 0.42 of the time
 after fifty trials and 0.24 after five hundred, whatever its size, and more certification

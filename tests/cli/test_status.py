@@ -106,6 +106,10 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
         True,
         False,
     )
+    assert [reading["gate"] for reading in precheck["gates"]] == ["deflated_edge"], (
+        "every reading the stall took, to the refusal that spared it"
+    )
+    assert precheck["gates"][0]["evidence"] == precheck["evidence"]
     evidence = precheck["evidence"]
     spared = (
         f"stall spared: deflated_edge {evidence['probability']:.3f} < "

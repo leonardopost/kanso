@@ -142,13 +142,25 @@ CERT_GATES: list[dict[str, Any]] = [
         "rationale": "required; the deployed code path must be the researched one",
     },
     {
+        "id": "walk_forward_consistency",
+        "stage": "cert",
+        "params": {"min_positive_folds": 1},
+        "rationale": "required; the edge recurs across the research folds",
+    },
+    {
+        "id": "research_plateau",
+        "stage": "cert",
+        "params": {"perturb_pct": 10.0, "keep_fraction": 0.0},
+        "rationale": "required; the research score survives a move of every parameter",
+    },
+    {
         "id": "entry_timing",
         "stage": "cert",
         "params": {"max_p": 0.1},
         "rationale": "required for a Sharpe: timing told from what holding the series earns",
     },
 ]
-"""The three cert gates every plan must carry, since all three are structural invariants, and
+"""The five cert gates every plan must carry, since all five are structural invariants, and
 the one every plan for the demo's Sharpe carries beside them."""
 
 BOOTSTRAP_GATE: dict[str, Any] = {

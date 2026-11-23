@@ -1,11 +1,13 @@
-"""A stall's search correction, judged on research data before a certification window is read.
+"""A stall's research gates, judged on research data before a certification window is read.
 
-The precheck is the certificate's own correction asked early: the gate the plan pins for the
-subject's objective, by its own `evaluate`, on the research run the subject card kept — in
-the lane that stalled — or on the research run certification has just made — in the child,
-before it reads the certification window. What is under test is that it is the same verdict
-on the same numbers as the certificate's, and that where it cannot be, it judges nothing
-rather than guessing.
+The precheck is the certificate's own research gates asked early: the search correction the
+plan pins for the subject's objective, then `walk_forward_consistency` and `research_plateau`,
+each by its own `evaluate`, on the research run the subject card kept — in the lane that
+stalled, which runs nothing and so leaves the plateau to the child — or on the research run
+certification has just made — in the child, before it reads the certification window. What
+is under test is that each is the same verdict on the same numbers as the certificate's, that
+a refusal by any of them reads no certification window, and that where one cannot be judged
+it judges nothing rather than guessing.
 
 The workspace is the research suite's synthetic saw-tooth. A measurement built here from
 `build_run` stands for one the loop kept: what the precheck reads off it is the objective,
@@ -23,9 +25,18 @@ from typing import Any
 
 import pytest
 
-from kanso.certify import certificate
-from kanso.certify.run import Precheck, certify, certify_at_stall, precheck, read_precheck
+from kanso.certify import certificate, run
+from kanso.certify.run import (
+    LEFT_TO_CHILD,
+    RESEARCH_FAILED,
+    Precheck,
+    certify,
+    certify_at_stall,
+    precheck,
+    read_precheck,
+)
 from kanso.criteria import criteria_version
+from kanso.criteria.context import skipped, verdict
 from kanso.data import snapshot as snapshots
 from kanso.errors import PreconditionError
 from kanso.hyp import set_status, show
@@ -35,9 +46,25 @@ from kanso.research.records import Measurement
 from kanso.schemas import ObjectiveRef
 from kanso.state import StateStore
 from kanso.workspace import Workspace
-from tests.certify.test_run import CERT_GATES, SEARCHED, a_card, a_grid, a_manifest, write_plan
+from tests.certify.test_run import (
+    CERT_GATES,
+    SEARCHED,
+    a_card,
+    a_grid,
+    a_manifest,
+    write_plan,
+)
 from tests.criteria.builders import build_run
-from tests.research.conftest import DOCUMENT, FLAT, HYP_ID, RESEARCH, REVERTING, classify
+from tests.criteria.test_param_plateau import source
+from tests.research.conftest import (
+    CERTIFICATION,
+    DOCUMENT,
+    FLAT,
+    HYP_ID,
+    RESEARCH,
+    REVERTING,
+    classify,
+)
 
 RESEARCH_RUN = build_run((3.0, -1.0, 4.0, 1.0, 5.0, -2.0, 6.0, 2.0))
 """A research run that earned on six days of eight, its error read off all eight."""
@@ -49,6 +76,35 @@ expected maximum is next to nothing and an estimate clear of its own error passe
 WIDE = (-40.0, 40.0, -20.0, 20.0)
 """Four trials spread forty either side: a search whose expected maximum no estimate of this
 size reaches, so the correction refuses it."""
+
+FICKLE = build_run((3.0, -1.0, -4.0, -1.0, 5.0, -2.0, -6.0, -2.0))
+"""A research run that earned in two of its four folds and lost in the other two."""
+
+
+def with_gate(gate_id: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """The cert gates a plan for the demo carries, one of them at other values."""
+    return [{**gate, "params": params} if gate["id"] == gate_id else gate for gate in CERT_GATES]
+
+
+EVERY_FOLD = with_gate("walk_forward_consistency", {"min_positive_folds": 4})
+"""The demo's cert gates asking every one of the four research folds to be positive."""
+
+STEEP = with_gate("research_plateau", {"perturb_pct": 10.0, "keep_fraction": 0.5})
+"""The demo's cert gates asking every move of the research plateau to keep half its score."""
+
+FRAGILE = source(1.0)
+"""The reverter whose `min_fall` sits at the deepest fall the saw-tooth has: moved up a tenth
+it never trades, so the research plateau refuses it at any `keep_fraction` above zero."""
+
+
+def read_of(checked: Precheck, gate_id: str) -> Any:
+    """The one reading of a gate a precheck took."""
+    (found,) = [reading for reading in checked.readings if reading.id == gate_id]
+    return found
+
+
+def gate_ids(checked: Precheck) -> list[str]:
+    return [reading.id for reading in checked.readings]
 
 
 def measurement(ws: Workspace, store: StateStore, **changes: Any) -> str:
@@ -112,6 +168,57 @@ def test_a_search_whose_trials_barely_differ_passes(ws: Workspace, store: StateS
 
     assert (checked.judged, checked.passed, checked.spared) == (True, True, False)
     assert checked.evidence["dsr"] >= checked.evidence["min_dsr"]
+
+
+def test_the_lane_leaves_the_research_plateau_to_the_child(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The plateau re-runs the research window once per move, and the lane runs nothing: it is
+    recorded as left to the child, after every research gate the lane could judge."""
+    sha = best_with(ws, store, *TIGHT)
+
+    checked = precheck(ws, store, HYP_ID, sha, plan_of(ws))
+
+    assert gate_ids(checked) == ["deflated_sharpe", "walk_forward_consistency", "research_plateau"]
+    plateau = read_of(checked, "research_plateau")
+    assert (plateau.skipped, plateau.passed, plateau.evidence) == (LEFT_TO_CHILD, True, {})
+    assert read_of(checked, "walk_forward_consistency").skipped is None
+    assert not checked.spared
+    assert len(LEFT_TO_CHILD) <= 200 and len(RESEARCH_FAILED) <= 200
+
+
+def test_the_lane_spares_a_best_whose_folds_do_not_recur_without_reading_any_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`walk_forward_consistency` reads the research folds alone, so the lane judges it from the
+    measurement the best kept, after the correction — here the plan's word that it carries
+    none — and refuses a best positive in two folds of four when the plan asks for all four,
+    reading nothing."""
+
+    def unread(*_: object, **__: object) -> Any:
+        raise AssertionError("the lane read a window")
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, run=FICKLE))
+    plan = write_plan(ws, gates=EVERY_FOLD)
+    monkeypatch.setattr(backtest, "window_chunks", unread)
+    monkeypatch.setattr(backtest, "run", unread)
+
+    checked = precheck(ws, store, HYP_ID, sha, plan)
+
+    assert checked.spared and checked.measured is False
+    assert (checked.gate, checked.judged, checked.passed) == (
+        "walk_forward_consistency",
+        True,
+        False,
+    )
+    assert checked.evidence["positive_folds"] == 2
+    assert checked.evidence["min_positive_folds"] == 4
+    assert gate_ids(checked) == ["deflated_sharpe", "walk_forward_consistency"], (
+        "the correction first, and nothing judged after the refusal"
+    )
+    assert read_of(checked, "deflated_sharpe").skipped is not None, "the plan carries none"
+    assert checked.payload()["gates"][1]["pass"] is False
 
 
 def test_a_declared_grid_is_among_the_draws_the_precheck_deflates_by(
@@ -184,10 +291,12 @@ def test_a_best_that_kept_no_measurement_judges_nothing(ws: Workspace, store: St
     assert checked.reason == f"the newest card of {sha[:7]} kept no measurement to judge it from"
 
 
-def test_a_plan_that_carries_no_correction_has_no_search_to_price(
+def test_a_plan_that_carries_no_correction_has_no_search_to_price_and_still_judges_folds(
     ws: Workspace, store: StateStore
 ) -> None:
-    """Before the search's second draw a plan carries no correction, and nothing is spared."""
+    """Before the search's second draw a plan carries no correction, which spares nothing, and
+    the other research gates are judged all the same: the lane reads the folds, and leaves the
+    plateau to the child."""
     classify(ws, store, DOCUMENT, REVERTING)
     sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
     plan = write_plan(ws)
@@ -197,9 +306,13 @@ def test_a_plan_that_carries_no_correction_has_no_search_to_price(
     assert (checked.gate, checked.judged, checked.passed) == ("deflated_sharpe", False, None)
     assert checked.reason == (
         "plan version 1 carries no deflated_sharpe, the search correction for wf_sharpe_net: "
-        "a plan carries it once the search has 2 draws, its cards and the prior_trials its "
-        "family declares together"
+        "a plan carries it from 2 draws, its cards and declared prior_trials together"
     )
+    assert gate_ids(checked) == ["deflated_sharpe", "walk_forward_consistency", "research_plateau"]
+    folds = read_of(checked, "walk_forward_consistency")
+    assert folds.skipped is None and folds.passed
+    assert folds.evidence["positive_folds"] == 4
+    assert not checked.spared
 
 
 def test_a_correction_that_skips_on_research_data_spares_nothing(
@@ -241,30 +354,74 @@ def test_a_best_pinned_to_an_unclassified_file_is_left_to_certification_to_refus
     )
     assert checked.reason == (
         f"the newest card of {sha[:7]} was researched without a construct or an objective, so "
-        "there is no search correction to judge it by"
+        "there is no research gate to judge it by"
     )
+    assert checked.readings == ()
     with pytest.raises(PreconditionError, match="without a construct or an objective") as refused:
         scheduler.on_stall(ws, store, hyp_id)
     assert refused.value.remedy == f"run `kanso classify {hyp_id}` and research it again"
 
 
+PASSED = verdict("deflated_sharpe", True, {"dsr": 0.99, "min_dsr": 0.95})
+REFUSED = verdict("deflated_edge", False, {"probability": 0.25, "min_probability": 0.95})
+UNREAD = skipped("deflated_contribution", "the card kept no measurement")
+FOLDS = verdict("walk_forward_consistency", False, {"positive_folds": 2, "min_positive_folds": 4})
+
+
 @pytest.mark.parametrize(
     "checked",
     [
-        Precheck("deflated_edge", True, False, {"probability": 0.25, "trials": 3}, measured=False),
-        Precheck("deflated_sharpe", True, True, {"dsr": 0.99}, measured=True),
-        Precheck(
-            "deflated_contribution", False, None, {}, "the card kept no measurement", measured=False
-        ),
-        Precheck(None, False, None, {}, "no gate", measured=True),
+        Precheck([REFUSED], measured=False),
+        Precheck([PASSED], measured=True),
+        Precheck([UNREAD], measured=False),
+        Precheck(measured=True, reason="no gate"),
+        Precheck([PASSED, FOLDS, skipped("research_plateau", RESEARCH_FAILED)], measured=True),
+        Precheck([UNREAD, verdict("walk_forward_consistency", True, {})], measured=False),
     ],
 )
 def test_a_precheck_reads_back_from_what_it_records(checked: Precheck) -> None:
-    """The child reports its precheck as JSON and the lane reads it back whole."""
+    """The child reports its precheck as JSON and the lane reads it back whole, every reading
+    under `gates` and the deciding one's keys beside them."""
     recorded = json.loads(json.dumps(checked.payload()))
 
     assert read_precheck(recorded) == checked
     assert ("reason" in recorded) is (checked.reason is not None)
+    assert [entry["gate"] for entry in recorded["gates"]] == gate_ids(checked)
+    deciding = checked.deciding
+    assert recorded["gate"] == (None if deciding is None else deciding.id)
+
+
+@pytest.mark.parametrize(
+    "checked",
+    [
+        Precheck([REFUSED], measured=False),
+        Precheck([UNREAD], measured=True),
+        Precheck(measured=False, reason="no gate"),
+    ],
+)
+def test_a_precheck_recorded_before_stalls_listed_gates_reads_back_as_its_one_reading(
+    checked: Precheck,
+) -> None:
+    """A `stalled` event written before a stall judged more than its correction has no `gates`:
+    its own keys are the one reading it took, or none where they name no gate."""
+    recorded = json.loads(json.dumps(checked.payload()))
+    del recorded["gates"]
+
+    assert read_precheck(recorded) == checked
+
+
+def test_the_deciding_reading_is_the_first_refusal_else_the_first() -> None:
+    """The correction is judged first, so the keys a stall has always recorded stay its own
+    unless another research gate spared the stall."""
+    spared = Precheck([PASSED, FOLDS], measured=True)
+    held = Precheck([UNREAD, verdict("walk_forward_consistency", True, {})], measured=False)
+
+    assert spared.spared and spared.gate == "walk_forward_consistency"
+    assert (spared.judged, spared.passed, spared.reason) == (True, False, None)
+    assert spared.evidence == {"positive_folds": 2, "min_positive_folds": 4}
+    assert not held.spared and held.gate == "deflated_contribution"
+    assert (held.judged, held.passed, held.reason) == (False, None, UNREAD.skipped)
+    assert Precheck(measured=False, reason="why").evidence == {}
 
 
 # --- in the certification child, from the research run it makes ---------------
@@ -287,6 +444,7 @@ def test_the_child_s_precheck_says_it_ran_the_research_window_whatever_it_found(
     assert (lane.judged, lane.measured) == (False, False)
     assert (child.judged, child.measured) == (False, True)
     assert child.reason == lane.reason
+    assert read_of(child, "research_plateau").skipped is None, "the child judges the plateau"
 
 
 def test_the_precheck_is_the_certificate_s_own_correction_to_the_last_bit(
@@ -294,7 +452,8 @@ def test_the_precheck_is_the_certificate_s_own_correction_to_the_last_bit(
 ) -> None:
     """The lane's reading of the card the loop measured, the child's reading of the research
     window it ran again, and the certificate's correction are one number, bit for bit: one
-    gate's arithmetic on one run, with no warmup and no host to resolve again in between."""
+    gate's arithmetic on one run, with no warmup and no host to resolve again in between. So
+    are the folds, and the certificate's plateau is the child's."""
     hyp_id = classify(ws, store, DOCUMENT, REVERTING)
     loop.begin(ws, store, hyp_id)
     loop.end(ws, store, hyp_id)
@@ -312,24 +471,20 @@ def test_the_precheck_is_the_certificate_s_own_correction_to_the_last_bit(
     assert lane.judged and child.judged and deflation.skipped is None
     assert lane.evidence == child.evidence == deflation.evidence
     assert lane.passed is child.passed is deflation.passed is True
+    for gate_id in ("walk_forward_consistency", "research_plateau"):
+        (recorded,) = [gate for gate in made.gates if gate.id == gate_id]
+        assert recorded.evidence == read_of(child, gate_id).evidence, gate_id
+    assert (
+        read_of(lane, "walk_forward_consistency").evidence
+        == read_of(child, "walk_forward_consistency").evidence
+    )
     (certifiable,) = store.events(kind=scheduler.CERTIFIABLE, subject=hyp_id)
-    assert certifiable.detail == {"strategy_sha": sha}, "a candidate once the correction held"
+    assert certifiable.detail == {"strategy_sha": sha}, "a candidate once the research gates held"
 
 
-def test_a_stall_the_correction_refuses_on_research_data_never_reads_the_window(
-    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The lane could not judge — the card kept no measurement — so the child runs the
-    research window, judges the correction there and stops before the certification window.
-    An operator's `cert run` is never spared, and its certificate's correction is the one the
-    child read."""
-    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
-    set_status(store, hyp_id, "researching")
-    sha = a_card(ws, store, REVERTING)
-    searched(ws, store, *WIDE)
-    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED])
-    assert not precheck(ws, store, hyp_id, sha, plan).judged
-
+def research_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[date, date]]:
+    """The window of every read a certification makes from here on, refusing any read of the
+    certification window."""
     read = backtest.window_chunks
     windows: list[tuple[date, date]] = []
 
@@ -339,32 +494,155 @@ def test_a_stall_the_correction_refuses_on_research_data_never_reads_the_window(
             raise AssertionError("a spared stall read the certification window")
         return read(request, *args, **kwargs)
 
+    monkeypatch.setattr(backtest, "window_chunks", research_only)
+    return windows
+
+
+def test_a_stall_the_correction_refuses_on_research_data_never_reads_the_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lane could not judge — the card kept no measurement — so the child runs the
+    research window, judges the correction there and stops before the certification window,
+    and before the plateau's backtests. An operator's `cert run` is never spared: its
+    certificate's correction is the one the child read, every research gate is judged but the
+    plateau, which is not run behind a refusal, and the certification window is read."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, REVERTING)
+    searched(ws, store, *WIDE)
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+    assert not precheck(ws, store, hyp_id, sha, plan).judged
+
     with monkeypatch.context() as patched:
-        patched.setattr(backtest, "window_chunks", research_only)
+        windows = research_reads(patched)
         made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
 
-    assert windows == [RESEARCH], "the research window was run, and only it"
+    assert windows == [RESEARCH], "the research window was run, once, and only it"
     assert made is None
     assert checked is not None and checked.spared and checked.measured
+    assert gate_ids(checked) == ["deflated_sharpe"], "the readings end at the refusal"
     assert checked.evidence["dsr"] < checked.evidence["min_dsr"]
     assert certificate.latest(store, hyp_id) is None
     assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
     assert store.events(kind=scheduler.CERTIFIABLE) == []
 
+    read = backtest.window_chunks
+    windows = []
+
+    def counted(request: backtest.RunRequest, *args: Any, **kwargs: Any) -> Any:
+        windows.append(request.window)
+        return read(request, *args, **kwargs)
+
+    monkeypatch.setattr(backtest, "window_chunks", counted)
     by_hand = certify(ws, store, hyp_id)
 
-    (deflation,) = [gate for gate in by_hand.gates if gate.id == SEARCHED["id"]]
-    assert deflation.evidence == checked.evidence and deflation.passed is False
+    gates = {gate.id: gate for gate in by_hand.gates}
+    assert gates["deflated_sharpe"].evidence == checked.evidence
+    assert gates["deflated_sharpe"].passed is False
+    assert gates["walk_forward_consistency"].skipped is None, "judged, by hand"
+    plateau = gates["research_plateau"]
+    assert (plateau.skipped, plateau.passed, plateau.evidence) == (RESEARCH_FAILED, True, {})
     assert by_hand.verdict == "fail"
+    assert CERTIFICATION in windows, "by hand the certification window is read regardless"
+    assert windows.count(RESEARCH) == 1, "and no research-window move was run"
+
+
+def test_a_stall_the_research_plateau_refuses_never_reads_the_window(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lane leaves the plateau to the child; the child runs the research window, judges
+    the cheap research gates, then moves each parameter over the research window — and a best
+    fitted to its one setting is refused there, the certification window unread: no
+    certificate, no `certifiable` event, no look, and the hypothesis where it was."""
+    hyp_id = classify(ws, store, DOCUMENT, FRAGILE)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, FRAGILE)
+    plan = write_plan(ws, gates=STEEP)
+    assert not precheck(ws, store, hyp_id, sha, plan).spared
+
+    with monkeypatch.context() as patched:
+        windows = research_reads(patched)
+        made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is None and checked.spared and checked.measured
+    assert set(windows) == {RESEARCH}, "the research window, run again for every move"
+    assert len(windows) == 1 + checked.evidence["n_backtests"]
+    assert (checked.gate, checked.passed) == ("research_plateau", False)
+    moved = {(p["field"], p["direction"]): p["metric"] for p in checked.evidence["perturbations"]}
+    assert moved[("min_fall", "up")] == 0.0, "1.10 is deeper than the saw-tooth ever falls"
+    assert gate_ids(checked) == ["deflated_sharpe", "walk_forward_consistency", "research_plateau"]
+    assert certificate.latest(store, hyp_id) is None
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
+    assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]
+    from kanso.certify.looks import looks
+
+    assert looks(store, hyp_id, CERTIFICATION).prior == (), "no look was taken"
+
+
+def test_the_certificate_records_the_plateau_the_child_read_and_pays_for_it_once(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every research-window move is one backtest, made once: the certificate's plateau is the
+    reading the child took before the window was read, never judged again."""
+    hyp_id = classify(ws, store, DOCUMENT, source(0.5))
+    sha = a_card(ws, store, source(0.5))
+    write_plan(ws)
+    original = backtest.run
+    research: list[backtest.RunRequest] = []
+
+    def counted(request: backtest.RunRequest, *args: Any, **kwargs: Any) -> Any:
+        if request.window == RESEARCH:
+            research.append(request)
+        return original(request, *args, **kwargs)
+
+    monkeypatch.setattr(backtest, "run", counted)
+    made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is not None and made.verdict == "pass"
+    (plateau,) = [gate for gate in made.gates if gate.id == "research_plateau"]
+    assert plateau.evidence == read_of(checked, "research_plateau").evidence
+    assert plateau.evidence["n_backtests"] == 4, "notional and min_fall, each moved both ways"
+    assert len(research) == 1 + plateau.evidence["n_backtests"], (
+        "the subject's research run, and one run per move"
+    )
+    assert [request.overrides for request in research[1:]] == [
+        {point["field"]: point["value"]} for point in plateau.evidence["perturbations"]
+    ]
+
+
+def test_a_trial_recorded_while_the_window_runs_moves_no_reading_of_the_certificate(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The search is priced once, before the window is read: a card another lane records while
+    certification runs the window does not reach the certificate's correction."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING)
+    searched(ws, store, *TIGHT)
+    write_plan(ws, gates=[*CERT_GATES, SEARCHED])
+    measure = run._measure
+
+    def another_lane_cards(*args: Any, **kwargs: Any) -> Any:
+        a_card(ws, store, FLAT + b"# another lane\n", seq=9, metric=0.5, best=False)
+        return measure(*args, **kwargs)
+
+    monkeypatch.setattr(run, "_measure", another_lane_cards)
+    made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is not None
+    (deflation,) = [gate for gate in made.gates if gate.id == SEARCHED["id"]]
+    assert deflation.evidence == checked.evidence
+    assert deflation.evidence["trials"] == 3, "the best and its two trials, not the fourth card"
+    assert records.candidates(store, hyp_id) == 4
 
 
 def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_runs_no_window(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Such a snapshot fails every gate before anything runs, at a stall as by hand, so there
-    is no research run to judge the correction on and no window about to be read: the failing
+    is no research run to judge a research gate on and no window about to be read: the failing
     certificate is written with no `certifiable` and no move to candidate, beside a precheck
-    that judged nothing, ran nothing and says why — the reasons the certificate fails on."""
+    that judged nothing, ran nothing and says why — the reasons the certificate fails on — for
+    every research gate the plan carries."""
     a_manifest(ws, publication="unknown")
     snapshots.freeze(ws)
     hyp_id = classify(ws, store, DOCUMENT, REVERTING)
@@ -379,10 +657,16 @@ def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_runs_no_window(
     made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
 
     assert made is not None and made.verdict == "fail"
-    assert (checked.gate, checked.judged, checked.passed) == ("deflated_sharpe", False, None)
+    assert (checked.gate, checked.judged, checked.passed) == (
+        "walk_forward_consistency",
+        False,
+        None,
+    )
+    assert gate_ids(checked) == ["walk_forward_consistency", "research_plateau"]
     assert checked.measured is False, "no window was run for it"
     assert checked.reason is not None and "cannot support a claim" in checked.reason
     assert all(gate.evidence == checked.evidence for gate in made.gates)
+    assert all(reading.evidence == checked.evidence for reading in checked.readings)
     assert checked.evidence["inadmissible"]
     assert store.events(kind=scheduler.CERTIFIABLE) == []
     assert show(ws, store, hyp_id).status == "researching"  # type: ignore[union-attr]

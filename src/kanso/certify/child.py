@@ -27,8 +27,10 @@ the plan before it starts the child, which reads it back as `kanso cert run` doe
 the planner only where that plan is gone by then. It certifies as `kanso cert run` does, by
 the one function, with the one difference a stall makes
 (`kanso.certify.run.certify_at_stall`): the research window is run first and the plan's
-search correction judged on it, and a correction that refuses the subject there spares the
-stall — the certification window is never read and no certificate is written. On a snapshot
+research gates judged on it — the search correction, `walk_forward_consistency`, and
+`research_plateau`, which runs the research window again for every parameter it moves — and
+one that refuses the subject there spares the stall — the certification window is never read
+and no certificate is written. On a snapshot
 that cannot support a claim it runs neither window, as `cert run` does, and its precheck
 judges nothing and says why. It writes the certificate and every event itself, and reports
 the certificate, or that none was made, beside that precheck — or the refusal — to the lane,
@@ -37,9 +39,10 @@ reports carries the certification window's net per trade, struck from the run it
 judged (`kanso.certify.run.net_per_trade`) — the number a book ranks its members by, which
 nothing ever recomputes by running the window again. A fault that is not a refusal comes
 back as one naming what raised, so a lane records it and goes on rather than dying of it.
-No wall time is imposed: how many engine runs a certification makes is its plan's choice —
-the gates, and the parameters a perturbation moves — so no multiple of a card's budget
-bounds it.
+No wall time is imposed: how many engine runs a certification makes follows from its plan —
+the gates, and the parameters a perturbation moves, `research_plateau`'s among them, which
+every plan carries, so they are no longer the plan's choice alone — and no multiple of a
+card's budget bounds it.
 
 A child killed over the share is refused, naming what it reached and the two ways to give
 it more: a larger `[env] mem_per_lane_gb`, which plans the lanes around what certification
@@ -98,8 +101,8 @@ _REFUSALS: Final[dict[Exit, Callable[[str, str | None], KansoError]]] = {
 
 @dataclass(frozen=True)
 class Certified:
-    """The certificate a child made — `None` when the search correction spared the stall —
-    the correction as it judged it on the research window it ran, or why it judged nothing
+    """The certificate a child made — `None` when a research gate spared the stall — the
+    research gates as it judged them on the research window it ran, or why it judged nothing
     (`kanso.certify.run.certify_at_stall`), and what that cost: the child's peak resident
     memory in gibibytes and its wall time in seconds."""
 
@@ -113,7 +116,7 @@ def certify_in_child(
     ws: Workspace, store: StateStore, hyp_id: str, *, sha: str, lane: str = DEFAULT_LANE
 ) -> Certified:
     """Certify one carded strategy of a hypothesis in a child, as a stall does, and return
-    what it made: a certificate, or none when the search correction spared it.
+    what it made: a certificate, or none when a research gate spared it.
 
     Raises what the certification raised, as the same kind of error with the same remedy; a
     `PreconditionError` when the child was killed over its share, when this process was
@@ -146,7 +149,7 @@ def certify_in_child(
         raise PreconditionError(
             f"the certification of {hyp_id} was interrupted: the lane running it was told to stop",
             remedy="start the daemon again; the hypothesis goes back in the queue and its "
-            "best is certified at its next stall, unless its search correction spares it",
+            "best is certified at its next stall, unless a research gate spares it",
         )
     if breach is not None:  # no wall time is imposed, so only the memory share is breached
         raise PreconditionError(
@@ -154,7 +157,7 @@ def certify_in_child(
             f"run may hold, so it was killed at {peak_gb:.2f} GB",
             remedy="declare a larger `[env] mem_per_lane_gb` in kanso.toml and run `kanso env "
             f"detect`, or certify it by hand with `kanso cert run {hyp_id}`, which reads the "
-            "certification window whatever its search correction says",
+            "certification window whatever its research gates say",
         )
     if answer is None:
         raise PreconditionError(

@@ -558,8 +558,9 @@ def test_a_warmed_sleeve_s_expectation_is_measured_warm_over_its_certification_w
     """Composition resolves the certification prefix as certification did, from the pin.
 
     A passing verdict composes on the spot, so the runner is watched from the certificate
-    on: certification runs the research window warmed on December, then composition runs
-    the certification window warmed on the three sessions before it.
+    on: certification runs the research window warmed on December, and runs it again so for
+    every move of the research plateau, then composition runs the certification window warmed
+    on the three sessions before it.
     """
     from datetime import date
 
@@ -582,8 +583,12 @@ def test_a_warmed_sleeve_s_expectation_is_measured_warm_over_its_certification_w
     assert certify(ws, store, HYP_ID).verdict == "pass"
     version = compose(ws, store, HYP_ID)
 
-    assert [(request.window, request.prefix) for request in asked] == [
-        (RESEARCH, (date(2023, 12, 29), date(2023, 12, 31))),
+    researched = [request for request in asked if request.window == RESEARCH]
+    december = (date(2023, 12, 29), date(2023, 12, 31))
+    assert [request.prefix for request in researched] == [december] * len(researched)
+    assert not researched[0].overrides and len(researched) > 1
+    assert all(request.overrides for request in researched[1:]), "the plateau's moves"
+    assert [(request.window, request.prefix) for request in asked[len(researched) :]] == [
         (CERTIFICATION, (date(2024, 2, 3), date(2024, 2, 5))),
     ]
     assert version.version == 1

@@ -1,7 +1,9 @@
 id: walk_forward_consistency
 kind: gate
 stage: cert
-required: false
+required: true
+together: true
+reads: research
 meaningful_when: "Informative when the research window holds several folds: it asks whether the edge recurs across them rather than arriving once. It reads the research window alone."
 params: {min_positive_folds: int}
 ranges: {min_positive_folds: [1, "1 * folds"]}

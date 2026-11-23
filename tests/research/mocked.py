@@ -150,6 +150,18 @@ PLAN: dict[str, Any] = {
             "rationale": "required; the deployed code path must be the researched one",
         },
         {
+            "id": "walk_forward_consistency",
+            "stage": "cert",
+            "params": pairs({"min_positive_folds": 1}),
+            "rationale": "required; the edge recurs across the research folds",
+        },
+        {
+            "id": "research_plateau",
+            "stage": "cert",
+            "params": pairs({"perturb_pct": 10.0, "keep_fraction": 0.0}),
+            "rationale": "required; the research score survives a move of every parameter",
+        },
+        {
             "id": "deflated_sharpe",
             "stage": "cert",
             "params": pairs({"min_dsr": 0.9}),

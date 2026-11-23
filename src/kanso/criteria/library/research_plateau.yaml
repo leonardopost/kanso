@@ -1,0 +1,10 @@
+id: research_plateau
+kind: gate
+stage: cert
+required: true
+together: true
+reads: research
+meaningful_when: "param_plateau on the research window, before the certification window is read: each numeric parameter moved both ways must keep keep_fraction of a research score selection already inflated."
+params: {perturb_pct: float, keep_fraction: float}
+ranges: {perturb_pct: [1, 50], keep_fraction: [0.0, 1.0]}
+impl: kanso.criteria.gates.param_plateau.research

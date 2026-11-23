@@ -169,6 +169,13 @@ class CriteriaItem(KansoModel):
     `together` says the gate's parameters mean nothing apart: wherever it is named, every
     one it declares is set, since a gate given half its rule judges nothing and a gate that
     judges nothing passes (`kanso.criteria.library.check_params`).
+
+    `reads: research` is a cert gate's claim that what it judges is the research window's
+    runs, the card measurements the store keeps and the trial counts, and never the
+    certification window: so it can be judged before that window is read, and a stall whose
+    best it refuses is spared with no certificate and no look
+    (`kanso.criteria.library.research_gates`, `kanso.certify.run`). Only a cert gate makes
+    it, since a card gate already reads the research window and a paper or live gate a stage.
     """
 
     id: CatalogueId
@@ -178,6 +185,7 @@ class CriteriaItem(KansoModel):
     deflates: list[CatalogueId] | None = None
     required_for: list[CatalogueId] | None = None
     together: bool | None = None
+    reads: Literal["research"] | None = None
     applies: Applies | None = None
     priority: int | None = Field(default=None, ge=0)
     meaningful_when: str | None = Field(default=None, max_length=200)
@@ -213,6 +221,11 @@ class CriteriaItem(KansoModel):
                 "together: a gate required for an objective is carried with every parameter "
                 "set, so it declares its parameters together"
             )
+        if self.reads is not None and self.stage != "cert":
+            raise ValueError(
+                "reads: only a cert gate is judged before the certification window is read; a "
+                "card gate reads the research window already, and a paper or live gate a stage"
+            )
 
     def _check_objective(self) -> None:
         if self.stage is not None:
@@ -225,6 +238,8 @@ class CriteriaItem(KansoModel):
             raise ValueError("required_for: only a gate guards an objective")
         if self.together is not None:
             raise ValueError("together: only a gate's parameters are named together")
+        if self.reads is not None:
+            raise ValueError("reads: only a gate judges a window; an objective is measured on one")
         if self.applies is None:
             raise ValueError("applies: an objective declares the hypotheses it applies to")
         if self.priority is None:
