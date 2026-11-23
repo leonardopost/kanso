@@ -50,6 +50,7 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.research.structural_cards == 10
     assert config.research.reseed_after_stalls == 2
     assert config.research.explore_after_stalls == 5
+    assert config.research.park_after_stalls == 0
     assert config.research.explore_mechanisms == []
     assert config.research.folds == 4
     assert config.research.max_lines_per_keep == 40
@@ -67,6 +68,16 @@ def test_rendered_template_parses_with_the_documented_defaults(tmp_path: Path) -
     assert config.adapters == {}
 
 
+def test_parking_is_off_until_the_operator_sets_it(tmp_path: Path) -> None:
+    """`[research] park_after_stalls` is a framework search rule an operator opts into: the
+    model's default, a file without the key and the template all read 0, which is never."""
+    assert ResearchConfig().park_after_stalls == 0
+    assert load_config(write(tmp_path, render_config("0.1.0"))).research.park_after_stalls == 0
+    assert "park_after_stalls = 0 " in render_config("0.1.0")
+    tuned = load_config(write(tmp_path, MINIMAL + "[research]\npark_after_stalls = 4\n"))
+    assert tuned.research.park_after_stalls == 4
+
+
 def test_the_template_names_the_broker_research_inherits(tmp_path: Path) -> None:
     config = load_config(write(tmp_path, render_config("0.1.0")))
     assert config.research.broker  # the template supplies it; the model has no default
@@ -78,6 +89,7 @@ def test_omitted_sections_take_their_defaults(tmp_path: Path) -> None:
     assert config.research.folds == 4
     assert config.research.explore_after_stalls == 5  # a file without the key explores too
     assert config.research.explore_mechanisms == []  # and a draft keeps its parent's mechanism
+    assert config.research.park_after_stalls == 0  # and nothing is parked unless asked
     assert config.data.reference == "none"
     assert config.monitor.interval == "5m"
 
@@ -141,6 +153,7 @@ def test_the_flat_field_names_are_accepted_directly() -> None:
         '[research]\ncapital = "lots"\n',
         "[research]\nfolds = 1\n",
         "[research]\nexplore_after_stalls = -1\n",
+        "[research]\npark_after_stalls = -1\n",
         "[research]\ncapital = 0\n",
         '[research]\naccount = "spot"\n',
         '[research]\ncurrency = "usd"\n',

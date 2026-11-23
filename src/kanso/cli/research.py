@@ -22,7 +22,8 @@ A run that stalls with a keep nothing has certified certifies it before it retur
 a research gate — its search correction, `walk_forward_consistency`, `overfit_probability`
 where the plan carries it, or `research_plateau` — refuses it on research data, so `run`
 reports what that stall decided: the certificate the best stands under, pointing at it, or
-the research gate that spared it.
+the research gate that spared it — and whether it parked the hypothesis, after
+`[research] park_after_stalls` stalls on that best.
 
 `show` prints what is in state: a card's stored `strategy.py`, the unified diff between
 two of them, or — under `--measured` — what the newest card of those bytes that kept a
@@ -365,7 +366,12 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         else {"sha7": certified.sha7, "verdict": certified.verdict},
         "stall": None
         if stall is None
-        else {"certifiable": stall.certifiable, "precheck": stall.precheck},
+        else {
+            "certifiable": stall.certifiable,
+            "precheck": stall.precheck,
+            "parked": stall.parked,
+            "stalls_on_best": stall.stalls_on_best,
+        },
     }
     best = (
         "none yet"
@@ -392,6 +398,11 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
             field(
                 "certification", f"spared · {spared} on research data, so the window was not read"
             )
+        )
+    if stall is not None and stall.parked:
+        on = "no best" if stall.best_sha is None else stall.best_sha[:7]
+        lines.append(
+            field("parked", f"at {stall.priority} after {stall.stalls_on_best} stalls on {on}")
         )
     lines.append(
         field(

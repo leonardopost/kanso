@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 from kanso.certify import certificate
 from kanso.certify.plan import read_plan
 from kanso.certify.run import Precheck, precheck
+from kanso.cli.render import field
 from kanso.cli.research import spared_by
 from kanso.criteria import gates
 from kanso.criteria.context import MovedRunError, TrialFolds, skipped, verdict
@@ -167,6 +168,43 @@ def test_a_stall_ends_the_run_and_the_command_says_so(runner: CliRunner, mocked_
     # Ending a run removes its lane directory and nothing else: the keep is still there.
     assert not lane(mocked_ws).exists()
     assert "Strategy.mode" in at(runner, mocked_ws, "research", "show", HYP_ID).stdout
+
+
+def test_a_stall_that_completes_its_spell_parks_the_hypothesis_and_says_so(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """`[research] park_after_stalls` stalls on one best send the hypothesis back at −3, and
+    `run` reports it under `stall` and on a `parked` line, read from what its own stall
+    decided. The second run's stall is on the same best, certified by then, so the spell is
+    two long."""
+    mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
+
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+
+    assert (outcome["stall"]["parked"], outcome["stall"]["stalls_on_best"]) == (True, 1)
+    queue = payload(at(runner, mocked_ws, "research", "status", "--json"))["queue"]
+    assert [(row["id"], row["priority"]) for row in queue] == [(HYP_ID, scheduler.PARK_PRIORITY)]
+
+    mocked.tuned(mocked_ws, park_after_stalls=2)
+    second = at(runner, mocked_ws, "research", "run", HYP_ID)
+
+    assert second.exit_code == Exit.OK, second.stdout
+    with StateStore(mocked_ws / "state.db") as store:
+        stalled = store.events(kind=scheduler.STALLED, subject=HYP_ID)[-1].detail
+    assert stalled["parked"] is True
+    said = f"at -3 after {stalled['stalls_on_best']} stalls on {str(stalled['best_sha'])[:7]}"
+    assert field("parked", said) in second.stdout
+
+
+def test_a_stall_that_parks_nothing_says_nothing_of_a_park(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    mocked.tuned(mocked_ws, stall_k=1)
+
+    result = at(runner, mocked_ws, "research", "run", HYP_ID)
+
+    assert result.exit_code == Exit.OK, result.stdout
+    assert "parked" not in result.stdout
 
 
 def test_a_stall_says_what_its_search_correction_judged(runner: CliRunner, mocked_ws: Path) -> None:
@@ -461,7 +499,12 @@ def test_a_stall_that_wrote_nothing_reports_no_earlier_stall_as_its_own(
     second = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
 
     assert second["ended"] is True
-    assert second["stall"] == {"certifiable": False, "precheck": None}
+    assert second["stall"] == {
+        "certifiable": False,
+        "precheck": None,
+        "parked": False,
+        "stalls_on_best": None,
+    }, "returned nowhere, so nothing parked and no spell counted"
     assert second["certificate"] is None
 
 

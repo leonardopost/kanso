@@ -53,6 +53,7 @@ class ResearchConfig(BaseModel):
     structural_cards: int = Field(default=10, gt=0)
     reseed_after_stalls: int = Field(default=2, gt=0)
     explore_after_stalls: int = Field(default=5, ge=0)
+    park_after_stalls: int = Field(default=0, ge=0)
     explore_mechanisms: list[Mechanism] = Field(default_factory=list)
     folds: int = Field(default=4, ge=2)
     max_lines_per_keep: int = Field(default=40, gt=0)

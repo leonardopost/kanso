@@ -9,10 +9,24 @@ that already works.
 
 Order is priority descending, then first in. That is the whole policy, and the priorities
 are the whole of its tuning: a hypothesis nobody has touched enters at 0, a stalled one
-returns at −1, and one whose baseline would not run returns at −2. So a stall is a demotion
-rather than an exclusion, and repeated stalling costs a hypothesis its place at the front
-without ever costing it its place in the queue. That decay, the keep rule's noise floor
-and the refusal to re-certify unchanged bytes are the three things that bound churn.
+returns at −1, one whose baseline would not run returns at −2, and one parked returns at
+−3. So a stall is a demotion rather than an exclusion, and repeated stalling costs a
+hypothesis its place at the front without ever costing it its place in the queue. That
+decay, the keep rule's noise floor and the refusal to re-certify unchanged bytes are the
+three things that bound churn.
+
+A park is `[research] park_after_stalls` stalls in a row on one best, however the runs
+between them were re-seeded or explored (0, the template's, is never). It is recorded on the
+stall that completes the spell, and it is derived again in `requeue` from the newest `stalled`
+event — parked, and on the best the hypothesis still holds — rather than written once there,
+because every return to the queue goes through `requeue` and most are not stalls: a lane
+failing mid-run puts a hypothesis back at −1, a baseline that would not run at −2, `recover`
+at whatever the claim recorded, and a band written only at the stall was lifted by the next
+of them (`docs/backlog.md` row 62). So every return agrees with the stall, until a keep that
+beats the best — or a stall recording no park — lifts it. A park only reorders: the row stays
+in the queue, its status, run and best are untouched, and a lane serves it as soon as nothing
+ranks above it. `enqueue` is not held to it, so an operator's `queue add --priority` raises a
+parked row, and a host composing wakes one at 0, until its next return.
 
 Three rows are skipped rather than served: a hypothesis already being researched somewhere,
 because one run per hypothesis is the invariant the run table enforces; a dead one, which is
@@ -44,6 +58,7 @@ in a lane's hands has its claim closed, so resuming it later does not revive the
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -75,6 +90,7 @@ __all__ = [
     "CERTIFIABLE",
     "CLAIMED",
     "DEAD",
+    "PARK_PRIORITY",
     "QUEUED",
     "REMOVED",
     "RESEED",
@@ -105,6 +121,10 @@ STALL_PRIORITY: Final = -1
 BASELINE_PRIORITY: Final = -2
 """Where a hypothesis whose baseline would not run returns: behind a stalled one, since
 its starting point needs an operator rather than another lane."""
+
+PARK_PRIORITY: Final = -3
+"""Where a parked hypothesis returns, by any path, while its best is the one it parked on:
+behind every other, served as soon as nothing else waits."""
 
 WAKEABLE: Final = frozenset({"classified", "researching", "certified"})
 """The statuses a hypothesis attached to a host may be in and be woken from when the host
@@ -162,6 +182,12 @@ class Stall:
     was read (`kanso.certify.run.Precheck.payload`): the deciding reading's keys, and every
     reading under `gates` — the certification child's wherever one was started; `None` where
     nothing was worth certifying before it."""
+    parked: bool = False
+    """Whether this stall completed `[research] park_after_stalls` stalls on its best and the
+    hypothesis returned at `PARK_PRIORITY`."""
+    stalls_on_best: int | None = None
+    """The stalls in a row on this best, this one included, however re-seeded or explored;
+    `None` where the hypothesis returned nowhere — retired, or taken out of the queue."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -172,6 +198,8 @@ class Stall:
             "verdict": self.verdict,
             "reseed_from": self.reseed_from,
             "precheck": self.precheck,
+            "parked": self.parked,
+            "stalls_on_best": self.stalls_on_best,
         }
 
 
@@ -209,13 +237,22 @@ def enqueue(store: StateStore, hyp_id: str, priority: int = 0) -> QueueItem:
 def requeue(
     store: StateStore, hyp_id: str, priority: int, *, reseed_from: str | None = None
 ) -> QueueItem:
-    """Return a hypothesis to the queue at `priority`, behind everything in that band.
+    """Return a hypothesis to the queue at `priority`, behind everything in that band — or at
+    `PARK_PRIORITY` while it is parked, whatever `priority` the caller asked for.
+
+    Parked is the newest `stalled` event's word, read here rather than at the stall: it
+    recorded a park and the hypothesis's best is still the one it recorded. Every return
+    goes through here — a stall, a lane's failure mid-run, a baseline that would not run, a
+    claim recovered — so all of them agree, and a keep that beats the best ends the park at
+    the next. The `queued` passage records the priority the row was given.
 
     `reseed_from` rides on the passage: the sha the next run starts from instead of the
     best, read back by `research/passages.py` when that run begins.
     """
     drop(store, hyp_id)
     _alive(store, hyp_id)
+    if priority > PARK_PRIORITY and _parked(store, hyp_id):
+        priority = PARK_PRIORITY
     now = datetime.now(tz=UTC).isoformat()
     store.connection.execute(
         "INSERT INTO queue (hyp_id, priority, enqueued_at) VALUES (?, ?, ?)",
@@ -248,11 +285,12 @@ def recover(store: StateStore, lane: str | None = None) -> list[str]:
     That is what a lane leaves behind when it dies between taking a hypothesis and
     recording its run, or between a stall and the scheduler's decision: no run, no place,
     and the queue's last word on it a claim. Each returns at the priority the claim
-    recorded — where it stood in the queue, or where the stall would have put it — in the
-    order the claims were made. Nothing else with no run and no place is touched: a
-    hypothesis whose run the operator ended looks the same from the tables and is left
-    alone, and so is one the operator took out of the queue. A reseed the dead lane was
-    handed and never consumed — no run began — rides on to the new passage.
+    recorded — where it stood in the queue, or where the stall would have put it — or at −3
+    while it is parked (`requeue`), in the order the claims were made. Nothing else with no
+    run and no place is touched: a hypothesis whose run the operator ended looks the same
+    from the tables and is left alone, and so is one the operator took out of the queue. A
+    reseed the dead lane was handed and never consumed — no run began — rides on to the new
+    passage.
 
     With `lane`, only what that lane held: what the supervisor puts back when one lane
     dies under a running daemon, where every other lane is alive and working what it
@@ -328,7 +366,9 @@ def put_back(store: StateStore, hyp_id: str, lane: str | None = None) -> QueueIt
     """Return a failed lane's hypothesis to the queue, or say why not with `None`.
 
     Beside the stalled ones when its run is still open, behind them when the lane held it
-    without one — a baseline that would not run, or a stall whose certification could not.
+    without one — a baseline that would not run, or a stall whose certification could not —
+    and at −3, behind both, while it is parked: a lane's failure is no reason to lift a park
+    (`requeue`).
     Nothing comes back that was retired, or that the operator took out of the queue while
     the lane held it: the lane's failure is not a reason to overrule either, and a retire
     closes the claim so that `hyp resume` does not revive it. Nor does anything come back
@@ -466,6 +506,14 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     other keep still aligned under the stalled run's pins, `program.md` among them, else
     from that run's base when it differs from the best. The decision is a `reseed` event
     and rides on the `queued` passage.
+
+    `[research] park_after_stalls` stalls in a row on the same best — counted newest first
+    over the `stalled` events, this one included, and broken only by a stall on another best,
+    so neither a reseed nor an exploration starts it over, and a stall spared or certified
+    counts like any other — park the hypothesis: the `stalled` event records `parked` and
+    `stalls_on_best`, and the hypothesis returns at −3, where `requeue` keeps every later
+    return until a keep beats that best. 0 is never. A park ends nothing: the status, the
+    best and the row are untouched, and a lane serves it once nothing else waits.
     """
     # Certification reads research; research schedules certification. The import is
     # deferred so the cycle exists only while this function runs.
@@ -515,6 +563,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
             "cert_wall_s": round(made.wall_s, 3),
         }
     checks = None if checked is None else checked.payload()
+    after = ws.config.research.park_after_stalls
+    stalls_on_best = _spell(store, hyp_id, best) + 1
+    parked = after > 0 and stalls_on_best >= after
     store.event(
         STALLED,
         hyp_id,
@@ -524,6 +575,8 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
             "certifiable": certifiable,
             "verdict": verdict,
             "precheck": checks,
+            "parked": parked,
+            "stalls_on_best": stalls_on_best,
             **cost,
         },
     )
@@ -534,22 +587,22 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     if _kind(last_passage(store, hyp_id)) == REMOVED:
         return Stall(hyp_id, best, certifiable, None, verdict, precheck=checks)
     reseed = _reseed(store, hyp_id, best, ws.config.research.reseed_after_stalls)
-    requeue(store, hyp_id, STALL_PRIORITY, reseed_from=reseed)
-    return Stall(hyp_id, best, certifiable, STALL_PRIORITY, verdict, reseed, checks)
+    item = requeue(store, hyp_id, STALL_PRIORITY, reseed_from=reseed)
+    return Stall(
+        hyp_id, best, certifiable, item.priority, verdict, reseed, checks, parked, stalls_on_best
+    )
 
 
 def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
     """The newest stall of a hypothesis as `kanso status` shows it: when, on which best,
-    whether a certification followed, its verdict and the precheck that decided it — `None`
+    whether a certification followed, its verdict and the precheck that decided it, whether
+    it parked the hypothesis and how many stalls in a row on that best it was — `None`
     before the first stall. A `precheck` of `None` is a stall that had nothing worth
     certifying — a best at or below zero, one already certified under the pinned plan and
     the installed engine, a search not yet priceable — or one recorded before stalls judged
-    one."""
-    row = store.connection.execute(
-        "SELECT ts, detail FROM events WHERE kind = ? AND subject = ?"
-        " ORDER BY event_id DESC LIMIT 1",
-        (STALLED, hyp_id),
-    ).fetchone()
+    one; a `stalls_on_best` of `None` is one recorded before stalls counted them, which
+    parked nothing."""
+    row = _newest_stall(store, hyp_id)
     if row is None:
         return None
     detail = json.loads(str(row["detail"]))
@@ -559,7 +612,44 @@ def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
         "certifiable": detail.get("certifiable"),
         "verdict": detail.get("verdict"),
         "precheck": detail.get("precheck"),
+        "parked": detail.get("parked") is True,
+        "stalls_on_best": detail.get("stalls_on_best"),
     }
+
+
+def _newest_stall(store: StateStore, hyp_id: str) -> sqlite3.Row | None:
+    row: sqlite3.Row | None = store.connection.execute(
+        "SELECT ts, detail FROM events WHERE kind = ? AND subject = ?"
+        " ORDER BY event_id DESC LIMIT 1",
+        (STALLED, hyp_id),
+    ).fetchone()
+    return row
+
+
+def _spell(store: StateStore, hyp_id: str, best: str | None) -> int:
+    """The stalls in a row on `best` already recorded: the hypothesis's `stalled` events
+    counted newest first while each is on `best`. Only another best breaks the spell — a
+    `reseed` or an exploration between them does not — and a best of `None` is one best."""
+    rows = store.connection.execute(
+        "SELECT detail FROM events WHERE kind = ? AND subject = ? ORDER BY event_id DESC",
+        (STALLED, hyp_id),
+    )
+    spell = 0
+    for row in rows:
+        if json.loads(str(row["detail"])).get("best_sha") != best:
+            break
+        spell += 1
+    return spell
+
+
+def _parked(store: StateStore, hyp_id: str) -> bool:
+    """Whether the newest stall parked the hypothesis on the best it still holds."""
+    row = _newest_stall(store, hyp_id)
+    if row is None:
+        return False
+    detail = json.loads(str(row["detail"]))
+    best = records.best_of(store, hyp_id)[0]
+    return detail.get("parked") is True and detail.get("best_sha") == best
 
 
 def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str | None:

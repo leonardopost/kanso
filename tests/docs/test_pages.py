@@ -93,6 +93,20 @@ def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() ->
     assert stated in prose(page("concepts.md"))
 
 
+def test_the_pages_state_that_a_hypothesis_parks_only_once_the_operator_says_how_often() -> None:
+    """A park reorders the queue a lane serves, so an operator reads here that nothing parks
+    until `kanso.toml` says how often, and that a park never ends a hypothesis."""
+    default = ResearchConfig().park_after_stalls
+    assert f"\npark_after_stalls = {default} " in render_config("0.1.0"), "the template's value"
+    stated = f"({default} in the template; 0 is never)"
+    for name in ("cli.md", "concepts.md"):
+        text = prose(page(name))
+        assert f"park_after_stalls` {stated}" in text, name
+        assert "at −3" in text, name
+    assert "it never ends, retires or removes anything" in prose(page("cli.md"))
+    assert "A park ends nothing" in prose(page("concepts.md"))
+
+
 def explore_row() -> str:
     return next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp explore")

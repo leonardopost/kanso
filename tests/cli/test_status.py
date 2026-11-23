@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from kanso.errors import Exit
 from kanso.inbox import escalate
+from kanso.research import records
 from kanso.state import StateStore
 from kanso.workspace import find
 
@@ -116,6 +117,43 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
         f"{evidence['min_probability']:.3f}"
     )
     assert spared in at(runner, mocked_ws, "status").stdout
+
+
+def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """`last_stall` carries what the stall recorded; the human line says the hypothesis is
+    parked only while the park holds — on the best it still holds, which a keep beating it
+    ends at the next return to the queue."""
+    mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    stall = entry["last_stall"]
+    assert stall["best_sha"] == outcome["best_sha"] == entry["best_sha"]
+    assert (stall["parked"], stall["stalls_on_best"]) == (True, 1)
+    assert "· parked after 1 stalls on its best" in at(runner, mocked_ws, "status").stdout
+
+    with StateStore(mocked_ws / "state.db") as store:
+        run = records.runs_of(store, HYP_ID)[-1]
+        records.set_best(store, run, store.put_blob(b"# better\n"), 1e9)
+
+    (moved,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert moved["last_stall"]["parked"] is True, "what the stall recorded"
+    assert "parked after" not in at(runner, mocked_ws, "status").stdout
+
+
+def test_a_stall_recorded_before_stalls_counted_reads_as_unparked(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    with StateStore(mocked_ws / "state.db") as store:
+        store.event("stalled", HYP_ID, {"best_sha": None, "certifiable": False})
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    assert (entry["last_stall"]["parked"], entry["last_stall"]["stalls_on_best"]) == (False, None)
+    assert "parked after" not in at(runner, mocked_ws, "status").stdout
 
 
 def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(

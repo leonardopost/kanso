@@ -25,6 +25,7 @@ local_cards = 10          # misses since the last keep during which the proposer
 structural_cards = 10     # the misses after those during which a change that moves no structure is refused; then local again
 reseed_after_stalls = 2   # consecutive stalls on the same best after which the next run starts from the best other aligned keep under the pins
 explore_after_stalls = 5  # stalls on the same best, since the last exploration, after which a daemon lane writes a draft hypothesis (`kanso hyp explore`); 0 = never
+park_after_stalls = 0     # stalls on the same best, however re-seeded or explored, after which the hypothesis returns to the queue at -3, behind every other, until a keep moves its best; never ends or retires it; 0 = never
 explore_mechanisms = []   # mechanisms an explored draft may state besides its parent's own (mean_reversion|momentum|microstructure|stat_arb|event|carry|vol|other); [] = the parent's only
 folds = 4                 # contiguous folds the metric is a mean of; metric_se is read off the per-period series
 max_lines_per_keep = 40   # complexity rule: a keep growing strategy.py by more lines must clear twice the keep rule's k_se

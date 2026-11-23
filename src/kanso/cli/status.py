@@ -319,7 +319,11 @@ def _hypothesis_line(row: dict[str, Any]) -> str:
         line += f" · {row['forward_looks']} forward look(s)"
     stall = row["last_stall"]
     spared = None if stall is None else spared_by(stall["precheck"])
-    return line if spared is None else f"{line} · stall spared: {spared}"
+    if spared is not None:
+        line += f" · stall spared: {spared}"
+    if stall is not None and stall["parked"] and stall["best_sha"] == row["best_sha"]:
+        line += f" · parked after {stall['stalls_on_best']} stalls on its best"
+    return line
 
 
 def _escalation_line(entry: dict[str, Any]) -> str:

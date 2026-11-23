@@ -1278,6 +1278,29 @@ rewrites: a workspace initialised on 0.8.0 to 0.13.x states `explore_after_stall
 keeps never until you set it, and one initialised before 0.8.0, whose file has no key,
 explores at the default.
 
+Neither a re-seed nor an exploration frees a lane: the parent stays in the queue, and a
+hypothesis whose every run stalls on the same best takes its turn as often as one still
+climbing. `[research] park_after_stalls` (0 in the template; 0 is never) **parks** it: the
+stall that makes that many in a row on one best returns it to the queue at −3, behind every
+other. The spell is counted newest first over its `stalled` events, this stall included, and
+only a stall on another best breaks it — a reseed or an exploration between two stalls does
+not, since neither moved the best, and a stall spared on research data or certified counts like
+any other. The stall records `parked` and `stalls_on_best` on its `stalled` event. A park ends
+nothing — the status, the best, the run and the row are as they were, and only the operator
+retires a hypothesis — and it only reorders: a lane serves a parked row as soon as nothing
+ranked above it waits, so with every hypothesis in the queue saturated, lanes keep serving
+them at −3. It is lifted by a keep that beats the best it parked on, at the next return to the
+queue, and by the next stall once the key is 0, which records `parked: false`; `kanso research
+queue add ID --priority P` raises it until its next return. The band is not written once, at
+the stall, because a band written there does not survive a live workspace: a lane that fails
+mid-run puts its hypothesis back at −1, a baseline that would not run at −2, and a live
+workspace recorded 373 `lane_failed` events against 8 `stalled` (`docs/backlog.md` row 62), so a band
+written at the stall was lifted by the next provider hiccup. It is derived instead inside
+`requeue`, which every return goes through — a stall, a lane's failure, a baseline's, a claim
+recovered from a dead lane — from the newest `stalled` event: parked, on the best the hypothesis
+still holds. A stall whose certification is refused before its event is written (a pinned plan
+this version cannot run) writes none, so it neither advances the spell nor lifts a park.
+
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included
 — and of every hypothesis it derives from (`derived_from` in `hypothesis.yaml`), since the
 cards that chose a draft are part of the search that found its result: an `explore` draft

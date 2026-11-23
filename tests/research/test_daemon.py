@@ -136,6 +136,21 @@ def test_a_lane_finishes_its_own_run_before_it_takes_anything_new(
     assert daemon.claim(ws, store, "l2") is None
 
 
+def test_a_lane_claims_a_stalled_row_before_a_parked_one_and_the_parked_one_when_alone(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A park reorders and ends nothing: the lane serves it once nothing ranks above it."""
+    workspace = tuned(ws, park_after_stalls=1)
+    parked = classify(workspace, store, DOCUMENT)
+    stalled = classify(workspace, store, document(id="demo_two"))
+    assert scheduler.on_stall(workspace, store, parked).priority == scheduler.PARK_PRIORITY
+    scheduler.requeue(store, stalled, scheduler.STALL_PRIORITY)
+
+    assert daemon.claim(workspace, store, "l1") == stalled
+    assert daemon.claim(workspace, store, "l2") == parked
+    assert daemon.claim(workspace, store, "l3") is None
+
+
 def test_the_interactive_lane_s_run_is_not_a_daemon_lane_s_work(
     ws: Workspace, store: StateStore
 ) -> None:
