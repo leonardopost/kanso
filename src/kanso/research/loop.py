@@ -111,7 +111,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 from kanso import __version__, ext
 from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
-from kanso.criteria import CardRun, GateContext, check_params, criteria_version, gates
+from kanso.criteria import CardRun, GateContext, check_folds, criteria_version, gates
 from kanso.criteria import catalogue as toolbox
 from kanso.criteria.context import verdict
 from kanso.criteria.digest import digest as digest_of
@@ -545,21 +545,24 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
 
 
 def _refuse_unadmitted(ws: Workspace, hyp: Hypothesis, folds: int) -> None:
-    """Refuse card gates whose values the toolbox does not admit under `folds`.
+    """Refuse card gates whose values a range that scales with `folds` does not admit.
 
     A card gate's range can scale with `[research] folds` — `positive_folds` counts to it —
     and `kanso hyp validate` checked the file under the folds of its day. Lowered beneath a
     registered count, every card would fail that gate with every fold positive: each one a
     discard, the run never keeping, and nothing saying why. So the card gates are held to
-    their ranges here, under the folds every card of the run is set up and scored in, as
-    `cert plan` holds a pinned plan to the folds it would run at.
+    those ranges here, under the folds every card of the run is set up and scored in, as
+    `cert plan` holds a pinned plan to the folds it would run at. Only to those
+    (`check_folds`): the rest of what `hyp validate` asks is the file's own and did not move
+    under the pin, and a toolbox rule made since it was pinned is the next registration's to
+    hold it to.
     """
     items = toolbox()
     problems = [
         f"{ref.id}.{problem}"
         for ref in hyp.card_gates
         if ref.id in items
-        for problem in check_params(items[ref.id], ref.params, hyp, folds)
+        for problem in check_folds(items[ref.id], ref.params, hyp, folds)
     ]
     if not problems:
         return

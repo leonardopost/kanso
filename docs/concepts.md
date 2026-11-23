@@ -2909,11 +2909,15 @@ plateau, so a `keep_fraction` above `1 − perturb_pct / 100` refuses every stra
 one — measured on the research suite's saw-tooth, a notional moved from 5,000 to 4,500 took
 `wf_contribution_bps` from 11.3242 to 10.1917, a ratio of 0.9000, and left `net_edge_bps` and
 `wf_sharpe_net` where they were. The planner sets `keep_fraction` knowing both: the invariants
-it is shown state each. A move at which the strategy raises kept nothing: the card ran where the
-search left it, so the move is recorded with no `metric` and what raised under `raised`, and the
-gate refuses the subject — a stall spared on that evidence, a certificate by hand failed on it —
-where a refusal of the certification would refuse every certification of such a best, at every
-stall. A move of the certification window that raises still refuses the certification, as any
+it is shown state each. A move at which the strategy refuses its setting kept nothing — its
+configuration class rejecting the moved value, the harness refusing an order it placed there,
+or its own code raising: the card ran where the search left it, so the move is recorded with no
+`metric` and what raised under `raised`, and the gate refuses the subject — a stall spared on
+that evidence, a certificate by hand failed on it — where a refusal of the certification would
+refuse every certification of such a best, at every stall. A fault of a moved run that is not
+the strategy's — one of kanso's own refusals, a catalog that could not be read, a process out of
+memory — says nothing of the move and refuses the certification, as it does a run that is not
+moved. A move of the certification window that raises still refuses the certification, as any
 run of that window that raises does (`docs/backlog.md` row 342). `param_plateau` stays the
 planner's to include: it holds each move to a fraction of the certification score, after the
 certification window is read.

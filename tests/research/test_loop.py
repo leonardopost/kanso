@@ -363,6 +363,30 @@ def test_a_fold_count_the_folds_were_lowered_beneath_is_refused_where_a_run_is_s
     assert len(records.runs_of(store, hyp_id)) == 1, "and no run was begun under them"
 
 
+def test_only_a_range_the_folds_scale_holds_a_pinned_card_gate_where_a_run_is_set_up(
+    ws: Workspace,
+) -> None:
+    """`[research] folds` is the one thing a pin was validated against that the workspace can
+    move under it. A file pinned before `edge_per_trade` became `together`, naming `min_bps`
+    alone, is held to that rule where it is next registered, not refused here as if the folds
+    had moved; beside a `positive_folds` count the folds no longer reach, the refusal names
+    that count and nothing else."""
+    from tests.criteria.builders import make_hyp
+
+    half = {"id": "edge_per_trade", "params": {"min_bps": 1.0}}
+    loop._refuse_unadmitted(ws, make_hyp(required_constraints=[half]), 4)
+
+    counted = {"id": "positive_folds", "params": {"min_positive_folds": 6}}
+    with pytest.raises(ValidationError) as refused:
+        loop._refuse_unadmitted(ws, make_hyp(required_constraints=[half, counted]), 4)
+
+    assert refused.value.message.endswith(
+        "card gates `[research] folds` 4 does not admit: "
+        "positive_folds.min_positive_folds: 6 is outside the range [1, 4]"
+    )
+    assert "edge_per_trade" not in refused.value.message
+
+
 def test_begin_refuses_a_tick_hypothesis_whose_venue_now_states_no_latency(
     ws: Workspace, store: StateStore
 ) -> None:

@@ -75,13 +75,17 @@ whichever run that is, so what it costs does not grow with the window's length o
 many runs its plan makes, and a perturbation costs one engine run and one read of the window.
 Only the subject's own parameters can move — a sleeve's own configuration fields, or the
 construct parameters an attached modifier was composed with — never the capital, the risk
-limits or anything else the hypothesis injects. A strategy that raises at a setting
-`research_plateau` moved it to has not refused a test: the card ran where the search left
-it, so the move is one that kept nothing and the gate refuses the subject (`MovedRunError`):
-a stall is spared on that evidence and a certificate by hand fails on it. Every plan carries
-that gate, and a refusal there would refuse every certification of such a best, at every
-stall. A run of the certification window that raises, a move of it included, still refuses
-the certification (`docs/backlog.md` row 342).
+limits or anything else the hypothesis injects. A strategy that refuses a setting
+`research_plateau` moved it to — its configuration class rejecting the moved value, the
+harness refusing an order it placed there, or its own code raising — has not refused a test:
+the card ran where the search left it, so the move is one that kept nothing and the gate
+refuses the subject (`MovedRunError`): a stall is spared on that evidence and a certificate
+by hand fails on it. Every plan carries that gate, and a refusal there would refuse every
+certification of such a best, at every stall. Any other fault of a moved run — one of
+kanso's own refusals, a catalog that could not be read, a process out of memory — says
+nothing of the move, and refuses the certification as an unmoved run's does (`_ran`). A run
+of the certification window that raises, a move of it included, still refuses the
+certification (`docs/backlog.md` row 342).
 
 **A gate that moves the trades in time reads the window once more.** `entry_timing` prices
 the subject's trades at other sessions (`kanso.criteria.timing`), at prices the run does not
@@ -1390,12 +1394,12 @@ def _measure(subject: Subject, researched: _Researched | None = None) -> Measure
     the window it is run over is fixed here rather than chosen by it. A strategy that
     nevertheless raises stops the certification and says so, so the failure reaches the
     operator as a refusal rather than as a verdict — a card that will not run has not failed
-    a test, it has not taken one; only a move of the research plateau that raises is a
-    verdict, since the card it moves ran (`_ran`). The process certifying is the operator's
-    own under `kanso cert run`, and for a stall a child of the lane that stalled, watched by
-    that lane under its memory share (`kanso.certify.child`), so the daemon lane that asked
-    for it survives to research something else and is left holding none of what the windows
-    cost.
+    a test, it has not taken one; only a move of the research plateau at which the author's
+    code refused its setting is a verdict, since the card it moves ran (`_ran`). The process
+    certifying is the operator's own under `kanso cert run`, and for a stall a child of the
+    lane that stalled, watched by that lane under its memory share (`kanso.certify.child`),
+    so the daemon lane that asked for it survives to research something else and is left
+    holding none of what the windows cost.
     """
     from kanso.nautilus.venue import PRINT_SIZE
 
@@ -1443,8 +1447,15 @@ def _ran(
     moved: Mapping[str, float] | None = None,
 ) -> CardRun:
     """One backtest, with an exception turned into a refusal that names what raised — or,
-    for a run of the research window with parameters `moved`, into `MovedRunError`, which a
-    perturbation gate reads as a move that kept nothing.
+    for a run of the research window with parameters `moved`, where the author's code refused
+    the moved setting, into `MovedRunError`, which a perturbation gate reads as a move that
+    kept nothing.
+
+    The author's code refused it when its configuration class rejected a moved value, when the
+    harness refused an order it placed there, or when what it raised unwound through its own
+    file (`backtest.authored`). Anything else a moved run raises — kanso's own refusals of the
+    data, a catalog that could not be read, a process out of memory — is no verdict on the
+    move, and refuses the certification as a run that is not moved does.
 
     What the run's engine leaves is collected before the next run begins. A disposed engine
     leaves its orders, positions and components in reference cycles, which only the cyclic
@@ -1455,18 +1466,18 @@ def _ran(
     """
     try:
         return backtest_run().run
-    except KansoError:
-        raise
     except Exception as exc:
         raised = f"{type(exc).__name__}: {exc}"
         remedy = f"research {subject.hyp.id} further, or certify a card that runs"
-        if moved is not None:
+        if moved is not None and backtest.authored(exc):
             raise MovedRunError(
                 f"{subject.strategy_sha[:7]} raised when certification moved "
                 f"{', '.join(f'{name} to {value}' for name, value in moved.items())}: {raised}",
                 raised=raised,
                 remedy=remedy,
             ) from exc
+        if isinstance(exc, KansoError):
+            raise
         raise PreconditionError(
             f"{subject.strategy_sha[:7]} raised while certification ran it: {raised}",
             remedy=remedy,
@@ -1755,10 +1766,12 @@ def _judge(
 
     def rerun_research(overrides: Mapping[str, float]) -> CardRun:
         """The subject over the research window again, with parameters moved, read from the
-        catalog a chunk at a time as its first run was. A strategy that raises at the moved
-        setting raises `MovedRunError`, which the plateau records as a move that kept nothing:
-        `research_plateau` is in every plan, so a refusal here would refuse every
-        certification of a best that runs only where the search left it, at every stall."""
+        catalog a chunk at a time as its first run was. A strategy that refuses the moved
+        setting — its configuration rejecting the value, the harness an order it placed, or
+        its own code raising (`_ran`) — raises `MovedRunError`, which the plateau records as a
+        move that kept nothing: `research_plateau` is in every plan, so a refusal here would
+        refuse every certification of a best that runs only where the search left it, at
+        every stall."""
         request = _request(subject, subject.research, overrides=overrides)
         return _ran(subject, lambda: backtest.run(request, subject.catalog), moved=overrides)
 

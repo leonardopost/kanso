@@ -8,8 +8,17 @@ from pathlib import Path
 import pytest
 
 from kanso.criteria.run import BPS, Fill, midnight_ns
-from kanso.errors import ValidationError
-from kanso.nautilus.backtest import _equity, _instrument_of, folded, run
+from kanso.errors import PreconditionError, ValidationError
+from kanso.nautilus.backtest import (
+    AUTHOR_FILES,
+    ConfigError,
+    _equity,
+    _instrument_of,
+    authored,
+    folded,
+    run,
+)
+from kanso.nautilus.sizing import Refusal, SizingError
 from kanso.schemas import Hypothesis
 
 from .conftest import (
@@ -300,7 +309,8 @@ def test_a_file_that_defines_no_strategy_is_refused(store: Path, request_for) ->
 def test_a_configuration_the_sleeve_s_own_class_rejects_is_refused_by_name(
     store: Path, request_for
 ) -> None:
-    """The config class's own check speaks through the runner, naming the file and class."""
+    """The config class's own check speaks through the runner, naming the file and class, as
+    the configuration's refusal (`ConfigError`), which a moved re-run reads as the move's."""
     source = SLEEVE.replace(
         b"    every: int = 6\n",
         b'    every: int = 6\n    fixed_params: tuple[str, ...] = ("evry",)\n',
@@ -308,7 +318,7 @@ def test_a_configuration_the_sleeve_s_own_class_rejects_is_refused_by_name(
     assert source != SLEEVE
 
     with pytest.raises(
-        ValidationError,
+        ConfigError,
         match=r"^strategy\.py: Config: fixed_params: evry is not a numeric field of Config",
     ):
         run(request_for(source=source), store)
@@ -334,8 +344,43 @@ def test_a_modifier_attached_as_the_wrong_construct_is_refused(store: Path, requ
 
 
 def test_a_parameter_the_modifier_does_not_take_is_refused(store: Path, request_for) -> None:
-    with pytest.raises(ValidationError, match="does not take these parameters"):
+    with pytest.raises(ConfigError, match="does not take these parameters"):
         run(request_for(modifiers=(("filter", FILTER_MODIFIER, {"nonesuch": 1}),)), store)
+
+
+def _raised_in(filename: str, fault: Exception) -> Exception:
+    """`fault`, raised by a function compiled under `filename` and caught here."""
+    scope: dict[str, object] = {"fault": fault}
+    exec(compile("def go():\n    raise fault\n", filename, "exec"), scope)
+    try:
+        scope["go"]()  # type: ignore[operator]
+    except Exception as caught:
+        return caught
+    raise AssertionError("go did not raise")  # pragma: no cover - it always raises
+
+
+def test_a_fault_is_the_authors_only_where_the_authors_code_refused_its_setting() -> None:
+    """A moved re-run reads a fault as the move's only where the strategy refused it — its
+    configuration, the harness an order it placed, or an exception raised in its own file —
+    and never where the process it ran in failed, wherever that surfaced."""
+    refusal = Refusal(
+        rule="unfunded_order",
+        ts_event=0,
+        instrument_id="DEMO.XNAS",
+        asked="an entry",
+        held={},
+        why="the book cannot fund it",
+    )
+    assert {"<sleeve>", "<modifier>"} == AUTHOR_FILES
+    assert authored(ConfigError("strategy.py: Config: no"))
+    assert authored(SizingError(refusal))
+    for name in sorted(AUTHOR_FILES):
+        assert authored(_raised_in(name, ValueError("only one setting runs")))
+    assert not authored(_raised_in("<elsewhere>", ValueError("not the author's")))
+    assert not authored(ValueError("never raised, so no frame"))
+    assert not authored(_raised_in("<sleeve>", OSError(24, "Too many open files")))
+    assert not authored(_raised_in("<sleeve>", MemoryError()))
+    assert not authored(_raised_in("<sleeve>", PreconditionError("the catalog moved")))
 
 
 def test_a_file_that_defines_no_modifier_is_refused(store: Path, request_for) -> None:

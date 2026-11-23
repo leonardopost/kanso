@@ -44,14 +44,17 @@ produce the same numbers and the price of the gate is visible in its evidence as
 The host and the benchmark stay the runs the unperturbed score was measured against: a
 perturbation moves the subject, never what it is differenced against.
 
-**A move at which the strategy raises kept nothing.** The subject ran at the setting the
-search landed on, so a re-run that raises `MovedRunError` raised because of the move: the
-result does not survive it, and the move is recorded with no `metric` and what raised under
-`raised`, failing the gate. It is never dropped, which would pass a strategy that raises at
-every setting but its own. Certification's re-run of the research window raises it, so
-`research_plateau`, which every plan carries, judges such a strategy rather than refusing
-every certification of it; its re-run of the certification window refuses the certification
-instead, as any run of that window that raises does (`docs/backlog.md` row 342).
+**A move at which the strategy refuses its setting kept nothing.** The subject ran at the
+setting the search landed on, so a re-run that raises `MovedRunError` — the strategy's
+configuration rejecting the moved value, the harness an order it placed, or its own code
+raising — refused because of the move: the result does not survive it, and the move is
+recorded with no `metric` and what raised under `raised`, failing the gate. It is never
+dropped, which would pass a strategy that raises at every setting but its own.
+Certification's re-run of the research window raises it, so `research_plateau`, which every
+plan carries, judges such a strategy rather than refusing every certification of it; a fault
+of the run that is not the strategy's refuses the certification there, and its re-run of the
+certification window refuses the certification whatever raised, as any run of that window
+that raises does (`docs/backlog.md` row 342).
 """
 
 from __future__ import annotations

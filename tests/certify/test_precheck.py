@@ -644,6 +644,141 @@ def test_a_best_that_raises_when_moved_is_refused_by_the_research_plateau_not_by
     assert by_hand.verdict == "fail"
 
 
+REFUSES_ITS_MOVED_CONFIG = source(1.0).replace(
+    b"    min_fall: float = 1.0\n",
+    b"    min_fall: float = 1.0\n\n"
+    b"    def __post_init__(self) -> None:\n"
+    b"        super().__post_init__()\n"
+    b"        if self.min_fall > 1.05:\n"
+    b"            raise ValueError('min_fall above the deepest fall the market has')\n",
+)
+"""The reverter whose own configuration bounds `min_fall` at 1.05: its card runs at 1.0, and the
+move up builds no configuration at all."""
+
+BUYS_BY_HAND = b'''
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.objects import Quantity
+
+from kanso.nautilus.strategy import KansoConfig, KansoStrategy
+
+
+class Config(KansoConfig):
+    shares: float = 9_500.0
+    min_fall: float = 1.0
+
+
+class Strategy(KansoStrategy):
+    """Buys the trough by hand, `shares` of it, and sells the peak."""
+
+    config_cls = Config
+
+    def on_start(self) -> None:
+        self.closes = []
+        self.long = False
+
+    def on_bar(self, bar) -> None:
+        self.closes.append(float(bar.close))
+        if len(self.closes) < 3:
+            return
+        first, second, third = self.closes[-3:]
+        settings = self.kanso_config
+        if first > second > third and not self.long:
+            if first - third >= settings.min_fall:
+                order = self.order_factory.market(
+                    bar.bar_type.instrument_id,
+                    OrderSide.BUY,
+                    Quantity.from_int(int(settings.shares)),
+                )
+                self.submit_order(order)
+                self.long = True
+        elif first < second < third and self.long:
+            self.submit_exit(bar.bar_type.instrument_id)
+            self.long = False
+'''
+"""A reverter that builds its entry itself: 9,500 shares at the 10.00 trough is 95,000 of the
+workspace's 100,000, which the book funds, and 10,450 — the move up by a tenth — is 104,500,
+which the harness refuses as `unfunded_order` inside the handler that sent it."""
+
+
+@pytest.mark.parametrize(
+    ("strategy", "moved", "raised"),
+    [
+        (
+            REFUSES_ITS_MOVED_CONFIG,
+            ("min_fall", "up"),
+            "ConfigError: strategy.py: Config: min_fall above the deepest fall the market has",
+        ),
+        (BUYS_BY_HAND, ("shares", "up"), "SizingError: sizing: unfunded_order at "),
+    ],
+    ids=["its-configuration", "the-harness"],
+)
+def test_a_best_whose_moved_setting_kanso_refuses_is_judged_by_the_plateau_too(
+    ws: Workspace,
+    store: StateStore,
+    strategy: bytes,
+    moved: tuple[str, str],
+    raised: str,
+) -> None:
+    """A refusal kanso raises for the strategy at a moved setting — its configuration class
+    rejecting the value, the harness an order it placed there — is the move's as much as an
+    exception from its own code is: the card ran at its own setting, so the move kept nothing,
+    the stall is spared with the certification window unread, and a certification by hand
+    fails on it rather than refusing every certification of that best."""
+    hyp_id = classify(ws, store, DOCUMENT, strategy)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, strategy)
+    write_plan(ws)
+
+    made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is None and checked.spared and checked.measured
+    assert (checked.gate, checked.passed) == ("research_plateau", False)
+    refused = {
+        (move["field"], move["direction"]): move.get("raised")
+        for move in checked.evidence["perturbations"]
+        if move["metric"] is None
+    }
+    assert list(refused) == [moved]
+    assert refused[moved].startswith(raised)
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
+
+    by_hand = certify(ws, store, hyp_id)
+
+    (plateau,) = [gate for gate in by_hand.gates if gate.id == "research_plateau"]
+    assert plateau.passed is False and plateau.evidence == checked.evidence
+    assert by_hand.verdict == "fail"
+
+
+def test_a_fault_of_a_moved_run_that_is_not_the_strategy_s_still_refuses(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A catalog that cannot be read while a move runs says nothing about the move: the
+    certification is refused, as it is for any run that cannot be made — no certificate, no
+    look at the certification window — rather than failed by a plateau that blames the
+    strategy for its process."""
+    from kanso.certify.looks import looks
+
+    hyp_id = classify(ws, store, DOCUMENT, source(0.5))
+    sha = a_card(ws, store, source(0.5))
+    write_plan(ws)
+    original = backtest.window_chunks
+
+    def exhausted(request: backtest.RunRequest, *args: Any, **kwargs: Any) -> Any:
+        if request.window == RESEARCH and request.overrides:
+            raise OSError(24, "Too many open files")
+        return original(request, *args, **kwargs)
+
+    monkeypatch.setattr(backtest, "window_chunks", exhausted)
+
+    with pytest.raises(PreconditionError, match="raised while certification ran it: OSError"):
+        certify(ws, store, hyp_id)
+    with pytest.raises(PreconditionError, match="raised while certification ran it: OSError"):
+        certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert certificate.latest(store, hyp_id) is None
+    assert looks(store, hyp_id, CERTIFICATION).prior == (), "no look was taken"
+
+
 def test_the_certificate_records_the_plateau_the_child_read_and_pays_for_it_once(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

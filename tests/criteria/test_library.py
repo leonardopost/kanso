@@ -218,6 +218,24 @@ def test_every_fold_positive_on_a_card_is_a_value_and_never_a_default() -> None:
     assert bare.startswith("min_positive_folds: is not set, and positive_folds judges nothing")
 
 
+def test_a_pinned_card_gate_is_held_to_the_ranges_the_folds_scale_and_nothing_else() -> None:
+    """`check_folds` is `check_params` narrowed to what `[research] folds` moves: a value outside
+    a range one of whose bounds scales with the folds, and never a type, an undeclared name, a
+    range that does not scale or a `together` set left half-stated."""
+    counted = catalogue()["positive_folds"]
+    edge = catalogue()["edge_per_trade"]
+    hyp = make_hyp()
+
+    assert lib.check_folds(counted, {"min_positive_folds": FOLDS}, hyp, FOLDS) == []
+    assert lib.check_folds(counted, {"min_positive_folds": FOLDS + 1}, hyp, FOLDS) == [
+        f"min_positive_folds: {FOLDS + 1} is outside the range [1, {FOLDS}]"
+    ]
+    assert lib.check_folds(counted, {"min_positive_folds": "all"}, hyp, FOLDS) == []
+    assert lib.check_folds(counted, {"nonesuch": 1}, hyp, FOLDS) == []
+    assert lib.check_folds(edge, {"min_bps": 99.0}, hyp, FOLDS) == []
+    assert lib.check_params(edge, {"min_bps": 99.0}, hyp, FOLDS)
+
+
 def test_the_research_gates_are_the_ones_whose_files_say_they_read_research() -> None:
     """Read from the YAML, so no gate id is listed in code: a gate added with `reads: research`
     is judged before the certification window without anyone remembering to add it."""
