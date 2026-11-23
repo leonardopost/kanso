@@ -230,8 +230,9 @@ def test_the_certify_skill_says_a_stall_its_correction_refuses_is_spared() -> No
     search correction had already refused on research data."""
     text = skill(PACKAGED, "kanso-certify")
     assert "pass on research data. One they refuse is **spared**" in text
-    for gate in ("walk_forward_consistency", "research_plateau", "`gates`"):
+    for gate in ("walk_forward_consistency", "overfit_probability", "research_plateau", "`gates`"):
         assert gate in text, gate
+    assert "It prices the selection, not the edge" in text
     assert "never judged again" in text
     assert "`hypotheses[].last_stall.precheck`" in text
     assert "`kanso cert run` by hand is never spared" in text

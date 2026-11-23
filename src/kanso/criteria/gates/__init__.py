@@ -27,11 +27,13 @@ record rather than a run's, and the five paper and live gates — `paper_forward
 record the monitor assembles, because a run says nothing about the deployment that produced it.
 
 The gates whose library file says `reads: research` — the three deflation gates,
-`walk_forward_consistency` and `research_plateau` — read only the research slots of their
-context, the trials and the card measurements, so certification judges them before it reads
-the certification window and a stall whose best one of them refuses is spared
-(`kanso.certify.run`). `positive_folds` is `walk_forward_consistency`'s count on the card's own
-run: a card gate that costs no engine run.
+`walk_forward_consistency`, `overfit_probability` and `research_plateau` — read only the
+research slots of their context, the trials and the card measurements, so certification judges
+them before it reads the certification window and a stall whose best one of them refuses is
+spared (`kanso.certify.run`). `overfit_probability` lives in a module of its own: it reads the
+trials' stored measurements block by block through the reader the runner hands it.
+`positive_folds` is `walk_forward_consistency`'s count on the card's own run: a card gate that
+costs no engine run.
 
 Nothing is declared here and left unimplemented: every gate in the library resolves.
 """

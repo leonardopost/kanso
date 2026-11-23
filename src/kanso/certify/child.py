@@ -27,8 +27,9 @@ the plan before it starts the child, which reads it back as `kanso cert run` doe
 the planner only where that plan is gone by then. It certifies as `kanso cert run` does, by
 the one function, with the one difference a stall makes
 (`kanso.certify.run.certify_at_stall`): the research window is run first and the plan's
-research gates judged on it — the search correction, `walk_forward_consistency`, and
-`research_plateau`, which runs the research window again for every parameter it moves — and
+research gates judged on it — the search correction, `walk_forward_consistency`,
+`overfit_probability` where the plan carries it, which reads the trials' stored measurements,
+and `research_plateau`, which runs the research window again for every parameter it moves — and
 one that refuses the subject there spares the stall — the certification window is never read
 and no certificate is written. On a snapshot
 that cannot support a claim it runs neither window, as `cert run` does, and its precheck

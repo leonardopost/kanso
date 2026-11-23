@@ -1,0 +1,10 @@
+id: overfit_probability
+kind: gate
+stage: cert
+required: false
+together: true
+reads: research
+meaningful_when: "The search's probability of backtest overfitting (CSCV): the research window in 2 x half_blocks blocks; the best trial of every half-split held to its complement. Needs two aligned trials."
+params: {half_blocks: int, max_pbo: float}
+ranges: {half_blocks: [2, 8], max_pbo: [0.0, 0.25]}
+impl: kanso.criteria.gates.overfit_probability.gate

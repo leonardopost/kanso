@@ -2698,10 +2698,10 @@ The `cert run --sha` route is closed the same way. A card scored on `wf_contribu
 objective, so a plan made for the new one, which rightly leaves the gate out, is refused for it
 (exit 2), naming the gate, at any number of cards, with certifying the best as the remedy.
 
-**A stall certifies only a best whose research gates pass on research data.** Five cert gates
-say `reads: research` in their library files: the three corrections, `walk_forward_consistency`
-and `research_plateau`. Each reads the research window's runs and the trials and nothing of the
-certification window — `tests/criteria/test_library.py` judges every one of them on a context
+**A stall certifies only a best whose research gates pass on research data.** Six cert gates
+say `reads: research` in their library files: the three corrections, `walk_forward_consistency`,
+`overfit_probability` and `research_plateau`. Each reads the research window's runs, the trials
+and the measurements their cards kept, and nothing of the certification window — `tests/criteria/test_library.py` judges every one of them on a context
 whose certification slots hold an unrelated run and holds it to the same verdict — and a
 certificate is the conjunction of the gates that judged, so a best one of them refuses on
 research data fails its certificate whatever the certification window shows — the reason a best
@@ -2714,14 +2714,16 @@ research window for every parameter it moves.
 At a stall the plan is made in the lane, and the correction and the folds judged at the
 planner's values on the measurement the best's newest card kept — by each gate's own
 `evaluate`, on the context certification builds for it, with that research run in every run's
-place — running nothing, so the plateau is recorded as left to the child. A plan that carries
-no correction yet says so and goes on to the folds. A card measured under another `[research]
+place — and `overfit_probability`, where the plan carries it, on the trials' stored
+measurements, running nothing, so the plateau is recorded as left to the child. A plan that
+carries no correction yet says so and goes on to the folds. A card measured under another `[research]
 folds`, `return_period` or capital, or another criteria version, or one that kept no
 measurement, is no reading of the arithmetic certification would use: the lane judges nothing.
 The settings are read from `kanso.toml` as it stands at the stall, as the certification child
 reads them, not as the lane read them when it started, so one edited under a running daemon is
 the one both judge by. A card the lane cannot read judges nothing either, and goes to the child,
-which never reads it. Nor does the lane judge on a snapshot that cannot support a claim, where
+which judges on the research run it makes — `overfit_probability`, which reads the stored
+measurements there too, judging nothing where the best's own cannot be read. Nor does the lane judge on a snapshot that cannot support a claim, where
 certification judges no research gate and whose failing certificate is how that snapshot
 reaches the operator, so a stall on one is never spared. Whatever the lane read, the
 certification child it starts runs the research window first and judges every research gate on
@@ -2938,8 +2940,8 @@ perturbation is run, nor the window read again — the gates are
 evidence for a pass, and a certificate whose window failed cannot pass — while the
 certificate lists its gates in the plan's order as before. A window gate that judged nothing
 spares nothing. `research_plateau` is spared the same way by the research gates judged before
-it: once the correction or the folds have refused the subject, its backtests are not made and
-it is recorded as skipped, saying so. `bootstrap` judges both of the numbers it records: the ninety-fifth
+it: once the correction, the folds or `overfit_probability` have refused the subject, its
+backtests are not made and it is recorded as skipped, saying so. `bootstrap` judges both of the numbers it records: the ninety-fifth
 percentile of the resampled drawdown against `risk_limits.max_drawdown_pct`, and the
 ninety-percent band of the objective's statistic on the resample, which must reach above
 zero — a band that lies at or below zero says the population of trades carries no edge in
@@ -2982,6 +2984,82 @@ data lowered it. A clause whose pass rate does not move with the quantity it
 tests only refuses sound candidates at random, and a parameter that switched it on would only
 offer a planner those refusals. Whether the certification window holds the edge is
 `embargoed_window`'s question, asked against the research estimate.
+
+`overfit_probability` asks whether the search's selection holds out of sample: the probability
+of backtest overfitting, estimated by combinatorially symmetric cross-validation after Bailey,
+Borwein, López de Prado and Zhu (2014). The trials are the cards of the hypothesis's family that
+ran and traded — the set the corrections read — one row per strategy: the newest card of its
+bytes whose stored measurement shares the grid of the subject's newest card, the same periods,
+host and benchmark, so two byte strings are two rows however alike their results, and identical
+results only tie. The research window is cut into `S = 2 × half_blocks` equal calendar blocks
+and every row, `N` of them, is scored on each by the objective's own fold arithmetic — a block that holds no
+period scores zero, as a fold does. For each of the `C(S, S/2)` ways of choosing half the
+blocks, the row with the best mean over that half — the first, where two tie — is the one the
+search would have picked; its mean over the other half is ranked among every row's, ties at
+their midrank, and the split is overfit when that rank `r` puts `r / (N + 1)` at or below a
+half. The estimate is the share of splits that are overfit, held to `max_pbo`. It deviates from
+the authors in one respect: a half's value is the mean of its blocks' values, kanso's own metric
+arithmetic, rather than the statistic recomputed over the half's concatenated periods. Its
+evidence states the estimate and the ceiling, the blocks and splits, the rows and which is the
+subject's, `oos_loss` — the share of splits whose pick lost out of sample, which judges nothing —
+and the search it could not read: `searched` and `prior_trials`, the draws the correction counts,
+the settings a declared grid adds being no row since nothing measured them here, and `excluded`,
+the strategies that made no row, by why their newest card did not — `unmeasured`,
+`other_objective`, `off_grid`, a window a re-pin moved or a family member's own, and
+`unreadable`. It prices the search's current stretch alone, where the correction counts every
+draw. It reads stored measurements and runs nothing, so a stall judges it in the lane and the
+certification child reads the same matrix; it judges nothing without two rows, or with a grid
+holding fewer period ends than blocks. Reading them decodes each trial's measurement, one at a
+time, and keeps nothing of it but its block values: measured on a synthetic store of 1,000
+cards, each a scalper's 44 sessions of 8,800 trades and 17,600 fills, 505 KB stored, a read took
+217 and 312 seconds on two calls in one process — 0.2 to 0.3 seconds a card — and raised the
+process's peak resident memory by 108 MB on the first and by nothing on the second. The cost
+grows with the cards and with what each holds, not with the number held at once. A stall whose
+plan carries the gate pays it in the lane and again in the child when it passes; one it refuses
+in the lane starts no child, so the child's run of the research window is spared — which is
+why the lane judges it rather than leaving it to the child as it leaves the plateau. `half_blocks` sets its own block count: `[research]
+folds` is unchanged by it. It is the planner's to include, from 2 to 8 `half_blocks` and
+`max_pbo` from 0 to 0.25, and it carries no `deflates`: it complements the correction and
+never replaces it.
+
+It prices the selection, not the edge. Measured on seeded synthetic matrices, forty to a cell
+(`tests/criteria/test_overfit_probability.py`, which fails when a cell moves): a block's value
+in units of the standard error of a trial's value over the whole window, so its noise is the
+root of the block count; `noise` carries no edge, `one row at` puts one trial three or six of
+those errors above noise, and `a climb to` puts one there and every other below it by a uniform
+share of the edge, the shape of a hill climb whose edits are worse than its best. Each cell is
+the share of matrices whose estimate was at or under 0.1, 0.25 and 0.5:
+
+```
+trials  drawn               half_blocks 2   half_blocks 4   half_blocks 8
+     2  noise               0.20 0.20 0.42  0.17 0.20 0.42  0.15 0.35 0.55
+     2  one row at 3        0.78 0.78 0.93  0.70 0.75 0.90  0.62 0.80 0.93
+     2  one row at 6        1.00 1.00 1.00  1.00 1.00 1.00  1.00 1.00 1.00
+     2  a climb to 3        0.55 0.55 0.72  0.25 0.38 0.62  0.25 0.42 0.68
+     2  a climb to 6        0.78 0.78 0.85  0.47 0.62 0.75  0.55 0.60 0.80
+    50  noise               0.03 0.15 0.68  0.03 0.10 0.55  0.00 0.12 0.60
+    50  one row at 3        0.30 0.55 0.90  0.05 0.38 0.78  0.10 0.50 0.93
+    50  one row at 6        0.95 1.00 1.00  0.93 1.00 1.00  0.97 1.00 1.00
+    50  a climb to 3        0.12 0.57 0.88  0.10 0.40 0.88  0.10 0.57 0.97
+    50  a climb to 6        0.60 0.82 1.00  0.70 0.93 1.00  0.85 0.97 1.00
+   500  noise               0.00 0.10 0.60  0.00 0.05 0.45  0.00 0.03 0.40
+   500  one row at 3        0.10 0.28 0.70  0.07 0.25 0.80  0.00 0.07 0.65
+   500  one row at 6        0.65 0.88 1.00  0.95 1.00 1.00  0.68 0.93 0.97
+   500  a climb to 3        0.20 0.50 0.85  0.07 0.60 1.00  0.03 0.55 0.97
+   500  a climb to 6        0.70 0.95 1.00  0.88 1.00 1.00  0.95 1.00 1.00
+```
+
+A value every trial adds to every block moves no rank, so trials that all share one edge score
+what noise scores, draw for draw, whatever the edge: a search of near-copies of one idea is
+refused as often as noise is. Noise passed 0.5 in 16 to 27 of forty at every
+size and block count, so a plan could carry the gate there and price almost nothing — the
+reason `max_pbo` stops at 0.25, where noise passed in at most 14 of forty with two trials and 6
+with fifty or five hundred, and one trial six errors above noise in 35 or more at every size. A
+climb to 6 passed 0.25 in 33 or more of forty with fifty trials or more and a climb to 3 in 16
+to 24; one trial at 3 among five hundred, about the largest of that many draws of noise, in 3 to
+11. With two trials the ranks are one above the other or a tie, and `half_blocks` 2 makes six
+splits, so the estimate moves in sixths. A daily lane that trades rarely holds no trade in many
+of a fine grid's blocks, each scoring zero under a per-trade objective, so fewer blocks suit it.
 
 `entry_timing` asks whether the certification window's trades earned more than the same trades
 placed at other times. The null is the whole trade schedule **circularly shifted by whole

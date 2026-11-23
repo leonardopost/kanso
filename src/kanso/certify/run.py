@@ -17,29 +17,30 @@ for that window, and held fixed while a perturbation gate moves the subject. Eve
 run is made before the certification window is read, so a stall's certification can stop
 between the two.
 
-**A stall certifies only a best whose research gates pass on research data.** A cert gate
-whose library file says `reads: research` — the search correction the plan pins for the
-subject's objective, the gate whose file `deflates` it, beside `walk_forward_consistency` and
-`research_plateau`, both of which every plan carries — judges the research window's runs, the
-trials and nothing of the certification window, and a certificate is the conjunction of the
-gates that judged, so one of them that judged the subject and refused it fails the
-certificate whatever the certification window shows. Reading that window then buys a verdict
-already known and spends a look at the one window research never saw. So the research gates
-are judged first (`_research_readings`): the correction, then the others in the plan's order,
-`research_plateau` last, since it alone costs backtests — two of the research window per
-parameter it moves, made only once every cheaper research gate has passed. Before a stall
-certifies they are judged twice. In the lane that stalled (`precheck`), from the measurement
-the subject card kept, when that measurement was struck the way certification would strike it
-now, on a snapshot that can support a claim, running nothing — so the plateau is left to the
-child. In the certification child itself, on the research window it has just run, before the
-certification window is read (`certify_at_stall`). Either refusal spares the stall: no
-certification window is read and no certificate is written. A gate that judged nothing — a
+**A stall certifies only a best whose research gates pass on research data.** A cert gate whose
+library file says `reads: research` — the search correction the plan pins for the subject's
+objective, the gate whose file `deflates` it, beside `walk_forward_consistency` and
+`research_plateau`, both of which every plan carries, and `overfit_probability` where the plan
+carries it — judges the research window's runs, the trials, the measurements their cards kept
+and nothing of the certification window, and a certificate is the conjunction of the gates that
+judged, so one of them that judged the subject and refused it fails the certificate whatever
+the certification window shows. Reading that window then buys a verdict already known and
+spends a look at the one window research never saw. So the research gates are judged first
+(`_research_readings`): the correction, then the others in the plan's order, `research_plateau`
+last, since it alone costs backtests — two of the research window per parameter it moves, made
+only once every cheaper research gate has passed. Before a stall certifies they are judged
+twice. In the lane that stalled (`precheck`), from the measurement the subject card kept, when
+that measurement was struck the way certification would strike it now, on a snapshot that can
+support a claim, and from the trials' stored measurements, running nothing — so the plateau is
+left to the child. In the certification child itself, on the research window it has just run,
+before the certification window is read (`certify_at_stall`). Either refusal spares the stall:
+no certification window is read and no certificate is written. A gate that judged nothing — a
 plan that carries no correction before the search has two draws, cards and declared settings
 together, or a gate that skips on the research run — spares nothing, since it would judge
-nothing in the certificate either. The certificate records each research gate as the child
-read it, never evaluated again, so a card another lane records while the window runs does not
-move it and every backtest is paid once. `kanso cert run` is the operator's own act and is
-never spared: every research gate is judged, the plateau's backtests are not made once another
+nothing in the certificate either. The certificate records each research gate as the child read
+it, never evaluated again, so a card another lane records while the window runs does not move
+it and every backtest is paid once. `kanso cert run` is the operator's own act and is never
+spared: every research gate is judged, the plateau's backtests are not made once another
 research gate has refused, and the certification window is read regardless.
 
 **Both windows are measured the way a card is.** The objective the certificate records,
@@ -770,8 +771,9 @@ def precheck_at_stall(
     pinned on a full disk, say — is raised as the refusal the child's report made of it, exit
     1 naming what raised, with `kanso cert run ID` as the way to see it. One raised reading
     the card — a measurement this build cannot decode — reads no gate and says what raised,
-    and the stall goes to the child, which never reads that measurement: it judges the
-    research gates on the research run it makes.
+    and the stall goes to the child, which judges the research gates on the research run it
+    makes: `overfit_probability`, which reads stored measurements there too, judges nothing
+    where the subject's own cannot be read (`records.trial_folds`).
     """
     try:
         ws = find(root)
@@ -817,8 +819,10 @@ def precheck(
     for it (`_research_context`), the measurement's run in every run slot and the host and
     benchmark it was differenced against beside it, with the trials certification counts: one
     arithmetic, so what this judges is what the certificate's research gates would judge from
-    the same run. The correction comes first — or, where the plan carries none, a reading
-    saying so — and the others follow in the plan's order, stopping at the first that refuses;
+    the same run, and `overfit_probability` reads the trials' stored measurements on the
+    card's grid exactly as the child will. The correction comes first — or, where the plan
+    carries none, a reading saying so — and the others follow in the plan's order, stopping at
+    the first that refuses;
     `research_plateau` is recorded as left to the child (`LEFT_TO_CHILD`), since it costs
     backtests of the research window and the lane runs nothing.
 
@@ -953,9 +957,12 @@ def _research_context(
     Every run slot holds a research run — `run` and the `research_run` slots alike, the host's
     and the benchmark's beside them — and `window` is the research window, so no certification
     run can reach a research gate whatever it reads; the trials are counted as certification
-    counts them. Nothing the certification window yields is set: no dataset facts, no volume,
-    no cost re-run, no session prices and no replay. `rerun`, where given, runs the subject
-    over the research window again with parameters moved.
+    counts them, and `trial_folds` reads them block by block off the measurements the store
+    keeps, on the grid of the subject's newest card (`records.trial_folds`) — never off the
+    research run in hand, so the lane and the certification child read one matrix. Nothing the
+    certification window yields is set: no dataset facts, no volume, no cost re-run, no
+    session prices and no replay. `rerun`, where given, runs the subject over the research
+    window again with parameters moved.
     """
     objective = cast("ObjectiveRef", hyp.objective).id
     research = hyp.windows.research
@@ -978,6 +985,7 @@ def _research_context(
         trial_metrics=records.trial_metrics(store, hyp.id, objective),
         trials=max(records.candidates(store, hyp.id) + prior, 1),
         prior_trials=prior,
+        trial_folds=lambda blocks: records.trial_folds(store, hyp.id, strategy_sha, blocks),
         tunable=dict(tunable or {}),
         rerun=rerun,
     )
