@@ -21,6 +21,7 @@ from hypothesis import strategies as st
 from kanso.certify import run
 from kanso.certify.run import certify
 from kanso.criteria import CardRun, gates
+from kanso.criteria.context import MovedRunError
 from kanso.criteria.gates.param_plateau import (
     ALL_DROPPED,
     NO_PARAMETERS,
@@ -155,6 +156,45 @@ def test_it_fails_when_one_move_falls_below_the_floor() -> None:
         {"field": "fast", "direction": "up", "value": 11.0, "metric": pytest.approx(0.95)},
         {"field": "fast", "direction": "down", "value": 9.0, "metric": pytest.approx(0.5)},
     ]
+
+
+def test_a_move_at_which_the_strategy_raises_kept_nothing_and_fails_the_gate() -> None:
+    """A strategy that raises at a moved setting never ran there: the move is counted, scored
+    as nothing with what raised, and every other move is still run and scored."""
+    asked: list[dict[str, float]] = []
+
+    def rerun(overrides: Mapping[str, float]) -> CardRun:
+        asked.append(dict(overrides))
+        if overrides == {"fast": 11.0}:
+            raise MovedRunError("moved", raised="ValueError: only one setting runs")
+        return a_run(0.95)
+
+    result = judged(rerun, {"fast": 10.0, "slow": 40.0})  # type: ignore[arg-type]
+
+    assert not result.passed and result.skipped is None
+    assert result.evidence["n_backtests"] == 4 == len(asked), "every move was still run"
+    raised, *scored = result.evidence["perturbations"]
+    assert raised == {
+        "field": "fast",
+        "direction": "up",
+        "value": 11.0,
+        "metric": None,
+        "raised": "ValueError: only one setting runs",
+    }
+    assert [move["metric"] for move in scored] == pytest.approx([0.95] * 3)
+    assert all("raised" not in move for move in scored)
+    assert (
+        research.evaluate(
+            context(
+                a_run(5.0),
+                params=MOVES,
+                tunable={"fast": 10.0, "slow": 40.0},
+                rerun=rerun,
+                research_run=a_run(1.0),
+            )
+        ).evidence["perturbations"]
+        == result.evidence["perturbations"]
+    ), "both forms read it so"
 
 
 def test_the_floor_is_the_chosen_fraction_of_the_unperturbed_metric() -> None:
@@ -428,6 +468,35 @@ def test_the_moved_parameters_are_the_authors_own_and_not_the_injected_ones(
         "notional",
         "min_fall",
     }
+
+
+def test_a_sizing_parameter_moves_a_contribution_in_proportion_and_an_edge_not_at_all(
+    ws: Workspace, store: StateStore
+) -> None:
+    """What the planner is told of `keep_fraction` (`kanso.certify.plan.RESEARCH_GATES`): the
+    notional moved down a tenth takes a contribution down a tenth, so a plateau keeping more
+    than nine tenths of one refuses the strategy whatever its edge, and leaves the edge per
+    trade and the Sharpe where they were."""
+    from kanso.criteria.objectives import REGISTRY
+
+    hyp_id = classify(ws, store, DOCUMENT, source(0.5))
+    sha = a_card(ws, store, source(0.5))
+    subject = run._subject(ws, store, hyp_id, sha)
+    assert run._tunable(subject)["notional"] == 5_000.0
+    base = backtest.run(run._request(subject, subject.research), subject.catalog).run
+    smaller = backtest.run(
+        run._request(subject, subject.research, overrides={"notional": 4_500.0}),
+        subject.catalog,
+    ).run
+
+    def ratio(objective: str) -> float:
+        scored = [REGISTRY[objective].compute(each, subject.folds)[0] for each in (base, smaller)]
+        assert scored[0] > 0, objective
+        return scored[1] / scored[0]
+
+    assert ratio("wf_contribution_bps") == pytest.approx(0.9, abs=1e-9)
+    assert ratio("net_edge_bps") == pytest.approx(1.0, abs=1e-9)
+    assert ratio("wf_sharpe_net") == pytest.approx(1.0, abs=1e-9)
 
 
 CHASING = b'''

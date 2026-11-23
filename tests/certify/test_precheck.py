@@ -291,6 +291,27 @@ def test_a_best_that_kept_no_measurement_judges_nothing(ws: Workspace, store: St
     assert checked.reason == f"the newest card of {sha[:7]} kept no measurement to judge it from"
 
 
+def test_a_best_that_kept_no_measurement_under_a_plan_with_no_correction_says_it_carries_none(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The deciding reading is the correction's or the plan's word that it carries none,
+    wherever the lane could read nothing: never the first research gate after it."""
+    classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING)
+    plan = write_plan(ws)
+
+    checked = precheck(ws, store, HYP_ID, sha, plan)
+
+    assert (checked.gate, checked.judged, checked.passed) == ("deflated_sharpe", False, None)
+    assert checked.reason is not None and checked.reason.startswith(
+        "plan version 1 carries no deflated_sharpe"
+    )
+    assert gate_ids(checked) == ["deflated_sharpe", "walk_forward_consistency", "research_plateau"]
+    unread = f"the newest card of {sha[:7]} kept no measurement to judge it from"
+    assert [reading.skipped for reading in checked.readings[1:]] == [unread, unread]
+    assert not checked.spared
+
+
 def test_a_plan_that_carries_no_correction_has_no_search_to_price_and_still_judges_folds(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -579,6 +600,50 @@ def test_a_stall_the_research_plateau_refuses_never_reads_the_window(
     assert looks(store, hyp_id, CERTIFICATION).prior == (), "no look was taken"
 
 
+RAISES_WHEN_MOVED = source(1.0).replace(
+    b"    def on_start(self) -> None:\n",
+    b"    def on_start(self) -> None:\n"
+    b"        if self.kanso_config.min_fall != 1.0:\n"
+    b"            raise ValueError('only one setting runs')\n",
+)
+"""The reverter at its one setting, raising at any other: its card runs, its moves do not."""
+
+
+def test_a_best_that_raises_when_moved_is_refused_by_the_research_plateau_not_by_certification(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`research_plateau` is in every plan, so a best that runs only where the search left it
+    must be judged by it rather than refuse every certification: the moves that raised kept
+    nothing, the stall is spared on that evidence with the certification window unread, and a
+    certification by hand writes a certificate that fails on it."""
+    assert source(1.0) != RAISES_WHEN_MOVED
+    hyp_id = classify(ws, store, DOCUMENT, RAISES_WHEN_MOVED)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, RAISES_WHEN_MOVED)
+    write_plan(ws)
+
+    made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is None and checked.spared and checked.measured
+    assert (checked.gate, checked.passed) == ("research_plateau", False)
+    raised = {
+        (move["field"], move["direction"]): move.get("raised")
+        for move in checked.evidence["perturbations"]
+        if move["metric"] is None
+    }
+    assert raised == {
+        ("min_fall", "up"): "ValueError: only one setting runs",
+        ("min_fall", "down"): "ValueError: only one setting runs",
+    }
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
+
+    by_hand = certify(ws, store, hyp_id)
+
+    (plateau,) = [gate for gate in by_hand.gates if gate.id == "research_plateau"]
+    assert plateau.passed is False and plateau.evidence == checked.evidence
+    assert by_hand.verdict == "fail"
+
+
 def test_the_certificate_records_the_plateau_the_child_read_and_pays_for_it_once(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -657,12 +722,10 @@ def test_a_stall_on_a_snapshot_that_cannot_support_a_claim_runs_no_window(
     made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
 
     assert made is not None and made.verdict == "fail"
-    assert (checked.gate, checked.judged, checked.passed) == (
-        "walk_forward_consistency",
-        False,
-        None,
+    assert (checked.gate, checked.judged, checked.passed) == ("deflated_sharpe", False, None), (
+        "the plan carries no correction, and the deciding reading is still the correction's"
     )
-    assert gate_ids(checked) == ["walk_forward_consistency", "research_plateau"]
+    assert gate_ids(checked) == ["deflated_sharpe", "walk_forward_consistency", "research_plateau"]
     assert checked.measured is False, "no window was run for it"
     assert checked.reason is not None and "cannot support a claim" in checked.reason
     assert all(gate.evidence == checked.evidence for gate in made.gates)

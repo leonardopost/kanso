@@ -43,6 +43,15 @@ runner supplies, one after another in a fixed order, so two runs of the same cer
 produce the same numbers and the price of the gate is visible in its evidence as a count.
 The host and the benchmark stay the runs the unperturbed score was measured against: a
 perturbation moves the subject, never what it is differenced against.
+
+**A move at which the strategy raises kept nothing.** The subject ran at the setting the
+search landed on, so a re-run that raises `MovedRunError` raised because of the move: the
+result does not survive it, and the move is recorded with no `metric` and what raised under
+`raised`, failing the gate. It is never dropped, which would pass a strategy that raises at
+every setting but its own. Certification's re-run of the research window raises it, so
+`research_plateau`, which every plan carries, judges such a strategy rather than refusing
+every certification of it; its re-run of the certification window refuses the certification
+instead, as any run of that window that raises does (`docs/backlog.md` row 342).
 """
 
 from __future__ import annotations
@@ -50,7 +59,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import ClassVar, Final
 
-from kanso.criteria.context import Gate, GateContext, number, skipped, verdict
+from kanso.criteria.context import Gate, GateContext, MovedRunError, number, skipped, verdict
 from kanso.criteria.objectives import REGISTRY, Objective
 from kanso.criteria.run import CardRun
 from kanso.schemas import GateResult
@@ -125,14 +134,20 @@ class _ParamPlateau:
         scored = _score(ctx.research_folds, objective, ctx.rerun, moves, host, benchmark)
         return verdict(
             self.id,
-            all(metric >= floor for _, _, _, metric in scored),
+            all(metric is not None and metric >= floor for _, _, _, metric, _ in scored),
             {
                 **reading,
                 "floor": floor,
                 "n_backtests": len(scored),
                 "perturbations": [
-                    {"field": name, "direction": way, "value": value, "metric": metric}
-                    for name, way, value, metric in scored
+                    {
+                        "field": name,
+                        "direction": way,
+                        "value": value,
+                        "metric": metric,
+                        **({} if raised is None else {"raised": raised}),
+                    }
+                    for name, way, value, metric, raised in scored
                 ],
             },
         )
@@ -167,6 +182,11 @@ def _plan(
     return tuple(moves), dropped
 
 
+_Scored = tuple[str, str, float, float | None, str | None]
+"""One move: the field, the direction, the value, its score — `None` where the re-run raised —
+and what raised."""
+
+
 def _score(
     folds: int,
     objective: Objective,
@@ -174,18 +194,19 @@ def _score(
     moves: tuple[tuple[str, str, float], ...],
     host: CardRun | None,
     benchmark: CardRun | None,
-) -> tuple[tuple[str, str, float, float], ...]:
-    """Each move run and measured in turn, in the order `_plan` fixed, one at a time."""
-    return tuple(
-        (
-            name,
-            way,
-            value,
-            # The host and the benchmark stay fixed: a perturbation moves the subject alone.
-            objective.compute(rerun({name: value}), folds, host, benchmark)[0],
-        )
-        for name, way, value in moves
-    )
+) -> tuple[_Scored, ...]:
+    """Each move run and measured in turn, in the order `_plan` fixed, one at a time; a move
+    whose re-run raised `MovedRunError` is scored as nothing, with what raised."""
+    scored: list[_Scored] = []
+    for name, way, value in moves:
+        try:
+            moved = rerun({name: value})
+        except MovedRunError as fault:
+            scored.append((name, way, value, None, fault.raised))
+            continue
+        # The host and the benchmark stay fixed: a perturbation moves the subject alone.
+        scored.append((name, way, value, objective.compute(moved, folds, host, benchmark)[0], None))
+    return tuple(scored)
 
 
 def _objective(ctx: GateContext) -> Objective | None:

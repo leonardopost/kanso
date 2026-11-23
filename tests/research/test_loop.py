@@ -329,6 +329,40 @@ def test_a_card_whose_edge_does_not_recur_in_every_fold_it_is_held_to_is_a_disca
     assert (run.best_sha is None) is (status == "discard")
 
 
+def test_a_fold_count_the_folds_were_lowered_beneath_is_refused_where_a_run_is_set_up(
+    ws: Workspace, store: StateStore
+) -> None:
+    """`min_positive_folds` 4 was every fold positive when it was registered; under three folds
+    no card could meet it, and each would be a discard saying nothing of why. So neither a card
+    of an open run nor a run begun is set up under folds the card gates' ranges exclude, and
+    the refusal names both ways out."""
+    folds = {"id": "positive_folds", "params": {"min_positive_folds": 4}}
+    hyp_id = classify(
+        ws,
+        store,
+        document(constraints=[{"id": "strategy_integrity"}], required_constraints=[folds]),
+        REVERTING,
+    )
+    loop.begin(ws, store, hyp_id)
+    fewer = tuned(ws, folds=3)
+
+    with pytest.raises(ValidationError) as refused:
+        loop.card(fewer, store, hyp_id, "under three folds")
+
+    assert refused.value.code == Exit.VALIDATION
+    assert (
+        "positive_folds.min_positive_folds: 4 is outside the range [1, 3]" in refused.value.message
+    )
+    assert refused.value.remedy is not None
+    assert "`[research] folds`" in refused.value.remedy
+    assert f"`kanso hyp validate hypotheses/{hyp_id}/hypothesis.yaml`" in refused.value.remedy
+    assert len(records.cards_of(store, hyp_id)) == 1, "no card was made under three folds"
+    loop.end(fewer, store, hyp_id)
+    with pytest.raises(ValidationError, match="does not admit"):
+        loop.begin(fewer, store, hyp_id)
+    assert len(records.runs_of(store, hyp_id)) == 1, "and no run was begun under them"
+
+
 def test_begin_refuses_a_tick_hypothesis_whose_venue_now_states_no_latency(
     ws: Workspace, store: StateStore
 ) -> None:

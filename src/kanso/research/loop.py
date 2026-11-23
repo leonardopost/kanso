@@ -111,7 +111,8 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 from kanso import __version__, ext
 from kanso.classify.construct import Construct, Harness, HostRef
 from kanso.classify.construct import get as construct_for
-from kanso.criteria import CardRun, GateContext, criteria_version, gates
+from kanso.criteria import CardRun, GateContext, check_params, criteria_version, gates
+from kanso.criteria import catalogue as toolbox
 from kanso.criteria.context import verdict
 from kanso.criteria.digest import digest as digest_of
 from kanso.criteria.gates import strategy_integrity
@@ -500,6 +501,9 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     would otherwise each ask the vendor for every instrument at once, and be throttled out
     of their runs. Nothing is recorded, because a definition written here would move the
     store under that pin; only `kanso data instruments resolve` writes the store.
+
+    Refused where the card gates carry values `[research] folds` no longer admits
+    (`_refuse_unadmitted`), so no card is scored under folds its gates' ranges exclude.
     """
     ref = hyp.construct
     if ref is None:
@@ -513,6 +517,7 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
     instruments = run_definitions(ws, hyp.universe, hyp.windows.research.start)
     model = _one_venue_model(venue_models(ws, hyp, instruments))
     research = ws.config.research
+    _refuse_unadmitted(ws, hyp, research.folds)
     host_source: bytes | None = None
     modifiers: tuple[tuple[str, bytes, Mapping[str, Any]], ...] = ()
     if harness.host is not None:
@@ -536,6 +541,35 @@ def _setup(ws: Workspace, store: StateStore, hyp: Hypothesis, version: int | Non
         sleeve_budget=_sleeve_budget(ws, store, hyp, harness.host),
         prefix=backtest.warmup_prefix(hyp, window, catalog, grains),
         extensions=extensions,
+    )
+
+
+def _refuse_unadmitted(ws: Workspace, hyp: Hypothesis, folds: int) -> None:
+    """Refuse card gates whose values the toolbox does not admit under `folds`.
+
+    A card gate's range can scale with `[research] folds` — `positive_folds` counts to it —
+    and `kanso hyp validate` checked the file under the folds of its day. Lowered beneath a
+    registered count, every card would fail that gate with every fold positive: each one a
+    discard, the run never keeping, and nothing saying why. So the card gates are held to
+    their ranges here, under the folds every card of the run is set up and scored in, as
+    `cert plan` holds a pinned plan to the folds it would run at.
+    """
+    items = toolbox()
+    problems = [
+        f"{ref.id}.{problem}"
+        for ref in hyp.card_gates
+        if ref.id in items
+        for problem in check_params(items[ref.id], ref.params, hyp, folds)
+    ]
+    if not problems:
+        return
+    path = hypothesis_file(ws, hyp.id).relative_to(ws.root)
+    raise ValidationError(
+        f"{hyp.id} is pinned with card gates `[research] folds` {folds} does not admit: "
+        + "; ".join(problems),
+        remedy="set `[research] folds` in kanso.toml back to the folds they were chosen under, "
+        f"or change them in {path} until `kanso hyp validate {path}` passes and re-pin it with "
+        f"`kanso hyp add {path}`",
     )
 
 
@@ -1290,8 +1324,10 @@ def begin(
     run, whose workspace `hypothesis.yaml` no longer equals its pin, or which no snapshot
     covers, and one at tick resolution whose venue model, as the workspace resolves it now, a
     validation would refuse (`kanso.hyp.validate.check_tick_costs`) — a file registered before
-    the rule, or a `portfolio.yaml` edited since. A baseline that will not run leaves no record
-    and no lane directory.
+    the rule, or a `portfolio.yaml` edited since — and one whose card gates carry a value its
+    range excludes under `[research] folds` as `kanso.toml` now sets it, lowered beneath a
+    `positive_folds` count, say (`_refuse_unadmitted`). A baseline that will not run leaves no
+    record and no lane directory.
 
     One the operator takes out of `lane`'s hands (`research queue remove`) is refused with
     `TakenError` wherever the begin has got to: before anything is read, at the next

@@ -75,7 +75,13 @@ whichever run that is, so what it costs does not grow with the window's length o
 many runs its plan makes, and a perturbation costs one engine run and one read of the window.
 Only the subject's own parameters can move — a sleeve's own configuration fields, or the
 construct parameters an attached modifier was composed with — never the capital, the risk
-limits or anything else the hypothesis injects.
+limits or anything else the hypothesis injects. A strategy that raises at a setting
+`research_plateau` moved it to has not refused a test: the card ran where the search left
+it, so the move is one that kept nothing and the gate refuses the subject (`MovedRunError`):
+a stall is spared on that evidence and a certificate by hand fails on it. Every plan carries
+that gate, and a refusal there would refuse every certification of such a best, at every
+stall. A run of the certification window that raises, a move of it included, still refuses
+the certification (`docs/backlog.md` row 342).
 
 **A gate that moves the trades in time reads the window once more.** `entry_timing` prices
 the subject's trades at other sessions (`kanso.criteria.timing`), at prices the run does not
@@ -176,7 +182,7 @@ from kanso.criteria import (
     plannable,
 )
 from kanso.criteria import catalogue as toolbox
-from kanso.criteria.context import skipped
+from kanso.criteria.context import MovedRunError, skipped
 from kanso.criteria.digest import session_edge
 from kanso.criteria.library import (
     SEARCH_TRIALS,
@@ -913,9 +919,16 @@ def _uncorrected(plan: CertificationPlan, hyp: Hypothesis) -> GateResult | None:
 
 def _unjudged(plan: CertificationPlan, hyp: Hypothesis, reason: str) -> Precheck:
     """A lane precheck that could read no research run: every research gate the plan carries,
-    recorded as judging nothing, with the reason."""
+    recorded as judging nothing, with the reason — after the plan's word that it carries no
+    correction, where it carries none, as `_research_readings` reads it first, so the deciding
+    reading is the correction's or that word whatever the lane could read."""
+    missing = _uncorrected(plan, hyp)
     return Precheck(
-        [skipped(gate.id, reason) for gate in _research_order(plan, hyp)], measured=False
+        [
+            *([] if missing is None else [missing]),
+            *(skipped(gate.id, reason) for gate in _research_order(plan, hyp)),
+        ],
+        measured=False,
     )
 
 
@@ -1377,10 +1390,12 @@ def _measure(subject: Subject, researched: _Researched | None = None) -> Measure
     the window it is run over is fixed here rather than chosen by it. A strategy that
     nevertheless raises stops the certification and says so, so the failure reaches the
     operator as a refusal rather than as a verdict — a card that will not run has not failed
-    a test, it has not taken one. The process certifying is the operator's own under `kanso
-    cert run`, and for a stall a child of the lane that stalled, watched by that lane under
-    its memory share (`kanso.certify.child`), so the daemon lane that asked for it survives
-    to research something else and is left holding none of what the windows cost.
+    a test, it has not taken one; only a move of the research plateau that raises is a
+    verdict, since the card it moves ran (`_ran`). The process certifying is the operator's
+    own under `kanso cert run`, and for a stall a child of the lane that stalled, watched by
+    that lane under its memory share (`kanso.certify.child`), so the daemon lane that asked
+    for it survives to research something else and is left holding none of what the windows
+    cost.
     """
     from kanso.nautilus.venue import PRINT_SIZE
 
@@ -1421,8 +1436,15 @@ def _measure(subject: Subject, researched: _Researched | None = None) -> Measure
     )
 
 
-def _ran(subject: Subject, backtest_run: Callable[[], backtest.RunResult]) -> CardRun:
-    """One backtest, with an exception turned into a refusal that names what raised.
+def _ran(
+    subject: Subject,
+    backtest_run: Callable[[], backtest.RunResult],
+    *,
+    moved: Mapping[str, float] | None = None,
+) -> CardRun:
+    """One backtest, with an exception turned into a refusal that names what raised — or,
+    for a run of the research window with parameters `moved`, into `MovedRunError`, which a
+    perturbation gate reads as a move that kept nothing.
 
     What the run's engine leaves is collected before the next run begins. A disposed engine
     leaves its orders, positions and components in reference cycles, which only the cyclic
@@ -1436,10 +1458,18 @@ def _ran(subject: Subject, backtest_run: Callable[[], backtest.RunResult]) -> Ca
     except KansoError:
         raise
     except Exception as exc:
+        raised = f"{type(exc).__name__}: {exc}"
+        remedy = f"research {subject.hyp.id} further, or certify a card that runs"
+        if moved is not None:
+            raise MovedRunError(
+                f"{subject.strategy_sha[:7]} raised when certification moved "
+                f"{', '.join(f'{name} to {value}' for name, value in moved.items())}: {raised}",
+                raised=raised,
+                remedy=remedy,
+            ) from exc
         raise PreconditionError(
-            f"{subject.strategy_sha[:7]} raised while certification ran it: "
-            f"{type(exc).__name__}: {exc}",
-            remedy=f"research {subject.hyp.id} further, or certify a card that runs",
+            f"{subject.strategy_sha[:7]} raised while certification ran it: {raised}",
+            remedy=remedy,
         ) from exc
     finally:
         gc.collect()
@@ -1725,9 +1755,12 @@ def _judge(
 
     def rerun_research(overrides: Mapping[str, float]) -> CardRun:
         """The subject over the research window again, with parameters moved, read from the
-        catalog a chunk at a time as its first run was."""
+        catalog a chunk at a time as its first run was. A strategy that raises at the moved
+        setting raises `MovedRunError`, which the plateau records as a move that kept nothing:
+        `research_plateau` is in every plan, so a refusal here would refuse every
+        certification of a best that runs only where the search left it, at every stall."""
         request = _request(subject, subject.research, overrides=overrides)
-        return _ran(subject, lambda: backtest.run(request, subject.catalog))
+        return _ran(subject, lambda: backtest.run(request, subject.catalog), moved=overrides)
 
     readings = _research_readings(
         store,
@@ -1913,18 +1946,26 @@ def _unsupported(
     """A stall's precheck on a snapshot that cannot support a claim: certification runs no
     window there and judges no research gate, so neither the lane nor the child judges one,
     and each records every research gate the plan carries as judging nothing, with the
-    evidence the certificate's own gates fail on (`_blocked`)."""
+    evidence the certificate's own gates fail on (`_blocked`). The correction for the
+    objective `hyp` pins is read first whether or not the plan carries it, as a plan that
+    carries none is read first everywhere else (`_uncorrected`), so the deciding reading is
+    always the correction's."""
     evidence = {"snapshot_id": snapshot.snapshot_id, INADMISSIBLE: list(reasons)}
     reason = (
         f"snapshot {snapshot.snapshot_id[:12]} cannot support a claim, so certification runs "
         "no window on it and judges no research gate: its evidence says why"
     )
+    missing = _uncorrected(plan, hyp)
+    ids = [
+        *([] if missing is None else [missing.id]),
+        *(gate.id for gate in _research_order(plan, hyp)),
+    ]
     return Precheck(
         [
             GateResult.model_validate(
-                {"id": gate.id, "pass": True, "evidence": evidence, "skipped": reason}
+                {"id": gate, "pass": True, "evidence": evidence, "skipped": reason}
             )
-            for gate in _research_order(plan, hyp)
+            for gate in ids
         ],
         measured=False,
     )

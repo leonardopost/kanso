@@ -467,6 +467,10 @@ def test_the_planner_is_told_which_gates_read_research_data_before_the_window(
         "spares the stall: no certificate is written and no look is taken",
         "the research score the search selected",
         "param_plateau, when the plan includes it",
+        # The planner chooses keep_fraction, so it is told what a sizing field does to a
+        # contribution: above this bound the gate refuses every strategy declaring one.
+        "Under a contribution objective a parameter that sizes the position",
+        "so a keep_fraction above 1 - perturb_pct / 100 refuses every strategy that declares one",
     ):
         assert fact in plan_module.RESEARCH_GATES and fact in seen[0].system, fact
 

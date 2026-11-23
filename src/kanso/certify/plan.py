@@ -501,10 +501,18 @@ RESEARCH_GATES: Final = (
     "and no look is taken. research_plateau holds each move of a parameter to keep_fraction of "
     "the research score the search selected, which selection inflated; param_plateau, when the "
     "plan includes it, holds each move to keep_fraction of the certification score, and is "
-    "judged after the certification window is read"
+    "judged after the certification window is read. Under a contribution objective a "
+    "parameter that sizes the position, a notional say, moves the score in proportion to its "
+    "move under either plateau, so a keep_fraction above 1 - perturb_pct / 100 refuses every "
+    "strategy that declares one among its own parameters, whatever its edge; under an edge "
+    "or a Sharpe it moves the score little or not at all"
 )
 """The invariant stating which gates are judged before the certification window, stated in
-every plan since `research_plateau` and `walk_forward_consistency` are in every plan."""
+every plan since `research_plateau` and `walk_forward_consistency` are in every plan, with
+the one fact of the plateaus' arithmetic that sets a bound on what `keep_fraction` can mean:
+measured on the research suite's saw-tooth on 2026-11-23, a notional moved from 5,000 to
+4,500 took `wf_contribution_bps` from 11.3242 to 10.1917, a ratio of 0.9000, and left
+`net_edge_bps` and `wf_sharpe_net` where they were."""
 
 FORWARD_LOOKS: Final = (
     "forward_looks is how many looks this hypothesis's lineage — every registered hypothesis "

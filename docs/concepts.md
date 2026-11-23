@@ -1335,7 +1335,7 @@ already over. There are twelve.
 | `max_hold` | a position held longer than the hypothesis allows: `days` in calendar days, `trading_days` in the sessions it was held across — the period ends of a daily return period, one per UTC day that holds a point, so a weekend or a holiday inside a hold adds nothing where nothing is stamped on it; no calendar is read, so a US equity's Friday post-market below a bar of a day, stamped past 00:00 UTC, makes Saturday one, and the evening before a weekday holiday the holiday (`docs/backlog.md` row 241). A closed position is timed from its entry fill to its exit fill, one still open when the window closes to that close; an attached construct on what it added to its host at period ends, a floor on the hold rather than a ceiling |
 | `trading_hours` | a fill outside a stated daily session, or a position not opened and closed inside one session — held overnight, or still open when the window closes: `session` is clock times on one day, `tz` the zone the clock is kept in, so daylight saving moves the session with the market. The evidence names the earliest and the latest fill outside it and the earliest and the latest position held outside it, each on the zone's clock |
 | `leg_edge` | a card whose named leg did not earn its place: in a fold that closed one of that leg's spells, the annualised Sharpe of their returns — `pnl_net / notional`, net of the leg's own fill costs — below `min_sharpe`. A spell belongs to the fold that closed it; one still open at the window's close counts nowhere; a fold whose spells cannot vary — one spell, or spells that returned the same, or the same but for the last bits of the arithmetic — scores zero; a leg that never closed one is skipped, not failed, and every skip says so in its evidence |
-| `positive_folds` | a card whose objective was positive in fewer of its `[research] folds` than `min_positive_folds`: the arithmetic and the evidence of `walk_forward_consistency`, which certification judges on the research window, taken of the card's own run — against its host's run for an attached construct and its hold's where it is measured against one — so an edge one fold earned and the others did not is a discard and never a keep, at no engine run beyond the card's. Never carried unasked: the classifier may name it among the constraints, or you state it in `required_constraints`, with its count set from one to the fold count — every fold positive is the count equal to `[research] folds`, a value you state and never a default |
+| `positive_folds` | a card whose objective was positive in fewer of its `[research] folds` than `min_positive_folds`: the arithmetic and the evidence of `walk_forward_consistency`, which certification judges on the research window, taken of the card's own run — against its host's run for an attached construct and its hold's where it is measured against one — so an edge one fold earned and the others did not is a discard and never a keep, at no engine run beyond the card's. Never carried unasked: the classifier may name it among the constraints, or you state it in `required_constraints`, with its count set from one to the fold count — every fold positive is the count equal to `[research] folds`, a value you state and never a default. `[research] folds` lowered beneath a registered count is refused wherever a run or a card is set up under it (exit 3), naming the count, since no card could meet it: set the folds back, or change the count and re-pin |
 | `edge_per_trade` | a card whose trades do not pay on average: its mean net edge per closed trade, in basis points of the position opened, less a margin of that mean's errors, at or below `min_bps`. The margin starts as a number of normal errors, `normal_margin`: the larger of `k_se` and the expected maximum of `trials` standard normals — 0 at 1 trial, 0.52 at 2, 2.28 at 50, 3.05 at 500 — where `trials` is the card, every card of the hypothesis before it that ran to a result and traded, under any objective, and the `prior_trials` its family declares tried outside kanso (*Card* above), so a hypothesis's first card is held to 0 only where no grid is declared. It is then struck on the error's own degrees of freedom: over `p` periods that closed a trade the edge over its error is a Student's t of `p − 1` degrees of freedom and the error reads low by `√((p − 1)/p)`, so `margin` is that t's quantile at the normal's chance of clearing `normal_margin`, times `√(p/(p − 1))` — at `k_se` 1, 2.60 errors over two periods, 1.15 over eight, 1.02 over sixty; as the fiftieth card, 39 over two, 3.1 over eight, 2.36 over sixty. The evidence carries `trials`, `prior_trials` — the declared part of it — `expected_maximum`, `normal_margin` and `margin`. The edge and its error are the per-trade objective's arithmetic over the whole window as one fold — the error read period by period, so a session's clips that move together count as one session's worth — and they are the `net_bps_per_trade` and `net_bps_per_trade_se` the card's digest records. A card that closed no trade has no edge and fails, and so does one whose trades all closed in one period — one trade, or one session's clips — at any `k_se`: its error would read zero whatever its trades did, so it has none, and its evidence says how many periods held a trade (`periods_with_trades`) |
 | `sizing` | an order the harness refused at the boundary — one a `sizing` rule forbids, or an entry built by hand that the book cannot fund: the rule, the instrument, the instant and the book held. Recorded by the runner, chosen by no one |
 
@@ -2736,9 +2736,12 @@ no correction before the search's second draw, card or declared setting, and a g
 on the research run would skip in the certificate too. A certificate the child goes on to write
 records each research gate as the child read it, never judged again: a card another lane records
 while the certification window runs moves nothing in it, and each of the plateau's backtests is
-paid once. `cert run` by hand is never spared: every research gate is judged, the plateau's
-backtests are not made once another has refused (the certificate says so), and the
-certification window is read regardless.
+paid once in that certification. A stall the child spares on the plateau writes no certificate,
+so its best stays certifiable, and every later stall of the same best starts a child that runs
+the research window and its moves again, to the same refusal (`docs/backlog.md` row 343).
+`cert run` by hand is never spared: every research gate is judged, the plateau's backtests are
+not made once another has refused (the certificate says so), and the certification window is
+read regardless.
 
 The lane's reading is the certificate's exactly — measured on the research suite's
 synthetic workspace, a card the loop itself measured, the probability, the expected maximum
@@ -2900,10 +2903,18 @@ of the unperturbed research score. It is required of every plan with both its pa
 because a result that survives only the setting the search landed on was fitted to it, and it
 is judged before the certification window is read, so a stall it refuses reads no certification
 window. Its unperturbed score is the one the search selected, which selection inflated, so a
-sound strategy keeps less of it under a move than it keeps of a certification score; the
-planner sets `keep_fraction` knowing so, and is told it in the invariants. A parameter that
-sizes the position moves a contribution in proportion to the move, so a `keep_fraction` above
-`1 − perturb_pct / 100` refuses every strategy that declares one. `param_plateau` stays the
+sound strategy keeps less of it under a move than it keeps of a certification score. A
+parameter that sizes the position moves a contribution in proportion to the move, under either
+plateau, so a `keep_fraction` above `1 − perturb_pct / 100` refuses every strategy that declares
+one — measured on the research suite's saw-tooth, a notional moved from 5,000 to 4,500 took
+`wf_contribution_bps` from 11.3242 to 10.1917, a ratio of 0.9000, and left `net_edge_bps` and
+`wf_sharpe_net` where they were. The planner sets `keep_fraction` knowing both: the invariants
+it is shown state each. A move at which the strategy raises kept nothing: the card ran where the
+search left it, so the move is recorded with no `metric` and what raised under `raised`, and the
+gate refuses the subject — a stall spared on that evidence, a certificate by hand failed on it —
+where a refusal of the certification would refuse every certification of such a best, at every
+stall. A move of the certification window that raises still refuses the certification, as any
+run of that window that raises does (`docs/backlog.md` row 342). `param_plateau` stays the
 planner's to include: it holds each move to a fraction of the certification score, after the
 certification window is read.
 

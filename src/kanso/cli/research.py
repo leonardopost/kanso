@@ -476,6 +476,7 @@ def spared_by(precheck: object) -> str | None:
     (`deflated_contribution 0.792 < 0.950`); `walk_forward_consistency` its count of positive
     folds and the planner's (`walk_forward_consistency 2 < 4 positive folds`); `research_plateau`
     how many of its moves fell under the floor (`research_plateau 3 of 8 moves under 1.234`),
+    and how many raised where any did (`research_plateau 0 of 8 moves under 1.234, 2 raised`),
     or that its unperturbed score was a loss (`research_plateau unperturbed -0.412 not
     positive`); any other gate that it refused. A stall recorded before stalls judged more than
     the correction reads as it always did.
@@ -495,8 +496,11 @@ def spared_by(precheck: object) -> str | None:
         if "floor" not in evidence:
             return f"{gate} unperturbed {evidence['unperturbed']:.3f} not positive"
         floor = evidence["floor"]
-        under = sum(1 for move in evidence["perturbations"] if move["metric"] < floor)
-        return f"{gate} {under} of {evidence['n_backtests']} moves under {floor:.3f}"
+        metrics = [move["metric"] for move in evidence["perturbations"]]
+        under = sum(1 for metric in metrics if metric is not None and metric < floor)
+        raised = metrics.count(None)
+        also = f", {raised} raised" if raised else ""
+        return f"{gate} {under} of {evidence['n_backtests']} moves under {floor:.3f}{also}"
     return f"{gate} refused"
 
 

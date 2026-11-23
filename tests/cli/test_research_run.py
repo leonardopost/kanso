@@ -20,7 +20,7 @@ from kanso.certify.plan import read_plan
 from kanso.certify.run import Precheck, precheck
 from kanso.cli.research import spared_by
 from kanso.criteria import gates
-from kanso.criteria.context import skipped, verdict
+from kanso.criteria.context import MovedRunError, skipped, verdict
 from kanso.errors import Exit
 from kanso.hyp import set_status, show
 from kanso.models import spend
@@ -202,6 +202,18 @@ def refusal(gate_id: str, params: dict[str, float], **slots: Any) -> dict[str, o
     ).payload()
 
 
+def raising_at(moved: dict[str, float], otherwise: Rerun) -> Any:
+    """A re-run whose strategy raises at one moved setting and scores as `otherwise` at the
+    rest."""
+
+    def rerun(overrides: dict[str, float]) -> Any:
+        if dict(overrides) == moved:
+            raise MovedRunError("moved", raised="ValueError: only one setting runs")
+        return otherwise(overrides)
+
+    return rerun
+
+
 @pytest.mark.parametrize(
     ("precheck", "said"),
     [
@@ -251,6 +263,16 @@ def refusal(gate_id: str, params: dict[str, float], **slots: Any) -> dict[str, o
             refusal(
                 "research_plateau",
                 params={"perturb_pct": 10.0, "keep_fraction": 0.9},
+                tunable={"fast": 10.0, "slow": 40.0},
+                rerun=raising_at({"fast": 11.0}, Rerun(0.5)),
+                research_run=a_run(1.0),
+            ),
+            "research_plateau 3 of 4 moves under 0.900, 1 raised",
+        ),
+        (
+            refusal(
+                "research_plateau",
+                params={"perturb_pct": 10.0, "keep_fraction": 0.9},
                 tunable={"fast": 10.0},
                 rerun=Rerun(),
                 research_run=a_run(-0.412),
@@ -276,6 +298,7 @@ def refusal(gate_id: str, params: dict[str, float], **slots: Any) -> dict[str, o
         "sharpe-recorded-before-gates",
         "folds",
         "plateau-moves",
+        "plateau-raised",
         "plateau-loss",
         "another-gate",
         "passed",

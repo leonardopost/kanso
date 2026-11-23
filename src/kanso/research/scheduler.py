@@ -430,7 +430,10 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     runs no window at all and writes its failing certificate, and its precheck judges nothing
     and says why. The `stalled` event records the lane's precheck where no child was started
     — a spare, the only lane precheck that keeps a child from starting — and the child's
-    wherever one was. A research gate that judged nothing spares nothing.
+    wherever one was. A research gate that judged nothing spares nothing. A stall the child
+    spares writes no certificate, so the best is not `judged` and a later stall of it starts
+    a child again; where it was the plateau that refused, that child runs the research window
+    and its moves again to the same refusal (`docs/backlog.md` row 343).
 
     The verdict says where the hypothesis stands and ends nothing: a pass certifies it and a
     fail returns it to research, and either way it is requeued at −1, because the queue is
