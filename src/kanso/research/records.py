@@ -37,12 +37,13 @@ needs how many draws there were and no spread, so it has no units to keep apart.
 outside kanso in the grids that chose its seeds, added to the cards wherever a search is
 priced and to no spread and no filename. `trial_folds` reads the same cards block by block: of
 each strategy, the newest card whose stored measurement shares the grid of the card being
-certified — its periods, its host and its benchmark (`Measurement.pairs`) — scored at a block
-count its caller chooses by the installed objective's own fold arithmetic, one row per
-strategy, and the rest counted by why they made none. It is what a gate that ranks the search's
-selection out of sample reads, off the store and never off a run in hand, so the lane that
-stalled and the certification child read one matrix; it and `trial_metrics` read their cards
-through one query (`_trial_rows`), so the two sets cannot drift apart.
+certified — its window, its periods, its host and its benchmark (`Measurement.pairs` and the
+window) — scored at a block count its caller chooses by the installed objective's own fold
+arithmetic, one row per strategy, and the rest counted by why they made none. It is what a
+gate that ranks the search's selection out of sample reads, off the store and never off a run
+in hand, so the lane that stalled and the certification child read one matrix; it and
+`trial_metrics` read their cards through one query (`_trial_rows`), so the two sets cannot
+drift apart.
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
@@ -749,7 +750,11 @@ class Measurement:
         """Whether this and `other` were scored on one objective, struck their returns at the
         same instants and were differenced against the same host and benchmark runs, as every
         two cards of one run under one reading were: the condition under which two numbers of
-        theirs are read on one grid, fold for fold and period for period."""
+        theirs are read period for period. It does not ask the window, and fold for fold needs
+        that too, since each run is cut into folds over its own declared window
+        (`CardRun.folds`) — two windows that differ only by days holding no period keep every
+        period end and cut every fold over another span. Two cards of one run share their
+        run's window, which is what `against` relies on; `trial_folds` asks it beside this."""
         return (
             self.objective.id == other.objective.id
             and self.run.period_ends_ns == other.run.period_ends_ns
@@ -763,12 +768,13 @@ class Measurement:
 
         They pair when they were scored on one objective, struck their returns at the same
         instants and were differenced against the same host and benchmark runs (`pairs`), as
-        every two cards of one run under one reading are. The host's or the hold's part of each
-        number then cancels, and the difference is the installed objective's own arithmetic
-        with the best in the host's place (`objectives.difference`): a contribution's
-        per-period differences, two Sharpes by Memmel, two per-trade edges linearised and
-        differenced period by period, each widened for serial correlation as every metric's
-        error is.
+        every two cards of one run under one reading are; its one caller hands it the best of
+        this card's own run (`best_measurement`), whose window is this one's, so the folds of
+        the two are cut over one span. The host's or the hold's part of each number then
+        cancels, and the difference is the installed objective's own arithmetic with the best
+        in the host's place (`objectives.difference`): a contribution's per-period differences,
+        two Sharpes by Memmel, two per-trade edges linearised and differenced period by period,
+        each widened for serial correlation as every metric's error is.
         """
         if not self.pairs(best):
             return None
@@ -866,8 +872,8 @@ EXCLUSIONS: Final = (UNMEASURED, OTHER_OBJECTIVE, OFF_GRID, UNREADABLE)
 
 def trial_folds(store: StateStore, hyp_id: str, subject_sha: str, blocks: int) -> TrialFolds | None:
     """The search behind a card, read block by block on the card's own grid: every trial of
-    the hypothesis's family scored on `blocks` equal calendar spans of the window the grid
-    covers, by the installed objective's own fold arithmetic (`Measurement.fold_values`).
+    the hypothesis's family scored on `blocks` equal calendar spans of the grid's window, by
+    the installed objective's own fold arithmetic (`Measurement.fold_values`).
 
     The grid is the measurement of the newest card of `subject_sha` among the hypothesis's own
     cards — the card certification takes as its subject — and `None` comes back where that
@@ -886,8 +892,9 @@ def trial_folds(store: StateStore, hyp_id: str, subject_sha: str, blocks: int) -
     `unreadable`, its measurement could not be decoded or scored. The settings a family
     declares tried outside kanso were never measured here and are never rows.
 
-    Each measurement is decoded only once it is wanted and reduced to its block values at once,
-    so no more than one run is held at a time, however many cards the search has.
+    Each trial's measurement is decoded only once it is wanted and reduced to its block values
+    at once, so what is held at a time is the grid's measurement and one trial's, however many
+    cards the search has.
     """
     newest = store.connection.execute(
         "SELECT card_id, measured_sha FROM cards WHERE hyp_id = ? AND strategy_sha = ?"

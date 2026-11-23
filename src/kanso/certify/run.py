@@ -29,19 +29,20 @@ spends a look at the one window research never saw. So the research gates are ju
 (`_research_readings`): the correction, then the others in the plan's order, `research_plateau`
 last, since it alone costs backtests — two of the research window per parameter it moves, made
 only once every cheaper research gate has passed. Before a stall certifies they are judged
-twice. In the lane that stalled (`precheck`), from the measurement the subject card kept, when
-that measurement was struck the way certification would strike it now, on a snapshot that can
-support a claim, and from the trials' stored measurements, running nothing — so the plateau is
-left to the child. In the certification child itself, on the research window it has just run,
-before the certification window is read (`certify_at_stall`). Either refusal spares the stall:
-no certification window is read and no certificate is written. A gate that judged nothing — a
-plan that carries no correction before the search has two draws, cards and declared settings
-together, or a gate that skips on the research run — spares nothing, since it would judge
-nothing in the certificate either. The certificate records each research gate as the child read
-it, never evaluated again, so a card another lane records while the window runs does not move
-it and every backtest is paid once. `kanso cert run` is the operator's own act and is never
-spared: every research gate is judged, the plateau's backtests are not made once another
-research gate has refused, and the certification window is read regardless.
+twice. In the lane that stalled (`precheck`), on a snapshot that can support a claim, running
+nothing: from the measurement the subject card kept, when that measurement was struck the way
+certification would strike it now, and from the trials' stored measurements however it was
+struck — so the plateau is left to the child. In the certification child itself, on the
+research window it has just run, before the certification window is read
+(`certify_at_stall`). Either refusal spares the stall: no certification window is read and no
+certificate is written. A gate that judged nothing — a plan that carries no correction before
+the search has two draws, cards and declared settings together, or a gate that skips on the
+research run — spares nothing, since it would judge nothing in the certificate either. The
+certificate records each research gate as the child read it, never evaluated again, so a card
+another lane records while the window runs does not move it and every backtest is paid once.
+`kanso cert run` is the operator's own act and is never spared: every research gate is judged,
+the plateau's backtests are not made once another research gate has refused, and the
+certification window is read regardless.
 
 **Both windows are measured the way a card is.** The objective the certificate records,
 and every gate's reading of it, is taken over the workspace's `[research] folds` equal
@@ -306,6 +307,13 @@ RERUNNING: Final = frozenset({PLATEAU, LATENCY, RESEARCH_PLATEAU})
 certification window, spared when the window gate has already refused the subject; on the
 research window, `research_plateau`, spared when another research gate has refused it, and
 never run in the lane, which runs nothing."""
+
+STORED: Final = frozenset({"overfit_probability"})
+"""The research gates that read no run in hand: `overfit_probability` scores the trials'
+stored measurements on the grid of the subject's newest card by the installed objective
+(`records.trial_folds`), and reads none of the settings a run in hand is struck under, so the
+lane judges it on a card measured under other `[research]` settings or another criteria
+version, where every other research gate judges nothing, and reads what the child will."""
 
 RESEARCH_FAILED: Final = (
     "a research gate refused the subject on research data and a certificate a gate refused "
@@ -808,9 +816,12 @@ def precheck(
     card of these bytes, under the hypothesis file its run pinned. Its stored measurement is
     read only when it was struck the way certification in `ws` would strike the research
     window now — the pin's objective, `[research] folds` and `return_period`, the subject's
-    capital and the installed `criteria_version` — and otherwise every research gate is
-    recorded as judging nothing, saying which differed, as it is for a card that kept no
-    measurement; a stall reads `ws` as its certification child opens it
+    capital and the installed `criteria_version` — and otherwise every research gate that
+    reads it is recorded as judging nothing, saying which differed, as every research gate is
+    for a card that kept no measurement; `overfit_probability`, which reads the trials' stored
+    measurements and no run in hand (`STORED`), is judged all the same, as the child will judge
+    it on the same grid, so a selection it refuses starts no child whatever the card was
+    measured under. A stall reads `ws` as its certification child opens it
     (`precheck_at_stall`). Nor does it judge on a snapshot that cannot support a claim:
     certification runs no window there and judges no research gate, and the failing
     certificate it writes is how that snapshot reaches the operator, so the lane leaves the
@@ -868,14 +879,15 @@ def precheck(
         ("capital", measured.run.capital, hyp.capital or research.capital),
         ("criteria_version", measured.criteria_version, criteria_version()),
     )
-    for name, was, now in expected:
-        if was != now:
-            return _unjudged(
-                plan,
-                hyp,
-                f"the newest card of {sha[:7]} was measured under {name} {was}, and "
-                f"certification would measure it under {now}",
-            )
+    moved = next(
+        (
+            f"the newest card of {sha[:7]} was measured under {name} {was}, and "
+            f"certification would measure it under {now}"
+            for name, was, now in expected
+            if was != now
+        ),
+        None,
+    )
     snapshot = read_snapshot(ws, run.snapshot_id)
     blocked = _inadmissible(ws, snapshot)
     if blocked:
@@ -891,6 +903,7 @@ def precheck(
         _Researched(measured.run, measured.host, measured.benchmark),
         measured.folds,
         stop_at_refusal=True,
+        unread=moved,
     )
     return Precheck(readings, measured=False)
 
@@ -1003,6 +1016,7 @@ def _research_readings(
     tunable: Mapping[str, float] | None = None,
     rerun: Callable[[Mapping[str, float]], CardRun] | None = None,
     stop_at_refusal: bool,
+    unread: str | None = None,
 ) -> tuple[GateResult, ...]:
     """The plan's research gates judged on one research run, in the order `_research_order`
     fixes, each by its own `evaluate` on `_research_context`.
@@ -1012,7 +1026,11 @@ def _research_readings(
     subject is recorded as left to the child where no `rerun` is given (`LEFT_TO_CHILD`), and
     as spared once a reading before it has refused the subject (`RESEARCH_FAILED`), so no
     backtest is made for a certificate that cannot pass. With `stop_at_refusal` — at a stall —
-    the readings end at the first that judged and refused.
+    the readings end at the first that judged and refused. `unread`, where given, is why the
+    run in hand is no reading of the arithmetic certification would use — the lane's card,
+    measured under other settings — and every gate that reads it is recorded as judging
+    nothing for that reason, as `_unjudged` records it, while one that reads no run in hand
+    (`STORED`) is judged all the same.
     """
     registry = gates()
     readings: list[GateResult] = []
@@ -1020,6 +1038,9 @@ def _research_readings(
     if missing is not None:
         readings.append(missing)
     for gate in _research_order(plan, hyp):
+        if unread is not None and gate.id not in STORED:
+            readings.append(skipped(gate.id, unread))
+            continue
         found = registry.get(gate.id)
         if found is None:
             readings.append(skipped(gate.id, UNIMPLEMENTED))

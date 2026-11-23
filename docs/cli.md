@@ -164,7 +164,10 @@ stored measurements on that card's grid, running nothing, so the lane leaves the
 child; a plan that carries no correction yet says so and the folds are judged all
 the same. A card measured under another `[research] folds`, `return_period`, capital or criteria
 version — a run's baseline struck by the build before an upgrade, say — or one that kept no
-measurement is no reading of the arithmetic certification would use, so the lane judges nothing.
+measurement is no reading of the arithmetic certification would use, so the lane judges no gate
+that reads it; `overfit_probability`, which reads the trials' stored measurements on that card's
+grid and none of those settings, is judged on a card measured under other settings all the
+same, and a selection it refuses there starts no child.
 The lane plans and judges on `kanso.toml` as it stands at the stall, read again as the
 certification child reads it, so a `[research]` setting edited under a running daemon is the one
 both use, though the lane read the file when it started. A card the lane cannot read judges

@@ -78,10 +78,10 @@ class TrialFolds:
     off the cards the store keeps (`kanso.research.records.trial_folds`).
 
     `values` holds one row per trial and one column per block: the objective's own fold
-    arithmetic at that many equal calendar blocks of the window the grid's periods cover, a
-    block holding no period scoring zero as a fold does. `subject` is the row of the card being
-    judged, `periods` how many period ends the grid holds, and `excluded` how many trials made
-    no row, by why. Plain data, so a gate reads it without reaching the store."""
+    arithmetic at that many equal calendar blocks of the grid's window, a block holding no
+    period scoring zero as a fold does. `subject` is the row of the card being judged, `periods`
+    how many period ends the grid holds, and `excluded` how many trials made no row, by why.
+    Plain data, so a gate reads it without reaching the store."""
 
     values: tuple[tuple[float, ...], ...]
     subject: int

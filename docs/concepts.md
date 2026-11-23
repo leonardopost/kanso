@@ -2718,7 +2718,10 @@ place — and `overfit_probability`, where the plan carries it, on the trials' s
 measurements, running nothing, so the plateau is recorded as left to the child. A plan that
 carries no correction yet says so and goes on to the folds. A card measured under another `[research]
 folds`, `return_period` or capital, or another criteria version, or one that kept no
-measurement, is no reading of the arithmetic certification would use: the lane judges nothing.
+measurement, is no reading of the arithmetic certification would use: the lane judges no gate
+that reads it. `overfit_probability` reads none of those settings — the trials' stored
+measurements on the card's grid, which the child reads too — so the lane judges it on a card
+measured under other settings all the same, and a selection it refuses there starts no child.
 The settings are read from `kanso.toml` as it stands at the stall, as the certification child
 reads them, not as the lane read them when it started, so one edited under a running daemon is
 the one both judge by. A card the lane cannot read judges nothing either, and goes to the child,
@@ -3007,12 +3010,14 @@ the settings a declared grid adds being no row since nothing measured them here,
 the strategies that made no row, by why their newest card did not — `unmeasured`,
 `other_objective`, `off_grid`, a window a re-pin moved or a family member's own, and
 `unreadable`. It prices the search's current stretch alone, where the correction counts every
-draw. It reads stored measurements and runs nothing, so a stall judges it in the lane and the
-certification child reads the same matrix; it judges nothing without two rows, or with a grid
-holding fewer period ends than blocks. Reading them decodes each trial's measurement, one at a
-time, and keeps nothing of it but its block values, so the memory it takes is one measurement's
-however many cards the search has, and the time grows with the cards and with what each holds —
-a scalper's thousands of trades a card cost more to read than a daily strategy's dozens. A stall
+draw. It reads stored measurements and runs nothing, so a stall judges it in the lane — on a
+card measured under other `[research]` settings or another criteria version too, which it reads
+none of — and the certification child reads the same matrix; it judges nothing without two
+rows, or with a grid holding fewer period ends than blocks. Reading them decodes each trial's
+measurement, one at a time, and keeps nothing of it but its block values, so the memory it
+takes is the grid's measurement and one trial's at a time, however many cards the search has,
+and the time grows with the cards and with what each holds — a scalper's thousands of trades a
+card cost more to read than a daily strategy's dozens. A stall
 whose plan carries the gate pays it in the lane and again in the child when it passes; one it
 refuses in the lane starts no child, so the child's run of the research window is spared —
 which is why the lane judges it rather than leaving it to the child as it leaves the plateau.

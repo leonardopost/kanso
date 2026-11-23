@@ -261,7 +261,8 @@ def test_a_measurement_struck_otherwise_than_certification_would_strike_it_judge
     ws: Workspace, store: StateStore, name: str, changes: dict[str, Any], was: str
 ) -> None:
     """The arithmetic the card's number is would not be the certificate's, so the lane leaves
-    the judging to the certification child, which runs the research window first."""
+    every gate that reads it to the certification child, which runs the research window first;
+    a plan without `overfit_probability`, the one that reads no run in hand, judges nothing."""
     sha = best_with(ws, store, *WIDE, **changes)
 
     checked = precheck(ws, store, HYP_ID, sha, plan_of(ws))
@@ -603,19 +604,85 @@ def test_the_lane_s_reading_of_the_selection_is_the_certificate_s_to_the_last_bi
     ]
 
 
+@pytest.mark.parametrize(
+    ("name", "changes"),
+    [
+        ("folds", {"folds": 3}),
+        ("return_period", {"run": replace(RESEARCH_RUN, period="1h")}),
+        ("capital", {"run": replace(RESEARCH_RUN, capital=50_000.0)}),
+        ("criteria_version", {"criteria_version": "0.0.1"}),
+    ],
+)
+def test_a_selection_carded_under_other_settings_is_refused_in_the_lane_without_a_child(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    changes: dict[str, Any],
+) -> None:
+    """`overfit_probability` reads the trials' stored measurements on the grid of the best's
+    newest card, and none of the settings a run in hand is struck under, so a search carded
+    before the operator edited `[research]` or before a release moved the criteria version is
+    judged in the lane all the same, while every gate that reads the card's run judges nothing
+    and says why: trials that tie the best spare the stall, running and reading nothing, and the
+    certification child, had it been started, reads the same matrix and refuses it alike."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, **changes))
+    for seq, metric in enumerate(TIGHT, start=2):
+        a_card(
+            ws,
+            store,
+            FLAT + f"# measured trial {seq}\n".encode(),
+            seq=seq,
+            metric=metric,
+            best=False,
+            measured_sha=measurement(ws, store, **changes),
+        )
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+
+    def unread(*_: object, **__: object) -> Any:
+        raise AssertionError("the lane ran or read a window")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(backtest, "window_chunks", unread)
+        patched.setattr(backtest, "run", unread)
+        lane = precheck(ws, store, hyp_id, sha, plan)
+
+    assert gate_ids(lane) == [
+        "deflated_sharpe",
+        "walk_forward_consistency",
+        "overfit_probability",
+    ], "the correction, then the plan's order, ending at the refusal before the plateau"
+    moved = read_of(lane, "deflated_sharpe").skipped
+    assert moved is not None
+    assert moved.startswith(f"the newest card of {sha[:7]} was measured under {name} ")
+    assert read_of(lane, "walk_forward_consistency").skipped == moved
+    assert lane.spared and lane.judged and lane.measured is False
+    assert (lane.gate, lane.passed, lane.reason) == ("overfit_probability", False, None)
+    assert lane.evidence["pbo"] == 1.0 and lane.evidence["rows"] == 3
+
+    made, child = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is None and child.spared and child.measured
+    assert read_of(child, "overfit_probability").evidence == lane.evidence
+
+
 def test_a_child_the_selection_refuses_reads_no_window_and_runs_no_plateau(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Where the lane could not judge — the best's card was measured under other folds — the
-    child runs the research window and judges the research gates on it; `overfit_probability`
-    reads the stored grid all the same, refuses, and the stall is spared there: the certification
-    window unread, and none of the plateau's moves of the research window run."""
+    """Where the child judges a selection the lane let through — the trials that tie the best
+    recorded after the lane judged it, as another lane of its family records them — it runs the
+    research window and judges the research gates on it; `overfit_probability` reads the stored
+    grid as it stands, refuses, and the stall is spared there: the certification window unread,
+    and none of the plateau's moves of the research window run."""
     hyp_id = classify(ws, store, DOCUMENT, REVERTING)
     set_status(store, hyp_id, "researching")
-    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, folds=3))
-    measured_trials(ws, store, RESEARCH_RUN, *TIGHT)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
     plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
-    assert not precheck(ws, store, hyp_id, sha, plan).judged
+    lane = precheck(ws, store, hyp_id, sha, plan)
+    assert not lane.spared
+    assert read_of(lane, "overfit_probability").skipped is not None, "the best's row alone"
+    measured_trials(ws, store, RESEARCH_RUN, *TIGHT)
     original = backtest.run
     ran: list[backtest.RunRequest] = []
 

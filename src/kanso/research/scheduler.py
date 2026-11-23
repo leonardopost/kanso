@@ -422,8 +422,10 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     (`kanso.certify.run.precheck_at_stall`). A refusal spares the stall: no child is started,
     no certification window is read, the hypothesis stays where it was and goes back to the
     queue at −1. A measurement struck under another `[research]` reading than the file's now
-    or another criteria version, or none at all, judges nothing here, and nor does a snapshot
-    that cannot support a claim, whose failing certificate is how it reaches the operator.
+    or another criteria version judges nothing here but `overfit_probability`, which reads
+    the trials' stored measurements and none of those settings; none at all judges nothing,
+    and nor does a snapshot that cannot support a claim, whose failing certificate is how it
+    reaches the operator.
     Whatever the lane read, a child it starts runs the research window first and judges every
     research gate again on that run, the plateau last, before it reads the certification
     window, and spares the stall itself when one refuses
