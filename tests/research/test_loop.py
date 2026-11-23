@@ -218,8 +218,9 @@ def test_a_turn_s_first_card_that_trades_in_slot_order_strikes_the_card_budget(
 def test_a_baseline_killed_for_its_clock_records_what_it_ran_on_and_one_that_raised_does_not(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """What a lane compares before it begins the run again (`daemon.parked`): the strategy, the
-    two files, the snapshots, the baseline budget and the kanso, as a begin now reads them."""
+    """What a lane compares before it begins the run again (`daemon.baseline_unmoved`): the
+    strategy, the two files, the snapshots, the baseline budget and the kanso, as a begin now
+    reads them."""
 
     def killed(request: backtest.RunRequest, *_: object, **__: object) -> backtest.RunResult:
         return backtest.RunResult(

@@ -1720,7 +1720,7 @@ def test_a_baseline_killed_for_its_clock_waits_in_the_queue_until_what_it_ran_on
     assert begun == ["l1"], "after its backoff the lane passed it over rather than begin it again"
     assert waited == [daemon.BACKOFF_S, daemon.POLL_S]
     assert [item.hyp_id for item in scheduler.queued(store)] == [hyp_id]
-    assert daemon.parked(ws, store, hyp_id)
+    assert daemon.baseline_unmoved(ws, store, hyp_id)
 
     if moved == "strategy.py":
         ws.path("hypotheses", hyp_id, "strategy.py").write_bytes(FLAT + b"# lighter\n")
@@ -1729,11 +1729,11 @@ def test_a_baseline_killed_for_its_clock_waits_in_the_queue_until_what_it_ran_on
     else:
         ws.path("catalog", "snapshots", f"{'e' * 64}.yaml").write_text("{}\n", encoding="utf-8")
 
-    assert not daemon.parked(ws, store, hyp_id)
+    assert not daemon.baseline_unmoved(ws, store, hyp_id)
     assert daemon.claim(ws, store, "l2") == hyp_id
 
 
-def test_a_baseline_killed_for_its_clock_is_not_parked_once_a_run_has_begun_or_it_cannot_be_read(
+def test_a_baseline_killed_for_its_clock_is_not_passed_over_once_a_run_has_begun_or_unreadable(
     ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hyp_id = classify(ws, store, DOCUMENT)
@@ -1741,16 +1741,18 @@ def test_a_baseline_killed_for_its_clock_is_not_parked_once_a_run_has_begun_or_i
         killed_for_its_clock(patched)
         with pytest.raises(research_loop.OverBudgetError):
             research_loop.begin(ws, store, hyp_id)
-    assert daemon.parked(ws, store, hyp_id)
+    assert daemon.baseline_unmoved(ws, store, hyp_id)
     program = ws.path("hypotheses", hyp_id, "program.md")
     kept = program.read_bytes()
     program.unlink()
-    assert not daemon.parked(ws, store, hyp_id), "the begin is left to say what is missing"
+    assert not daemon.baseline_unmoved(ws, store, hyp_id), (
+        "the begin is left to say what is missing"
+    )
     program.write_bytes(kept)
 
     research_loop.begin(ws, store, hyp_id)
 
-    assert not daemon.parked(ws, store, hyp_id)
+    assert not daemon.baseline_unmoved(ws, store, hyp_id)
 
 
 def test_a_drain_of_a_supervisor_that_cannot_answer_one_is_refused_and_sends_it_nothing(

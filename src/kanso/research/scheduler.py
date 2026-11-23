@@ -16,9 +16,9 @@ and the refusal to re-certify unchanged bytes are the three things that bound ch
 
 Three rows are skipped rather than served: a hypothesis already being researched somewhere,
 because one run per hypothesis is the invariant the run table enforces; a dead one, which is
-dropped on sight; and one the caller says is parked — a daemon lane's, a baseline killed for
-its clock on what a baseline would run on now (`kanso.research.daemon.parked`), which is left
-where it is. Lane `op` is a lane like any other to this module, which is
+dropped on sight; and one the caller says to pass over — a daemon lane's, a baseline killed
+for its clock on what a baseline would run on now (`kanso.research.daemon.baseline_unmoved`),
+which is left where it is. Lane `op` is a lane like any other to this module, which is
 what keeps an operator working by hand from blocking a daemon lane: their hypothesis is
 simply not available to be taken.
 
@@ -353,14 +353,14 @@ def put_back(store: StateStore, hyp_id: str, lane: str | None = None) -> QueueIt
 def dequeue(
     store: StateStore,
     lane: str = DEFAULT_LANE,
-    parked: Callable[[str], bool] | None = None,
+    passed_over: Callable[[str], bool] | None = None,
 ) -> str | None:
     """The next hypothesis to research, removed from the queue, or `None`.
 
     A dead hypothesis is dropped on sight, and one already being researched — a run open,
     or a claim a lane holds with its run still to begin — is passed over and left where it
-    is, so the lane that finishes it finds its place unchanged; so is one `parked` says a
-    lane is not to begin yet. Measured before the second
+    is, so the lane that finishes it finds its place unchanged; so is one `passed_over` says
+    a lane is not to begin yet. Measured before the second
     reading: a lane claimed a hypothesis, the operator queued it again in the minutes its
     baseline card took, a second lane claimed it too, and the two runs collided on the
     one row a hypothesis may have open.
@@ -379,7 +379,7 @@ def dequeue(
             continue
         if active_run(store, item.hyp_id) is not None or claimed(store, item.hyp_id):
             continue
-        if parked is not None and parked(item.hyp_id):
+        if passed_over is not None and passed_over(item.hyp_id):
             continue
         with store.transaction():
             if not drop(store, item.hyp_id):
