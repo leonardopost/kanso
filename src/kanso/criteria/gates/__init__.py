@@ -30,7 +30,8 @@ The gates whose library file says `reads: research` — the three deflation gate
 `walk_forward_consistency` and `research_plateau` — read only the research slots of their
 context, the trials and the card measurements, so certification judges them before it reads
 the certification window and a stall whose best one of them refuses is spared
-(`kanso.certify.run`).
+(`kanso.certify.run`). `positive_folds` is `walk_forward_consistency`'s count on the card's own
+run: a card gate that costs no engine run.
 
 Nothing is declared here and left unimplemented: every gate in the library resolves.
 """
@@ -730,6 +731,38 @@ class _EmbargoedWindow:
         )
 
 
+def _positive_folds(
+    gate: str,
+    ctx: GateContext,
+    run: CardRun | None,
+    host: CardRun | None,
+    benchmark: CardRun | None,
+) -> GateResult:
+    """In how many of `run`'s folds the objective was positive, held to `min_positive_folds`:
+    the one count `walk_forward_consistency` takes of the research slots at certification and
+    `positive_folds` of the card's own run, with the same evidence."""
+    required = count(ctx, "min_positive_folds")
+    if required is None:
+        return skipped(gate, "no fold count was chosen, so no consistency was required")
+    objective = _objective(ctx)
+    if objective is None:
+        return skipped(gate, NO_OBJECTIVE)
+    if run is None:
+        return skipped(gate, NO_RESEARCH_RUN)
+    folds = objective.fold_values(run, ctx.research_folds, host, benchmark)
+    positive = sum(1 for value in folds if value > 0)
+    return verdict(
+        gate,
+        positive >= required,
+        {
+            "objective": objective.id,
+            "folds": list(folds),
+            "positive_folds": positive,
+            "min_positive_folds": required,
+        },
+    )
+
+
 class _WalkForwardConsistency:
     """Most research folds positive: an edge that recurs rather than arriving once.
 
@@ -755,31 +788,25 @@ class _WalkForwardConsistency:
     id: ClassVar[str] = "walk_forward_consistency"
 
     def evaluate(self, ctx: GateContext) -> GateResult:
-        required = count(ctx, "min_positive_folds")
-        if required is None:
-            return skipped(self.id, "no fold count was chosen, so no consistency was required")
-        objective = _objective(ctx)
-        if objective is None:
-            return skipped(self.id, NO_OBJECTIVE)
-        if ctx.research_run is None:
-            return skipped(self.id, NO_RESEARCH_RUN)
-        folds = objective.fold_values(
-            ctx.research_run,
-            ctx.research_folds,
-            ctx.host_research_run,
-            ctx.benchmark_research_run,
+        return _positive_folds(
+            self.id, ctx, ctx.research_run, ctx.host_research_run, ctx.benchmark_research_run
         )
-        positive = sum(1 for value in folds if value > 0)
-        return verdict(
-            self.id,
-            positive >= required,
-            {
-                "objective": objective.id,
-                "folds": list(folds),
-                "positive_folds": positive,
-                "min_positive_folds": required,
-            },
-        )
+
+
+class _PositiveFolds:
+    """The card's own folds positive in at least `min_positive_folds`: the arithmetic of
+    `walk_forward_consistency` on the run a card is judged on — the research window, with the
+    host's and the benchmark's run beside it — so a card whose edge one fold earned and the
+    others did not fails a card gate, is a discard, and is never kept. It costs no engine run.
+    Whether a hypothesis carries it, and at how many folds, is the classifier's choice among
+    its constraints or the operator's in `required_constraints`: every fold positive is a count
+    of `[research] folds`, stated as a value, never a default.
+    """
+
+    id: ClassVar[str] = "positive_folds"
+
+    def evaluate(self, ctx: GateContext) -> GateResult:
+        return _positive_folds(self.id, ctx, ctx.run, ctx.host_run, ctx.benchmark_run)
 
 
 class _DeflatedSharpe:
@@ -1965,6 +1992,7 @@ intraday_drawdown: Final[Gate] = _IntradayDrawdown()
 maintenance_margin: Final[Gate] = _MaintenanceMargin()
 embargoed_window: Final[Gate] = _EmbargoedWindow()
 walk_forward_consistency: Final[Gate] = _WalkForwardConsistency()
+positive_folds: Final[Gate] = _PositiveFolds()
 deflated_sharpe: Final[Gate] = _DeflatedSharpe()
 deflated_contribution: Final[Gate] = _DeflatedContribution()
 deflated_edge: Final[Gate] = _DeflatedEdge()

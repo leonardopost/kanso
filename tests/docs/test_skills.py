@@ -308,6 +308,18 @@ def test_the_research_skill_says_a_stall_s_certification_can_be_spared() -> None
     ) in text
 
 
+def test_the_hypothesis_skill_states_every_fold_positive_as_the_operator_s_value() -> None:
+    """An agent asked for an edge that recurs writes the card gate from here; told nothing of
+    the count, it would leave the gate bare, which `hyp validate` refuses, or pick a count the
+    operator never stated."""
+    text = skill(PACKAGED, "kanso-hypothesis")
+    assert "`required_constraints: [{id: positive_folds, params: {min_positive_folds: N}}]`" in text
+    assert "N is the operator's, never yours" in text
+    classify = skill(PACKAGED, "kanso-classify")
+    assert "`positive_folds` holds a card to a positive objective" in classify
+    assert "never carried by default" in classify
+
+
 def test_the_data_skill_says_where_a_split_s_ex_date_is_dated() -> None:
     """An agent declaring a US split without a zone gets a UTC day, which lands the split
     inside a winter post-market; the skill is where it learns the key exists."""

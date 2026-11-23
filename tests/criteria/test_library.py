@@ -145,7 +145,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 39
+    assert len(items) == 40
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -202,6 +202,20 @@ def test_a_research_gate_every_plan_carries_is_carried_with_every_parameter_set(
     )
     with pytest.raises(ValidationError, match=rf"gates\.{gate_id}\.\w+: is not set"):
         validate_plan(replacing(gate_id, params=params), make_hyp(), FOLDS)
+
+
+def test_every_fold_positive_on_a_card_is_a_value_and_never_a_default() -> None:
+    """`positive_folds` is the classifier's to name among the constraints, or the operator's in
+    `required_constraints`, with its count set; no hypothesis carries it unasked."""
+    item = catalogue()["positive_folds"]
+
+    assert (item.stage, item.required, item.together, item.reads) == ("card", False, True, None)
+    assert item.required_for is None
+    assert lib.check_params(item, {"min_positive_folds": FOLDS}, make_hyp(), FOLDS) == []
+    (wide,) = lib.check_params(item, {"min_positive_folds": FOLDS + 1}, make_hyp(), FOLDS)
+    assert wide == f"min_positive_folds: {FOLDS + 1} is outside the range [1, {FOLDS}]"
+    (bare,) = lib.check_params(item, {}, make_hyp(), FOLDS)
+    assert bare.startswith("min_positive_folds: is not set, and positive_folds judges nothing")
 
 
 def test_the_research_gates_are_the_ones_whose_files_say_they_read_research() -> None:
