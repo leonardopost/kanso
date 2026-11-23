@@ -182,7 +182,7 @@ is refused when the harness is built, which for a fresh run is inside the baseli
 $ kanso research begin demo_filter
 error: the baseline card of demo_filter did not run: exception: Traceback (most recent call last):
 …
-kanso.errors.ValidationError: construct.params: Config does not take these parameters: Unexpected keyword argument 'scope'
+kanso.nautilus.backtest.ConfigError: construct.params: Config does not take these parameters: Unexpected keyword argument 'scope'
 remedy: fix hypotheses/demo_filter/strategy.py and begin again
 ```
 
