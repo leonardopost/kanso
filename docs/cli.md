@@ -167,7 +167,11 @@ version — a run's baseline struck by the build before an upgrade, say — or o
 measurement is no reading of the arithmetic certification would use, so the lane judges no gate
 that reads it; `overfit_probability`, which reads the trials' stored measurements on that card's
 grid and none of those settings, is judged on a card measured under other settings all the
-same, and a selection it refuses there starts no child.
+same, and a selection it refuses there starts no child. It ranks only the trials struck under
+that card's own reading — its capital, account currency and venue model — so the cards carded
+after a `[research] capital`, `[research] broker` or `portfolio.yaml` edit are no rows beside a
+best carded before it; the warmup and a sizing budget, which no stored run holds, are not
+asked.
 The lane plans and judges on `kanso.toml` as it stands at the stall, read again as the
 certification child reads it, so a `[research]` setting edited under a running daemon is the one
 both use, though the lane read the file when it started. A card the lane cannot read judges
@@ -203,7 +207,8 @@ correction's probability and its threshold (`probability` and `min_probability` 
 estimate and its error, the expected maximum, `trials` and `scored_trials`; the folds' `folds`,
 `positive_folds` and `min_positive_folds`; the selection's `pbo` and `max_pbo`, `blocks`,
 `splits`, `rows`, `subject_row`, `searched`, `prior_trials`, `excluded` — the strategies that
-made no row, by `unmeasured`, `other_objective`, `off_grid` and `unreadable` — and `oos_loss`,
+made no row, by `unmeasured`, `other_objective`, `off_grid`, `other_reading` and `unreadable` —
+and `oos_loss`,
 under `overfit_probability`; the plateau's `unperturbed`, `floor`, `n_backtests` and
 `perturbations`, a move whose setting the strategy refused — its configuration rejecting the
 value, the harness an order, or its own code raising — carrying `metric` `null` and `raised`.

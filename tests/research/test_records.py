@@ -593,6 +593,7 @@ def test_the_search_is_read_block_by_block_on_the_subject_s_grid(
         "unmeasured": 1,
         "other_objective": 1,
         "off_grid": 2,
+        "other_reading": 0,
         "unreadable": 1,
     }
     assert found.periods == 8
@@ -669,6 +670,56 @@ def test_a_family_s_trials_on_the_grid_are_rows_and_a_window_a_re_pin_moved_is_o
         "the parent's January and wider cards are off its grid too, and its child's card is no"
         " trial of it"
     )
+
+
+def test_a_trial_struck_under_another_reading_than_the_grid_s_is_no_row(
+    store: StateStore, registered: str
+) -> None:
+    """A stored run states the capital it opened at, its account currency and the venue model
+    each of its fills was charged under, and a trial struck under another than the grid's is
+    another number for the same book — a card from before `[research] capital`, `[research]
+    broker` or `portfolio.yaml` was edited, or before a re-pin moved the costs — however exactly
+    it shares the grid's instants, window, host and benchmark. It makes no row and is counted as
+    `other_reading`; a strategy whose newest card is one, and whose older card shares the grid's
+    reading, is read on the older card, as a strategy off the grid is."""
+    run = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
+    subject, richer, dearer, euro, both = (
+        store.put_blob(f"# {name}\n".encode())
+        for name in ("subject", "richer", "dearer", "euro", "both")
+    )
+    at_double = replace(GRID, capital=2 * GRID.capital)
+    charged = replace(GRID, venue_model={"commission_bps": 99.0})
+    in_euro = replace(GRID, currency="EUR")
+    for other in (at_double, charged, in_euro):
+        assert on_grid(run=other).pairs(on_grid()), "the same instants, host and benchmark"
+        assert other.window == GRID.window
+    older = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)
+    cards = [
+        (both, grid_measurement(store, *older)),
+        (subject, grid_measurement(store)),
+        (richer, grid_measurement(store, run=at_double)),
+        (dearer, grid_measurement(store, run=charged)),
+        (euro, grid_measurement(store, run=in_euro)),
+        (both, grid_measurement(store, run=charged)),
+    ]
+    for sha, measured in cards:
+        records.record_card(store, run, a_card(run, sha, 1.0, measured))
+
+    found = records.trial_folds(store, registered, subject, 4)
+
+    assert found is not None
+    assert found.values == (on_grid(*older).fold_values(4), on_grid().fold_values(4)), (
+        "the older card of the strategy whose newest was charged under another model, then the"
+        " subject"
+    )
+    assert found.subject == 1
+    assert dict(found.excluded) == {
+        "unmeasured": 0,
+        "other_objective": 0,
+        "off_grid": 0,
+        "other_reading": 3,
+        "unreadable": 0,
+    }
 
 
 def test_a_subject_with_no_grid_to_read_has_no_trial_folds(

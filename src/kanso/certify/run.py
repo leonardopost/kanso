@@ -310,10 +310,11 @@ never run in the lane, which runs nothing."""
 
 STORED: Final = frozenset({"overfit_probability"})
 """The research gates that read no run in hand: `overfit_probability` scores the trials'
-stored measurements on the grid of the subject's newest card by the installed objective
-(`records.trial_folds`), and reads none of the settings a run in hand is struck under, so the
-lane judges it on a card measured under other `[research]` settings or another criteria
-version, where every other research gate judges nothing, and reads what the child will."""
+stored measurements on the grid of the subject's newest card, under the reading that card was
+struck under, by the installed objective (`records.trial_folds`), and reads none of the settings
+a run in hand is struck under, so the lane judges it on a card measured under other
+`[research]` settings or another criteria version, where every other research gate judges
+nothing, and reads what the child will."""
 
 RESEARCH_FAILED: Final = (
     "a research gate refused the subject on research data and a certificate a gate refused "

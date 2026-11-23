@@ -79,9 +79,13 @@ class TrialFolds:
 
     `values` holds one row per trial and one column per block: the objective's own fold
     arithmetic at that many equal calendar blocks of the grid's window, a block holding no
-    period scoring zero as a fold does. `subject` is the row of the card being judged, `periods`
-    how many period ends the grid holds, and `excluded` how many trials made no row, by why.
-    Plain data, so a gate reads it without reaching the store."""
+    period scoring zero as a fold does. Every row was struck at the grid's instants, over its
+    window, against its host and benchmark, and under its reading — the capital, the account
+    currency and the venue model the subject's run states — so the rows are one number each
+    for one question; the warmup and a sizing budget, which no stored run holds, are not asked.
+    `subject` is the row of the card being judged, `periods` how many period ends the grid
+    holds, and `excluded` how many trials made no row, by why. Plain data, so a gate reads it
+    without reaching the store."""
 
     values: tuple[tuple[float, ...], ...]
     subject: int
@@ -119,10 +123,10 @@ class GateContext:
       a count has no units to keep apart and a spread does. It is 1 — no search — wherever
       no caller counts one;
     * `trial_folds` reads the same search block by block: handed a block count, it returns
-      every trial whose stored measurement shares the subject's grid, scored on that many
-      equal blocks of it (`TrialFolds`), or `None` where the subject's card kept no measurement
-      to be the grid — what a gate that asks how the search's selection ranks out of sample
-      needs, read off stored measurements, so it runs nothing;
+      every trial whose stored measurement shares the subject's grid and its reading, scored
+      on that many equal blocks of it (`TrialFolds`), or `None` where the subject's card kept
+      no measurement to be the grid — what a gate that asks how the search's selection ranks
+      out of sample needs, read off stored measurements, so it runs nothing;
     * `lane_dir` and `pinned` are the lane directory and the sha256 of each blob the run
       pinned, which is what the scope rule is checked against;
     * `datasets` are the pinned snapshot's datasets with their observed and documented

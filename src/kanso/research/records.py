@@ -38,8 +38,10 @@ outside kanso in the grids that chose its seeds, added to the cards wherever a s
 priced and to no spread and no filename. `trial_folds` reads the same cards block by block: of
 each strategy, the newest card whose stored measurement shares the grid of the card being
 certified — its window, its periods, its host and its benchmark (`Measurement.pairs` and the
-window) — scored at a block count its caller chooses by the installed objective's own fold
-arithmetic, one row per strategy, and the rest counted by why they made none. It is what a
+window) — and its reading, the capital, currency and venue model its run was struck under (a
+stored run holds neither its warmup nor a sizing budget, so neither is asked), scored at a
+block count its caller chooses by the installed objective's own fold arithmetic, one row per
+strategy, and the rest counted by why they made none. It is what a
 gate that ranks the search's selection out of sample reads, off the store and never off a run
 in hand, so the lane that stalled and the certification child read one matrix; it and
 `trial_metrics` read their cards through one query (`_trial_rows`), so the two sets cannot
@@ -865,8 +867,9 @@ def read_measurement(payload: Mapping[str, Any]) -> Measurement:
 UNMEASURED: Final = "unmeasured"
 OTHER_OBJECTIVE: Final = "other_objective"
 OFF_GRID: Final = "off_grid"
+OTHER_READING: Final = "other_reading"
 UNREADABLE: Final = "unreadable"
-EXCLUSIONS: Final = (UNMEASURED, OTHER_OBJECTIVE, OFF_GRID, UNREADABLE)
+EXCLUSIONS: Final = (UNMEASURED, OTHER_OBJECTIVE, OFF_GRID, OTHER_READING, UNREADABLE)
 """Why a trial makes no row of `trial_folds`, in the order its `excluded` lists them."""
 
 
@@ -880,17 +883,30 @@ def trial_folds(store: StateStore, hyp_id: str, subject_sha: str, blocks: int) -
     card kept none, or kept one this build cannot read or score. Its row is the subject's.
     Every other row is a strategy of the trials `trial_metrics` reads (`_trial_rows`): the
     newest card of its bytes whose measurement pairs with the grid (`Measurement.pairs`) over
-    the grid's own window, so two byte strings are two rows however alike their results, and a
-    strategy carded again under new pins is read where it shares the grid. Rows are in the
-    order those cards were recorded.
+    the grid's own window and under the grid's reading — its run's capital, account currency
+    and venue model, the cost model each fill was charged under — so two byte strings are two
+    rows however alike their results, and a strategy carded again under new pins is read where
+    it shares the grid and its reading. Rows are in the order those cards were recorded.
 
     A strategy none of whose cards pairs makes no row, and is counted in `excluded` by why its
     newest card did not: `unmeasured`, it kept no measurement; `other_objective`, its run pinned
     a file naming another objective, a number in other units; `off_grid`, it struck its returns
     at other instants, over another window or against another host or benchmark — a window a
     re-pin moved, even only across days that held no period, a family member's own;
-    `unreadable`, its measurement could not be decoded or scored. The settings a family
-    declares tried outside kanso were never measured here and are never rows.
+    `other_reading`, it shares the grid but was struck at another capital, in another currency
+    or under another venue model — a card from before `[research] capital`, `[research] broker`
+    or `portfolio.yaml` was edited, or before a re-pin moved the costs; `unreadable`, its
+    measurement could not be decoded or scored. The settings a family declares tried outside
+    kanso were never measured here and are never rows.
+
+    The reading is asked because the rows are ranked against each other: one book struck at
+    another capital or charged under another cost model is another number
+    (`loop.Setup.measured_under`), and rows a shift of reading sets apart rank apart on both
+    halves of every split, so the pick holds its rank out of sample for the shift's sake and the
+    estimate falls toward a pass. What a stored run does not hold is not asked, and a card that
+    differs from the grid only there is read as one on it: the warmup sessions it was fed before
+    the window, and the budget a `sizing` rule sized it to — its pinned file's, or an attached
+    construct's host's — with the bar sizes an overlay loads beside its host's.
 
     Each trial's measurement is decoded only once it is wanted and reduced to its block values
     at once, so what is held at a time is the grid's measurement and one trial's, however many
@@ -953,12 +969,17 @@ def _on_grid(
     store: StateStore, sha: str, grid: Measurement, blocks: int
 ) -> tuple[float, ...] | str:
     """A stored measurement's block values where it pairs with `grid` over the grid's own
-    window, or why it has none: decoded and scored here, and nothing of it kept but the values.
+    window and under its reading, or why it has none: decoded and scored here, and nothing of it
+    kept but the values.
 
     The window is asked beside `pairs` because the blocks are cut from each run's own window
     (`CardRun.folds`) while its period ends hold only the periods that held a point: a window
     moved across days that held none — an end moved from a Friday to the Sunday after it, a
-    start on a holiday — keeps every period end and cuts every block over another span.
+    start on a holiday — keeps every period end and cuts every block over another span. The
+    reading is asked after both (`_reading`), because `pairs` asks only what makes two numbers
+    comparable period for period and not whether they are one number: a card struck at another
+    capital or charged under another venue model strikes its returns at the grid's instants all
+    the same.
     """
     try:
         measured = _measurement(store, sha)
@@ -966,9 +987,18 @@ def _on_grid(
             return OTHER_OBJECTIVE
         if not measured.pairs(grid) or measured.run.window != grid.run.window:
             return OFF_GRID
+        if _reading(measured.run) != _reading(grid.run):
+            return OTHER_READING
         return measured.fold_values(blocks)
     except Exception:
         return UNREADABLE
+
+
+def _reading(run: CardRun) -> tuple[float, str, Mapping[str, object]]:
+    """The reading a stored run states it was struck under and `Measurement.pairs` does not
+    ask: the capital it opened at, its account currency and the venue model each of its fills
+    was charged under."""
+    return (run.capital, run.currency, run.venue_model)
 
 
 def signature(run: CardRun, hourly: bool = False) -> Signature:

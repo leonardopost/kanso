@@ -569,7 +569,13 @@ def test_the_lane_refuses_a_selection_its_trials_tie_without_running_anything(
         "subject_row": 0,
         "searched": 3,
         "prior_trials": 0,
-        "excluded": {"unmeasured": 0, "other_objective": 0, "off_grid": 0, "unreadable": 0},
+        "excluded": {
+            "unmeasured": 0,
+            "other_objective": 0,
+            "off_grid": 0,
+            "other_reading": 0,
+            "unreadable": 0,
+        },
         "oos_loss": 0.0,
     }
     assert spared_by(checked.payload()) == "overfit_probability 1.000 > 0.250"
@@ -665,6 +671,46 @@ def test_a_selection_carded_under_other_settings_is_refused_in_the_lane_without_
 
     assert made is None and child.spared and child.measured
     assert read_of(child, "overfit_probability").evidence == lane.evidence
+
+
+def test_a_best_carded_before_a_capital_edit_is_ranked_among_the_trials_of_its_own_reading(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A stall comes when the cards after a best fail to beat it, so where `[research] capital`
+    was edited between them the best and the cards before the edit were struck at one capital
+    and the cards after it at another: one book read two ways. The lane judges
+    `overfit_probability` on that best all the same, but only on the rows of the best's own
+    reading — the cards after the edit, which every block sets above the best's, would be picked
+    on every split and hold their rank out of sample for that reason alone, a pass for a
+    selection that selected nothing — and counts them as `other_reading`."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    before = replace(RESEARCH_RUN, capital=ws.config.research.capital / 2)
+    after = replace(RESEARCH_RUN, returns=tuple(value + 10.0 for value in RESEARCH_RUN.returns))
+    assert after.capital == ws.config.research.capital, "struck at the capital kanso.toml states"
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, run=before))
+    for seq, (run_of, metric) in enumerate(
+        ((before, TIGHT[0]), (before, TIGHT[1]), (after, 0.5), (after, 0.6)), start=2
+    ):
+        a_card(
+            ws,
+            store,
+            FLAT + f"# measured trial {seq}\n".encode(),
+            seq=seq,
+            metric=metric,
+            best=False,
+            measured_sha=measurement(ws, store, run=run_of),
+        )
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+
+    lane = precheck(ws, store, hyp_id, sha, plan)
+
+    moved = read_of(lane, "deflated_sharpe").skipped
+    assert moved is not None and "capital" in moved
+    assert lane.spared and lane.judged and lane.measured is False
+    assert (lane.gate, lane.passed) == ("overfit_probability", False)
+    assert lane.evidence["pbo"] == 1.0, "the best and the two cards before the edit tie"
+    assert lane.evidence["rows"] == 3 and lane.evidence["subject_row"] == 0
+    assert lane.evidence["excluded"]["other_reading"] == 2, "the two cards after the edit"
 
 
 def test_a_child_the_selection_refuses_reads_no_window_and_runs_no_plateau(

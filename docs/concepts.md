@@ -2722,6 +2722,10 @@ measurement, is no reading of the arithmetic certification would use: the lane j
 that reads it. `overfit_probability` reads none of those settings — the trials' stored
 measurements on the card's grid, which the child reads too — so the lane judges it on a card
 measured under other settings all the same, and a selection it refuses there starts no child.
+It holds each trial to the capital, currency and venue model that card was struck under, not to
+the file's: a best carded before an edit to `[research] capital` is ranked among the trials
+struck at its own capital, and the cards after the edit, which stalled it, are no rows beside
+it.
 The settings are read from `kanso.toml` as it stands at the stall, as the certification child
 reads them, not as the lane read them when it started, so one edited under a running daemon is
 the one both judge by. A card the lane cannot read judges nothing either, and goes to the child,
@@ -2993,8 +2997,15 @@ of backtest overfitting, estimated by combinatorially symmetric cross-validation
 Borwein, López de Prado and Zhu (2014). The trials are the cards of the hypothesis's family that
 ran and traded — the set the corrections read — one row per strategy: the newest card of its
 bytes whose stored measurement shares the grid of the subject's newest card, the same window,
-periods, host and benchmark, so two byte strings are two rows however alike their results, and identical
-results only tie. The research window is cut into `S = 2 × half_blocks` equal calendar blocks
+periods, host and benchmark, and its reading, the capital, account currency and venue model its
+run was struck under, so two byte strings are two rows however alike their results, and identical
+results only tie. The reading is asked because the rows are ranked against each other: one book
+struck at another capital or charged under another cost model is another number, and rows a
+shift of reading sets apart rank apart on both halves of every split, so the pick holds its rank
+out of sample for the shift's sake and the estimate falls toward a pass. What a stored run does not hold is not
+asked, and a card that differs only there is a row: the warmup sessions it was fed before the
+window, and the budget a `sizing` rule sized it to — its pinned file's, or an attached
+construct's host's — with the bar sizes an overlay loads beside its host's. The research window is cut into `S = 2 × half_blocks` equal calendar blocks
 and every row, `N` of them, is scored on each by the objective's own fold arithmetic — a block that holds no
 period scores zero, as a fold does. For each of the `C(S, S/2)` ways of choosing half the
 blocks, the row with the best mean over that half — the first, where two tie — is the one the
@@ -3008,8 +3019,9 @@ subject's, `oos_loss` — the share of splits whose pick lost out of sample, whi
 and the search it could not read: `searched` and `prior_trials`, the draws the correction counts,
 the settings a declared grid adds being no row since nothing measured them here, and `excluded`,
 the strategies that made no row, by why their newest card did not — `unmeasured`,
-`other_objective`, `off_grid`, a window a re-pin moved or a family member's own, and
-`unreadable`. It prices the search's current stretch alone, where the correction counts every
+`other_objective`, `off_grid`, a window a re-pin moved or a family member's own,
+`other_reading`, a card from before `[research] capital`, `[research] broker` or
+`portfolio.yaml` was edited or before a re-pin moved the costs, and `unreadable`. It prices the search's current stretch alone, where the correction counts every
 draw. It reads stored measurements and runs nothing, so a stall judges it in the lane — on a
 card measured under other `[research]` settings or another criteria version too, which it reads
 none of — and the certification child reads the same matrix; it judges nothing without two

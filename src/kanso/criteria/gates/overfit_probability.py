@@ -70,11 +70,13 @@ moves in sixths. The gate complements a deflation and never replaces one: it car
 
 **It reads stored measurements and runs nothing.** The matrix comes from the reader the
 certification runner hands it, which reads every trial's newest card that shares the subject's
-grid off the cards the store keeps, so the lane that stalled and the certification child read the
-same matrix; a gate in `criteria` reaches nothing of `research`. The settings a family declares
-tried outside kanso were never measured here, so they are no rows: the evidence states them as
-`prior_trials` beside `searched`, the draws a deflation counts, and `excluded` says how many
-carded trials made no row and why.
+grid and its reading — the capital, currency and venue model the subject's run was struck
+under, since rows a shift of reading sets apart rank apart in both halves and take the estimate
+toward a pass — off the cards the store keeps, so the lane that stalled and the certification
+child read the same matrix; a gate in `criteria` reaches nothing of `research`. The settings a
+family declares tried outside kanso were never measured here, so they are no rows: the evidence
+states them as `prior_trials` beside `searched`, the draws a deflation counts, and `excluded`
+says how many carded trials made no row and why.
 
 It judges nothing — and passes, saying why — without both its parameters, an objective, a
 reader, a grid, two rows, or a grid of at least `S` period ends.
