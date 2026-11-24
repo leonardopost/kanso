@@ -395,8 +395,8 @@ def test_the_research_skill_states_the_exploration_default_the_package_ships() -
 def test_the_research_skill_states_that_a_park_is_off_until_the_operator_sets_it() -> None:
     """The agent reading this skill is the one an operator asks why a hypothesis waits behind
     every other: it is told to read the key in `kanso.toml`, which the template writes as
-    never, where to read whether a park holds now rather than what a stall recorded, and that
-    a park ends nothing."""
+    never, where to read whether a park holds now rather than what a stall recorded, that a
+    lifted park leaves a row already waiting at −3 where it is, and that a park ends nothing."""
     default = ResearchConfig().park_after_stalls
     text = skill(PACKAGED, "kanso-research")
     assert (
@@ -404,6 +404,7 @@ def test_the_research_skill_states_that_a_park_is_off_until_the_operator_sets_it
         f" writes {default}, 0 is never —"
     ) in text
     assert "Whether it holds now is `kanso status --json` → `hypotheses[].parked`" in text
+    assert "a lifted park moves no row" in text, "a row waiting at −3 when a re-pin lifts it"
     assert "`hypotheses[].last_stall.parked`" in text
     assert "A park ends, retires and removes nothing" in text
 

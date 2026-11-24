@@ -1284,9 +1284,9 @@ climbing. `[research] park_after_stalls` (0 in the template; 0 is never) **parks
 stall that makes that many in a row on one best returns it to the queue at −3, behind 0, −1 and
 −2, every band kanso itself returns a hypothesis to. The spell is counted newest first over its
 `stalled` events since its best was last cleared, this stall included, and only a stall on
-another best or a `best_cleared` breaks it — a reseed or an exploration between two stalls does
-not, since neither moved the best, and a stall spared on research data or certified counts like
-any other. The stall records `parked` and `stalls_on_best` on its `stalled` event. A park ends
+another best, a `best_cleared` or a stall decided across one breaks it — a reseed or an
+exploration between two stalls does not, since neither moved the best, and a stall spared on
+research data or certified counts like any other. The stall records `parked` and `stalls_on_best` on its `stalled` event. A park ends
 nothing — the status, the best, the run and the row are as they were, and only the operator
 retires a hypothesis — and it only reorders: a lane serves a parked row as soon as nothing
 ranked above it waits, so with every hypothesis in the queue saturated, lanes keep serving
@@ -1294,9 +1294,15 @@ them at −3. It is lifted at the next return to the queue by a keep that moves 
 parked on, and by a `best_cleared` — a re-pin whose scope or card gates moved, or `research
 begin --from-workspace` — even when the next baseline keeps the same bytes again, since the
 stalls behind it were measured under the scope it replaced; and by the next stall once the key
-is 0 or above its spell, which records `parked: false`. `kanso research queue add ID --priority
-P` raises it until its next return, and `kanso status --json` → `hypotheses[].parked` says
-whether it holds now. The band is not written once, at the stall, because a band written there
+is 0 or above its spell, which records `parked: false`. A re-pin is not refused while a stall
+is decided — the lane's run has ended before the stall certifies — so a stall reads the best
+again before it records itself, and one whose best moved or was cleared in the meantime records
+`stalls_on_best: 0` and `parked: false`: it was measured under the scope the re-pin replaced, so
+it stands in no spell, and the next stall's starts after it. `kanso research queue add ID
+--priority P` raises a parked row until its next return, and `kanso status --json` →
+`hypotheses[].parked` says whether the park holds at the next return. A lifted park moves no
+row: one already waiting at −3 when a re-pin lifts it keeps that place until a lane serves it
+or `queue add --priority` raises it. The band is not written once, at the stall, because a band written there
 would not survive a live workspace: a lane that fails mid-run puts its hypothesis back at −1, a
 baseline that would not run at −2, and a live workspace recorded 373 `lane_failed` events
 against 8 `stalled` (`docs/backlog.md` row 62), so a band written at the stall would be lifted

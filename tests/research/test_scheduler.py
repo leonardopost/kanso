@@ -1336,6 +1336,83 @@ def test_a_cleared_best_lifts_the_park_though_the_baseline_keeps_the_same_bytes_
     ), "a new spell"
 
 
+def test_a_re_pin_that_lifts_a_park_leaves_a_row_waiting_at_minus_three_where_it_stands(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The park is read at a return, so a re-pin that clears the best moves no row already
+    waiting: it stays behind −2 until a lane serves it, or `queue add --priority` raises it."""
+    workspace, hyp_id, _ = saturated(ws, store, 2)
+    stalls(workspace, store, hyp_id, 2)
+    other = register(workspace, store, "demo_two")
+    scheduler.requeue(store, other, scheduler.BASELINE_PRIORITY)
+    waiting = [(other, scheduler.BASELINE_PRIORITY), (hyp_id, scheduler.PARK_PRIORITY)]
+    assert priorities(store) == waiting
+
+    moved = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+    classify(workspace, store, document(costs=moved), REVERTING)
+
+    assert scheduler.parked(store, hyp_id) is False, "its next return goes to its band"
+    assert priorities(store) == waiting, "and the row waiting now stays where it is"
+    scheduler.enqueue(store, hyp_id, priority=scheduler.STALL_PRIORITY)
+    assert priorities(store) == [
+        (hyp_id, scheduler.STALL_PRIORITY),
+        (other, scheduler.BASELINE_PRIORITY),
+    ]
+
+
+@pytest.mark.parametrize("after", [1, 2])
+def test_a_stall_decided_across_a_re_pin_that_cleared_its_best_stands_in_no_spell(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, after: int
+) -> None:
+    """A re-pin is not refused while a stall is decided — the lane's run has ended — so one
+    whose scope moved can clear the best between the stall reading it and recording itself.
+    That stall was measured under the scope the re-pin replaced: it parks nothing, and once
+    the next baseline keeps the same bytes again the first stall under the new scope is the
+    first of its spell, at either key."""
+    workspace, hyp_id, best = saturated(ws, store, after)
+    stalls(workspace, store, hyp_id, after - 1)
+    real = certificates.judged
+    re_pinned: list[str] = []
+
+    def re_pinning(*args: Any, **kwargs: Any) -> bool:
+        if not re_pinned:
+            moved = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+            re_pinned.append(classify(workspace, store, document(costs=moved), REVERTING))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(certificates, "judged", re_pinning)
+
+    across = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert re_pinned == [hyp_id], "the re-pin landed while the stall was decided"
+    assert records.best_of(store, hyp_id) == (None, None)
+    assert (across.best_sha, across.parked, across.stalls_on_best, across.priority) == (
+        best,
+        False,
+        0,
+        scheduler.STALL_PRIORITY,
+    )
+    detail = store.events(kind=scheduler.STALLED, subject=hyp_id)[-1].detail
+    assert (detail["best_sha"], detail["parked"], detail["stalls_on_best"]) == (best, False, 0)
+    assert scheduler.parked(store, hyp_id) is False
+    assert priorities(store) == [(hyp_id, scheduler.STALL_PRIORITY)]
+
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    run = open_run(store, hyp_id, lane="l1")
+    records.set_best(store, run, best, 2.0)  # the baseline, on the same bytes
+    assert scheduler.parked(store, hyp_id) is False
+    item = scheduler.put_back(store, hyp_id, "l1")
+    assert item is not None and item.priority == scheduler.STALL_PRIORITY
+    records.close(store, run)
+
+    first = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert first.stalls_on_best == 1, "a new spell, which the stall across the re-pin is not in"
+    assert (first.parked, first.priority) == (
+        (True, scheduler.PARK_PRIORITY) if after == 1 else (False, scheduler.STALL_PRIORITY)
+    )
+
+
 def test_a_claim_on_a_row_queued_below_the_park_recovers_where_it_stood(
     ws: Workspace, store: StateStore
 ) -> None:
