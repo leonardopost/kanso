@@ -61,6 +61,12 @@ error: demo_filter has an active run (f922aba53c5d48f3a3f40b45f850fb72), so it c
 remedy: end the run with `kanso research end demo_filter` first
 ```
 
+A lane whose baseline is running holds a claim and no run yet, so a re-pin then is accepted, and
+it is the lane's begin that is refused: the begin pinned `hypothesis.yaml` before its baseline,
+and it reads the registered sha again in the write that records the run and its `run_begun`, so
+no run begins on the bytes a re-pin replaced. The daemon puts the hypothesis back in the queue,
+and its next run is pinned to the new bytes.
+
 A hypothesis moves through `draft → classified → researching → candidate → certified`, and
 `retired` is the one end. **Only an operator ends a line of research**, with `kanso hyp
 retire`, and `kanso hyp resume` takes it back. A certificate, pass or fail, is a milestone
@@ -1307,6 +1313,9 @@ directory and records its end — so a stall is anchored to its run: one whose r
 `best_cleared` or a re-pin that moved its scope or added a card gate — best or no best — or whose
 best moved while it was decided records `stalls_on_best: 0` and `parked: false`: it was measured
 under what the re-pin replaced, so it stands in no spell, and the next stall's starts after it.
+A run's beginning is its `run_begun`, written once its baseline has run, and a re-pin that lands
+while the baseline runs, before the run exists, leaves that run unbegun (Hypothesis, above),
+so no run begins after a re-pin on the bytes it replaced.
 It reads its best again, counts its spell and records itself in one write transaction, so no
 clearing lands between the check and the record. `kanso research queue add ID --priority P`
 raises a parked row until its next return, and `kanso status --json` → `hypotheses[].parked`

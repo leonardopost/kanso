@@ -30,7 +30,7 @@ from kanso.hyp import set_status, show
 from kanso.hyp.registry import BEST_CLEARED, REPINNED, RESCOPED
 from kanso.inbox import unread
 from kanso.nautilus import backtest
-from kanso.research import explore, loop, passages, records, scheduler
+from kanso.research import explore, lanes, loop, passages, records, scheduler
 from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
@@ -1599,6 +1599,62 @@ def test_a_stall_whose_run_closed_before_a_re_pin_that_moved_its_scope_stands_in
         a_run_that_stalled(store, hyp_id, seq)
         after.append(scheduler.on_stall(workspace, store, hyp_id))
     assert [(m.stalls_on_best, m.parked) for m in after] == [(1, False), (2, False), (3, True)]
+
+
+@pytest.mark.parametrize("moved", ["scope", "gate"])
+def test_a_re_pin_that_lands_while_a_baseline_runs_begins_no_run_to_stand_in_its_spell(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, moved: str
+) -> None:
+    """`loop.begin` pins `hypothesis.yaml` before its baseline and records the run and its
+    `run_begun` after it, and a re-pin waits only on a recorded run, so one that moves the scope
+    or adds a gate while the lane holds nothing but its claim is accepted. The begin is refused
+    in the write that would record the run: no run is pinned to the bytes the re-pin replaced,
+    so none has a `run_begun` after the re-pin to stand in the spell it started, and the park
+    comes at the key under the new pins rather than one stall early."""
+    workspace = tuned(ws, park_after_stalls=2)
+    hyp_id = classify(workspace, store, DOCUMENT)
+    replaced = show(workspace, store, hyp_id).hypothesis_sha  # type: ignore[union-attr]
+    if moved == "scope":
+        costs = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+        edited = document(costs=costs)
+    else:
+        edited = document(required_constraints=[MIN_TRADES])
+    real = backtest._payload
+    re_pins: list[str] = []
+
+    def re_pinning(*args: Any, **kwargs: Any) -> Any:
+        if not re_pins:  # the operator, while the baseline card runs
+            re_pins.append(classify(workspace, store, edited))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(backtest, "_payload", re_pinning)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+
+    with pytest.raises(PreconditionError, match="re-pinned while its baseline ran"):
+        loop.begin(workspace, store, hyp_id, lane="l1")
+
+    assert re_pins == [hyp_id]
+    assert store.events(kind=REPINNED, subject=hyp_id)[-1].detail[RESCOPED] is True
+    assert records.runs_of(store, hyp_id) == [], "no run is pinned to the bytes it replaced"
+    kinds = [event.kind for event in store.events(subject=hyp_id)]
+    assert BEGUN not in kinds and loop.BASELINE_FAILED not in kinds, "the baseline ran"
+    assert not lanes.lane_dir(workspace, "l1", hyp_id).exists()
+    back = scheduler.put_back(store, hyp_id, "l1")  # as a daemon lane puts back its failure
+    assert back is not None and back.priority == scheduler.BASELINE_PRIORITY
+    monkeypatch.setattr(backtest, "_payload", real)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    run = loop.begin(workspace, store, hyp_id, lane="l1")
+    pinned = show(workspace, store, hyp_id).hypothesis_sha  # type: ignore[union-attr]
+    assert run.hypothesis_sha == pinned != replaced
+    loop.end(workspace, store, hyp_id)
+
+    first = scheduler.on_stall(workspace, store, hyp_id)
+    a_run_that_stalled(store, hyp_id, 2)
+    second = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert [(m.stalls_on_best, m.parked) for m in (first, second)] == [(1, False), (2, True)]
+    assert second.priority == scheduler.PARK_PRIORITY
 
 
 def test_no_clearing_lands_between_a_stall_s_check_and_its_record(

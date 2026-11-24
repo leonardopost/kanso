@@ -12,7 +12,10 @@ hypothesis is an edit, not a reclassification; a file whose classification has b
 cleared returns to `draft`, since there is no longer a construct to research it as.
 Either way it is refused outright while a run is active: the run is pinned to the bytes
 that were registered when it began, and moving the pin under it would make the lane's
-copy disagree with the run without anything having changed in the lane.
+copy disagree with the run without anything having changed in the lane. A lane whose
+baseline is running holds a claim and no run yet, so a re-pin then is not refused; that
+lane's begin is, in the write that would record the run (`kanso.research.loop.begin`), so no
+run begins on the bytes a re-pin replaced.
 
 The scope a `best` is comparable under is what `SCOPE` names: the universe, the
 resolution, the data the hypothesis is shown — the types it requires, which instrument is

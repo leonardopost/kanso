@@ -550,7 +550,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     its run, not to this call: where a `best_cleared` or a re-pin that moved the scope or
     added a card gate — best or no best — landed after the stalled run's `run_begun`
     (`_measured_from`), which, a re-pin being refused while a run is active, it did once that
-    run had closed, or where the best moved since this read it, the stall records
+    run had closed — a begin a re-pin overtook while its baseline ran records no run
+    (`kanso.research.loop.begin`), so every run is pinned to the bytes registered when its
+    `run_begun` was written — or where the best moved since this read it, the stall records
     `stalls_on_best` 0 and parks nothing: it was measured under the scope the re-pin
     replaced, so it belongs to no spell, and the next stall's spell starts after it. The best
     is read again, the spell counted and the `stalled` event written in one write
@@ -752,12 +754,14 @@ def _measured_from(store: StateStore, hyp_id: str) -> int:
     """The event id a clearing (`_CLEARS`) must come after to leave the stall being decided out
     of every spell: the `run_begun` of the hypothesis's newest run to have ended, which is the
     run the stall ended — the lane closes it before the stall is decided. A re-pin is refused
-    while a run is active, and `research begin --from-workspace` clears the best before its
-    own run begins, so a clearing recorded after that run began landed once it had closed:
-    the run was measured under what it replaced, however long the lane took between closing
-    it and deciding the stall. With no such run, or one that recorded no beginning — a stall
-    decided by hand — it is the newest clearing's id as the stall first reads it, so only a
-    clearing that lands while the stall is decided leaves it out."""
+    while a run is active, `research begin --from-workspace` clears the best before its own run
+    begins, and a begin whose `hypothesis.yaml` a re-pin replaced while its baseline ran, before
+    the run existed, records no run (`kanso.research.loop.begin`), so a clearing recorded after
+    that run began landed once it had closed: the run was measured under what it replaced,
+    however long the lane took between closing it and deciding the stall, and it was measured
+    under every one recorded before it began. With no such run, or one that recorded no
+    beginning — a stall decided by hand — it is the newest clearing's id as the stall first
+    reads it, so only a clearing that lands while the stall is decided leaves it out."""
     row = store.connection.execute(
         "SELECT MAX(event_id) FROM events WHERE subject = ? AND kind = ?"
         " AND json_extract(detail, '$.run_id') = (SELECT run_id FROM runs"
