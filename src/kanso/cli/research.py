@@ -19,9 +19,10 @@ picks them up before it takes anything new — so stopping is a cheap act rather
 decision.
 
 A run that stalls with a keep nothing has certified certifies it before it returns, unless
-a research gate — its search correction, `walk_forward_consistency` or `research_plateau` —
-refuses it on research data, so `run` reports what that stall decided: the certificate the
-best stands under, pointing at it, or the research gate that spared it.
+a research gate — its search correction, `walk_forward_consistency`, `overfit_probability`
+where the plan carries it, or `research_plateau` — refuses it on research data, so `run`
+reports what that stall decided: the certificate the best stands under, pointing at it, or
+the research gate that spared it.
 
 `show` prints what is in state: a card's stored `strategy.py`, the unified diff between
 two of them, or — under `--measured` — what the newest card of those bytes that kept a
@@ -474,7 +475,9 @@ def spared_by(precheck: object) -> str | None:
 
     A search correction gives its probability and the planner's threshold
     (`deflated_contribution 0.792 < 0.950`); `walk_forward_consistency` its count of positive
-    folds and the planner's (`walk_forward_consistency 2 < 4 positive folds`); `research_plateau`
+    folds and the planner's (`walk_forward_consistency 2 < 4 positive folds`);
+    `overfit_probability` its probability of backtest overfitting above the planner's ceiling
+    (`overfit_probability 0.667 > 0.250`); `research_plateau`
     how many of its moves fell under the floor (`research_plateau 3 of 8 moves under 1.234`),
     and how many raised where any did (`research_plateau 0 of 8 moves under 1.234, 2 raised`),
     or that its unperturbed score was a loss (`research_plateau unperturbed -0.412 not
@@ -492,6 +495,8 @@ def spared_by(precheck: object) -> str | None:
         return (
             f"{gate} {evidence['positive_folds']} < {evidence['min_positive_folds']} positive folds"
         )
+    if "pbo" in evidence:
+        return f"{gate} {evidence['pbo']:.3f} > {evidence['max_pbo']:.3f}"
     if "perturbations" in evidence:
         if "floor" not in evidence:
             return f"{gate} unperturbed {evidence['unperturbed']:.3f} not positive"

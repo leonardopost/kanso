@@ -261,7 +261,8 @@ def test_a_measurement_struck_otherwise_than_certification_would_strike_it_judge
     ws: Workspace, store: StateStore, name: str, changes: dict[str, Any], was: str
 ) -> None:
     """The arithmetic the card's number is would not be the certificate's, so the lane leaves
-    the judging to the certification child, which runs the research window first."""
+    every gate that reads it to the certification child, which runs the research window first;
+    a plan without `overfit_probability`, the one that reads no run in hand, judges nothing."""
     sha = best_with(ws, store, *WIDE, **changes)
 
     checked = precheck(ws, store, HYP_ID, sha, plan_of(ws))
@@ -501,6 +502,253 @@ def test_the_precheck_is_the_certificate_s_own_correction_to_the_last_bit(
     )
     (certifiable,) = store.events(kind=scheduler.CERTIFIABLE, subject=hyp_id)
     assert certifiable.detail == {"strategy_sha": sha}, "a candidate once the research gates held"
+
+
+OVERFIT: dict[str, Any] = {
+    "id": "overfit_probability",
+    "stage": "cert",
+    "params": {"half_blocks": 2, "max_pbo": 0.25},
+    "rationale": "the search's selection, ranked out of sample on its own research window",
+}
+"""The probability of backtest overfitting, at four blocks of the research window."""
+
+BELOW = replace(RESEARCH_RUN, returns=tuple(value - 10.0 for value in RESEARCH_RUN.returns))
+"""The best's research run ten worse every day: a trial it beats in every block."""
+
+
+def measured_trials(ws: Workspace, store: StateStore, run: Any, *metrics: float) -> None:
+    """Cards behind the best that kept a measurement of `run`, one trial of each metric."""
+    for seq, metric in enumerate(metrics, start=2):
+        a_card(
+            ws,
+            store,
+            FLAT + f"# measured trial {seq}\n".encode(),
+            seq=seq,
+            metric=metric,
+            best=False,
+            measured_sha=measurement(ws, store, run=run),
+        )
+
+
+def test_the_lane_refuses_a_selection_its_trials_tie_without_running_anything(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`overfit_probability` reads the trials' stored measurements on the best's own grid, so
+    the lane judges it, running and reading nothing: trials that scored exactly what the best
+    scored, block for block, make a selection that selected nothing — every split ties at the
+    median — and the stall is spared after the correction and the folds passed."""
+    from kanso.cli.research import spared_by
+
+    classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    measured_trials(ws, store, RESEARCH_RUN, *TIGHT)
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+
+    def unread(*_: object, **__: object) -> Any:
+        raise AssertionError("the lane ran or read a window")
+
+    monkeypatch.setattr(backtest, "window_chunks", unread)
+    monkeypatch.setattr(backtest, "run", unread)
+    checked = precheck(ws, store, HYP_ID, sha, plan)
+
+    assert gate_ids(checked) == [
+        "deflated_sharpe",
+        "walk_forward_consistency",
+        "overfit_probability",
+    ], "the correction, then the plan's order, ending at the refusal before the plateau"
+    assert read_of(checked, "deflated_sharpe").passed
+    assert read_of(checked, "walk_forward_consistency").passed
+    assert checked.spared and checked.measured is False
+    assert (checked.gate, checked.passed) == ("overfit_probability", False)
+    assert checked.evidence == {
+        "pbo": 1.0,
+        "max_pbo": 0.25,
+        "blocks": 4,
+        "splits": 6,
+        "rows": 3,
+        "subject_row": 0,
+        "searched": 3,
+        "prior_trials": 0,
+        "excluded": {
+            "unmeasured": 0,
+            "other_objective": 0,
+            "off_grid": 0,
+            "other_reading": 0,
+            "unreadable": 0,
+        },
+        "oos_loss": 0.0,
+    }
+    assert spared_by(checked.payload()) == "overfit_probability 1.000 > 0.250"
+
+
+def test_the_lane_s_reading_of_the_selection_is_the_certificate_s_to_the_last_bit(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The lane and the certification child read one matrix — the trials' stored measurements
+    on the grid of the best's newest card — never the research run the child makes, so the
+    certificate's reading, which is the child's, is the lane's bit for bit."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    measured_trials(ws, store, BELOW, *TIGHT)
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+
+    lane = precheck(ws, store, hyp_id, sha, plan)
+    made, child = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is not None and not lane.spared and not child.spared
+    (recorded,) = [gate for gate in made.gates if gate.id == "overfit_probability"]
+    reading = read_of(lane, "overfit_probability")
+    assert reading.skipped is None and reading.passed
+    assert reading.evidence["pbo"] == 0.0, "the best beats both trials in every block"
+    assert recorded.evidence == read_of(child, "overfit_probability").evidence == reading.evidence
+    assert recorded.passed is True and recorded.params == OVERFIT["params"]
+    assert gate_ids(child) == [
+        "deflated_sharpe",
+        "walk_forward_consistency",
+        "overfit_probability",
+        "research_plateau",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "changes"),
+    [
+        ("folds", {"folds": 3}),
+        ("return_period", {"run": replace(RESEARCH_RUN, period="1h")}),
+        ("capital", {"run": replace(RESEARCH_RUN, capital=50_000.0)}),
+        ("criteria_version", {"criteria_version": "0.0.1"}),
+    ],
+)
+def test_a_selection_carded_under_other_settings_is_refused_in_the_lane_without_a_child(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    changes: dict[str, Any],
+) -> None:
+    """`overfit_probability` reads the trials' stored measurements on the grid of the best's
+    newest card, and none of the settings a run in hand is struck under, so a search carded
+    before the operator edited `[research]` or before a release moved the criteria version is
+    judged in the lane all the same, while every gate that reads the card's run judges nothing
+    and says why: trials that tie the best spare the stall, running and reading nothing, and the
+    certification child, had it been started, reads the same matrix and refuses it alike."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, **changes))
+    for seq, metric in enumerate(TIGHT, start=2):
+        a_card(
+            ws,
+            store,
+            FLAT + f"# measured trial {seq}\n".encode(),
+            seq=seq,
+            metric=metric,
+            best=False,
+            measured_sha=measurement(ws, store, **changes),
+        )
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+
+    def unread(*_: object, **__: object) -> Any:
+        raise AssertionError("the lane ran or read a window")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(backtest, "window_chunks", unread)
+        patched.setattr(backtest, "run", unread)
+        lane = precheck(ws, store, hyp_id, sha, plan)
+
+    assert gate_ids(lane) == [
+        "deflated_sharpe",
+        "walk_forward_consistency",
+        "overfit_probability",
+    ], "the correction, then the plan's order, ending at the refusal before the plateau"
+    moved = read_of(lane, "deflated_sharpe").skipped
+    assert moved is not None
+    assert moved.startswith(f"the newest card of {sha[:7]} was measured under {name} ")
+    assert read_of(lane, "walk_forward_consistency").skipped == moved
+    assert lane.spared and lane.judged and lane.measured is False
+    assert (lane.gate, lane.passed, lane.reason) == ("overfit_probability", False, None)
+    assert lane.evidence["pbo"] == 1.0 and lane.evidence["rows"] == 3
+
+    made, child = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is None and child.spared and child.measured
+    assert read_of(child, "overfit_probability").evidence == lane.evidence
+
+
+def test_a_best_carded_before_a_capital_edit_is_ranked_among_the_trials_of_its_own_reading(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A stall comes when the cards after a best fail to beat it, so where `[research] capital`
+    was edited between them the best and the cards before the edit were struck at one capital
+    and the cards after it at another: one book read two ways. The lane judges
+    `overfit_probability` on that best all the same, but only on the rows of the best's own
+    reading — the cards after the edit, which every block sets above the best's, would be picked
+    on every split and hold their rank out of sample for that reason alone, a pass for a
+    selection that selected nothing — and counts them as `other_reading`."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    before = replace(RESEARCH_RUN, capital=ws.config.research.capital / 2)
+    after = replace(RESEARCH_RUN, returns=tuple(value + 10.0 for value in RESEARCH_RUN.returns))
+    assert after.capital == ws.config.research.capital, "struck at the capital kanso.toml states"
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store, run=before))
+    for seq, (run_of, metric) in enumerate(
+        ((before, TIGHT[0]), (before, TIGHT[1]), (after, 0.5), (after, 0.6)), start=2
+    ):
+        a_card(
+            ws,
+            store,
+            FLAT + f"# measured trial {seq}\n".encode(),
+            seq=seq,
+            metric=metric,
+            best=False,
+            measured_sha=measurement(ws, store, run=run_of),
+        )
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+
+    lane = precheck(ws, store, hyp_id, sha, plan)
+
+    moved = read_of(lane, "deflated_sharpe").skipped
+    assert moved is not None and "capital" in moved
+    assert lane.spared and lane.judged and lane.measured is False
+    assert (lane.gate, lane.passed) == ("overfit_probability", False)
+    assert lane.evidence["pbo"] == 1.0, "the best and the two cards before the edit tie"
+    assert lane.evidence["rows"] == 3 and lane.evidence["subject_row"] == 0
+    assert lane.evidence["excluded"]["other_reading"] == 2, "the two cards after the edit"
+
+
+def test_a_child_the_selection_refuses_reads_no_window_and_runs_no_plateau(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where the child judges a selection the lane let through — the trials that tie the best
+    recorded after the lane judged it, as another lane of its family records them — it runs the
+    research window and judges the research gates on it; `overfit_probability` reads the stored
+    grid as it stands, refuses, and the stall is spared there: the certification window unread,
+    and none of the plateau's moves of the research window run."""
+    hyp_id = classify(ws, store, DOCUMENT, REVERTING)
+    set_status(store, hyp_id, "researching")
+    sha = a_card(ws, store, REVERTING, measured_sha=measurement(ws, store))
+    plan = write_plan(ws, gates=[*CERT_GATES, SEARCHED, OVERFIT])
+    lane = precheck(ws, store, hyp_id, sha, plan)
+    assert not lane.spared
+    assert read_of(lane, "overfit_probability").skipped is not None, "the best's row alone"
+    measured_trials(ws, store, RESEARCH_RUN, *TIGHT)
+    original = backtest.run
+    ran: list[backtest.RunRequest] = []
+
+    def counted(request: backtest.RunRequest, *args: Any, **kwargs: Any) -> Any:
+        ran.append(request)
+        return original(request, *args, **kwargs)
+
+    with monkeypatch.context() as patched:
+        windows = research_reads(patched)
+        patched.setattr(backtest, "run", counted)
+        made, checked = certify_at_stall(ws, store, hyp_id, sha=sha)
+
+    assert made is None and checked.spared and checked.measured
+    assert (checked.gate, checked.passed) == ("overfit_probability", False)
+    assert checked.evidence["pbo"] == 1.0
+    assert windows == [RESEARCH], "the research window, once, and never the certification one"
+    assert [request.overrides for request in ran] == [{}], "the subject's run, and no move"
+    assert gate_ids(checked)[-1] == "overfit_probability"
+    assert certificate.latest(store, hyp_id) is None
+    assert store.events(kind=scheduler.CERTIFIABLE) == []
 
 
 def research_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[date, date]]:

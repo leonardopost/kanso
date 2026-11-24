@@ -20,7 +20,7 @@ from kanso.certify.plan import read_plan
 from kanso.certify.run import Precheck, precheck
 from kanso.cli.research import spared_by
 from kanso.criteria import gates
-from kanso.criteria.context import MovedRunError, skipped, verdict
+from kanso.criteria.context import MovedRunError, TrialFolds, skipped, verdict
 from kanso.errors import Exit
 from kanso.hyp import set_status, show
 from kanso.models import spend
@@ -251,6 +251,19 @@ def raising_at(moved: dict[str, float], otherwise: Rerun) -> Any:
         ),
         (
             refusal(
+                "overfit_probability",
+                params={"half_blocks": 2, "max_pbo": 0.25},
+                trial_folds=lambda blocks: TrialFolds(
+                    values=((3.0, 1.0, 0.0, 2.0), (1.0, 2.0, 2.0, 1.0), (0.0, 0.0, 1.0, 1.0)),
+                    subject=0,
+                    excluded={},
+                    periods=8,
+                ),
+            ),
+            "overfit_probability 0.667 > 0.250",
+        ),
+        (
+            refusal(
                 "research_plateau",
                 params={"perturb_pct": 10.0, "keep_fraction": 0.9},
                 tunable={"fast": 10.0, "slow": 40.0},
@@ -297,6 +310,7 @@ def raising_at(moved: dict[str, float], otherwise: Rerun) -> Any:
         "contribution",
         "sharpe-recorded-before-gates",
         "folds",
+        "selection",
         "plateau-moves",
         "plateau-raised",
         "plateau-loss",

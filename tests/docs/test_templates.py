@@ -145,9 +145,13 @@ def test_the_program_says_a_stall_s_certification_can_be_spared() -> None:
     zero is certified, it would take a spared stall's missing certificate for a fault."""
     never_stop = template("program.md").split("## Never stop", 1)[1]
     assert (
-        "unless a research gate of the plan — its search correction, `walk_forward_consistency` "
-        "or `research_plateau` — refuses it on research data, which spares the "
+        "unless a research gate of the plan — its search correction, `walk_forward_consistency`, "
+        "`overfit_probability` where the plan carries it, or `research_plateau` — refuses it on "
+        "research data, which spares the "
     ) in never_stop
+    assert "the search's pick ranks at or below the median of its trials out of sample" in (
+        never_stop
+    ), "what the selection's gate refuses, beside what the others do"
 
 
 def test_the_program_names_every_status_a_card_can_carry_and_only_the_printed_ones() -> None:

@@ -35,7 +35,17 @@ every objective: a card gate that holds one card's edge to the width of the sear
 needs how many draws there were and no spread, so it has no units to keep apart.
 `prior_trials` is the draws no card made: the settings a hypothesis's family declares tried
 outside kanso in the grids that chose its seeds, added to the cards wherever a search is
-priced and to no spread and no filename.
+priced and to no spread and no filename. `trial_folds` reads the same cards block by block: of
+each strategy, the newest card whose stored measurement shares the grid of the card being
+certified — its window, its periods, its host and its benchmark (`Measurement.pairs` and the
+window) — and its reading, the capital, currency and venue model its run was struck under (a
+stored run holds neither its warmup nor a sizing budget, so neither is asked), scored at a
+block count its caller chooses by the installed objective's own fold arithmetic, one row per
+strategy, and the rest counted by why they made none. It is what a
+gate that ranks the search's selection out of sample reads, off the store and never off a run
+in hand, so the lane that stalled and the certification child read one matrix; it and
+`trial_metrics` read their cards through one query (`_trial_rows`), so the two sets cannot
+drift apart.
 
 A run's best and the hypothesis's best are two records with two rules. `set_best` always
 moves the run's, because a keep is a keep of its run; it moves the hypothesis's only when
@@ -122,6 +132,7 @@ from typing import TYPE_CHECKING, Any, Final
 import yaml
 
 from kanso.criteria.codec import decode_run, encode_run
+from kanso.criteria.context import TrialFolds
 from kanso.criteria.library import objectives
 from kanso.criteria.objectives import difference
 from kanso.criteria.run import NS_PER_DAY, CardRun, day_of
@@ -177,6 +188,7 @@ __all__ = [
     "stored_metric",
     "strike_budget",
     "superseded",
+    "trial_folds",
     "trial_metrics",
     "unset_best",
 ]
@@ -577,22 +589,38 @@ def trial_metrics(store: StateStore, hyp_id: str, objective_id: str) -> list[flo
     (`docs/backlog.md` row 59) -- an answer would be one stated rule with its own test,
     never a set quietly narrowed until a bar is passed.
     """
+    rows = _trial_rows(store, hyp_id)
+    scored = _objectives_of(store, rows)
+    return [
+        float(row["metric"]) for row in rows if scored[str(row["hypothesis_sha"])] == objective_id
+    ]
+
+
+def _trial_rows(store: StateStore, hyp_id: str) -> list[sqlite3.Row]:
+    """Every card of the hypothesis's family that ran to a result and traded, in the order
+    they were recorded: its `card_id`, `strategy_sha`, `measured_sha` and `metric`, and the
+    `hypothesis_sha` its run pinned. The one set `trial_metrics` and `trial_folds` read, so the
+    trials a deflation's spread is taken over and the trials a selection is ranked among are
+    the same cards."""
     ids = family(store, hyp_id)
-    rows = store.connection.execute(
-        "SELECT cards.metric, runs.hypothesis_sha FROM cards JOIN runs USING (run_id)"
+    return store.connection.execute(
+        "SELECT cards.card_id, cards.strategy_sha, cards.measured_sha, cards.metric,"
+        " runs.hypothesis_sha FROM cards JOIN runs USING (run_id)"
         f" WHERE cards.hyp_id IN ({_placeholders(ids)})"
         " AND cards.status != 'crash' AND cards.n_trades > 0"
         " ORDER BY cards.card_id",
         ids,
     ).fetchall()
+
+
+def _objectives_of(store: StateStore, rows: Sequence[sqlite3.Row]) -> dict[str, str | None]:
+    """The objective each pin those rows' runs pinned names, each pin read once."""
     scored: dict[str, str | None] = {}
     for row in rows:
         pin = str(row["hypothesis_sha"])
         if pin not in scored:
             scored[pin] = objective_of(store, pin)
-    return [
-        float(row["metric"]) for row in rows if scored[str(row["hypothesis_sha"])] == objective_id
-    ]
+    return scored
 
 
 def candidates(store: StateStore, hyp_id: str) -> int:
@@ -713,24 +741,44 @@ class Measurement:
         found = objectives()[self.objective.id]
         return found.compute(self.run, self.folds, self.host, self.benchmark)
 
+    def fold_values(self, folds: int) -> tuple[float, ...]:
+        """The installed objective's value on each of `folds` equal calendar spans of this
+        measurement's window, in window order — the arithmetic `compute` takes the mean of,
+        at a count of its caller's choosing."""
+        found = objectives()[self.objective.id]
+        return found.fold_values(self.run, folds, self.host, self.benchmark)
+
+    def pairs(self, other: Measurement) -> bool:
+        """Whether this and `other` were scored on one objective, struck their returns at the
+        same instants and were differenced against the same host and benchmark runs, as every
+        two cards of one run under one reading were: the condition under which two numbers of
+        theirs are read period for period. It does not ask the window, and fold for fold needs
+        that too, since each run is cut into folds over its own declared window
+        (`CardRun.folds`) — two windows that differ only by days holding no period keep every
+        period end and cut every fold over another span. Two cards of one run share their
+        run's window, which is what `against` relies on; `trial_folds` asks it beside this."""
+        return (
+            self.objective.id == other.objective.id
+            and self.run.period_ends_ns == other.run.period_ends_ns
+            and self.host == other.host
+            and self.benchmark == other.benchmark
+        )
+
     def against(self, best: Measurement) -> tuple[float, float] | None:
         """This metric less `best`'s, and the error of that difference read off the two runs
         period by period, at this measurement's folds; `None` when the two do not pair.
 
         They pair when they were scored on one objective, struck their returns at the same
-        instants and were differenced against the same host and benchmark runs, as every two
-        cards of one run under one reading are. The host's or the hold's part of each number
-        then cancels, and the difference is the installed objective's own arithmetic with the
-        best in the host's place (`objectives.difference`): a contribution's per-period
-        differences, two Sharpes by Memmel, two per-trade edges linearised and differenced
-        period by period, each widened for serial correlation as every metric's error is.
+        instants and were differenced against the same host and benchmark runs (`pairs`), as
+        every two cards of one run under one reading are; its one caller hands it the best of
+        this card's own run (`best_measurement`), whose window is this one's, so the folds of
+        the two are cut over one span. The host's or the hold's part of each number then
+        cancels, and the difference is the installed objective's own arithmetic with the best
+        in the host's place (`objectives.difference`): a contribution's per-period differences,
+        two Sharpes by Memmel, two per-trade edges linearised and differenced period by period,
+        each widened for serial correlation as every metric's error is.
         """
-        if (
-            self.objective.id != best.objective.id
-            or self.run.period_ends_ns != best.run.period_ends_ns
-            or self.host != best.host
-            or self.benchmark != best.benchmark
-        ):
+        if not self.pairs(best):
             return None
         return difference(objectives()[self.objective.id], self.run, best.run, self.folds)
 
@@ -814,6 +862,143 @@ def read_measurement(payload: Mapping[str, Any]) -> Measurement:
         benchmark=None if payload["benchmark"] is None else decode_run(payload["benchmark"]),
         criteria_version=str(payload["criteria_version"]),
     )
+
+
+UNMEASURED: Final = "unmeasured"
+OTHER_OBJECTIVE: Final = "other_objective"
+OFF_GRID: Final = "off_grid"
+OTHER_READING: Final = "other_reading"
+UNREADABLE: Final = "unreadable"
+EXCLUSIONS: Final = (UNMEASURED, OTHER_OBJECTIVE, OFF_GRID, OTHER_READING, UNREADABLE)
+"""Why a trial makes no row of `trial_folds`, in the order its `excluded` lists them."""
+
+
+def trial_folds(store: StateStore, hyp_id: str, subject_sha: str, blocks: int) -> TrialFolds | None:
+    """The search behind a card, read block by block on the card's own grid: every trial of
+    the hypothesis's family scored on `blocks` equal calendar spans of the grid's window, by
+    the installed objective's own fold arithmetic (`Measurement.fold_values`).
+
+    The grid is the measurement of the newest card of `subject_sha` among the hypothesis's own
+    cards — the card certification takes as its subject — and `None` comes back where that
+    card kept none, or kept one this build cannot read or score. Its row is the subject's.
+    Every other row is a strategy of the trials `trial_metrics` reads (`_trial_rows`): the
+    newest card of its bytes whose measurement pairs with the grid (`Measurement.pairs`) over
+    the grid's own window and under the grid's reading — its run's capital, account currency
+    and venue model, the cost model each fill was charged under — so two byte strings are two
+    rows however alike their results, and a strategy carded again under new pins is read where
+    it shares the grid and its reading. Rows are in the order those cards were recorded.
+
+    A strategy none of whose cards pairs makes no row, and is counted in `excluded` by why its
+    newest card did not: `unmeasured`, it kept no measurement; `other_objective`, its run pinned
+    a file naming another objective, a number in other units; `off_grid`, it struck its returns
+    at other instants, over another window or against another host or benchmark — a window a
+    re-pin moved, even only across days that held no period, a family member's own;
+    `other_reading`, it shares the grid but was struck at another capital, in another currency
+    or under another venue model — a card from before `[research] capital`, `[research] broker`
+    or `portfolio.yaml` was edited, or before a re-pin moved the costs; `unreadable`, its
+    measurement could not be decoded or scored. The settings a family declares tried outside
+    kanso were never measured here and are never rows.
+
+    The reading is asked because the rows are ranked against each other: one book struck at
+    another capital or charged under another cost model is another number
+    (`loop.Setup.measured_under`), and rows a shift of reading sets apart rank apart on both
+    halves of every split, so the pick holds its rank out of sample for the shift's sake and the
+    estimate falls toward a pass. What a stored run does not hold is not asked, and a card that
+    differs from the grid only there is read as one on it: the warmup sessions it was fed before
+    the window, and the budget a `sizing` rule sized it to — its pinned file's, or an attached
+    construct's host's — with the bar sizes an overlay loads beside its host's.
+
+    Each trial's measurement is decoded only once it is wanted and reduced to its block values
+    at once, so what is held at a time is the grid's measurement and one trial's, however many
+    cards the search has.
+    """
+    newest = store.connection.execute(
+        "SELECT card_id, measured_sha FROM cards WHERE hyp_id = ? AND strategy_sha = ?"
+        " ORDER BY card_id DESC LIMIT 1",
+        (hyp_id, subject_sha),
+    ).fetchone()
+    if newest is None or newest["measured_sha"] is None:
+        return None
+    try:
+        grid = _measurement(store, str(newest["measured_sha"]))
+        own = grid.fold_values(blocks)
+    except Exception:
+        return None
+    trials = _trial_rows(store, hyp_id)
+    scored = _objectives_of(store, trials)
+    read: dict[str, tuple[float, ...] | str] = {}
+
+    def reading(row: sqlite3.Row) -> tuple[float, ...] | str:
+        """The block values of one card on the grid, or why it has none."""
+        if row["measured_sha"] is None:
+            return UNMEASURED
+        if scored[str(row["hypothesis_sha"])] != grid.objective.id:
+            return OTHER_OBJECTIVE
+        sha = str(row["measured_sha"])
+        if sha not in read:
+            read[sha] = _on_grid(store, sha, grid, blocks)
+        return read[sha]
+
+    by_strategy: dict[str, list[sqlite3.Row]] = {}
+    for row in trials:
+        if row["strategy_sha"] != subject_sha:
+            by_strategy.setdefault(str(row["strategy_sha"]), []).append(row)
+    rows: list[tuple[int, bool, tuple[float, ...]]] = [(int(newest["card_id"]), True, own)]
+    excluded = dict.fromkeys(EXCLUSIONS, 0)
+    for cards in by_strategy.values():
+        reasons: list[str] = []
+        for row in reversed(cards):
+            values = reading(row)
+            if isinstance(values, str):
+                reasons.append(values)
+                continue
+            rows.append((int(row["card_id"]), False, values))
+            break
+        else:
+            excluded[reasons[0]] += 1
+    rows.sort(key=lambda row: row[0])
+    return TrialFolds(
+        values=tuple(values for _, _, values in rows),
+        subject=next(index for index, (_, own_row, _) in enumerate(rows) if own_row),
+        excluded=excluded,
+        periods=len(grid.run.period_ends_ns),
+    )
+
+
+def _on_grid(
+    store: StateStore, sha: str, grid: Measurement, blocks: int
+) -> tuple[float, ...] | str:
+    """A stored measurement's block values where it pairs with `grid` over the grid's own
+    window and under its reading, or why it has none: decoded and scored here, and nothing of it
+    kept but the values.
+
+    The window is asked beside `pairs` because the blocks are cut from each run's own window
+    (`CardRun.folds`) while its period ends hold only the periods that held a point: a window
+    moved across days that held none — an end moved from a Friday to the Sunday after it, a
+    start on a holiday — keeps every period end and cuts every block over another span. The
+    reading is asked after both (`_reading`), because `pairs` asks only what makes two numbers
+    comparable period for period and not whether they are one number: a card struck at another
+    capital or charged under another venue model strikes its returns at the grid's instants all
+    the same.
+    """
+    try:
+        measured = _measurement(store, sha)
+        if measured.objective.id != grid.objective.id:
+            return OTHER_OBJECTIVE
+        if not measured.pairs(grid) or measured.run.window != grid.run.window:
+            return OFF_GRID
+        if _reading(measured.run) != _reading(grid.run):
+            return OTHER_READING
+        return measured.fold_values(blocks)
+    except Exception:
+        return UNREADABLE
+
+
+def _reading(run: CardRun) -> tuple[float, str, Mapping[str, object]]:
+    """The reading a stored run states it was struck under and `Measurement.pairs` does not
+    ask: the capital it opened at, its account currency and the venue model each of its fills
+    was charged under."""
+    return (run.capital, run.currency, run.venue_model)
 
 
 def signature(run: CardRun, hourly: bool = False) -> Signature:

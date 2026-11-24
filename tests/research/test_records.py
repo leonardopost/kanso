@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -29,6 +30,7 @@ from kanso.schemas import (
 )
 from kanso.state import StateStore
 from kanso.workspace import Workspace
+from tests.criteria.builders import build_run
 from tests.schemas import strategies as gen
 
 from .conftest import DOCUMENT, FLAT, RAISING, REVERTING, classify, measured_as_scored
@@ -444,6 +446,310 @@ def test_a_trial_is_a_card_scored_under_the_objective_being_deflated(
     assert records.candidates(store, registered) == 5, "a count has no units to keep apart"
 
 
+def test_the_trials_a_spread_and_a_ranking_read_are_one_set_of_cards(
+    store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`trial_metrics` and `trial_folds` read their trials through one query, so the cards a
+    deflation's spread is taken over and the cards a selection is ranked among cannot drift
+    apart: every card of the family that ran and traded, crashes and cards that placed no
+    order left out, in the order they were recorded, with what each was measured from."""
+    edge = pinned_run(store, registered, 1, b"objective: {id: net_edge_bps}\n")
+    first = pinned_run(store, registered, 2, b"objective: {id: wf_contribution_bps}\n")
+    for run, metric in ((edge, 40.0), (first, 1.5), (edge, 55.0), (first, 2.5)):
+        scored(store, run, metric)
+    scored(store, first, 7.0, n_trades=0)
+    store.connection.execute("UPDATE cards SET status = 'crash' WHERE metric = 55.0")
+
+    rows = records._trial_rows(store, registered)
+
+    assert [float(row["metric"]) for row in rows] == [40.0, 1.5, 2.5]
+    assert [row["card_id"] for row in rows] == sorted(row["card_id"] for row in rows)
+    assert {row["hypothesis_sha"] for row in rows} == {edge.hypothesis_sha, first.hypothesis_sha}
+    assert all(row["measured_sha"] is None for row in rows)
+    assert records.trial_metrics(store, registered, "wf_contribution_bps") == [1.5, 2.5]
+    assert records.trial_metrics(store, registered, "net_edge_bps") == [40.0]
+
+    read: list[str] = []
+    shared = records._trial_rows
+
+    def counted(opened: StateStore, hyp_id: str) -> Any:
+        read.append(hyp_id)
+        return shared(opened, hyp_id)
+
+    monkeypatch.setattr(records, "_trial_rows", counted)
+    records.trial_metrics(store, registered, "net_edge_bps")
+    sha = store.put_blob(b"# the subject\n")
+    records.record_card(store, first, a_card(first, sha, 1.0, grid_measurement(store)))
+    records.trial_folds(store, registered, sha, 4)
+    assert read == [registered, registered]
+
+
+CONTRIBUTION = ObjectiveRef.model_validate(
+    {"id": "wf_contribution_bps", "params": {"min_delta": 0.0, "k_se": 1.0}}
+)
+GRID = build_run((10.0, -5.0, 8.0, 2.0, -3.0, 6.0, 1.0, 4.0))
+"""Eight sessions a trial is measured on: the subject's grid, cut into four blocks of two."""
+
+
+def on_grid(*returns: float, **changes: Any) -> records.Measurement:
+    """A measurement of a run on the grid's sessions earning `returns`, with any field of the
+    measurement replaced."""
+    fields: dict[str, Any] = {
+        "objective": CONTRIBUTION,
+        "folds": 4,
+        "run": replace(GRID, returns=returns or GRID.returns),
+        "criteria_version": "v",
+        **changes,
+    }
+    return records.Measurement(**fields)
+
+
+def grid_measurement(store: StateStore, *returns: float, **changes: Any) -> str:
+    """`on_grid`, stored, as the card's `measured_sha`."""
+    return records.record_measurement(store, on_grid(*returns, **changes))
+
+
+def a_card(run: RunRecord, sha: str, metric: float, measured: str | None, **changes: Any) -> Card:
+    """One traded card of `run` for the bytes `sha`, which kept the measurement `measured`."""
+    return Card.model_validate(
+        {
+            "run_id": run.run_id,
+            "lane": "op",
+            "strategy_sha": sha,
+            "metric": metric,
+            "metric_se": 0.1,
+            "n_trials": 1,
+            "n_trades": 5,
+            "wall_s": 1.0,
+            "peak_mem_gb": 0.1,
+            "status": "discard",
+            "desc": "a card",
+            "venue_model": resolve_venue_model(
+                "XNAS",
+                hypothesis_costs=Costs.model_validate(DOCUMENT["costs"]),
+                max_leverage=1.0,
+                quotes_available=False,
+            ),
+            "created_at": records.now(),
+            "measured_sha": measured,
+            **changes,
+        }
+    )
+
+
+def test_the_search_is_read_block_by_block_on_the_subject_s_grid(
+    store: StateStore, registered: str
+) -> None:
+    """Each trial is a row of the installed objective's block values on the subject's grid, the
+    newest card of its bytes that shares the grid; a strategy with none makes no row and is
+    counted by why its newest card did not, and what is no trial at all is in neither."""
+    contribution = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
+    edge = pinned_run(store, registered, 2, b"objective: {id: net_edge_bps}\n")
+    later = pinned_run(store, registered, 3, b"id: x\nobjective: {id: wf_contribution_bps}\n")
+    shas = {name: store.put_blob(f"# {name}\n".encode()) for name in "SABCDEFGHI"}
+    shifted = replace(GRID, period_ends_ns=tuple(t + 1 for t in GRID.period_ends_ns))
+    garbage = store.put_blob(b"not a measurement")
+    cards = [
+        (contribution, "A", grid_measurement(store, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)),
+        (contribution, "B", None),
+        (edge, "C", grid_measurement(store, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0)),
+        (contribution, "D", grid_measurement(store, run=shifted)),
+        (contribution, "S", grid_measurement(store)),
+        (contribution, "E", garbage),
+        (contribution, "F", grid_measurement(store, host=GRID)),
+        (later, "A", grid_measurement(store, run=shifted)),
+        (later, "H", grid_measurement(store, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0)),
+        (later, "H", grid_measurement(store, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0)),
+        (later, "I", grid_measurement(store, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)),
+    ]
+    for run, name, measured in cards:
+        records.record_card(store, run, a_card(run, shas[name], 1.0, measured))
+    records.record_card(
+        store, later, a_card(later, shas["G"], 0.0, grid_measurement(store), n_trades=0)
+    )
+    records.record_card(
+        store, later, a_card(later, shas["G"], 0.0, None, status="crash", n_trades=0)
+    )
+
+    found = records.trial_folds(store, registered, shas["S"], 4)
+
+    assert found is not None
+    blocks = {
+        name: on_grid(*returns).fold_values(4)
+        for name, returns in (
+            ("A", (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)),
+            ("S", ()),
+            ("H", (2.0,) * 8),
+            ("I", (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)),
+        )
+    }
+    assert found.values == (blocks["A"], blocks["S"], blocks["H"], blocks["I"]), (
+        "in the order their cards were recorded: A's older card, the one on the grid; H's newer"
+    )
+    assert found.subject == 1
+    assert blocks["A"] == blocks["I"], "two byte strings with one result are two rows that tie"
+    assert found.values[1] == objectives()["wf_contribution_bps"].fold_values(GRID, 4)
+    assert dict(found.excluded) == {
+        "unmeasured": 1,
+        "other_objective": 1,
+        "off_grid": 2,
+        "other_reading": 0,
+        "unreadable": 1,
+    }
+    assert found.periods == 8
+    finer = records.trial_folds(store, registered, shas["S"], 8)
+    assert finer is not None and len(finer.values[0]) == 8, "the block count is the caller's"
+
+
+def test_a_measurement_scored_under_another_objective_than_its_pin_is_another_objective(
+    store: StateStore, registered: str
+) -> None:
+    """The pin is read first, since it costs no decode; a measurement whose own objective is
+    not the grid's is counted the same way where its pin did not say so."""
+    run = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
+    sharpe = ObjectiveRef.model_validate(
+        {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    subject = store.put_blob(b"# subject\n")
+    other = store.put_blob(b"# other\n")
+    records.record_card(store, run, a_card(run, subject, 1.0, grid_measurement(store)))
+    records.record_card(
+        store, run, a_card(run, other, 1.0, grid_measurement(store, objective=sharpe))
+    )
+
+    found = records.trial_folds(store, registered, subject, 4)
+
+    assert found is not None and len(found.values) == 1
+    assert found.excluded["other_objective"] == 1
+
+
+def test_a_family_s_trials_on_the_grid_are_rows_and_a_window_a_re_pin_moved_is_off_it(
+    ws: Workspace, store: StateStore, registered: str
+) -> None:
+    """A parent's cards are trials of the child's search, so those on the child's grid are
+    rows; a card measured over the window before a re-pin moved it struck its returns at other
+    instants, and is counted off the grid rather than set beside the subject — and so is one
+    whose window a re-pin moved only across days that held no period, which struck every
+    return at the grid's instants but is cut into blocks over other spans."""
+    child = classify(ws, store, {**DOCUMENT, "id": "demo_child", "derived_from": [registered]})
+    parent = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
+    moved = pinned_run(store, child, 2, b"id: x\nobjective: {id: wf_contribution_bps}\n")
+    january = replace(
+        GRID, period_ends_ns=tuple(t - 31 * 86_400 * 10**9 for t in GRID.period_ends_ns)
+    )
+    wider = replace(GRID, window=(GRID.window[0], GRID.window[1] + timedelta(days=2)))
+    assert on_grid(run=wider).pairs(on_grid()), "the same instants, host and benchmark"
+    assert on_grid(run=wider).fold_values(4) != on_grid().fold_values(4), "other blocks"
+    shas = [store.put_blob(f"# {n}\n".encode()) for n in range(4)]
+    records.record_card(
+        store, parent, a_card(parent, shas[0], 1.0, grid_measurement(store, run=january))
+    )
+    records.record_card(
+        store, parent, a_card(parent, shas[3], 1.0, grid_measurement(store, run=wider))
+    )
+    records.record_card(
+        store,
+        parent,
+        a_card(
+            parent, shas[1], 1.0, grid_measurement(store, 3.0, 1.0, 0.0, 2.0, 1.0, 1.0, 4.0, 0.0)
+        ),
+    )
+    records.record_card(store, moved, a_card(moved, shas[2], 1.0, grid_measurement(store)))
+
+    found = records.trial_folds(store, child, shas[2], 4)
+    alone = records.trial_folds(store, registered, shas[1], 4)
+
+    assert found is not None and alone is not None
+    assert len(found.values) == 2 and found.subject == 1, (
+        "the parent's card on the grid, then the subject"
+    )
+    assert found.excluded["off_grid"] == 2, (
+        "the parent's cards measured before the window moved, and over the wider window"
+    )
+    assert alone.excluded["off_grid"] == 2 and len(alone.values) == 1, (
+        "the parent's January and wider cards are off its grid too, and its child's card is no"
+        " trial of it"
+    )
+
+
+def test_a_trial_struck_under_another_reading_than_the_grid_s_is_no_row(
+    store: StateStore, registered: str
+) -> None:
+    """A stored run states the capital it opened at, its account currency and the venue model
+    each of its fills was charged under, and a trial struck under another than the grid's is
+    another number for the same book — a card from before `[research] capital`, `[research]
+    broker` or `portfolio.yaml` was edited, or before a re-pin moved the costs — however exactly
+    it shares the grid's instants, window, host and benchmark. It makes no row and is counted as
+    `other_reading`; a strategy whose newest card is one, and whose older card shares the grid's
+    reading, is read on the older card, as a strategy off the grid is."""
+    run = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
+    subject, richer, dearer, euro, both = (
+        store.put_blob(f"# {name}\n".encode())
+        for name in ("subject", "richer", "dearer", "euro", "both")
+    )
+    at_double = replace(GRID, capital=2 * GRID.capital)
+    charged = replace(GRID, venue_model={"commission_bps": 99.0})
+    in_euro = replace(GRID, currency="EUR")
+    for other in (at_double, charged, in_euro):
+        assert on_grid(run=other).pairs(on_grid()), "the same instants, host and benchmark"
+        assert other.window == GRID.window
+    older = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)
+    cards = [
+        (both, grid_measurement(store, *older)),
+        (subject, grid_measurement(store)),
+        (richer, grid_measurement(store, run=at_double)),
+        (dearer, grid_measurement(store, run=charged)),
+        (euro, grid_measurement(store, run=in_euro)),
+        (both, grid_measurement(store, run=charged)),
+    ]
+    for sha, measured in cards:
+        records.record_card(store, run, a_card(run, sha, 1.0, measured))
+
+    found = records.trial_folds(store, registered, subject, 4)
+
+    assert found is not None
+    assert found.values == (on_grid(*older).fold_values(4), on_grid().fold_values(4)), (
+        "the older card of the strategy whose newest was charged under another model, then the"
+        " subject"
+    )
+    assert found.subject == 1
+    assert dict(found.excluded) == {
+        "unmeasured": 0,
+        "other_objective": 0,
+        "off_grid": 0,
+        "other_reading": 3,
+        "unreadable": 0,
+    }
+
+
+def test_a_subject_with_no_grid_to_read_has_no_trial_folds(
+    store: StateStore, registered: str
+) -> None:
+    """The grid is the subject's newest card's measurement: a card that kept none, one this
+    build cannot decode or score, and bytes the hypothesis never carded give nothing to hold the
+    trials to."""
+    run = pinned_run(store, registered, 1, b"objective: {id: wf_contribution_bps}\n")
+    kept, unkept, garbled, unscored = (
+        store.put_blob(f"# {name}\n".encode()) for name in ("kept", "unkept", "garbled", "x")
+    )
+    hold = ObjectiveRef.model_validate(
+        {"id": "wf_sharpe_vs_hold", "params": {"min_delta": 0.0, "k_se": 1.0}}
+    )
+    records.record_card(store, run, a_card(run, kept, 1.0, grid_measurement(store)))
+    records.record_card(store, run, a_card(run, unkept, 1.0, None))
+    records.record_card(store, run, a_card(run, garbled, 1.0, store.put_blob(b"garbled")))
+    records.record_card(
+        store, run, a_card(run, unscored, 1.0, grid_measurement(store, objective=hold))
+    )
+    records.record_card(store, run, a_card(run, kept, 1.0, None))
+
+    assert records.trial_folds(store, registered, kept, 4) is None, "its newest card kept none"
+    assert records.trial_folds(store, registered, unkept, 4) is None
+    assert records.trial_folds(store, registered, garbled, 4) is None
+    assert records.trial_folds(store, registered, unscored, 4) is None, "no benchmark to read"
+    assert records.trial_folds(store, registered, "0" * 64, 4) is None
+
+
 def a_run(held: tuple[Held, ...] = (), trades: tuple[Trade, ...] = (), days: int = 3) -> CardRun:
     """A run over `days` sessions whose holdings and trades are given, the rest empty."""
     ends = tuple(midnight_ns(date(2024, 1, 1 + i)) + 16 * 3_600 * 10**9 for i in range(days))
@@ -849,6 +1155,28 @@ def test_a_card_less_the_best_is_paired_period_by_period_and_only_what_pairs_is_
         {"id": "wf_sharpe_net", "params": {"min_delta": 0.0, "k_se": 1.0}}
     )
     assert card.against(replace(best, objective=other)) is None, "another objective"
+    variants = (
+        best,
+        replace(best, folds=3),
+        replace(best, run=shifted),
+        replace(best, host=best_run),
+        replace(best, benchmark=best_run),
+        replace(best, objective=other),
+        replace(best, criteria_version="w"),
+    )
+    assert [card.pairs(variant) for variant in variants] == [
+        card.against(variant) is not None for variant in variants
+    ]
+    assert [card.pairs(variant) for variant in variants] == [
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert card.fold_values(3) == wf_contribution_bps.fold_values(better, 3)
 
 
 def test_a_card_pairs_with_a_stored_best_against_a_benchmark_under_a_dated_spread() -> None:

@@ -453,6 +453,7 @@ def test_the_planner_is_told_which_gates_read_research_data_before_the_window(
         "deflated_contribution",
         "deflated_edge",
         "deflated_sharpe",
+        "overfit_probability",
         "research_plateau",
         "walk_forward_consistency",
     }

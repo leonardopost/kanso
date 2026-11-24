@@ -10,6 +10,7 @@ import pytest
 from kanso import criteria
 from kanso.criteria import catalogue, check_params, criteria_version, gates, validate_plan
 from kanso.criteria import library as lib
+from kanso.criteria.context import TrialFolds
 from kanso.criteria.gates import PENDING
 from kanso.criteria.library import resolve_bound
 from kanso.errors import ValidationError
@@ -145,7 +146,7 @@ def replacing(gate_id: str, **fields: Any) -> dict[str, Any]:
 
 def test_the_catalogue_is_the_shipped_yaml() -> None:
     items = catalogue()
-    assert len(items) == 40
+    assert len(items) == 41
     assert all(isinstance(item, CriteriaItem) for item in items.values())
     assert sum(1 for item in items.values() if item.kind == "objective") == 7
 
@@ -250,6 +251,7 @@ def test_the_research_gates_are_the_ones_whose_files_say_they_read_research() ->
         "deflated_contribution",
         "deflated_edge",
         "deflated_sharpe",
+        "overfit_probability",
         "research_plateau",
         "walk_forward_consistency",
     }
@@ -282,8 +284,20 @@ RESEARCH_PARAMS: dict[str, dict[str, Any]] = {
     "deflated_contribution": {"min_probability": 0.95},
     "deflated_edge": {"min_probability": 0.95},
     "walk_forward_consistency": {"min_positive_folds": 3},
+    "overfit_probability": {"half_blocks": 2, "max_pbo": 0.25},
     "research_plateau": {"perturb_pct": 10.0, "keep_fraction": 0.5},
 }
+
+
+def trial_folds(blocks: int) -> TrialFolds:
+    """The trials' stored measurements on the subject's grid, as the runner's reader returns
+    them: whatever a gate is handed, these are the same rows."""
+    return TrialFolds(
+        values=((3.0, -1.0, 4.0, 1.0), (1.0, 2.0, 0.0, 1.0), (-2.0, 0.0, 1.0, 0.5)),
+        subject=0,
+        excluded={"unmeasured": 1},
+        periods=8,
+    )
 
 
 @pytest.mark.parametrize(
@@ -315,6 +329,7 @@ def test_a_research_gate_reads_nothing_of_the_certification_window(
         "research_run": RESEARCHED,
         "trial_metrics": (1.0, 2.0, 0.5, 1.5),
         "trials": 4,
+        "trial_folds": trial_folds,
         "tunable": {"fast": 10.0},
         "rerun": rerun,
     }
@@ -335,8 +350,8 @@ def test_a_research_gate_reads_nothing_of_the_certification_window(
         assert own == leaked, gate_id
         if own.skipped is None:
             judged.append(gate_id)
-    assert {"walk_forward_consistency", "research_plateau"} <= set(judged)
-    assert len(judged) == 3, "the objective's own correction judged too, and no other"
+    assert {"walk_forward_consistency", "overfit_probability", "research_plateau"} <= set(judged)
+    assert len(judged) == 4, "the objective's own correction judged too, and no other"
     assert reran, "the plateau moved the subject"
 
 
