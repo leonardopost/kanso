@@ -15,6 +15,7 @@ import yaml
 
 from kanso import hyp
 from kanso.errors import Exit, KansoError
+from kanso.hyp.registry import RESCOPED
 from kanso.schemas import Hypothesis, parse_yaml
 from kanso.state import StateStore
 from kanso.workspace import Workspace
@@ -1109,6 +1110,29 @@ def test_clearing_the_best_says_so_in_the_event_log(ws: Workspace, store: StateS
     events = store.events(subject=HYP_ID)
     assert [event.kind for event in events] == ["registered", "best_cleared", "repinned"]
     assert events[1].detail["reason"] == "resolution changed from '1m' to '5m'"
+
+
+@pytest.mark.parametrize("best", [True, False])
+def test_a_re_pin_records_on_its_own_event_whether_it_moved_the_scope_or_added_a_gate(
+    ws: Workspace, store: StateStore, best: bool
+) -> None:
+    """With a best to clear or none: a stall measured before either move was measured under
+    what it replaced, and with no best there is no `best_cleared` to say so."""
+    register(ws, store, document(**SLEEVE_CLASSIFICATION))
+    if best:
+        set_best(store)
+    guard = {"id": "edge_per_trade", "params": {"min_bps": 0.0, "k_se": 1.0}}
+    retitled = {**SLEEVE_CLASSIFICATION, "title": "A better title"}
+
+    register(ws, store, document(**retitled))
+    register(ws, store, document(**retitled, resolution="5m"))
+    register(ws, store, document(**retitled, resolution="5m", required_constraints=[guard]))
+
+    events = store.events(subject=HYP_ID)
+    assert RESCOPED not in events[0].detail, "a first registration replaces nothing"
+    assert [e.detail[RESCOPED] for e in events if e.kind == "repinned"] == [False, True, True]
+    cleared = [event for event in events if event.kind == "best_cleared"]
+    assert len(cleared) == (1 if best else 0), "the second move had no best left to clear"
 
 
 def test_a_registration_whose_pins_record_no_scope_clears_the_best(

@@ -12,10 +12,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.hyp import set_status
 from kanso.inbox import escalate
+from kanso.research import records, scheduler
 from kanso.state import StateStore
 from kanso.workspace import find
 
@@ -116,6 +119,106 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
         f"{evidence['min_probability']:.3f}"
     )
     assert spared in at(runner, mocked_ws, "status").stdout
+
+
+def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """`last_stall` carries what the stall recorded and `parked` whether the park holds now,
+    by the predicate the queue applies — on the best it still holds, which a keep beating it
+    ends at the next return to the queue — and the human line says what `parked` says, on a
+    hypothesis that is not retired."""
+    mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    stall = entry["last_stall"]
+    assert stall["best_sha"] == outcome["best_sha"] == entry["best_sha"]
+    assert (stall["parked"], stall["stalls_on_best"], entry["parked"]) == (True, 1, True)
+    assert "· parked after 1 stall on its best" in at(runner, mocked_ws, "status").stdout
+
+    with StateStore(mocked_ws / "state.db") as store:
+        set_status(store, HYP_ID, "retired")
+    (retired,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert retired["parked"] is True, "where its returns go once it is resumed"
+    assert "parked after" not in at(runner, mocked_ws, "status").stdout, "not in the queue"
+
+    assert at(runner, mocked_ws, "hyp", "resume", HYP_ID).exit_code == Exit.OK
+    (resumed,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert (resumed["status"], resumed["parked"]) == ("researching", True)
+    assert "· parked after 1 stall on its best" in at(runner, mocked_ws, "status").stdout
+
+    with StateStore(mocked_ws / "state.db") as store:
+        run = records.runs_of(store, HYP_ID)[-1]
+        records.set_best(store, run, store.put_blob(b"# better\n"), 1e9)
+
+    (moved,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert moved["status"] == "researching", "not retired, so only the predicate hides the park"
+    assert moved["last_stall"]["parked"] is True, "what the stall recorded"
+    assert moved["parked"] is False, "a keep moved the best"
+    assert "parked after" not in at(runner, mocked_ws, "status").stdout
+
+
+def test_a_spared_stall_that_parked_says_both_the_spare_first_and_ends_on_the_park(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """The two suffixes are appended in one order: what spared the stall, then the park."""
+    searched_wide(mocked_ws)
+    mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+    assert outcome["stall"]["precheck"]["pass"] is False, "spared"
+    assert (outcome["stall"]["parked"], outcome["stall"]["stalls_on_best"]) == (True, 1)
+
+    lines = at(runner, mocked_ws, "status").stdout.splitlines()
+    (line,) = [line for line in lines if line.strip().startswith(HYP_ID)]
+
+    spared, parked = line.index(" · stall spared: deflated_edge "), line.index(" · parked after ")
+    assert spared < parked
+    assert line.endswith(" · parked after 1 stall on its best")
+
+
+def test_a_stall_recorded_before_stalls_counted_reads_as_unparked(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    with StateStore(mocked_ws / "state.db") as store:
+        store.event("stalled", HYP_ID, {"best_sha": None, "certifiable": False})
+
+    (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+
+    assert (entry["last_stall"]["parked"], entry["last_stall"]["stalls_on_best"]) == (False, None)
+    assert entry["parked"] is False
+    assert "parked after" not in at(runner, mocked_ws, "status").stdout
+
+
+def test_a_stall_that_parks_as_the_park_is_read_is_the_stall_the_line_reads(
+    runner: CliRunner, mocked_ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane records stalls while `status` reads, so the park is read before the newest stall
+    the line counts the spell from: a hypothesis's first stall, parking it, that lands as the
+    park is read is read as the newest stall too — never a park beside no stall to count."""
+    mocked.tuned(mocked_ws, park_after_stalls=1)
+    real = scheduler.parked
+    stalled: list[str] = []
+
+    def stalling(opened: StateStore, hyp_id: str) -> bool:
+        if not stalled:  # a lane's first stall, recorded as the park is read
+            with StateStore(mocked_ws / "state.db") as lane:
+                lane.event(
+                    scheduler.STALLED,
+                    hyp_id,
+                    {"best_sha": None, "parked": True, "stalls_on_best": 1},
+                )
+            stalled.append(hyp_id)
+        return real(opened, hyp_id)
+
+    monkeypatch.setattr(scheduler, "parked", stalling)
+
+    result = at(runner, mocked_ws, "status")
+
+    assert stalled == [HYP_ID]
+    assert result.exit_code == Exit.OK, result.stdout
+    assert "· parked after 1 stall on its best" in result.stdout
 
 
 def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(

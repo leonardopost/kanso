@@ -93,6 +93,39 @@ def test_the_pages_state_how_often_a_lane_explores_as_the_template_ships_it() ->
     assert stated in prose(page("concepts.md"))
 
 
+def test_the_pages_state_that_a_hypothesis_parks_only_once_the_operator_says_how_often() -> None:
+    """A park reorders the queue a lane serves, so an operator reads here that nothing parks
+    until `kanso.toml` says how often, and that a park never ends a hypothesis."""
+    default = ResearchConfig().park_after_stalls
+    assert f"\npark_after_stalls = {default} " in render_config("0.1.0"), "the template's value"
+    stated = f"({default} in the template; 0 is never)"
+    for name in ("cli.md", "concepts.md"):
+        text = prose(page(name))
+        assert f"park_after_stalls` {stated}" in text, name
+        assert "at −3" in text, name
+    assert "it never ends, retires or removes anything" in prose(page("cli.md"))
+    assert "A park ends nothing" in prose(page("concepts.md"))
+
+
+def test_the_pages_state_when_a_park_holds_as_the_queue_reads_it() -> None:
+    """A return goes to −3 while the park holds (`scheduler.parked`): its newest stall since the
+    best was last cleared, or a re-pin last moved the scope or added a card gate, parked it on the
+    best it still holds — not while it merely holds the best it parked on, which a best cleared
+    and kept again on the same bytes does, and a park on no best a re-pin lifted does too."""
+    since = "since its best was last cleared, or a re-pin last moved its scope or added a card gate"
+    queue_add = next(
+        line
+        for line in page("cli.md").splitlines()
+        if line.startswith("| `kanso research queue add")
+    )
+    assert f"while the park holds — while its newest stall {since}" in queue_add
+    assert "`hypotheses[].parked`" in queue_add
+    cli = prose(page("cli.md"))
+    assert f"at −3 while its newest stall {since}, parked it on the best it still holds" in cli
+    assert "while it still holds the best it parked on" not in cli
+    assert "records itself and returns the hypothesis to the queue in one write transaction" in cli
+
+
 def explore_row() -> str:
     return next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp explore")

@@ -61,6 +61,12 @@ error: demo_filter has an active run (f922aba53c5d48f3a3f40b45f850fb72), so it c
 remedy: end the run with `kanso research end demo_filter` first
 ```
 
+A lane whose baseline is running holds a claim and no run yet, so a re-pin then is accepted, and
+it is the lane's begin that is refused: the begin pinned `hypothesis.yaml` before its baseline,
+and it reads the registered sha again in the write that records the run and its `run_begun`, so
+no run begins on the bytes a re-pin replaced. The daemon puts the hypothesis back in the queue,
+and its next run is pinned to the new bytes.
+
 A hypothesis moves through `draft → classified → researching → candidate → certified`, and
 `retired` is the one end. **Only an operator ends a line of research**, with `kanso hyp
 retire`, and `kanso hyp resume` takes it back. A certificate, pass or fail, is a milestone
@@ -1277,6 +1283,60 @@ of the lane. The number a lane reads is the workspace's own `kanso.toml`, which 
 rewrites: a workspace initialised on 0.8.0 to 0.13.x states `explore_after_stalls = 0` and
 keeps never until you set it, and one initialised before 0.8.0, whose file has no key,
 explores at the default.
+
+Neither a re-seed nor an exploration frees a lane: the parent stays in the queue, and a
+hypothesis whose every run stalls on the same best takes its turn as often as one still
+climbing. `[research] park_after_stalls` (0 in the template; 0 is never) **parks** it: the
+stall that makes that many in a row on one best — no best among them — returns it to the queue
+at −3, behind 0, −1 and −2, every band kanso itself returns a hypothesis to. The spell is
+counted newest first over its `stalled` events since its best was last cleared or a re-pin last
+moved its scope or added a card gate, this stall included, and only a stall on another best, a
+`best_cleared`, a re-pin that moved the scope or added a card gate — with a best or none, which
+its `repinned` event records as `rescoped: true` — or a stall whose run began before either
+breaks it —
+a reseed or an exploration between two stalls does not, since neither moved the best, and a
+stall spared on research data or certified counts like any other. The stall records `parked`
+and `stalls_on_best` on its `stalled` event. A park ends nothing — the status, the best, the
+run and the row are as they were, and only the operator retires a hypothesis — and it only
+reorders: a lane serves a parked row as soon as nothing ranked above it waits, so with every
+hypothesis in the queue saturated, lanes keep serving them at −3. It is lifted at the next
+return to the queue by a keep that moves the best it parked on; by a re-pin that moved the scope
+or added a card gate, with a best or none — clearing a best with `best_cleared`, and recording
+`rescoped` on its `repinned` event either way, since with no best there is no `best_cleared` to
+say the scope moved; by `research begin --from-workspace` on a best, which clears it with
+`best_cleared` (with no best it writes nothing, and the spell runs on) — even when the next
+baseline keeps the same bytes again, since the stalls behind either were measured under the
+scope it replaced; and by the next stall once the key is 0 or above its spell, which records
+`parked: false`. A re-pin is not refused while a stall is decided — the lane's run has ended
+before the stall certifies, and before it reads anything, while the lane removes the run's
+directory and records its end — so a stall is anchored to its run: one whose run began before a
+`best_cleared` or a re-pin that moved its scope or added a card gate — best or no best — or whose
+best moved while it was decided records `stalls_on_best: 0` and `parked: false`: it was measured
+under what the re-pin replaced, so it stands in no spell, and the next stall's starts after it.
+A run's beginning is its `run_begun`, written once its baseline has run, and a re-pin that lands
+while the baseline runs, before the run exists, leaves that run unbegun (Hypothesis, above),
+so no run begins after a re-pin on the bytes it replaced.
+It reads its best again, counts its spell, records itself and returns the hypothesis to the
+queue in one write transaction, so no clearing lands between the check and the record, nor
+between the record and the return: where it goes back at all, it goes back at −3 exactly when
+its `stalled` event records `parked: true`, and a re-pin that waited on the lock lands after the
+row is placed. `kanso research queue add ID --priority P`
+raises a parked row until its next return, and `kanso status --json` → `hypotheses[].parked`
+says whether the park holds at the next return. A lifted park moves no row: one already waiting
+at −3 when a re-pin lifts it keeps that place until a lane serves it or `queue add --priority`
+raises it. The band is not written once, at the stall, because a band written there would not
+survive a live workspace: a lane that fails mid-run puts its hypothesis back at −1, a baseline that
+would not run at −2, and a live workspace recorded 373 `lane_failed` events against 8 `stalled`
+(`docs/backlog.md` row 62), so a band written at the stall would be lifted by the next provider
+hiccup. It is derived
+instead inside `requeue`, which every return goes through — a stall, a lane's failure, a
+baseline's, a claim recovered from a dead lane — from the newest `stalled` event: parked, on
+the best the hypothesis still holds, with neither a `best_cleared` nor a `repinned` recording
+`rescoped` since; it reads the park and places the row in one write transaction, so a re-pin
+lands before the read or after the row, never between. A park lowers a return and never raises
+one: a claim recovered from a row an operator queued below −3 goes back where it stood. A stall
+whose certification is refused before its event is written (a pinned plan this version cannot
+run) writes none, so it neither advances the spell nor lifts a park.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included
 — and of every hypothesis it derives from (`derived_from` in `hypothesis.yaml`), since the
@@ -2739,7 +2799,8 @@ cheaper one has passed — and stops at the first that refuses; on a snapshot th
 a claim it runs neither window, and the failing certificate it writes is recorded beside a
 precheck that judged nothing and says why. A refusal in either place spares the stall — no
 certification window read, no certificate, no look, no failure counted toward `n_fail`, the
-hypothesis back in the queue at −1 — and the `stalled` event records the precheck, every
+hypothesis back in the queue at −1, or −3 while parked (`[research] park_after_stalls`) — and
+the `stalled` event records the precheck, every
 reading under `gates` (`docs/cli.md`). A gate that judged nothing spares nothing: a plan carries
 no correction before the search's second draw, card or declared setting, and a gate that skips
 on the research run would skip in the certificate too. A certificate the child goes on to write

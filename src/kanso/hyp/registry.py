@@ -12,7 +12,10 @@ hypothesis is an edit, not a reclassification; a file whose classification has b
 cleared returns to `draft`, since there is no longer a construct to research it as.
 Either way it is refused outright while a run is active: the run is pinned to the bytes
 that were registered when it began, and moving the pin under it would make the lane's
-copy disagree with the run without anything having changed in the lane.
+copy disagree with the run without anything having changed in the lane. A lane whose
+baseline is running holds a claim and no run yet, so a re-pin then is not refused; that
+lane's begin is, in the write that would record the run (`kanso.research.loop.begin`), so no
+run begins on the bytes a re-pin replaced.
 
 The scope a `best` is comparable under is what `SCOPE` names: the universe, the
 resolution, the data the hypothesis is shown — the types it requires, which instrument is
@@ -35,6 +38,11 @@ baseline is judged under every gate the file now names, so the strategy is re-ju
 gate rather than inherited past it. A re-pin that only drops a gate keeps the best, which
 passed every gate it still names. The gates are not scope: a certificate earned under fewer
 of them still says what its window measured, so composition does not read them.
+
+Either move is recorded on the re-pin's own `repinned` event too, as `rescoped`, whether or
+not there was a best to clear: the stalls of the runs begun before it were measured under what
+it replaced, and the scheduler's park, which counts stalls on one best — no best among them —
+stops at one, as it stops at a `best_cleared`.
 """
 
 from __future__ import annotations
@@ -124,6 +132,14 @@ REGISTERED: Final = "registered"
 REPINNED: Final = "repinned"
 BEST_CLEARED: Final = "best_cleared"
 """The event kinds this module appends, all under the hypothesis id as subject."""
+
+RESCOPED: Final = "rescoped"
+"""The key of every `repinned` event: true when the re-pin moved a field of the scope or added
+a card gate — one the held pin did not name, or named at other parameters — which is what
+clears a held best, whether or not there was a best to clear. A stall of a run begun before it
+was measured under what it replaced, so the scheduler's park counts no such stall
+(`kanso.research.scheduler.parked`), best or no best; with no best there is no `best_cleared`
+to say so, and this is the record that does."""
 
 _COLUMNS: Final = (
     "hyp_id",
@@ -229,7 +245,9 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     thesis is needs no model to say so, which is the same override that is open to them
     after a classification. A re-pin keeps the status while the file is still classified
     and returns it to `draft` otherwise, and clears the hypothesis's `best` when any field
-    of `scope_of` moved from the scope the held row was pinned under.
+    of `scope_of` moved from the scope the held row was pinned under, or a card gate was
+    added. Its `repinned` event records under `RESCOPED` whether either happened, a best to
+    clear or none.
     """
     refuse_active_run(store, hyp.id, "re-pin")
     held = _row(store, hyp.id)
@@ -237,7 +255,8 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
     scope = scope_of(hyp)
     before = {} if held is None else _scope_of(store, held, scope)
     added = [] if held is None else gates_added(_pinned_hypothesis(store, held), hyp)
-    cleared = held is not None and held["best_sha"] is not None and (before != scope or bool(added))
+    rescoped = held is not None and (before != scope or bool(added))
+    cleared = held is not None and held["best_sha"] is not None and rescoped
     status: Status
     if hyp.construct is None:
         status = DRAFT
@@ -273,11 +292,10 @@ def pin(store: StateStore, hyp: Hypothesis, source: bytes) -> str:
             hyp.id,
             {"reason": "; ".join(reasons), "scope": scope, "gates_added": added},
         )
-    store.event(
-        REGISTERED if held is None else REPINNED,
-        hyp.id,
-        {"hypothesis_sha": sha, "status": status},
-    )
+    detail: dict[str, object] = {"hypothesis_sha": sha, "status": status}
+    if held is not None:
+        detail[RESCOPED] = rescoped
+    store.event(REGISTERED if held is None else REPINNED, hyp.id, detail)
     return sha
 
 

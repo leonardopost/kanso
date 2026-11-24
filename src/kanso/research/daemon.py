@@ -121,6 +121,7 @@ __all__ = [
     "Status",
     "Stopped",
     "WORK_SUFFIX",
+    "baseline_unmoved",
     "claim",
     "clear_stop",
     "ending",
@@ -131,7 +132,6 @@ __all__ = [
     "log_path",
     "main",
     "monitor",
-    "parked",
     "pid_of",
     "pid_path",
     "request_drain",
@@ -752,10 +752,11 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
 
     A hypothesis it could not research goes back in the queue rather than out of it — a
     baseline that will not run returns behind the stalled ones, and anything that failed
-    mid-run returns beside them — and the lane waits before taking anything else, so a
-    provider that is down costs a call a minute rather than a call a second. The two
-    exceptions are the operator's: a hypothesis retired, or taken out of the queue, while
-    the lane held it stays out. One taken out before its run began is not a failure at
+    mid-run returns beside them, either at −3 instead while it is parked
+    (`[research] park_after_stalls`, `scheduler.parked`) — and the lane waits before taking
+    anything else, so a provider that is down costs a call a minute rather than a call a
+    second. The two exceptions are the operator's: a hypothesis retired, or taken out of the
+    queue, while the lane held it stays out. One taken out before its run began is not a failure at
     all: the lane lets go of it at the next catalog read of its baseline, or within a
     second of the card (`loop.begin`), records nothing and claims the next hypothesis
     without waiting. Nor is a run the operator ended while the lane worked it
@@ -848,8 +849,8 @@ def monitor(ws: Workspace, supervisor: int) -> int:
 
 
 def claim(ws: Workspace, store: StateStore, lane: str) -> str | None:
-    """What this lane works next: its own unfinished run, else the head of the queue that is
-    not `parked`.
+    """What this lane works next: its own unfinished run, else the head of the queue whose
+    baseline is not waiting on unmoved inputs (`baseline_unmoved`).
 
     Its own run comes first, which is what makes a lane started in a dead one's place
     resume the run the dead one left.
@@ -857,10 +858,10 @@ def claim(ws: Workspace, store: StateStore, lane: str) -> str | None:
     mine = _run_in(store, lane)
     if mine is not None:
         return mine
-    return scheduler.dequeue(store, lane, lambda hyp_id: parked(ws, store, hyp_id))
+    return scheduler.dequeue(store, lane, lambda hyp_id: baseline_unmoved(ws, store, hyp_id))
 
 
-def parked(ws: Workspace, store: StateStore, hyp_id: str) -> bool:
+def baseline_unmoved(ws: Workspace, store: StateStore, hyp_id: str) -> bool:
     """Whether a lane leaves `hyp_id` in the queue rather than begin its run: its last
     attempt to begin one ended on a baseline killed for its clock, no run has begun since,
     and a baseline begun now would run on what that one ran on (`loop.baseline_inputs`).
@@ -868,7 +869,7 @@ def parked(ws: Workspace, store: StateStore, hyp_id: str) -> bool:
     Before this a baseline killed for its clock was put back and begun again `BACKOFF_S`
     later on the same strategy, hypothesis, snapshot and budget, and killed again a budget
     later (`docs/backlog.md` row 73). It stays where `put_back` put it. When what a baseline
-    would run on cannot be read — a file gone — it is not parked, so the begin says why.
+    would run on cannot be read — a file gone — it is not passed over, so the begin says why.
     """
     failed = store.events(kind=research_loop.BASELINE_FAILED, subject=hyp_id)
     if not failed or research_loop.INPUTS not in failed[-1].detail:

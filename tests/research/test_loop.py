@@ -218,8 +218,9 @@ def test_a_turn_s_first_card_that_trades_in_slot_order_strikes_the_card_budget(
 def test_a_baseline_killed_for_its_clock_records_what_it_ran_on_and_one_that_raised_does_not(
     ws: Workspace, store: StateStore, registered: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """What a lane compares before it begins the run again (`daemon.parked`): the strategy, the
-    two files, the snapshots, the baseline budget and the kanso, as a begin now reads them."""
+    """What a lane compares before it begins the run again (`daemon.baseline_unmoved`): the
+    strategy, the two files, the snapshots, the baseline budget and the kanso, as a begin now
+    reads them."""
 
     def killed(request: backtest.RunRequest, *_: object, **__: object) -> backtest.RunResult:
         return backtest.RunResult(
@@ -2410,3 +2411,51 @@ def test_a_removal_is_honoured_at_the_next_read_of_whatever_begin_is_reading(
     assert records.active(store, hyp_id) is None
     assert not lanes.lane_dir(ws, "l1", hyp_id).exists()
     assert loop.BASELINE_FAILED not in [event.kind for event in store.events(subject=hyp_id)]
+
+
+# --- a re-pin while the run is being begun ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("changes", "begins"),
+    [({}, True), ({"title": "A better title"}, False)],
+    ids=["same-bytes", "retitled"],
+)
+def test_a_re_pin_while_the_baseline_runs_refuses_the_run_only_when_it_moved_the_bytes(
+    ws: Workspace,
+    store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
+    changes: dict[str, object],
+    begins: bool,
+) -> None:
+    """A re-pin waits only on a recorded run, and the baseline runs before there is one, so the
+    registered sha is read again in the write that records the run. The same bytes registered
+    again move nothing, and the run begins pinned to them; any other bytes — a title, which
+    moves no scope, included — leave no run, no `run_begun`, no lane directory and no
+    `baseline_failed`, since the baseline ran. So a run is pinned to the bytes registered when
+    its `run_begun` was written."""
+    hyp_id = classify(ws, store, DOCUMENT)
+    real = backtest._payload
+    re_pins: list[str] = []
+
+    def re_pinning(*args: object, **kwargs: object) -> object:
+        if not re_pins:  # the operator, while the baseline card runs
+            re_pins.append(classify(ws, store, document(**changes)))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(backtest, "_payload", re_pinning)
+
+    if begins:
+        run = loop.begin(ws, store, hyp_id, lane="l1")
+        assert run.hypothesis_sha == show(ws, store, hyp_id).hypothesis_sha  # type: ignore[union-attr]
+        assert [e.detail["run_id"] for e in store.events(kind=passages.BEGUN)] == [run.run_id]
+    else:
+        with pytest.raises(PreconditionError, match="re-pinned while its baseline ran") as refused:
+            loop.begin(ws, store, hyp_id, lane="l1")
+        assert refused.value.code == Exit.PRECONDITION
+        assert f"kanso research begin {hyp_id}" in (refused.value.remedy or "")
+        assert records.runs_of(store, hyp_id) == []
+        kinds = [event.kind for event in store.events(subject=hyp_id)]
+        assert passages.BEGUN not in kinds and loop.BASELINE_FAILED not in kinds
+        assert not lanes.lane_dir(ws, "l1", hyp_id).exists()
+    assert re_pins == [hyp_id]

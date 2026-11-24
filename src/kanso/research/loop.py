@@ -422,6 +422,16 @@ def _registration(ws: Workspace, store: StateStore, hyp_id: str) -> Registration
     return cast(Registration, show(ws, store, hyp_id))
 
 
+def _registered_sha(store: StateStore, hyp_id: str) -> str | None:
+    """The sha of the `hypothesis.yaml` the registry holds for `hyp_id` now, read off its row
+    alone: `begin` asks it in the write that records a run, where the workspace file is not
+    what is being compared."""
+    row = store.connection.execute(
+        "SELECT hypothesis_sha FROM hypotheses WHERE hyp_id = ?", (hyp_id,)
+    ).fetchone()
+    return None if row is None else cast("str | None", row["hypothesis_sha"])
+
+
 def _pinned(ws: Workspace, store: StateStore, run: RunRecord) -> Hypothesis:
     """The hypothesis this run was pinned to, parsed from the blob it stored."""
     text = store.get_blob(run.hypothesis_sha).decode("utf-8")
@@ -1332,6 +1342,16 @@ def begin(
     `positive_folds` count, say (`_refuse_unadmitted`). A baseline that will not run leaves no
     record and no lane directory.
 
+    Nor does a begin whose `hypothesis.yaml` a re-pin replaced while its baseline ran. The file
+    is read and pinned before the baseline and the run recorded after it, and a re-pin waits
+    only on a recorded run (`kanso.hyp.registry.pin`), never on a lane's claim, so the
+    registered sha is read again in the write transaction that records the run and its
+    `run_begun`, and a pin it no longer equals is refused there, with no `baseline_failed`,
+    since the baseline ran. So every run is pinned to the bytes registered when its `run_begun`
+    was written, and a re-pin recorded before that event is one the run was measured under —
+    which is what lets a stall's park count read a clearing after its run's `run_begun` as one
+    the run was not measured under (`kanso.research.scheduler`).
+
     One the operator takes out of `lane`'s hands (`research queue remove`) is refused with
     `TakenError` wherever the begin has got to: before anything is read, at the next
     catalog read of the warmup, the benchmark or the baseline's window, within
@@ -1437,31 +1457,41 @@ def begin(
             )
         store.event(BASELINE_FAILED, hyp_id, failed)
         raise
-    run = records.insert(
-        store,
-        RunRecord(
-            run_id=uuid.uuid4().hex,
-            hyp_id=hyp_id,
-            tag=tag or records.next_tag(store, hyp_id, date.today()),
-            lane=lane,
-            dir=str(directory.relative_to(ws.root)),
-            base_sha=pins[STRATEGY_FILE],
-            hypothesis_sha=pins[HYPOTHESIS_FILE],
-            program_sha=pins[PROGRAM_FILE],
-            snapshot_id=snapshot.snapshot_id,
-            criteria_version=criteria_version(),
-            host_version=setup.harness.host.version if setup.harness.host else None,
-            card_budget_s=_budget(result.wall_s),
-            baseline_wall_s=result.wall_s,
-            baseline_peak_mem_gb=result.peak_mem_gb,
-            started_at=records.now(),
-        ),
+    record = RunRecord(
+        run_id=uuid.uuid4().hex,
+        hyp_id=hyp_id,
+        tag=tag or records.next_tag(store, hyp_id, date.today()),
+        lane=lane,
+        dir=str(directory.relative_to(ws.root)),
+        base_sha=pins[STRATEGY_FILE],
+        hypothesis_sha=pins[HYPOTHESIS_FILE],
+        program_sha=pins[PROGRAM_FILE],
+        snapshot_id=snapshot.snapshot_id,
+        criteria_version=criteria_version(),
+        host_version=setup.harness.host.version if setup.harness.host else None,
+        card_budget_s=_budget(result.wall_s),
+        baseline_wall_s=result.wall_s,
+        baseline_peak_mem_gb=result.peak_mem_gb,
+        started_at=records.now(),
     )
-    _HOST_RUNS[run.run_id] = host_cache
-    begun: dict[str, object] = {"run_id": run.run_id, "tag": run.tag, "lane": lane}
+    begun: dict[str, object] = {"run_id": record.run_id, "tag": record.tag, "lane": lane}
     if reseeded is not None:
         begun[RESEED_FROM] = reseeded
-    store.event(BEGUN, hyp_id, begun)
+    with store.transaction():
+        repinned = _registered_sha(store, hyp_id) != pins[HYPOTHESIS_FILE]
+        if not repinned:
+            records.insert(store, record)
+            store.event(BEGUN, hyp_id, begun)
+    if repinned:
+        lanes.remove(directory)
+        raise PreconditionError(
+            f"{hyp_id} was re-pinned while its baseline ran, and a run is pinned to the "
+            "registered bytes, so no run begins on the bytes the re-pin replaced",
+            remedy=f"`kanso research begin {hyp_id}` begins it under the new pin; a daemon "
+            "lane puts it back in the queue and begins it when it is served again",
+        )
+    run = record
+    _HOST_RUNS[run.run_id] = host_cache
     if registration.status != RESEARCHING:
         set_status(store, hyp_id, RESEARCHING)
     _judge(
