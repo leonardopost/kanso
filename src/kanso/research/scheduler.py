@@ -17,22 +17,26 @@ three things that bound churn.
 
 A park is `[research] park_after_stalls` stalls in a row on one best, however the runs
 between them were re-seeded or explored (0, the template's, is never), and counted since the
-best was last cleared. It is recorded on the stall that completes the spell, and it is derived
-again in `requeue` (`parked`) from the newest `stalled` event — parked, on the best the
-hypothesis still holds, and no `best_cleared` since — rather than written once there, because
-every return to the queue goes through `requeue` and most are not stalls: a lane failing
-mid-run puts a hypothesis back at −1, a baseline that would not run at −2, `recover` at
-whatever the claim recorded, and a band written only at the stall would be lifted by the next
-of them (`docs/backlog.md` row 62). So every return agrees with the stall until a keep moves
-the best, a re-pin or `research begin --from-workspace` clears it — a cleared best re-kept on
-the same bytes is a new spell — or a stall records no park, under a key of 0 or one above its
-spell. A park only reorders: the row stays in the queue, its status, run and best are
-untouched, and a lane serves it as soon as nothing ranks above it. Nor does it raise a return
-asked for lower still: `recover` puts a claim on a row an operator queued below −3 back where
-it stood. `enqueue` is not held to it, so an operator's `queue add --priority` raises a parked
-row, or queues one out of the queue at the priority asked, until its next return. A host
-composing wakes only a hypothesis in no row (`on_host_composed`) — at 0, until its next
-return — so a parked row already in the queue stays at −3.
+best was last cleared or a re-pin last moved the scope or added a card gate. It is recorded
+on the stall that completes the spell, and it is derived again in `requeue` (`parked`) from the
+newest `stalled` event — parked, on the best the hypothesis still holds, and neither a
+`best_cleared` nor such a re-pin since — rather than written once there, because every return
+to the queue goes through `requeue` and most are not stalls: a lane failing mid-run puts a
+hypothesis back at −1, a baseline that would not run at −2, `recover` at whatever the claim
+recorded, and a band written only at the stall would be lifted by the next of them
+(`docs/backlog.md` row 62). So every return agrees with the stall until a keep moves the best,
+a re-pin moves the scope or adds a card gate — clearing the best where there is one, and
+recording `rescoped` on its `repinned` event whether or not there is
+(`kanso.hyp.registry.RESCOPED`) — or `research begin --from-workspace` clears the best — a best
+re-kept on the same bytes after either is a new spell — or a stall records no park, under a key
+of 0 or one above its spell. A park only
+reorders: the row stays in the queue, its status, run and best are untouched, and a lane
+serves it as soon as nothing ranks above it. Nor does it raise a return asked for lower still:
+`recover` puts a claim on a row an operator queued below −3 back where it stood. `enqueue` is
+not held to it, so an operator's `queue add --priority` raises a parked row, or queues one out
+of the queue at the priority asked, until its next return. A host composing wakes only a
+hypothesis in no row (`on_host_composed`) — at 0, until its next return — so a parked row
+already in the queue stays at −3.
 
 Three rows are skipped rather than served: a hypothesis already being researched somewhere,
 because one run per hypothesis is the invariant the run table enforces; a dead one, which is
@@ -55,7 +59,8 @@ row to show for it, until its baseline has run and the run row exists — and ag
 a stall, which ends the run, and this module's decision on where the hypothesis goes. The
 queue records the passage — `queued`, `claimed`, `removed`, and the run's own `run_begun` —
 so both gaps can be read back: what a dead lane was holding is put back at the priority it
-held, at the next start or as soon as a running daemon's supervisor finds that lane dead;
+held, or −3 while parked (`[research] park_after_stalls`) where it held more, at the next start
+or as soon as a running daemon's supervisor finds that lane dead;
 what an operator took out while a lane held it stays out when that
 lane fails, and the lane does not begin the run it was about to; and a hypothesis retired
 in a lane's hands has its claim closed, so resuming it later does not revive the claim.
@@ -72,7 +77,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 from kanso.errors import PreconditionError
 from kanso.hyp import active_run
-from kanso.hyp.registry import BEST_CLEARED
+from kanso.hyp.registry import BEST_CLEARED, REPINNED, RESCOPED
 from kanso.research import records
 from kanso.research.lanes import DEFAULT_LANE
 from kanso.research.passages import (
@@ -197,10 +202,12 @@ class Stall:
     returned nowhere — retired or taken out of the queue while the stall certified — returns
     there once it is queued again and a lane puts it back."""
     stalls_on_best: int | None = None
-    """The stalls in a row on this best since it was last cleared, this one included, however
-    re-seeded or explored; 0 where the best moved while the stall was decided — a re-pin
-    cleared it during the certification — so the stall stands in no spell and parks nothing;
-    `None` where the stall recorded no `stalled` event — a hypothesis retired before it."""
+    """The stalls in a row on this best since it was last cleared or a re-pin last moved the
+    scope or added a card gate, this one included, however re-seeded or explored; 0 where the
+    best moved or was cleared while the stall was decided, or a re-pin that moved the scope or
+    added a card gate landed then — during the certification, best or no best — so the stall
+    stands in no spell and parks nothing; `None` where the stall recorded no `stalled` event —
+    a hypothesis retired before it."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -255,10 +262,11 @@ def requeue(
 
     Parked is the newest `stalled` event's word, read here rather than at the stall
     (`parked`): it recorded a park, the hypothesis's best is still the one it recorded, and
-    no `best_cleared` came after it. Every return goes through here — a stall, a lane's
-    failure mid-run, a baseline that would not run, a claim recovered — so all of them agree,
-    and a keep that moves the best, or a re-pin that clears it, ends the park at the next.
-    The `queued` passage records the priority the row was given.
+    neither a `best_cleared` nor a re-pin that moved the scope or added a card gate came after
+    it. Every return goes through here — a stall, a lane's failure mid-run, a baseline that
+    would not run, a claim recovered — so all of them agree, and a keep that moves the best, or
+    a re-pin that moves the scope or adds a card gate, best or no best, ends the park at the
+    next. The `queued` passage records the priority the row was given.
 
     `reseed_from` rides on the passage: the sha the next run starts from instead of the
     best, read back by `research/passages.py` when that run begins.
@@ -525,20 +533,23 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
 
     `[research] park_after_stalls` stalls in a row on the same best — counted newest first
     over the `stalled` events, this one included, and broken only by a stall on another best,
-    a `best_cleared` or a stall decided across one, so neither a reseed nor an exploration
-    starts it over, and a stall spared or certified counts like any other — park the
-    hypothesis: the `stalled` event records `parked` and `stalls_on_best`, and the hypothesis
-    returns at −3, where `requeue` keeps every later return until a keep moves that best, a
-    re-pin clears it, or a later stall parks nothing — under a key of 0, or one above its
-    spell. 0 is never. A park ends nothing: the status, the best and the row are untouched,
-    and a lane serves it once nothing ranked above it waits. A retire or a `queue remove`
-    during the certification leaves the park recorded, and the `Stall` says so: the
-    hypothesis returns nowhere now, and at −3 once it is queued again and a lane puts it
-    back. A re-pin is not refused while this decides — the run it would wait on has ended —
-    so the best is read again before the `stalled` event is written, and where it moved or
-    was cleared since it was read the stall records `stalls_on_best` 0 and parks nothing: it
-    was measured under the scope the re-pin replaced, so it belongs to no spell, and the next
-    stall's spell starts after it.
+    a `best_cleared`, a re-pin that moved the scope or added a card gate — best or no best,
+    which its `repinned` event records as `rescoped` — or a stall decided across either, so
+    neither a reseed nor an exploration starts it over, and a stall spared or certified counts
+    like any other — park the hypothesis: the `stalled` event records `parked` and
+    `stalls_on_best`, and the hypothesis returns at −3, where `requeue` keeps every later
+    return until a keep moves that best, a re-pin moves the scope or adds a card gate,
+    `research begin --from-workspace` clears the best, or a later stall parks nothing — under
+    a key of 0, or one above its spell. 0 is never. A park ends nothing: the status, the best
+    and the row are untouched, and a lane serves it once nothing ranked above it waits. A
+    retire or a `queue remove` during the certification leaves the park recorded, and the
+    `Stall` says so: the hypothesis returns nowhere now, and at −3 once it is queued again and
+    a lane puts it back. A re-pin is not refused while this decides — the run it would wait on
+    has ended — so the best is read again before the `stalled` event is written, and where it
+    moved or was cleared since it was read, or a re-pin that moved the scope or added a card
+    gate landed since — best or no best — the stall records `stalls_on_best` 0 and parks
+    nothing: it was measured under the scope the re-pin replaced, so it belongs to no spell,
+    and the next stall's spell starts after it.
     """
     # Certification reads research; research schedules certification. The import is
     # deferred so the cycle exists only while this function runs.
@@ -628,9 +639,11 @@ def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
     certifying — a best at or below zero, one already certified under the pinned plan and
     the installed engine, a search not yet priceable — or one recorded before stalls judged
     one; a `stalls_on_best` of `None` is one recorded before stalls counted them, which
-    parked nothing, and of 0 one whose best moved while it was decided, which stands in no
-    spell. `parked` here is what the stall recorded, and stays so after a keep moves
-    the best or a re-pin clears it; whether the park still holds is `parked(store, hyp_id)`."""
+    parked nothing, and of 0 one whose best moved or was cleared while it was decided, or
+    that was decided across a re-pin that moved the scope or added a card gate, which stands
+    in no spell. `parked` here is what the stall recorded, and stays so after a keep moves the
+    best or such a re-pin lifts the park; whether the park still holds is
+    `parked(store, hyp_id)`."""
     row = _newest_stall(store, hyp_id)
     if row is None:
         return None
@@ -658,15 +671,18 @@ def _newest_stall(store: StateStore, hyp_id: str) -> sqlite3.Row | None:
 def parked(store: StateStore, hyp_id: str) -> bool:
     """Whether the hypothesis's returns to the queue go to `PARK_PRIORITY` now — the one
     predicate `requeue` applies and `kanso status` reports: its newest stall since its best
-    was last cleared recorded a park, on the best it still holds.
+    was last cleared or a re-pin last moved its scope or added a card gate recorded a park,
+    on the best it still holds.
 
-    So a keep that moves the best lifts it, and so does a `best_cleared` — a re-pin whose
-    scope or card gates moved, or `research begin --from-workspace` — even when the next
-    baseline keeps the same bytes again, since the stalls behind it were measured under the
-    scope it replaced. A retired hypothesis is answered like any other: it returns nowhere
-    until it is resumed and queued, and then here. It is read at a return and moves no row:
-    one already waiting at −3 when a re-pin lifts the park keeps that place until a lane
-    serves it or `enqueue` raises it, since `kanso.hyp` re-pins without the scheduler.
+    So a keep that moves the best lifts it, and so does a re-pin that moved the scope or
+    added a card gate — best or no best: with a best it records `best_cleared`, and with or
+    without one its `repinned` event records `rescoped` — and so does `research begin
+    --from-workspace` on a best, which it clears with `best_cleared`, even when the next
+    baseline keeps the same bytes again, since the stalls behind either were measured under
+    the scope it replaced. A retired hypothesis is answered like any other: it returns
+    nowhere until it is resumed and queued, and then here. It is read at a return and moves
+    no row: one already waiting at −3 when a re-pin lifts the park keeps that place until a
+    lane serves it or `enqueue` raises it, since `kanso.hyp` re-pins without the scheduler.
     """
     newest = next(_stalls_since_cleared(store, hyp_id), None)
     if newest is None:
@@ -677,10 +693,11 @@ def parked(store: StateStore, hyp_id: str) -> bool:
 
 def _spell(store: StateStore, hyp_id: str, best: str | None) -> int:
     """The stalls in a row on `best` already recorded: the hypothesis's `stalled` events
-    since its best was last cleared, counted newest first while each is on `best`. Only
-    another best, a `best_cleared` or a stall decided across a move of the best — recorded
-    at 0 — breaks the spell — a `reseed` or an exploration between them does not — and a
-    best of `None` is one best."""
+    since its best was last cleared or a re-pin last moved its scope or added a card gate
+    (`_stalls_since_cleared`), counted newest first while each is on `best`. Only another
+    best, a `best_cleared`, such a re-pin — best or no best — or a stall decided across a move
+    of either — recorded at 0 — breaks the spell — a `reseed` or an exploration between them
+    does not — and a best of `None` is one best."""
     spell = 0
     for detail in _stalls_since_cleared(store, hyp_id):
         if detail.get("best_sha") != best or detail.get("stalls_on_best") == 0:
@@ -689,14 +706,22 @@ def _spell(store: StateStore, hyp_id: str, best: str | None) -> int:
     return spell
 
 
+_CLEARS: Final = f"(kind = ? OR (kind = ? AND json_extract(detail, '$.{RESCOPED}') = 1))"
+_CLEARING: Final = (BEST_CLEARED, REPINNED)
+"""The events no earlier stall counts across, as a predicate and the kinds it binds: a
+`best_cleared` — a re-pin's, or `research begin --from-workspace`'s — and a `repinned` whose
+re-pin moved the scope or added a card gate, which it records as `rescoped` whether or not
+there was a best to clear (`kanso.hyp.registry.RESCOPED`). So no stall measured under a scope
+a re-pin replaced counts toward a park, best or no best."""
+
+
 def _stalls_since_cleared(store: StateStore, hyp_id: str) -> Iterator[dict[str, object]]:
     """The details of the hypothesis's `stalled` events, newest first, back to its newest
-    `best_cleared` (`kanso.hyp.registry.BEST_CLEARED`, which `research begin
-    --from-workspace` writes too)."""
+    `best_cleared` or re-pin that moved its scope or added a card gate (`_CLEARS`)."""
     rows = store.connection.execute(
-        "SELECT kind, detail FROM events WHERE subject = ? AND kind IN (?, ?)"
+        f"SELECT kind, detail FROM events WHERE subject = ? AND (kind = ? OR {_CLEARS})"
         " ORDER BY event_id DESC",
-        (hyp_id, STALLED, BEST_CLEARED),
+        (hyp_id, STALLED, *_CLEARING),
     )
     for row in rows:
         if str(row["kind"]) != STALLED:
@@ -706,10 +731,11 @@ def _stalls_since_cleared(store: StateStore, hyp_id: str) -> Iterator[dict[str, 
 
 
 def _cleared(store: StateStore, hyp_id: str) -> int:
-    """The event id of the hypothesis's newest `best_cleared`, 0 before its first."""
+    """The event id of the hypothesis's newest `best_cleared` or re-pin that moved its scope or
+    added a card gate (`_CLEARS`), 0 before its first."""
     row = store.connection.execute(
-        "SELECT MAX(event_id) FROM events WHERE kind = ? AND subject = ?",
-        (BEST_CLEARED, hyp_id),
+        f"SELECT MAX(event_id) FROM events WHERE subject = ? AND {_CLEARS}",
+        (hyp_id, *_CLEARING),
     ).fetchone()
     return int(row[0] or 0)
 

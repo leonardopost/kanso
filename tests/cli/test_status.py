@@ -154,6 +154,24 @@ def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
     assert "parked after" not in at(runner, mocked_ws, "status").stdout
 
 
+def test_a_spared_stall_that_parked_says_both_the_spare_first_and_ends_on_the_park(
+    runner: CliRunner, mocked_ws: Path
+) -> None:
+    """The two suffixes are appended in one order: what spared the stall, then the park."""
+    searched_wide(mocked_ws)
+    mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
+    outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
+    assert outcome["stall"]["precheck"]["pass"] is False, "spared"
+    assert (outcome["stall"]["parked"], outcome["stall"]["stalls_on_best"]) == (True, 1)
+
+    lines = at(runner, mocked_ws, "status").stdout.splitlines()
+    (line,) = [line for line in lines if line.strip().startswith(HYP_ID)]
+
+    spared, parked = line.index(" · stall spared: deflated_edge "), line.index(" · parked after ")
+    assert spared < parked
+    assert line.endswith(" · parked after 1 stalls on its best")
+
+
 def test_a_stall_recorded_before_stalls_counted_reads_as_unparked(
     runner: CliRunner, mocked_ws: Path
 ) -> None:

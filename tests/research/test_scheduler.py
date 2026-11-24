@@ -26,7 +26,7 @@ from kanso.certify.run import precheck, precheck_at_stall
 from kanso.data import snapshot as snapshots
 from kanso.errors import Exit, KansoError, PreconditionError
 from kanso.hyp import set_status, show
-from kanso.hyp.registry import BEST_CLEARED
+from kanso.hyp.registry import BEST_CLEARED, REPINNED, RESCOPED
 from kanso.inbox import unread
 from kanso.nautilus import backtest
 from kanso.research import explore, loop, passages, records, scheduler
@@ -1336,6 +1336,66 @@ def test_a_cleared_best_lifts_the_park_though_the_baseline_keeps_the_same_bytes_
     ), "a new spell"
 
 
+MIN_TRADES = {"id": "min_trades", "params": {"min": 30}}
+"""A card gate the demo hypothesis does not name."""
+
+
+@pytest.mark.parametrize("moved", ["scope", "gate"])
+def test_a_re_pin_that_moves_the_scope_or_adds_a_gate_lifts_a_park_on_no_best(
+    ws: Workspace, store: StateStore, moved: str
+) -> None:
+    """No best is one best, and a re-pin with no best to clear writes no `best_cleared`: its
+    `repinned` event records `rescoped`, and the stalls behind it — measured under the scope it
+    replaced — neither hold the park nor count toward the next spell."""
+    workspace = tuned(ws, park_after_stalls=2)
+    hyp_id = classify(workspace, store, DOCUMENT)
+    stalls(workspace, store, hyp_id, 2)
+    assert scheduler.parked(store, hyp_id)
+    if moved == "scope":
+        costs = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+        classify(workspace, store, document(costs=costs))
+    else:
+        classify(workspace, store, document(required_constraints=[MIN_TRADES]))
+
+    assert store.events(kind=BEST_CLEARED, subject=hyp_id) == [], "no best to clear"
+    assert store.events(kind=REPINNED, subject=hyp_id)[-1].detail[RESCOPED] is True
+    assert scheduler.parked(store, hyp_id) is False
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    run = open_run(store, hyp_id, lane="l1")
+    item = scheduler.put_back(store, hyp_id, "l1")
+    assert item is not None and item.priority == scheduler.STALL_PRIORITY
+    records.close(store, run)
+
+    after = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert (after.best_sha, after.stalls_on_best, after.parked, after.priority) == (
+        None,
+        1,
+        False,
+        scheduler.STALL_PRIORITY,
+    ), "a new spell"
+
+
+def test_a_re_pin_within_the_scope_leaves_a_park_on_no_best_where_it_is(
+    ws: Workspace, store: StateStore
+) -> None:
+    """A retitled file is the same experiment: `rescoped` is false, and the spell runs on."""
+    workspace = tuned(ws, park_after_stalls=2)
+    hyp_id = classify(workspace, store, DOCUMENT)
+    stalls(workspace, store, hyp_id, 2)
+
+    classify(workspace, store, document(title="Demo, retitled"))
+
+    assert store.events(kind=REPINNED, subject=hyp_id)[-1].detail[RESCOPED] is False
+    assert scheduler.parked(store, hyp_id)
+    third = scheduler.on_stall(workspace, store, hyp_id)
+    assert (third.stalls_on_best, third.parked, third.priority) == (
+        3,
+        True,
+        scheduler.PARK_PRIORITY,
+    )
+
+
 def test_a_re_pin_that_lifts_a_park_leaves_a_row_waiting_at_minus_three_where_it_stands(
     ws: Workspace, store: StateStore
 ) -> None:
@@ -1411,6 +1471,86 @@ def test_a_stall_decided_across_a_re_pin_that_cleared_its_best_stands_in_no_spel
     assert (first.parked, first.priority) == (
         (True, scheduler.PARK_PRIORITY) if after == 1 else (False, scheduler.STALL_PRIORITY)
     )
+
+
+@pytest.mark.parametrize("after", [1, 2])
+def test_a_stall_whose_best_was_cleared_and_re_kept_while_it_was_decided_stands_in_no_spell(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch, after: int
+) -> None:
+    """The best the stall reads again is the one it read, but a `best_cleared` came between —
+    `research begin --from-workspace`, and a baseline that kept the same bytes — so the stall
+    was measured before a clearing and counts in no spell: the best alone cannot say so, and the
+    newest clearing's id does."""
+    workspace, hyp_id, best = saturated(ws, store, after)
+    stalls(workspace, store, hyp_id, after - 1)
+    real = certificates.judged
+    cleared: list[str] = []
+
+    def clearing(*args: Any, **kwargs: Any) -> bool:
+        if not cleared:
+            loop._base_source(workspace, store, hyp_id, from_workspace=True)
+            records.set_best(store, records.runs_of(store, hyp_id)[-1], best, 2.0)
+            cleared.append(hyp_id)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(certificates, "judged", clearing)
+
+    across = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert cleared == [hyp_id], "the best was cleared and re-kept while the stall was decided"
+    assert len(store.events(kind=BEST_CLEARED, subject=hyp_id)) == 1
+    assert records.best_of(store, hyp_id)[0] == best, "the same bytes again"
+    assert (across.best_sha, across.parked, across.stalls_on_best, across.priority) == (
+        best,
+        False,
+        0,
+        scheduler.STALL_PRIORITY,
+    )
+    detail = store.events(kind=scheduler.STALLED, subject=hyp_id)[-1].detail
+    assert (detail["best_sha"], detail["parked"], detail["stalls_on_best"]) == (best, False, 0)
+    assert scheduler.parked(store, hyp_id) is False
+
+    first = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert first.stalls_on_best == 1, "a new spell, which the stall across the clearing is not in"
+    assert (first.parked, first.priority) == (
+        (True, scheduler.PARK_PRIORITY) if after == 1 else (False, scheduler.STALL_PRIORITY)
+    )
+
+
+def test_a_stall_on_no_best_decided_across_a_re_pin_that_moved_its_scope_stands_in_no_spell(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No best is read again as no best, so only the re-pin's `rescoped` says the stall was
+    measured under the scope it replaced: it parks nothing, and the next stall is the first of
+    its spell."""
+    workspace = tuned(ws, park_after_stalls=2)
+    hyp_id = classify(workspace, store, DOCUMENT)
+    stalls(workspace, store, hyp_id, 1)
+    real = records.best_of
+    reads: list[str] = []
+
+    def re_pinning(*args: Any, **kwargs: Any) -> Any:
+        reads.append("read")
+        if len(reads) == 2:  # the stall reads its best again before it records itself
+            costs = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+            classify(workspace, store, document(costs=costs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(records, "best_of", re_pinning)
+
+    across = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert store.events(kind=REPINNED, subject=hyp_id)[-1].detail[RESCOPED] is True
+    assert (across.best_sha, across.parked, across.stalls_on_best, across.priority) == (
+        None,
+        False,
+        0,
+        scheduler.STALL_PRIORITY,
+    ), "two stalls on no best, one of them under the replaced scope"
+    monkeypatch.setattr(records, "best_of", real)
+    first = scheduler.on_stall(workspace, store, hyp_id)
+    assert (first.stalls_on_best, first.parked) == (1, False)
 
 
 def test_a_claim_on_a_row_queued_below_the_park_recovers_where_it_stood(
