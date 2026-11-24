@@ -11,6 +11,7 @@ import errno
 import json
 import os
 import re
+import sqlite3
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
@@ -1551,6 +1552,100 @@ def test_a_stall_on_no_best_decided_across_a_re_pin_that_moved_its_scope_stands_
     monkeypatch.setattr(records, "best_of", real)
     first = scheduler.on_stall(workspace, store, hyp_id)
     assert (first.stalls_on_best, first.parked) == (1, False)
+
+
+def a_run_that_stalled(store: StateStore, hyp_id: str, seq: int) -> RunRecord:
+    """A run as a lane hands it to its stall: begun, with the `run_begun` `loop.begin` records,
+    and closed, as `loop.end` closes it before the stall is decided."""
+    run = open_run(store, hyp_id, lane=f"l{seq}")
+    store.event(BEGUN, hyp_id, {"run_id": run.run_id, "tag": run.tag, "lane": run.lane})
+    return records.close(store, run)
+
+
+@pytest.mark.parametrize("moved", ["scope", "gate"])
+def test_a_stall_whose_run_closed_before_a_re_pin_that_moved_its_scope_stands_in_no_spell(
+    ws: Workspace, store: StateStore, moved: str
+) -> None:
+    """A re-pin is accepted the moment the stalled run closes, and the lane removes the run's
+    directory and records its end before the stall reads anything, so a re-pin landing then is
+    already in the stall's first read. The run's `run_begun` is what says the run was measured
+    under the scope the re-pin replaced: that stall parks nothing, and the stalls of the runs
+    begun after the re-pin are a new spell, parked at the key and not before it."""
+    workspace = tuned(ws, park_after_stalls=3)
+    hyp_id = classify(workspace, store, DOCUMENT)
+    before = []
+    for seq in (1, 2):
+        a_run_that_stalled(store, hyp_id, seq)
+        before.append(scheduler.on_stall(workspace, store, hyp_id))
+    assert [(m.stalls_on_best, m.parked) for m in before] == [(1, False), (2, False)]
+    a_run_that_stalled(store, hyp_id, 3)
+    if moved == "scope":
+        costs = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+        classify(workspace, store, document(costs=costs))
+    else:
+        classify(workspace, store, document(required_constraints=[MIN_TRADES]))
+    assert store.events(kind=REPINNED, subject=hyp_id)[-1].detail[RESCOPED] is True
+
+    across = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert (across.best_sha, across.stalls_on_best, across.parked, across.priority) == (
+        None,
+        0,
+        False,
+        scheduler.STALL_PRIORITY,
+    ), "measured under the scope the re-pin replaced"
+    after = []
+    for seq in (4, 5, 6):
+        a_run_that_stalled(store, hyp_id, seq)
+        after.append(scheduler.on_stall(workspace, store, hyp_id))
+    assert [(m.stalls_on_best, m.parked) for m in after] == [(1, False), (2, False), (3, True)]
+
+
+def test_no_clearing_lands_between_a_stall_s_check_and_its_record(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stall reads its best again, counts its spell and records itself in one write
+    transaction, so `research begin --from-workspace` from another process while the spell is
+    counted cannot clear the best until the stall is recorded. The stall is decided on what it
+    read, and the clearing after it lifts the park it recorded and starts the next spell — never
+    a park recorded after a clearing, which would hold across it."""
+    workspace, hyp_id, best = saturated(ws, store, 3)
+    stalls(workspace, store, hyp_id, 2)
+    real = scheduler._spell
+    waited: list[str] = []
+
+    def clearing(*args: Any, **kwargs: Any) -> int:
+        with StateStore(store.path) as other:
+            other.connection.execute("PRAGMA busy_timeout = 0")  # refused, rather than waiting
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                loop._base_source(workspace, other, hyp_id, from_workspace=True)
+        waited.append(hyp_id)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler, "_spell", clearing)
+
+    third = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert waited == [hyp_id], "the clearing was tried while the spell was counted"
+    assert store.events(kind=BEST_CLEARED, subject=hyp_id) == []
+    assert (third.best_sha, third.stalls_on_best, third.parked, third.priority) == (
+        best,
+        3,
+        True,
+        scheduler.PARK_PRIORITY,
+    )
+    monkeypatch.setattr(scheduler, "_spell", real)
+    loop._base_source(workspace, store, hyp_id, from_workspace=True)  # once the stall is recorded
+    records.set_best(store, records.runs_of(store, hyp_id)[-1], best, 2.0)  # the same bytes
+    assert scheduler.parked(store, hyp_id) is False, "the clearing came after the park"
+
+    fourth = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert (fourth.stalls_on_best, fourth.parked, fourth.priority) == (
+        1,
+        False,
+        scheduler.STALL_PRIORITY,
+    ), "a new spell"
 
 
 def test_a_claim_on_a_row_queued_below_the_park_recovers_where_it_stood(

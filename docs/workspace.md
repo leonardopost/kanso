@@ -1987,7 +1987,7 @@ records `best_cleared` naming the field that moved. So does a re-pin whose card 
 other parameters: the best was never judged by it, and the event's `gates_added` names it; a
 re-pin that only drops a gate keeps the best. Either move is recorded on the re-pin's own
 `repinned` event too, as `rescoped: true`, whether or not there was a best to clear, and no
-stall measured before it counts toward a park (`[research] park_after_stalls`, `docs/cli.md`).
+stall of a run begun before it counts toward a park (`[research] park_after_stalls`, `docs/cli.md`).
 `kanso classify` re-pins on the same terms, so
 classifying onto another construct, or with another gate, clears it too. The windows are not scope:
 moving the research window keeps `best`, and later cards are compared with a best measured

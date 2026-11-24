@@ -37,8 +37,8 @@ passed every gate it still names. The gates are not scope: a certificate earned 
 of them still says what its window measured, so composition does not read them.
 
 Either move is recorded on the re-pin's own `repinned` event too, as `rescoped`, whether or
-not there was a best to clear: the stalls measured before it were measured under what it
-replaced, and the scheduler's park, which counts stalls on one best — no best among them —
+not there was a best to clear: the stalls of the runs begun before it were measured under what
+it replaced, and the scheduler's park, which counts stalls on one best — no best among them —
 stops at one, as it stops at a `best_cleared`.
 """
 
@@ -133,8 +133,8 @@ BEST_CLEARED: Final = "best_cleared"
 RESCOPED: Final = "rescoped"
 """The key of every `repinned` event: true when the re-pin moved a field of the scope or added
 a card gate — one the held pin did not name, or named at other parameters — which is what
-clears a held best, whether or not there was a best to clear. A stall measured before it was
-measured under what it replaced, so the scheduler's park counts no stall behind one
+clears a held best, whether or not there was a best to clear. A stall of a run begun before it
+was measured under what it replaced, so the scheduler's park counts no such stall
 (`kanso.research.scheduler.parked`), best or no best; with no best there is no `best_cleared`
 to say so, and this is the record that does."""
 

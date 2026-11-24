@@ -1286,7 +1286,8 @@ at −3, behind 0, −1 and −2, every band kanso itself returns a hypothesis t
 counted newest first over its `stalled` events since its best was last cleared or a re-pin last
 moved its scope or added a card gate, this stall included, and only a stall on another best, a
 `best_cleared`, a re-pin that moved the scope or added a card gate — with a best or none, which
-its `repinned` event records as `rescoped: true` — or a stall decided across either breaks it —
+its `repinned` event records as `rescoped: true` — or a stall whose run began before either
+breaks it —
 a reseed or an exploration between two stalls does not, since neither moved the best, and a
 stall spared on research data or certified counts like any other. The stall records `parked`
 and `stalls_on_best` on its `stalled` event. A park ends nothing — the status, the best, the
@@ -1301,20 +1302,21 @@ say the scope moved; by `research begin --from-workspace` on a best, which clear
 baseline keeps the same bytes again, since the stalls behind either were measured under the
 scope it replaced; and by the next stall once the key is 0 or above its spell, which records
 `parked: false`. A re-pin is not refused while a stall is decided — the lane's run has ended
-before the stall certifies — so a stall reads its best again, and whether anything cleared it or
-a re-pin moved its scope or added a card gate since it first read it, before it records itself:
-one whose best moved or was cleared in the meantime, or that was decided across a re-pin that
-moved its scope or added a card gate — best or no best — records `stalls_on_best: 0` and
-`parked: false`:
-it was measured under what the re-pin replaced, so it stands in no spell, and the next stall's
-starts after it. `kanso research queue add ID --priority P` raises a parked row until its next
-return, and `kanso status --json` → `hypotheses[].parked` says whether the park holds at the
-next return. A lifted park moves no row: one already waiting at −3 when a re-pin lifts it keeps
-that place until a lane serves it or `queue add --priority` raises it. The band is not written
-once, at the stall, because a band written there would not survive a live workspace: a lane
-that fails mid-run puts its hypothesis back at −1, a baseline that would not run at −2, and a
-live workspace recorded 373 `lane_failed` events against 8 `stalled` (`docs/backlog.md` row
-62), so a band written at the stall would be lifted by the next provider hiccup. It is derived
+before the stall certifies, and before it reads anything, while the lane removes the run's
+directory and records its end — so a stall is anchored to its run: one whose run began before a
+`best_cleared` or a re-pin that moved its scope or added a card gate — best or no best — or whose
+best moved while it was decided records `stalls_on_best: 0` and `parked: false`: it was measured
+under what the re-pin replaced, so it stands in no spell, and the next stall's starts after it.
+It reads its best again, counts its spell and records itself in one write transaction, so no
+clearing lands between the check and the record. `kanso research queue add ID --priority P`
+raises a parked row until its next return, and `kanso status --json` → `hypotheses[].parked`
+says whether the park holds at the next return. A lifted park moves no row: one already waiting
+at −3 when a re-pin lifts it keeps that place until a lane serves it or `queue add --priority`
+raises it. The band is not written once, at the stall, because a band written there would not
+survive a live workspace: a lane that fails mid-run puts its hypothesis back at −1, a baseline that
+would not run at −2, and a live workspace recorded 373 `lane_failed` events against 8 `stalled`
+(`docs/backlog.md` row 62), so a band written at the stall would be lifted by the next provider
+hiccup. It is derived
 instead inside `requeue`, which every return goes through — a stall, a lane's failure, a
 baseline's, a claim recovered from a dead lane — from the newest `stalled` event: parked, on
 the best the hypothesis still holds, with neither a `best_cleared` nor a `repinned` recording

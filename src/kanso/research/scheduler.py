@@ -204,10 +204,10 @@ class Stall:
     stalls_on_best: int | None = None
     """The stalls in a row on this best since it was last cleared or a re-pin last moved the
     scope or added a card gate, this one included, however re-seeded or explored; 0 where the
-    best moved or was cleared while the stall was decided, or a re-pin that moved the scope or
-    added a card gate landed then — during the certification, best or no best — so the stall
-    stands in no spell and parks nothing; `None` where the stall recorded no `stalled` event —
-    a hypothesis retired before it."""
+    best moved while the stall was decided, or a `best_cleared` or a re-pin that moved the scope
+    or added a card gate landed after the stalled run began — once it had closed, best or no
+    best — so the stall stands in no spell and parks nothing; `None` where the stall recorded
+    no `stalled` event — a hypothesis retired before it."""
 
     def payload(self) -> dict[str, object]:
         return {
@@ -534,9 +534,9 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     `[research] park_after_stalls` stalls in a row on the same best — counted newest first
     over the `stalled` events, this one included, and broken only by a stall on another best,
     a `best_cleared`, a re-pin that moved the scope or added a card gate — best or no best,
-    which its `repinned` event records as `rescoped` — or a stall decided across either, so
-    neither a reseed nor an exploration starts it over, and a stall spared or certified counts
-    like any other — park the hypothesis: the `stalled` event records `parked` and
+    which its `repinned` event records as `rescoped` — or a stall whose run began before
+    either, so neither a reseed nor an exploration starts it over, and a stall spared or
+    certified counts like any other — park the hypothesis: the `stalled` event records `parked` and
     `stalls_on_best`, and the hypothesis returns at −3, where `requeue` keeps every later
     return until a keep moves that best, a re-pin moves the scope or adds a card gate,
     `research begin --from-workspace` clears the best, or a later stall parks nothing — under
@@ -545,11 +545,16 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
     retire or a `queue remove` during the certification leaves the park recorded, and the
     `Stall` says so: the hypothesis returns nowhere now, and at −3 once it is queued again and
     a lane puts it back. A re-pin is not refused while this decides — the run it would wait on
-    has ended — so the best is read again before the `stalled` event is written, and where it
-    moved or was cleared since it was read, or a re-pin that moved the scope or added a card
-    gate landed since — best or no best — the stall records `stalls_on_best` 0 and parks
-    nothing: it was measured under the scope the re-pin replaced, so it belongs to no spell,
-    and the next stall's spell starts after it.
+    has ended — nor in the seconds between that run's close and this call, which the lane
+    spends removing the run's directory and recording its end. So the stall is anchored to
+    its run, not to this call: where a `best_cleared` or a re-pin that moved the scope or
+    added a card gate — best or no best — landed after the stalled run's `run_begun`
+    (`_measured_from`), which, a re-pin being refused while a run is active, it did once that
+    run had closed, or where the best moved since this read it, the stall records
+    `stalls_on_best` 0 and parks nothing: it was measured under the scope the re-pin
+    replaced, so it belongs to no spell, and the next stall's spell starts after it. The best
+    is read again, the spell counted and the `stalled` event written in one write
+    transaction, so no clearing lands between the check and the record.
     """
     # Certification reads research; research schedules certification. The import is
     # deferred so the cycle exists only while this function runs.
@@ -564,7 +569,7 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         _release(store, hyp_id, "retired")
         return Stall(hyp_id, None, False, None, None)
     best, scored = records.best_of(store, hyp_id)
-    cleared = _cleared(store, hyp_id)
+    measured_from = _measured_from(store, hyp_id)
     certifiable = False
     if best is not None and scored is not None and scored > 0:
         pinned = read_plan(ws, hyp_id)
@@ -601,23 +606,26 @@ def on_stall(ws: Workspace, store: StateStore, hyp_id: str, lane: str = DEFAULT_
         }
     checks = None if checked is None else checked.payload()
     after = ws.config.research.park_after_stalls
-    held = records.best_of(store, hyp_id)[0] == best and _cleared(store, hyp_id) == cleared
-    stalls_on_best = _spell(store, hyp_id, best) + 1 if held else 0
-    parks = after > 0 and stalls_on_best >= after
-    store.event(
-        STALLED,
-        hyp_id,
-        {
-            "best_sha": best,
-            "best_metric": scored,
-            "certifiable": certifiable,
-            "verdict": verdict,
-            "precheck": checks,
-            "parked": parks,
-            "stalls_on_best": stalls_on_best,
-            **cost,
-        },
-    )
+    with store.transaction():
+        held = (
+            records.best_of(store, hyp_id)[0] == best and _cleared(store, hyp_id) <= measured_from
+        )
+        stalls_on_best = _spell(store, hyp_id, best) + 1 if held else 0
+        parks = after > 0 and stalls_on_best >= after
+        store.event(
+            STALLED,
+            hyp_id,
+            {
+                "best_sha": best,
+                "best_metric": scored,
+                "certifiable": certifiable,
+                "verdict": verdict,
+                "precheck": checks,
+                "parked": parks,
+                "stalls_on_best": stalls_on_best,
+                **cost,
+            },
+        )
     if _status(store, hyp_id) in DEAD:
         drop(store, hyp_id)
         _release(store, hyp_id, "retired")
@@ -639,10 +647,10 @@ def last_stall(store: StateStore, hyp_id: str) -> dict[str, object] | None:
     certifying — a best at or below zero, one already certified under the pinned plan and
     the installed engine, a search not yet priceable — or one recorded before stalls judged
     one; a `stalls_on_best` of `None` is one recorded before stalls counted them, which
-    parked nothing, and of 0 one whose best moved or was cleared while it was decided, or
-    that was decided across a re-pin that moved the scope or added a card gate, which stands
-    in no spell. `parked` here is what the stall recorded, and stays so after a keep moves the
-    best or such a re-pin lifts the park; whether the park still holds is
+    parked nothing, and of 0 one whose best moved while it was decided, or whose run began
+    before a `best_cleared` or a re-pin that moved the scope or added a card gate, which
+    stands in no spell. `parked` here is what the stall recorded, and stays so after a keep
+    moves the best or such a re-pin lifts the park; whether the park still holds is
     `parked(store, hyp_id)`."""
     row = _newest_stall(store, hyp_id)
     if row is None:
@@ -695,9 +703,9 @@ def _spell(store: StateStore, hyp_id: str, best: str | None) -> int:
     """The stalls in a row on `best` already recorded: the hypothesis's `stalled` events
     since its best was last cleared or a re-pin last moved its scope or added a card gate
     (`_stalls_since_cleared`), counted newest first while each is on `best`. Only another
-    best, a `best_cleared`, such a re-pin — best or no best — or a stall decided across a move
-    of either — recorded at 0 — breaks the spell — a `reseed` or an exploration between them
-    does not — and a best of `None` is one best."""
+    best, a `best_cleared`, such a re-pin — best or no best — or a stall whose run began before
+    either, or whose best moved while it was decided — recorded at 0 — breaks the spell — a
+    `reseed` or an exploration between them does not — and a best of `None` is one best."""
     spell = 0
     for detail in _stalls_since_cleared(store, hyp_id):
         if detail.get("best_sha") != best or detail.get("stalls_on_best") == 0:
@@ -711,8 +719,8 @@ _CLEARING: Final = (BEST_CLEARED, REPINNED)
 """The events no earlier stall counts across, as a predicate and the kinds it binds: a
 `best_cleared` — a re-pin's, or `research begin --from-workspace`'s — and a `repinned` whose
 re-pin moved the scope or added a card gate, which it records as `rescoped` whether or not
-there was a best to clear (`kanso.hyp.registry.RESCOPED`). So no stall measured under a scope
-a re-pin replaced counts toward a park, best or no best."""
+there was a best to clear (`kanso.hyp.registry.RESCOPED`). So no stall of a run begun before
+one counts toward a park, best or no best (`_measured_from`)."""
 
 
 def _stalls_since_cleared(store: StateStore, hyp_id: str) -> Iterator[dict[str, object]]:
@@ -738,6 +746,26 @@ def _cleared(store: StateStore, hyp_id: str) -> int:
         (hyp_id, *_CLEARING),
     ).fetchone()
     return int(row[0] or 0)
+
+
+def _measured_from(store: StateStore, hyp_id: str) -> int:
+    """The event id a clearing (`_CLEARS`) must come after to leave the stall being decided out
+    of every spell: the `run_begun` of the hypothesis's newest run to have ended, which is the
+    run the stall ended — the lane closes it before the stall is decided. A re-pin is refused
+    while a run is active, and `research begin --from-workspace` clears the best before its
+    own run begins, so a clearing recorded after that run began landed once it had closed:
+    the run was measured under what it replaced, however long the lane took between closing
+    it and deciding the stall. With no such run, or one that recorded no beginning — a stall
+    decided by hand — it is the newest clearing's id as the stall first reads it, so only a
+    clearing that lands while the stall is decided leaves it out."""
+    row = store.connection.execute(
+        "SELECT MAX(event_id) FROM events WHERE subject = ? AND kind = ?"
+        " AND json_extract(detail, '$.run_id') = (SELECT run_id FROM runs"
+        " WHERE hyp_id = ? AND ended_at IS NOT NULL"
+        " ORDER BY ended_at DESC, started_at DESC, run_id DESC LIMIT 1)",
+        (hyp_id, BEGUN, hyp_id),
+    ).fetchone()
+    return _cleared(store, hyp_id) if row[0] is None else int(row[0])
 
 
 def _reseed(store: StateStore, hyp_id: str, best: str | None, after: int) -> str | None:
