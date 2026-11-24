@@ -1704,6 +1704,89 @@ def test_no_clearing_lands_between_a_stall_s_check_and_its_record(
     ), "a new spell"
 
 
+def re_pin_from_another_process(ws: Workspace, store: StateStore) -> str:
+    """The re-pin `kanso hyp add` makes from another process, moving the scope: `"landed"`, or
+    `"locked"` where this process holds the write lock — refused at once, rather than waiting
+    for the lock as a real one does and landing once it is released."""
+    costs = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+    with StateStore(store.path) as other:
+        other.connection.execute("PRAGMA busy_timeout = 0")
+        try:
+            classify(ws, other, document(costs=costs), REVERTING)
+        except sqlite3.OperationalError as exc:
+            assert "locked" in str(exc), exc
+            return "locked"
+    return "landed"
+
+
+def test_a_re_pin_cannot_land_between_a_stall_recording_its_park_and_its_return(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A re-pin that moves the scope lifts a park, and one is not refused while a stall is
+    decided, so one landing after the stall recorded `parked: true` and before it put the
+    hypothesis back sent it back at −1 under a stall that said it parked. The stall records
+    itself, re-seeds and returns in one write transaction: the re-pin waits on the lock until
+    the row is placed at −3, then lifts the park and moves no row."""
+    workspace, hyp_id, best = saturated(ws, store, 2)
+    stalls(workspace, store, hyp_id, 1)
+    real = scheduler._reseed
+    tried: list[str] = []
+
+    def re_pinning(*args: Any, **kwargs: Any) -> str | None:
+        if not tried:  # after the stall is recorded, before the hypothesis goes back
+            tried.append(re_pin_from_another_process(workspace, store))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler, "_reseed", re_pinning)
+
+    parking = scheduler.on_stall(workspace, store, hyp_id)
+
+    assert (parking.parked, parking.priority) == (True, scheduler.PARK_PRIORITY)
+    assert tried == ["locked"], "the re-pin could not land between the record and the return"
+    assert store.events(kind=BEST_CLEARED, subject=hyp_id) == []
+    assert (parking.best_sha, parking.stalls_on_best) == (best, 2)
+    assert priorities(store) == [(hyp_id, scheduler.PARK_PRIORITY)]
+    monkeypatch.setattr(scheduler, "_reseed", real)
+
+    assert re_pin_from_another_process(workspace, store) == "landed"  # once it has returned
+
+    assert records.best_of(store, hyp_id) == (None, None)
+    assert scheduler.parked(store, hyp_id) is False, "the re-pin lifts the park"
+    assert priorities(store) == [(hyp_id, scheduler.PARK_PRIORITY)], "and moves no row"
+
+
+def test_a_re_pin_cannot_land_between_a_return_reading_the_park_and_placing_the_row(
+    ws: Workspace, store: StateStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every return reads the park and places the row in one write transaction, so a re-pin
+    from another process lands before the read, and the row goes to its band, or after the
+    row, which it leaves where it is — never a row placed at −3 by a park already lifted. Here
+    a baseline that would not run puts a parked claim back."""
+    workspace, hyp_id, _ = saturated(ws, store, 1)
+    stalls(workspace, store, hyp_id, 1)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    real = scheduler.parked
+    tried: list[str] = []
+
+    def re_pinning(*args: Any, **kwargs: Any) -> bool:
+        held = real(*args, **kwargs)
+        if not tried:  # after the park is read, before the row is placed
+            tried.append(re_pin_from_another_process(workspace, store))
+        return held
+
+    monkeypatch.setattr(scheduler, "parked", re_pinning)
+
+    back = scheduler.put_back(store, hyp_id, "l1")
+
+    assert tried == ["locked"], "the re-pin could not land between the read and the row"
+    assert back is not None and back.priority == scheduler.PARK_PRIORITY
+    assert store.events(kind=REPINNED, subject=hyp_id) == []
+    monkeypatch.setattr(scheduler, "parked", real)
+    assert re_pin_from_another_process(workspace, store) == "landed"
+    assert scheduler.parked(store, hyp_id) is False
+    assert priorities(store) == [(hyp_id, scheduler.PARK_PRIORITY)], "a lifted park moves no row"
+
+
 def test_a_claim_on_a_row_queued_below_the_park_recovers_where_it_stood(
     ws: Workspace, store: StateStore
 ) -> None:

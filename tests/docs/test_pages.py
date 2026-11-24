@@ -107,6 +107,25 @@ def test_the_pages_state_that_a_hypothesis_parks_only_once_the_operator_says_how
     assert "A park ends nothing" in prose(page("concepts.md"))
 
 
+def test_the_pages_state_when_a_park_holds_as_the_queue_reads_it() -> None:
+    """A return goes to −3 while the park holds (`scheduler.parked`): its newest stall since the
+    best was last cleared, or a re-pin last moved the scope or added a card gate, parked it on the
+    best it still holds — not while it merely holds the best it parked on, which a best cleared
+    and kept again on the same bytes does, and a park on no best a re-pin lifted does too."""
+    since = "since its best was last cleared, or a re-pin last moved its scope or added a card gate"
+    queue_add = next(
+        line
+        for line in page("cli.md").splitlines()
+        if line.startswith("| `kanso research queue add")
+    )
+    assert f"while the park holds — while its newest stall {since}" in queue_add
+    assert "`hypotheses[].parked`" in queue_add
+    cli = prose(page("cli.md"))
+    assert f"at −3 while its newest stall {since}, parked it on the best it still holds" in cli
+    assert "while it still holds the best it parked on" not in cli
+    assert "records itself and returns the hypothesis to the queue in one write transaction" in cli
+
+
 def explore_row() -> str:
     return next(
         line for line in page("cli.md").splitlines() if line.startswith("| `kanso hyp explore")

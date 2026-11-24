@@ -1316,8 +1316,11 @@ under what the re-pin replaced, so it stands in no spell, and the next stall's s
 A run's beginning is its `run_begun`, written once its baseline has run, and a re-pin that lands
 while the baseline runs, before the run exists, leaves that run unbegun (Hypothesis, above),
 so no run begins after a re-pin on the bytes it replaced.
-It reads its best again, counts its spell and records itself in one write transaction, so no
-clearing lands between the check and the record. `kanso research queue add ID --priority P`
+It reads its best again, counts its spell, records itself and returns the hypothesis to the
+queue in one write transaction, so no clearing lands between the check and the record, nor
+between the record and the return: where it goes back at all, it goes back at −3 exactly when
+its `stalled` event records `parked: true`, and a re-pin that waited on the lock lands after the
+row is placed. `kanso research queue add ID --priority P`
 raises a parked row until its next return, and `kanso status --json` → `hypotheses[].parked`
 says whether the park holds at the next return. A lifted park moves no row: one already waiting
 at −3 when a re-pin lifts it keeps that place until a lane serves it or `queue add --priority`
@@ -1329,8 +1332,11 @@ hiccup. It is derived
 instead inside `requeue`, which every return goes through — a stall, a lane's failure, a
 baseline's, a claim recovered from a dead lane — from the newest `stalled` event: parked, on
 the best the hypothesis still holds, with neither a `best_cleared` nor a `repinned` recording
-`rescoped` since. A stall whose certification is refused before its event is written (a pinned
-plan this version cannot run) writes none, so it neither advances the spell nor lifts a park.
+`rescoped` since; it reads the park and places the row in one write transaction, so a re-pin
+lands before the read or after the row, never between. A park lowers a return and never raises
+one: a claim recovered from a row an operator queued below −3 goes back where it stood. A stall
+whose certification is refused before its event is written (a pinned plan this version cannot
+run) writes none, so it neither advances the spell nor lifts a park.
 
 `n_trials` counts every card of every run of the hypothesis, baselines and crashes included
 — and of every hypothesis it derives from (`derived_from` in `hypothesis.yaml`), since the
