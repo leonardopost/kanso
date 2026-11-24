@@ -143,12 +143,17 @@ def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
     assert retired["parked"] is True, "where its returns go once it is resumed"
     assert "parked after" not in at(runner, mocked_ws, "status").stdout, "not in the queue"
 
+    assert at(runner, mocked_ws, "hyp", "resume", HYP_ID).exit_code == Exit.OK
+    (resumed,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert (resumed["status"], resumed["parked"]) == ("researching", True)
+    assert "· parked after 1 stalls on its best" in at(runner, mocked_ws, "status").stdout
+
     with StateStore(mocked_ws / "state.db") as store:
-        set_status(store, HYP_ID, "researching")
         run = records.runs_of(store, HYP_ID)[-1]
         records.set_best(store, run, store.put_blob(b"# better\n"), 1e9)
 
     (moved,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert moved["status"] == "researching", "not retired, so only the predicate hides the park"
     assert moved["last_stall"]["parked"] is True, "what the stall recorded"
     assert moved["parked"] is False, "a keep moved the best"
     assert "parked after" not in at(runner, mocked_ws, "status").stdout
