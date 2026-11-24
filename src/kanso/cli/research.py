@@ -401,8 +401,14 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         )
     if stall is not None and stall.parked:
         on = "no best" if stall.best_sha is None else stall.best_sha[:7]
+        spell = f"after {stall.stalls_on_best} stalls on {on}"
         lines.append(
-            field("parked", f"at {stall.priority} after {stall.stalls_on_best} stalls on {on}")
+            field(
+                "parked",
+                f"{spell} · returned nowhere, retired or out of the queue"
+                if stall.priority is None
+                else f"at {stall.priority} {spell}",
+            )
         )
     lines.append(
         field(

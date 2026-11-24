@@ -26,9 +26,10 @@ from kanso.certify.run import precheck, precheck_at_stall
 from kanso.data import snapshot as snapshots
 from kanso.errors import Exit, KansoError, PreconditionError
 from kanso.hyp import set_status, show
+from kanso.hyp.registry import BEST_CLEARED
 from kanso.inbox import unread
 from kanso.nautilus import backtest
-from kanso.research import explore, passages, records, scheduler
+from kanso.research import explore, loop, passages, records, scheduler
 from kanso.research.loop import BEGUN
 from kanso.schemas import RunRecord
 from kanso.state import StateStore, usable
@@ -1275,15 +1276,16 @@ def test_a_keep_that_beats_the_best_lifts_the_park_at_the_next_return(
     assert item is not None and item.priority == scheduler.STALL_PRIORITY
 
 
-def test_setting_the_key_to_zero_lifts_the_park_at_the_next_stall(
-    ws: Workspace, store: StateStore
+@pytest.mark.parametrize("key", [0, 10])
+def test_setting_the_key_to_zero_or_above_the_spell_lifts_the_park_at_the_next_stall(
+    ws: Workspace, store: StateStore, key: int
 ) -> None:
     """The park is the newest stall's word, so the key read at a stall decides it."""
     workspace, hyp_id, _ = saturated(ws, store, 2)
     stalls(workspace, store, hyp_id, 2)
     assert priorities(store) == [(hyp_id, scheduler.PARK_PRIORITY)]
 
-    third = scheduler.on_stall(tuned(workspace, park_after_stalls=0), store, hyp_id)
+    third = scheduler.on_stall(tuned(workspace, park_after_stalls=key), store, hyp_id)
 
     assert (third.parked, third.stalls_on_best, third.priority) == (
         False,
@@ -1295,6 +1297,60 @@ def test_setting_the_key_to_zero_lifts_the_park_at_the_next_stall(
     open_run(store, hyp_id, lane="l1")
     item = scheduler.put_back(store, hyp_id, "l1")
     assert item is not None and item.priority == scheduler.STALL_PRIORITY
+
+
+@pytest.mark.parametrize("clearer", ["re-pin", "from-workspace"])
+def test_a_cleared_best_lifts_the_park_though_the_baseline_keeps_the_same_bytes_again(
+    ws: Workspace, store: StateStore, clearer: str
+) -> None:
+    """A re-pin whose scope moved, and `research begin --from-workspace`, clear the best and
+    record `best_cleared`; the next baseline keeps the workspace `strategy.py`, which a keep
+    wrote there, so the best is the parked bytes again — under another scope, so the stalls
+    measured under the old one neither hold the park nor count toward the next spell."""
+    workspace, hyp_id, best = saturated(ws, store, 2)
+    stalls(workspace, store, hyp_id, 2)
+    assert scheduler.parked(store, hyp_id)
+    if clearer == "re-pin":
+        moved = {**cast("dict[str, Any]", DOCUMENT["costs"]), "commission_bps": 1.0}
+        classify(workspace, store, document(costs=moved), REVERTING)
+    else:
+        loop._base_source(workspace, store, hyp_id, from_workspace=True)
+    assert records.best_of(store, hyp_id) == (None, None)
+    assert store.events(kind=BEST_CLEARED, subject=hyp_id)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+    run = open_run(store, hyp_id, lane="l1")
+    records.set_best(store, run, best, 2.0)  # the baseline, on the same bytes
+    assert records.best_of(store, hyp_id)[0] == best
+
+    assert scheduler.parked(store, hyp_id) is False
+    item = scheduler.put_back(store, hyp_id, "l1")
+
+    assert item is not None and item.priority == scheduler.STALL_PRIORITY
+    records.close(store, run)
+    after = scheduler.on_stall(workspace, store, hyp_id)
+    assert (after.best_sha, after.stalls_on_best, after.parked, after.priority) == (
+        best,
+        1,
+        False,
+        scheduler.STALL_PRIORITY,
+    ), "a new spell"
+
+
+def test_a_claim_on_a_row_queued_below_the_park_recovers_where_it_stood(
+    ws: Workspace, store: StateStore
+) -> None:
+    """The park lowers a return to −3 and never raises one: a row an operator queued at −5
+    and a lane claimed comes back at −5 when the lane dies."""
+    workspace, hyp_id, _ = saturated(ws, store, 2)
+    stalls(workspace, store, hyp_id, 2)
+    assert scheduler.remove(store, hyp_id) == "queue"
+    scheduler.enqueue(store, hyp_id, priority=-5)
+    assert scheduler.dequeue(store, "l1") == hyp_id
+
+    assert scheduler.recover(store) == [hyp_id]
+
+    assert scheduler.parked(store, hyp_id)
+    assert priorities(store) == [(hyp_id, -5)]
 
 
 def test_queue_add_raises_a_parked_row_until_its_next_return(
@@ -1343,10 +1399,19 @@ def test_a_retire_or_removal_during_a_parking_stall_s_certification_requeues_not
 
     stall = scheduler.on_stall(workspace, store, hyp_id, "l1")
 
-    assert (stall.priority, stall.parked) == (None, False)
-    assert store.events(kind=scheduler.STALLED, subject=hyp_id)[-1].detail["parked"] is True
+    assert (stall.priority, stall.parked, stall.stalls_on_best) == (None, True, 1)
+    assert (stall.payload()["parked"], stall.payload()["stalls_on_best"]) == (True, 1)
+    detail = store.events(kind=scheduler.STALLED, subject=hyp_id)[-1].detail
+    assert (detail["parked"], detail["stalls_on_best"]) == (True, 1), "what the Stall says"
     assert ids(store) == []
     assert scheduler.recover(store) == []
+    if act == "retire":
+        hyp.resume(workspace, store, hyp_id)
+    scheduler.enqueue(store, hyp_id)
+    assert scheduler.dequeue(store, "l2") == hyp_id
+    open_run(store, hyp_id, lane="l2")
+    item = scheduler.put_back(store, hyp_id, "l2")
+    assert item is not None and item.priority == scheduler.PARK_PRIORITY, "the park it recorded"
 
 
 def test_the_queue_serves_zero_then_minus_one_two_and_three_and_a_park_waiting_alone(

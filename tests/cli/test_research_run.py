@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from kanso.certify import certificate
+from kanso.certify import certificate, child
 from kanso.certify.plan import read_plan
 from kanso.certify.run import Precheck, precheck
 from kanso.cli.render import field
@@ -194,6 +194,32 @@ def test_a_stall_that_completes_its_spell_parks_the_hypothesis_and_says_so(
     assert stalled["parked"] is True
     said = f"at -3 after {stalled['stalls_on_best']} stalls on {str(stalled['best_sha'])[:7]}"
     assert field("parked", said) in second.stdout
+
+
+def test_a_parking_stall_retired_during_its_certification_says_it_returned_nowhere(
+    runner: CliRunner, mocked_ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stall recorded the park before the retire was read, and `run` reports what it
+    recorded: parked, with no place in the queue to have been parked in."""
+    mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
+    certify = child.certify_in_child
+
+    def retiring(ws: Any, store: StateStore, hyp_id: str, **kwargs: Any) -> Any:
+        made = certify(ws, store, hyp_id, **kwargs)
+        set_status(store, hyp_id, "retired")
+        return made
+
+    monkeypatch.setattr(child, "certify_in_child", retiring)
+
+    result = at(runner, mocked_ws, "research", "run", HYP_ID)
+
+    assert result.exit_code == Exit.OK, result.stdout
+    with StateStore(mocked_ws / "state.db") as store:
+        stalled = store.events(kind=scheduler.STALLED, subject=HYP_ID)[-1].detail
+        assert scheduler.queued(store) == []
+    assert (stalled["parked"], stalled["stalls_on_best"]) == (True, 1)
+    said = f"after 1 stalls on {str(stalled['best_sha'])[:7]} · returned nowhere"
+    assert field("parked", f"{said}, retired or out of the queue") in result.stdout
 
 
 def test_a_stall_that_parks_nothing_says_nothing_of_a_park(

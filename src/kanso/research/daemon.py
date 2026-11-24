@@ -752,10 +752,11 @@ def worker(ws: Workspace, lane: str, supervisor: int) -> int:
 
     A hypothesis it could not research goes back in the queue rather than out of it — a
     baseline that will not run returns behind the stalled ones, and anything that failed
-    mid-run returns beside them — and the lane waits before taking anything else, so a
-    provider that is down costs a call a minute rather than a call a second. The two
-    exceptions are the operator's: a hypothesis retired, or taken out of the queue, while
-    the lane held it stays out. One taken out before its run began is not a failure at
+    mid-run returns beside them, either at −3 instead while it is parked
+    (`[research] park_after_stalls`, `scheduler.parked`) — and the lane waits before taking
+    anything else, so a provider that is down costs a call a minute rather than a call a
+    second. The two exceptions are the operator's: a hypothesis retired, or taken out of the
+    queue, while the lane held it stays out. One taken out before its run began is not a failure at
     all: the lane lets go of it at the next catalog read of its baseline, or within a
     second of the card (`loop.begin`), records nothing and claims the next hypothesis
     without waiting. Nor is a run the operator ended while the lane worked it

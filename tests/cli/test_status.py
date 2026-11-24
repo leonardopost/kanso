@@ -15,6 +15,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
+from kanso.hyp import set_status
 from kanso.inbox import escalate
 from kanso.research import records
 from kanso.state import StateStore
@@ -122,9 +123,10 @@ def test_a_hypothesis_s_last_stall_says_what_its_search_correction_decided(
 def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
     runner: CliRunner, mocked_ws: Path
 ) -> None:
-    """`last_stall` carries what the stall recorded; the human line says the hypothesis is
-    parked only while the park holds — on the best it still holds, which a keep beating it
-    ends at the next return to the queue."""
+    """`last_stall` carries what the stall recorded and `parked` whether the park holds now,
+    by the predicate the queue applies — on the best it still holds, which a keep beating it
+    ends at the next return to the queue — and the human line says what `parked` says, on a
+    hypothesis that is not retired."""
     mocked.tuned(mocked_ws, stall_k=1, park_after_stalls=1)
     outcome = payload(at(runner, mocked_ws, "research", "run", HYP_ID, "--json"))
 
@@ -132,15 +134,23 @@ def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
 
     stall = entry["last_stall"]
     assert stall["best_sha"] == outcome["best_sha"] == entry["best_sha"]
-    assert (stall["parked"], stall["stalls_on_best"]) == (True, 1)
+    assert (stall["parked"], stall["stalls_on_best"], entry["parked"]) == (True, 1, True)
     assert "· parked after 1 stalls on its best" in at(runner, mocked_ws, "status").stdout
 
     with StateStore(mocked_ws / "state.db") as store:
+        set_status(store, HYP_ID, "retired")
+    (retired,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
+    assert retired["parked"] is True, "where its returns go once it is resumed"
+    assert "parked after" not in at(runner, mocked_ws, "status").stdout, "not in the queue"
+
+    with StateStore(mocked_ws / "state.db") as store:
+        set_status(store, HYP_ID, "researching")
         run = records.runs_of(store, HYP_ID)[-1]
         records.set_best(store, run, store.put_blob(b"# better\n"), 1e9)
 
     (moved,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
     assert moved["last_stall"]["parked"] is True, "what the stall recorded"
+    assert moved["parked"] is False, "a keep moved the best"
     assert "parked after" not in at(runner, mocked_ws, "status").stdout
 
 
@@ -153,6 +163,7 @@ def test_a_stall_recorded_before_stalls_counted_reads_as_unparked(
     (entry,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
 
     assert (entry["last_stall"]["parked"], entry["last_stall"]["stalls_on_best"]) == (False, None)
+    assert entry["parked"] is False
     assert "parked after" not in at(runner, mocked_ws, "status").stdout
 
 
