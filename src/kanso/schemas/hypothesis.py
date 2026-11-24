@@ -149,9 +149,14 @@ class Sizing(KansoModel):
     the price, floored to whole lots, with the round-trip cost reserved inside it — at most
     one instrument held at a time, and every exit the whole position. The harness computes
     each quantity: `submit_entry` and `submit_exit` take no size, and an attached overlay
-    names a `Clip` and never a `Hedge`. Operator-owned like `required_constraints`, so
-    classification neither reads nor writes it; and scope, so a `best` earned under one
-    rule is not compared with a card run under another.
+    names a `Clip` and never a `Hedge`. The budget is the same at every entry, whatever the
+    account has lost: `kanso hyp validate` holds it to `max_position_pct` and `max_leverage`
+    on the capital, and nothing reads either ceiling at run time, so an entry's leverage is
+    the budget over the balance — past `max_leverage` once the balance is below `budget /
+    max_leverage` — and the sleeve keeps entering below a balance of zero.
+    Operator-owned like `required_constraints`, so classification neither reads nor writes
+    it; and scope, so a `best` earned under one rule is not compared with a card run under
+    another.
     """
 
     mode: Literal["full_book"]
@@ -633,7 +638,10 @@ class Hypothesis(Versioned):
 
         A book fully levered to `max_leverage` holds equity of `100 / max_leverage` percent
         of its gross before any price moves, so a floor above that would be breached by the
-        first entry the limits admit.
+        first entry the limits admit. Under `sizing: full_book` that is a check of the first
+        entry alone: every entry is the whole budget, so a long book that has lost money holds
+        equity of about its balance over the budget at entry, and breaches the floor at entry
+        once the balance is below `maintenance_pct` of the budget.
         """
         if self.book is None or self.book.maintenance_pct is None:
             return

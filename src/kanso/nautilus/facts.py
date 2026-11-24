@@ -697,7 +697,11 @@ the venue lock margin beside whatever kanso computes, the maker/taker rule in
 `AGENTS.md` again. Measured: rates of 0.5/0.25 have the model ask 500,000 initial
 and 250,000 maintenance on 100,000 shares at 10.00 at leverage 1. At zero the
 venue locks no margin, calls none and liquidates nothing, and the only borrowing
-limit in a kanso backtest is the sleeve's own room.
+limit in a kanso backtest is what the sleeve sizes to. An unsized sleeve's is its room,
+`max_leverage` x the smaller of its capital and balance. A `sizing: full_book` sleeve has
+none: every entry is the whole budget whatever the balance, at a leverage of the budget over
+the balance — past `max_leverage` once the balance is below `budget / max_leverage` — and at
+a balance of zero or below it still buys the budget; only a shared book's room cuts it.
 
 Network I/O
 -----------

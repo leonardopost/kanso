@@ -87,6 +87,20 @@ def test_the_scaffold_says_a_bar_only_hypothesis_needs_a_fixed_spread() -> None:
     assert "`kanso hyp validate` refuses (exit 3)" in costs
 
 
+def test_the_scaffold_says_a_full_book_budget_is_held_to_the_ceilings_once() -> None:
+    """The comment named the check `hyp validate` makes and not that it is the only one: at
+    run time a sized entry is the whole budget whatever the account has lost."""
+    text = template("hypothesis.yaml")
+    sizing = " ".join(
+        line.lstrip("# ").strip()
+        for line in text[text.index("# sizing:") : text.index("risk_limits:")].splitlines()
+    )
+    assert "capital x max_leverage >= budget, on the capital, once" in sizing
+    assert "every entry is the whole budget whatever the account has lost" in sizing
+    assert "at a leverage of budget / balance, past max_leverage once the balance" in sizing
+    assert "still bought below a balance of zero" in sizing
+
+
 def test_the_program_states_the_repair_budget_the_driver_enforces() -> None:
     """The program tells an interactive proposer how many goes one fault buys, in words,
     and the driver holds the same number as a constant. The two drifted apart once: the
