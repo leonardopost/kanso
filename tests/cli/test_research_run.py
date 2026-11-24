@@ -191,8 +191,8 @@ def test_a_stall_that_completes_its_spell_parks_the_hypothesis_and_says_so(
     assert second.exit_code == Exit.OK, second.stdout
     with StateStore(mocked_ws / "state.db") as store:
         stalled = store.events(kind=scheduler.STALLED, subject=HYP_ID)[-1].detail
-    assert stalled["parked"] is True
-    said = f"at -3 after {stalled['stalls_on_best']} stalls on {str(stalled['best_sha'])[:7]}"
+    assert (stalled["parked"], stalled["stalls_on_best"]) == (True, 2)
+    said = f"at -3 after 2 stalls on {str(stalled['best_sha'])[:7]}"
     assert field("parked", said) in second.stdout
 
 
@@ -218,7 +218,7 @@ def test_a_parking_stall_retired_during_its_certification_says_it_returned_nowhe
         stalled = store.events(kind=scheduler.STALLED, subject=HYP_ID)[-1].detail
         assert scheduler.queued(store) == []
     assert (stalled["parked"], stalled["stalls_on_best"]) == (True, 1)
-    said = f"after 1 stalls on {str(stalled['best_sha'])[:7]} · returned nowhere"
+    said = f"after 1 stall on {str(stalled['best_sha'])[:7]} · returned nowhere"
     assert field("parked", f"{said}, retired or out of the queue") in result.stdout
 
 

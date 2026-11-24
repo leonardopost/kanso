@@ -171,8 +171,7 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
             "best_metric": None if row["best_metric"] is None else float(row["best_metric"]),
             "cards": int(row["cards"]),
             "cert_failures": int(row["cert_failures"]),
-            "last_stall": scheduler.last_stall(opened, str(row["hyp_id"])),
-            "parked": scheduler.parked(opened, str(row["hyp_id"])),
+            **_stall_and_park(opened, str(row["hyp_id"])),
             "holdout_looks": _holdout_looks(
                 opened,
                 str(row["hyp_id"]),
@@ -188,6 +187,14 @@ def _hypotheses(opened: StateStore) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def _stall_and_park(opened: StateStore, hyp_id: str) -> dict[str, Any]:
+    """`last_stall` and `parked`, the park read first: a stall recorded between the two reads
+    is then the newest stall the row shows beside a park read before it, and never one that
+    parked a hypothesis whose row shows no stall to say after how many."""
+    parked = scheduler.parked(opened, hyp_id)
+    return {"last_stall": scheduler.last_stall(opened, hyp_id), "parked": parked}
 
 
 def _holdout_looks(
@@ -324,7 +331,8 @@ def _hypothesis_line(row: dict[str, Any]) -> str:
     if spared is not None:
         line += f" · stall spared: {spared}"
     if row["parked"] and row["status"] not in scheduler.DEAD:
-        line += f" · parked after {stall['stalls_on_best']} stalls on its best"
+        spell = stall["stalls_on_best"]
+        line += f" · parked after {spell} stall{'' if spell == 1 else 's'} on its best"
     return line
 
 

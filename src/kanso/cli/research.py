@@ -401,7 +401,8 @@ def _run(ws: Workspace, hyp_id: str, cards: int | None) -> Report:
         )
     if stall is not None and stall.parked:
         on = "no best" if stall.best_sha is None else stall.best_sha[:7]
-        spell = f"after {stall.stalls_on_best} stalls on {on}"
+        stalls = "stall" if stall.stalls_on_best == 1 else "stalls"
+        spell = f"after {stall.stalls_on_best} {stalls} on {on}"
         lines.append(
             field(
                 "parked",

@@ -12,12 +12,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from kanso.errors import Exit
 from kanso.hyp import set_status
 from kanso.inbox import escalate
-from kanso.research import records
+from kanso.research import records, scheduler
 from kanso.state import StateStore
 from kanso.workspace import find
 
@@ -135,7 +136,7 @@ def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
     stall = entry["last_stall"]
     assert stall["best_sha"] == outcome["best_sha"] == entry["best_sha"]
     assert (stall["parked"], stall["stalls_on_best"], entry["parked"]) == (True, 1, True)
-    assert "· parked after 1 stalls on its best" in at(runner, mocked_ws, "status").stdout
+    assert "· parked after 1 stall on its best" in at(runner, mocked_ws, "status").stdout
 
     with StateStore(mocked_ws / "state.db") as store:
         set_status(store, HYP_ID, "retired")
@@ -146,7 +147,7 @@ def test_a_hypothesis_s_last_stall_says_whether_it_parked_it_and_after_how_many(
     assert at(runner, mocked_ws, "hyp", "resume", HYP_ID).exit_code == Exit.OK
     (resumed,) = payload(at(runner, mocked_ws, "status", "--json"))["hypotheses"]
     assert (resumed["status"], resumed["parked"]) == ("researching", True)
-    assert "· parked after 1 stalls on its best" in at(runner, mocked_ws, "status").stdout
+    assert "· parked after 1 stall on its best" in at(runner, mocked_ws, "status").stdout
 
     with StateStore(mocked_ws / "state.db") as store:
         run = records.runs_of(store, HYP_ID)[-1]
@@ -174,7 +175,7 @@ def test_a_spared_stall_that_parked_says_both_the_spare_first_and_ends_on_the_pa
 
     spared, parked = line.index(" · stall spared: deflated_edge "), line.index(" · parked after ")
     assert spared < parked
-    assert line.endswith(" · parked after 1 stalls on its best")
+    assert line.endswith(" · parked after 1 stall on its best")
 
 
 def test_a_stall_recorded_before_stalls_counted_reads_as_unparked(
@@ -188,6 +189,36 @@ def test_a_stall_recorded_before_stalls_counted_reads_as_unparked(
     assert (entry["last_stall"]["parked"], entry["last_stall"]["stalls_on_best"]) == (False, None)
     assert entry["parked"] is False
     assert "parked after" not in at(runner, mocked_ws, "status").stdout
+
+
+def test_a_stall_that_parks_as_the_park_is_read_is_the_stall_the_line_reads(
+    runner: CliRunner, mocked_ws: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane records stalls while `status` reads, so the park is read before the newest stall
+    the line counts the spell from: a hypothesis's first stall, parking it, that lands as the
+    park is read is read as the newest stall too — never a park beside no stall to count."""
+    mocked.tuned(mocked_ws, park_after_stalls=1)
+    real = scheduler.parked
+    stalled: list[str] = []
+
+    def stalling(opened: StateStore, hyp_id: str) -> bool:
+        if not stalled:  # a lane's first stall, recorded as the park is read
+            with StateStore(mocked_ws / "state.db") as lane:
+                lane.event(
+                    scheduler.STALLED,
+                    hyp_id,
+                    {"best_sha": None, "parked": True, "stalls_on_best": 1},
+                )
+            stalled.append(hyp_id)
+        return real(opened, hyp_id)
+
+    monkeypatch.setattr(scheduler, "parked", stalling)
+
+    result = at(runner, mocked_ws, "status")
+
+    assert stalled == [HYP_ID]
+    assert result.exit_code == Exit.OK, result.stdout
+    assert "· parked after 1 stall on its best" in result.stdout
 
 
 def test_a_hypothesis_says_how_many_looks_its_lineage_has_taken_at_its_window(
